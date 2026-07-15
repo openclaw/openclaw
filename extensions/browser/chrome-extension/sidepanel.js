@@ -373,9 +373,32 @@ async function handleHelloOk(payload) {
 // Per-tab session binding
 // ---------------------------------------------------------------------------
 
-// Tab ids are per-browser-session, so the generation map lives in
-// chrome.storage.session: it survives panel reloads (same tab resumes the
-// same thread) and resets with the browser (when tab ids recycle anyway).
+// Chrome hands out tab ids from a low counter that restarts with the browser,
+// while gateway sessions persist — so a key built on the tab id alone would give
+// a brand-new tab the previous launch's conversation for that id. This nonce
+// namespaces every key to one browser session. It lives in storage.session, so
+// it survives panel reloads (the same tab keeps its thread) and dies with the
+// browser, exactly when the ids it disambiguates start being reused.
+let browserSessionId = null;
+
+async function browserSession() {
+  if (browserSessionId) {
+    return browserSessionId;
+  }
+  const stored = await chrome.storage.session.get(["browserSessionId"]);
+  if (typeof stored.browserSessionId === "string" && stored.browserSessionId) {
+    browserSessionId = stored.browserSessionId;
+    return browserSessionId;
+  }
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  browserSessionId = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  await chrome.storage.session.set({ browserSessionId });
+  return browserSessionId;
+}
+
+// The generation map is scoped the same way: it survives panel reloads and
+// resets with the browser, alongside the nonce that namespaces the keys.
 async function tabGeneration(tabId) {
   const stored = await chrome.storage.session.get(["tabSessionGen"]);
   return stored.tabSessionGen?.[tabId] ?? 0;
@@ -394,7 +417,7 @@ async function bindTabSession() {
     return;
   }
   const generation = await tabGeneration(pinnedTabId);
-  const key = deriveTabSessionKey(mainSessionKey, pinnedTabId, generation);
+  const key = deriveTabSessionKey(mainSessionKey, pinnedTabId, await browserSession(), generation);
   if (!key) {
     return;
   }
@@ -695,7 +718,7 @@ async function onNewChat() {
 
 async function startFreshThread() {
   const generation = await bumpTabGeneration(pinnedTabId);
-  sessionKey = deriveTabSessionKey(mainSessionKey, pinnedTabId, generation);
+  sessionKey = deriveTabSessionKey(mainSessionKey, pinnedTabId, await browserSession(), generation);
   // The bump is persisted and sessionKey has already moved, so show the new
   // thread BEFORE the gateway round trips rather than after. If one of them
   // throws, the pane still matches where sends will actually land and the

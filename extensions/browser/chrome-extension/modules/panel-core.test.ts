@@ -13,25 +13,49 @@ import {
 } from "./panel-core.js";
 
 describe("deriveTabSessionKey", () => {
+  const B = "b1c2d3e4f5a6";
+
   it("threads the tab off the agent main key", () => {
-    expect(deriveTabSessionKey("agent:main:main", 42)).toBe("agent:main:main:thread:tab-42");
+    expect(deriveTabSessionKey("agent:main:main", 42, B)).toBe(
+      `agent:main:main:thread:tab-${B}-42`,
+    );
   });
 
   it("strips an existing :thread: suffix before threading", () => {
-    expect(deriveTabSessionKey("agent:main:main:thread:xyz", 7)).toBe(
-      "agent:main:main:thread:tab-7",
+    expect(deriveTabSessionKey("agent:main:main:thread:xyz", 7, B)).toBe(
+      `agent:main:main:thread:tab-${B}-7`,
     );
   });
 
   it("appends a generation suffix for fresh chats on the same tab", () => {
-    expect(deriveTabSessionKey("agent:main:main", 7, 2)).toBe("agent:main:main:thread:tab-7-g2");
-    expect(deriveTabSessionKey("agent:main:main", 7, 0)).toBe("agent:main:main:thread:tab-7");
+    expect(deriveTabSessionKey("agent:main:main", 7, B, 2)).toBe(
+      `agent:main:main:thread:tab-${B}-7-g2`,
+    );
+    expect(deriveTabSessionKey("agent:main:main", 7, B, 0)).toBe(
+      `agent:main:main:thread:tab-${B}-7`,
+    );
+  });
+
+  it("gives the same tab id a different thread in a different browser session", () => {
+    // Chrome restarts tab ids from a low counter each launch while gateway
+    // sessions persist, so without this a new tab would resume a stranger's
+    // conversation. Same id, same generation, different launch -> different key.
+    const first = deriveTabSessionKey("agent:main:main", 1, "aaaaaaaaaaaa");
+    const second = deriveTabSessionKey("agent:main:main", 1, "bbbbbbbbbbbb");
+    expect(first).not.toBe(second);
+  });
+
+  it("returns null rather than falling back to a bare tab id", () => {
+    // A missing nonce must not silently produce a colliding key.
+    expect(deriveTabSessionKey("agent:main:main", 7, "")).toBeNull();
+    expect(deriveTabSessionKey("agent:main:main", 7, undefined)).toBeNull();
+    expect(deriveTabSessionKey("agent:main:main", 7, null)).toBeNull();
   });
 
   it("returns null without a main key or tab id", () => {
-    expect(deriveTabSessionKey(null, 7)).toBeNull();
-    expect(deriveTabSessionKey("", 7)).toBeNull();
-    expect(deriveTabSessionKey("agent:main:main", undefined)).toBeNull();
+    expect(deriveTabSessionKey(null, 7, B)).toBeNull();
+    expect(deriveTabSessionKey("", 7, B)).toBeNull();
+    expect(deriveTabSessionKey("agent:main:main", undefined, B)).toBeNull();
   });
 });
 

@@ -6,18 +6,31 @@
  * Deterministic per-tab session key: each pinned tab converses in its own
  * thread off the agent's main session, so reopening the panel on the same tab
  * resumes the same conversation without any client-side storage of history.
+ *
+ * `browserSession` namespaces the key, and is required. Chrome restarts tab ids
+ * from a low counter on every launch while gateway sessions persist, so a bare
+ * tab id would hand a brand-new tab the previous session's conversation for that
+ * id — the exact context bleed "the tab is the conversation" promises against.
+ * Scoping to a per-launch nonce trades resume-across-restart, which tab-id reuse
+ * had already made meaningless, for correctness.
+ *
  * `generation` supports "New chat" for write-scope clients: sessions.reset is
  * operator.admin-only and sessions.create adopts an existing key, so a fresh
  * thread is minted by bumping the suffix instead of resetting in place.
  */
-export function deriveTabSessionKey(mainSessionKey, tabId, generation = 0) {
+export function deriveTabSessionKey(mainSessionKey, tabId, browserSession, generation = 0) {
   if (typeof mainSessionKey !== "string" || !mainSessionKey || typeof tabId !== "number") {
+    return null;
+  }
+  // No nonce, no key: falling back to a bare tab id would silently reintroduce
+  // the cross-restart collision this parameter exists to close.
+  if (typeof browserSession !== "string" || !browserSession) {
     return null;
   }
   const threadIndex = mainSessionKey.indexOf(":thread:");
   const base = threadIndex === -1 ? mainSessionKey : mainSessionKey.slice(0, threadIndex);
   const generationSuffix = generation > 0 ? `-g${generation}` : "";
-  return `${base}:thread:tab-${tabId}${generationSuffix}`;
+  return `${base}:thread:tab-${browserSession}-${tabId}${generationSuffix}`;
 }
 
 /**

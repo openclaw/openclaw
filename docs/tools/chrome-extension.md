@@ -125,8 +125,12 @@ my details", "summarize this thread" — the agent drives that tab through the
 normal `browser` tool.
 
 - **Per-tab conversations.** Each tab chats in its own gateway session
-  (`…:thread:tab-<id>`), so two tabs never mix context. Reopening the panel on
-  the same tab resumes its conversation; **New chat** starts a fresh one.
+  (`…:thread:tab-<browser-session>-<id>`), so two tabs never mix context.
+  Reopening the panel on the same tab resumes its conversation; **New chat**
+  starts a fresh one. Threads are scoped to one browser session on purpose:
+  Chrome reissues tab ids from a low counter every launch, so a restart starts
+  each tab fresh rather than handing it whichever conversation last held that
+  id.
 - **Allow the panel's origin — required once.** The panel is a Chrome
   extension page, so its WebSocket always sends an
   `Origin: chrome-extension://<extension-id>` header, and the Gateway checks any

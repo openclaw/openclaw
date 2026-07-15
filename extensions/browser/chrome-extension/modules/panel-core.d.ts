@@ -4,6 +4,7 @@
 export function deriveTabSessionKey(
   mainSessionKey: unknown,
   tabId: unknown,
+  browserSession: unknown,
   generation?: number,
 ): string | null;
 
