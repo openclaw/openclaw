@@ -1,22 +1,31 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
-import type { InProcessGatewayCaller } from "./in-process-gateway.js";
-import { createOpenClawDelegateTool } from "./openclaw-delegate-tool.js";
+import { callInProcessGatewayTool } from "./in-process-gateway.js";
+import { createOpenClawDelegateToolsForRun } from "./openclaw-delegate-tool.js";
+
+vi.mock("./in-process-gateway.js", () => ({
+  callInProcessGatewayTool: vi.fn(),
+}));
+
+const callGateway = vi.mocked(callInProcessGatewayTool);
+
+beforeEach(() => {
+  callGateway.mockReset();
+});
 
 describe("openclaw delegation tool", () => {
   it("relays context and surfaces pending approval", async () => {
-    const callGateway = vi.fn(async () => ({
+    callGateway.mockResolvedValue({
       sessionId: "ignored-by-client",
       reply: "Approval pending.",
       action: "none",
       needsApproval: true,
       proposalId: "system-agent:proposal-1",
-    }));
-    const tool = createOpenClawDelegateTool({
-      requesterAgentId: "main",
-      agentSessionKey: "agent:main:dm:one",
-      turnSourceChannel: "webchat",
-      callGateway: callGateway as InProcessGatewayCaller,
+    });
+    const [tool] = createOpenClawDelegateToolsForRun({
+      sessionAgentId: "main",
+      runSessionKey: "agent:main:dm:one",
+      agentChannel: "webchat",
     });
 
     const result = await tool.execute("call-1", { message: "Add channel." });
@@ -39,13 +48,13 @@ describe("openclaw delegation tool", () => {
   });
 
   it("reuses one session and accepts explicit continuation", async () => {
-    const callGateway = vi.fn(async (method: string, params: Record<string, unknown>) => ({
+    callGateway.mockImplementation(async (_method: string, params: Record<string, unknown>) => ({
       sessionId: params.sessionId,
       reply: "Done.",
     }));
-    const tool = createOpenClawDelegateTool({
-      agentSessionKey: "agent:main:main",
-      callGateway: callGateway as InProcessGatewayCaller,
+    const [tool] = createOpenClawDelegateToolsForRun({
+      sessionAgentId: "main",
+      runSessionKey: "agent:main:main",
     });
 
     await tool.execute("call-1", { message: "First." });
