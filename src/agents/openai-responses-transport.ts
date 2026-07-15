@@ -2633,7 +2633,7 @@ type OpenAIResponsesRequestParams = {
   include?: string[];
 };
 
-export const responsesTesting = {
+const responsesTesting = {
   getCompat,
   assertCodeModeResponsesToolSurface,
   buildOpenAIResponsesParams,
@@ -2660,4 +2660,12 @@ export const responsesTesting = {
   stringifyRedactedEvent,
   stringifyRedactedPayload,
 };
+
+declare global {
+  var openclawOpenAIResponsesTransportTestApi: typeof responsesTesting | undefined;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  globalThis.openclawOpenAIResponsesTransportTestApi = responsesTesting;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

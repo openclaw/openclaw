@@ -41,4 +41,26 @@ export function resetSessionWriteLockStateForTest(): void {
   getTestApi().resetSessionWriteLockStateForTest();
 }
 
-export const testing = getTestApi().testing;
+export const testing: SessionWriteLockTestApi["testing"] = {
+  get cleanupSignals() {
+    return getTestApi().testing.cleanupSignals;
+  },
+  handleTerminationSignal(signal) {
+    return getTestApi().testing.handleTerminationSignal(signal);
+  },
+  inspectLockPayloadForTest(payload, staleMs, nowMs, opts) {
+    return getTestApi().testing.inspectLockPayloadForTest(payload, staleMs, nowMs, opts);
+  },
+  releaseAllLocksSync() {
+    return getTestApi().testing.releaseAllLocksSync();
+  },
+  runLockWatchdogCheck(nowMs) {
+    return getTestApi().testing.runLockWatchdogCheck(nowMs);
+  },
+  resolveRemainingAcquireTimeoutMs(timeoutMs, startedAtMs, nowMs) {
+    return getTestApi().testing.resolveRemainingAcquireTimeoutMs(timeoutMs, startedAtMs, nowMs);
+  },
+  setProcessStartTimeResolverForTest(resolver) {
+    return getTestApi().testing.setProcessStartTimeResolverForTest(resolver);
+  },
+};

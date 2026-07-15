@@ -3,7 +3,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import OpenAI from "openai";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { buildOpenAICompletionsParams, testing } from "./openai-transport-stream.js";
+import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
   createResponsesAssistantOutput,
@@ -13,6 +13,7 @@ import {
   streamChunks,
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 
 function createEncryptedReplayRequest() {
   return {
@@ -2168,7 +2169,8 @@ describe("openai transport stream", () => {
     }));
 
     try {
-      const { testing: isolatedTesting } = await import("./openai-transport-stream.js");
+      const { testing: isolatedTesting } =
+        await import("./openai-transport-stream.test-support.js");
       const isolatedBuildOpenAIResponsesParams = isolatedTesting.buildOpenAIResponsesParams;
       const model = makeResponsesModel({
         id: "gpt-5.4",
