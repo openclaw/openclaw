@@ -109,12 +109,12 @@ describe("createGlobalCommandRunner", () => {
         );
         await fs.symlink(storeRoot, packageRoot, "dir");
 
-        const previousArgv1 = process.argv[1];
+        const previousArgv = [...process.argv];
         process.argv[1] = path.join(packageRoot, "openclaw.mjs");
         try {
           await expect(resolveUpdateRoot()).resolves.toBe(packageRoot);
         } finally {
-          process.argv[1] = previousArgv1;
+          process.argv.splice(0, process.argv.length, ...previousArgv);
         }
       });
     },

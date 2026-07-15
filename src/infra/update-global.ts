@@ -1029,8 +1029,12 @@ export async function detectGlobalInstallManagerForRoot(
       continue;
     }
     const globalReal = await tryRealpath(globalRoot);
-    if (manager === "pnpm" && (await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot }))) {
-      return "pnpm";
+    if (manager === "pnpm") {
+      for (const name of ALL_PACKAGE_NAMES) {
+        if (await resolvePnpmIsolatedGlobalPackage({ globalRoot, packageName: name, pkgRoot })) {
+          return "pnpm";
+        }
+      }
     }
     for (const name of ALL_PACKAGE_NAMES) {
       const expected = path.join(globalReal, name);
