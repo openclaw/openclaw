@@ -126,9 +126,9 @@ async function requestRealAdminRpc(
   });
 }
 
-async function requestContinuingStream(port: number): Promise<
-  CapturedResponse & { closed: boolean; writesAfterLimit: number }
-> {
+async function requestContinuingStream(
+  port: number,
+): Promise<CapturedResponse & { closed: boolean; writesAfterLimit: number }> {
   return await new Promise((resolve, reject) => {
     let response: CapturedResponse | undefined;
     let writesAfterLimit = 0;
