@@ -94,7 +94,7 @@ function currentClientGeneration(
   return client && state.client === client ? state.clientGeneration : null;
 }
 
-function bindClient(state: LogbookControllerState, client: GatewayBrowserClient): void {
+function bindClient(state: LogbookControllerState, client: GatewayBrowserClient | null): void {
   if (state.client === client) {
     return;
   }
@@ -262,6 +262,9 @@ export function configureLogbookPolling(
     }
     state.pollClient = null;
     state.backgroundRefreshQueued = false;
+    // Unlike stopLogbookPolling's detached-host path, this state can render
+    // again after reconnect. Retire every old async owner before reuse.
+    bindClient(state, null);
     return;
   }
   if (state.pollTimer && state.pollClient === client) {

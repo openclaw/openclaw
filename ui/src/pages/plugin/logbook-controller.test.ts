@@ -154,6 +154,54 @@ describe("Logbook controller", () => {
     expect(state.timeline?.cards[0]?.title).toBe("Resumed poll");
   });
 
+  it("retires silent refresh ownership while polling is inactive", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    hosts.push(host);
+    const state = getLogbookState(host);
+    state.day = "2026-07-04";
+    state.dayPinned = true;
+    const staleStatus = deferred<unknown>();
+    const staleDays = deferred<unknown>();
+    const staleTimeline = deferred<unknown>();
+    const staleBatch = new Map([
+      ["logbook.status", staleStatus],
+      ["logbook.days", staleDays],
+      ["logbook.timeline", staleTimeline],
+    ]);
+    const request = vi.fn((method: string) => {
+      const stale = staleBatch.get(method);
+      if (stale) {
+        staleBatch.delete(method);
+        return stale.promise;
+      }
+      if (method === "logbook.status") {
+        return Promise.resolve(statusFor("2026-07-04"));
+      }
+      if (method === "logbook.days") {
+        return Promise.resolve({ days: [] });
+      }
+      return Promise.resolve(timelineFor("2026-07-04", "Reactivated poll"));
+    });
+    const client = clientWithRequest(request);
+
+    configureLogbookPolling(state, client, true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).toHaveBeenCalledTimes(3);
+
+    configureLogbookPolling(state, null, false);
+    configureLogbookPolling(state, client, true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).toHaveBeenCalledTimes(6);
+    expect(state.timeline?.cards[0]?.title).toBe("Reactivated poll");
+
+    staleStatus.resolve(statusFor("2026-07-04"));
+    staleDays.resolve({ days: [] });
+    staleTimeline.resolve(timelineFor("2026-07-04", "Inactive poll"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.timeline?.cards[0]?.title).toBe("Reactivated poll");
+  });
+
   it("shares the background refresh owner with analysis completion", async () => {
     vi.useFakeTimers();
     const host = {};
