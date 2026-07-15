@@ -351,7 +351,7 @@ function handleMessage(msg) {
     handleChatEvent(msg.payload);
     return;
   }
-  if (msg.type === "event" && (msg.event === "agent" || msg.event === "session.tool")) {
+  if (msg.type === "event" && msg.event === "agent") {
     handleToolEvent(msg.payload);
   }
 }
@@ -508,18 +508,17 @@ function handleChatEvent(payload) {
     return;
   }
   if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
-    // A reconnect mid-run can deliver ONLY this event: the gateway dedupes its
-    // pre-terminal flush against what it already broadcast, so the reply reaches
-    // the new socket once, in this payload's snapshot. With no bubble to fold it
-    // into it would be dropped silently — the failure mode this panel exists to
-    // avoid — so render the snapshot here.
-    if (!streamingEl) {
-      const update = applyChatDelta(stream, payload);
-      if (update?.segmentText) {
-        streamingEl = addMessage("assistant", "");
-        streamingText = update.segmentText;
-        streamingEl.innerHTML = renderMarkdownLite(streamingText);
-      }
+    // Always fold the terminal snapshot in. applyChatDelta is snapshot-
+    // idempotent, so this costs nothing when the deltas already arrived, and it
+    // covers two ways the tail goes missing: the pre-terminal flush is broadcast
+    // drop-if-slow while this event is not, so a slow connection can miss the
+    // flush and freeze stale partial text as the final answer; and a reconnect
+    // mid-run can deliver only this event, carrying the whole reply.
+    const update = applyChatDelta(stream, payload);
+    if (update?.segmentText) {
+      streamingEl ??= addMessage("assistant", "");
+      streamingText = update.segmentText;
+      streamingEl.innerHTML = renderMarkdownLite(streamingText);
     }
     if (payload.state === "error" && payload.errorMessage) {
       // An error before any delta has no bubble either; say so rather than just
@@ -538,9 +537,11 @@ function handleChatEvent(payload) {
   }
 }
 
-// Tool lifecycle arrives as run-scoped `agent` events (we started the run) or
-// session-scoped `session.tool` mirrors; the gateway never sends both to one
-// connection. Each tool start is a bubble boundary plus a step line.
+// Tool lifecycle reaches this panel only as run-scoped `agent` events, on the
+// socket that started the run. The gateway's session-scoped `session.tool`
+// mirror goes to `sessions.subscribe` subscribers, and the panel subscribes to
+// messages, not sessions — so a run it did not start (reattach after a drop)
+// shows no steps. Each tool start is a bubble boundary plus a step line.
 function handleToolEvent(payload) {
   if (!payload || payload.stream !== "tool" || payload.sessionKey !== sessionKey) {
     return;
