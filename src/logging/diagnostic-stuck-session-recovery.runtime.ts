@@ -310,7 +310,9 @@ export async function recoverStuckDiagnosticSession(
     if (sessionLane && aborted && drained && !activeWorkStillOwned) {
       // Let an immediately-aborted lane owner finish its promise turn and pump
       // queued work before comparing task ids; fresh work must not be reset.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
 
     const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;

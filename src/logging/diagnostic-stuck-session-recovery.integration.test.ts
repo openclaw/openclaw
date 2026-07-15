@@ -328,7 +328,6 @@ describe("stuck session recovery integration", () => {
     const finishFallback = deferred();
     const events: string[] = [];
 
-    let primaryHandle!: EmbeddedAgentQueueHandle;
     const primaryBackend = {
       kind: "embedded" as const,
       cancel: vi.fn((reason?: string) => {
@@ -339,7 +338,7 @@ describe("stuck session recovery integration", () => {
       }),
       isStreaming: () => true,
     };
-    primaryHandle = {
+    const primaryHandle: EmbeddedAgentQueueHandle = {
       queueMessage: async () => {},
       isStreaming: primaryBackend.isStreaming,
       isCompacting: () => false,
@@ -349,13 +348,12 @@ describe("stuck session recovery integration", () => {
     operation.attachBackend(primaryBackend);
     setActiveEmbeddedRun(sessionId, primaryHandle, sessionKey);
 
-    let fallbackHandle!: EmbeddedAgentQueueHandle;
     const fallbackBackend = {
       kind: "embedded" as const,
       cancel: vi.fn(),
       isStreaming: () => true,
     };
-    fallbackHandle = {
+    const fallbackHandle: EmbeddedAgentQueueHandle = {
       queueMessage: async () => {},
       isStreaming: fallbackBackend.isStreaming,
       isCompacting: () => false,

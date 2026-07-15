@@ -1,4 +1,4 @@
-export type StuckRecoveryAbortClassification =
+type StuckRecoveryAbortClassification =
   | "model_idle_timeout"
   | "tool_execution_timeout"
   | "external_abort";

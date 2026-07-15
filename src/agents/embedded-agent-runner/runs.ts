@@ -56,7 +56,6 @@ export {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
-  type ActiveEmbeddedRunSnapshot,
   type EmbeddedAgentAbortReason,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
