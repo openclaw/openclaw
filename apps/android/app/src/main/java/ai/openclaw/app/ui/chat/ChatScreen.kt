@@ -647,7 +647,7 @@ private fun ChatHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
+      OpenClawMascot(modifier = Modifier.size(25.dp))
       Text(
         text = nativeString("OpenClaw"),
         style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
@@ -921,12 +921,12 @@ private fun ChatOfflineActions(
   onCopyDiagnostics: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Row(
+  Column(
     modifier = modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.weight(1f))
-    ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.weight(1f))
+    ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.fillMaxWidth())
+    ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth())
   }
 }
 

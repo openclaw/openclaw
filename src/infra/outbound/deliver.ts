@@ -434,7 +434,13 @@ function createPluginHandler(
     textChunkLimit: outbound?.textChunkLimit,
     supportsMedia: Boolean(messageMedia ?? sendMedia),
     sanitizeText: outbound?.sanitizeText
-      ? (payload) => outbound.sanitizeText!({ text: payload.text ?? "", payload })
+      ? (payload) =>
+          outbound.sanitizeText!({
+            text: payload.text ?? "",
+            payload,
+            cfg: params.cfg,
+            accountId: params.accountId,
+          })
       : undefined,
     normalizePayload: outbound?.normalizePayload
       ? (payload) =>

@@ -101,7 +101,7 @@ function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
 }
 
 /** Rewrite stale Codex model/provider/session runtime fields inside one session store object. */
-export function repairCodexSessionStoreRoutes(params: {
+function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
 }): SessionRouteRepairResult {
@@ -137,6 +137,12 @@ export function repairCodexSessionStoreRoutes(params: {
     changed: sessionKeys.length > 0,
     sessionKeys,
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.codexRouteSessionRepairTestApi")
+  ] = { repairCodexSessionStoreRoutes };
 }
 
 function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): string[] {

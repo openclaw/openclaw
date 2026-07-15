@@ -166,7 +166,7 @@ let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
 let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
 let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
-let replyRunTesting: typeof import("./reply-run-registry.js").testing;
+let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 
 function createGatewayDrainingError(): Error {
   const error = new Error("Gateway is draining for restart; new tasks are not accepted");
@@ -306,8 +306,8 @@ describe("runPreparedReply media-only handling", () => {
       await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
       await import("./inbound-meta.js"));
-    ({ testing: replyRunTesting, getActiveReplyRunCount } =
-      await import("./reply-run-registry.js"));
+    ({ getActiveReplyRunCount } = await import("./reply-run-registry.js"));
+    ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
 
     // Load deferred reply dependencies before per-case timing starts.
     await runPreparedReply(baseParams());
@@ -794,6 +794,38 @@ describe("runPreparedReply media-only handling", () => {
     });
     expect(call?.followupRun.run.messageProvider).toBe(channel);
     expect(call?.followupRun.originatingChannel).toBe(channel);
+  });
+
+  it("prefers a one-turn queue override over the stored session mode", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockImplementationOnce((params) => ({
+      mode: params.inlineMode ?? params.sessionEntry?.queueMode ?? "steer",
+    }));
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
+
+    await runPreparedReply(
+      baseParams({
+        sessionEntry: {
+          sessionId: "active-session",
+          updatedAt: Date.now(),
+          queueMode: "followup",
+        },
+        opts: { queueModeOverride: "steer" },
+      }),
+    );
+
+    expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ inlineMode: "steer" }),
+    );
+    expect(requireLastRunReplyAgentCall()).toMatchObject({
+      shouldSteer: true,
+      resolvedQueue: { mode: "steer" },
+    });
   });
 
   it("keeps thread history context on follow-up turns", async () => {

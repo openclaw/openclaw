@@ -289,7 +289,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
     if (predicate()) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   return false;
 }

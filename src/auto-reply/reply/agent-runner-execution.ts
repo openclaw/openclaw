@@ -5,10 +5,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import {
-  clearAutoFallbackPrimaryProbeSelection,
-  entryMatchesAutoFallbackPrimaryProbe,
-} from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
   formatRateLimitOrOverloadedErrorCopy,
@@ -19,7 +15,6 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -29,10 +24,12 @@ import {
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
-import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
+import {
+  clearRecoveredAutoFallbackPrimaryProbeSelection,
+  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
+} from "./agent-runner-auto-fallback.js";
 import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
 import type {
   AgentRunLoopResult,
@@ -83,9 +80,6 @@ async function runAgentTurnWithFallbackInternal(
           ...runnableRun,
           config: runtimeConfig,
         };
-  const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
-    effectiveRun.inputProvenance,
-  );
   let liveModelSwitchRuntimeEntry:
     | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
     | undefined;
@@ -228,65 +222,15 @@ async function runAgentTurnWithFallbackInternal(
   const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
     provider: string;
     model: string;
-  }): Promise<void> => {
-    if (preserveUserFacingSessionState) {
-      return;
-    }
-    const probe = effectiveRun.autoFallbackPrimaryProbe;
-    if (!probe) {
-      return;
-    }
-    if (paramsForClear.provider !== probe.provider || paramsForClear.model !== probe.model) {
-      return;
-    }
-    if (!params.sessionKey || !params.activeSessionStore) {
-      return;
-    }
-    const activeSessionEntry =
-      params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
-    if (!activeSessionEntry) {
-      return;
-    }
-    if (!entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
-      return;
-    }
-    clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
-    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
-    if (!params.storePath) {
-      return;
-    }
-    await updateSessionEntry(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
-      (persistedEntry) => {
-        if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
-          return null;
-        }
-        const shouldClearAuthProfile =
-          persistedEntry.authProfileOverrideSource === "auto" ||
-          (persistedEntry.authProfileOverrideSource === undefined &&
-            persistedEntry.authProfileOverrideCompactionCount !== undefined);
-        clearAutoFallbackPrimaryProbeSelection(persistedEntry);
-        return {
-          providerOverride: undefined,
-          modelOverride: undefined,
-          modelOverrideSource: undefined,
-          modelOverrideFallbackOriginProvider: undefined,
-          modelOverrideFallbackOriginModel: undefined,
-          ...(shouldClearAuthProfile
-            ? {
-                authProfileOverride: undefined,
-                authProfileOverrideSource: undefined,
-                authProfileOverrideCompactionCount: undefined,
-              }
-            : {}),
-          fallbackNoticeSelectedModel: undefined,
-          fallbackNoticeActiveModel: undefined,
-          fallbackNoticeReason: undefined,
-          updatedAt: persistedEntry.updatedAt,
-        };
-      },
-    );
-  };
+  }): Promise<void> =>
+    clearRecoveredAutoFallbackPrimaryProbeSelection({
+      run: effectiveRun,
+      ...paramsForClear,
+      sessionKey: params.sessionKey,
+      activeSessionStore: params.activeSessionStore,
+      getActiveSessionEntry: params.getActiveSessionEntry,
+      storePath: params.storePath,
+    });
 
   while (true) {
     try {

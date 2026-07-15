@@ -1,6 +1,6 @@
 # OpenClaw for Linux
 
-The Linux companion is a Tauri v2 desktop shell for a local OpenClaw Gateway. It installs the CLI when needed, delegates Gateway service management to `openclaw gateway`, opens the Gateway-served Control UI with its resolved auth URL, and stays available in the system tray.
+The Linux companion is a Tauri v2 desktop shell for OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when needed, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
 ## Linux prerequisites
 

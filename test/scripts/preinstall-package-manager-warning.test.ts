@@ -12,6 +12,7 @@ import {
   enforceSupportedNodeRuntime,
   nodeVersionSatisfiesPackageEngine,
   PACKAGE_INSTALL_GUARD_RELATIVE_PATH as PREINSTALL_GUARD_RELATIVE_PATH,
+  probePackageCliNodeRuntime,
   readPackageNodeEngine,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
@@ -51,12 +52,18 @@ describe("install runtime enforcement", () => {
     },
   );
 
-  it.each(["24.15.0-rc.1", "25.9.1-nightly.20260714", "24.15"])(
+  it.each(["24.15.0-rc.1", "25.9.1-nightly.20260714", "24.15", "24.15.0+", "24.15.0+local..1"])(
     "rejects non-release Node version %s",
     (version) => {
       expect(nodeVersionSatisfiesPackageEngine(version, EXPECTED_NODE_ENGINE_RANGE)).toBe(false);
     },
   );
+
+  it("accepts SemVer build metadata on a supported Node release", () => {
+    expect(nodeVersionSatisfiesPackageEngine("24.15.0+local.1", EXPECTED_NODE_ENGINE_RANGE)).toBe(
+      true,
+    );
+  });
 
   it("blocks unsupported Node before package replacement", () => {
     const reportError = vi.fn();
@@ -108,7 +115,7 @@ describe("install runtime enforcement", () => {
     expect(result.stderr).toContain(`detected Node ${process.versions.node}`);
   });
 
-  it("allows Bun package lifecycle scripts", () => {
+  it("allows Bun package lifecycle scripts when the installed CLI will use supported Node", () => {
     const reportError = vi.fn();
     expect(
       enforceSupportedNodeRuntime(
@@ -117,11 +124,271 @@ describe("install runtime enforcement", () => {
           bunVersion: "1.3.0",
           engine: EXPECTED_NODE_ENGINE_RANGE,
           execPath: "/opt/bun/bin/bun",
+          probeNodeRuntime: () => ({
+            version: "24.15.0",
+            bunVersion: null,
+            execPath: "/opt/node/bin/node",
+          }),
         },
         reportError,
       ),
     ).toBe(true);
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("blocks Bun package lifecycle scripts when the installed CLI will use old Node", () => {
+    const reportError = vi.fn();
+    expect(
+      enforceSupportedNodeRuntime(
+        {
+          bunVersion: "1.3.0",
+          engine: EXPECTED_NODE_ENGINE_RANGE,
+          probeNodeRuntime: () => ({
+            version: "24.14.1",
+            bunVersion: null,
+            execPath: "/opt/node/bin/node",
+          }),
+        },
+        reportError,
+      ),
+    ).toBe(false);
+    expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node 24.14.1"));
+  });
+
+  it("blocks Bun package lifecycle scripts when no real Node follows its shim", () => {
+    const reportError = vi.fn();
+    expect(
+      enforceSupportedNodeRuntime(
+        {
+          bunVersion: "1.3.0",
+          engine: EXPECTED_NODE_ENGINE_RANGE,
+          probeNodeRuntime: () => null,
+        },
+        reportError,
+      ),
+    ).toBe(false);
+    expect(reportError).toHaveBeenCalledWith(expect.stringContaining("detected Node missing"));
+  });
+
+  it("strips only Bun's cwd-to-root lifecycle PATH prefix", () => {
+    const candidates: string[] = [];
+    const runtime = probePackageCliNodeRuntime({
+      cwd: "/work/openclaw",
+      pathEnv: [
+        "/work/openclaw/node_modules/.bin",
+        "/work/node_modules/.bin",
+        "/node_modules/.bin",
+        "/opt/node/bin",
+      ].join(":"),
+      platform: "linux",
+      run: (command) => {
+        candidates.push(command);
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            version: "24.15.0",
+            bunVersion: null,
+            execPath: "/opt/node/bin/node",
+          }),
+        };
+      },
+    });
+
+    expect(candidates).toEqual(["/opt/node/bin/node"]);
+    expect(runtime).toEqual({
+      version: "24.15.0",
+      bunVersion: null,
+      execPath: "/opt/node/bin/node",
+    });
+  });
+
+  it("checks an inherited node_modules/.bin entry after Bun's prefix", () => {
+    const candidates: string[] = [];
+    const runtime = probePackageCliNodeRuntime({
+      cwd: "/work/openclaw",
+      pathEnv: [
+        "/work/openclaw/node_modules/.bin",
+        "/work/node_modules/.bin",
+        "/node_modules/.bin",
+        "/opt/tools/node_modules/.bin",
+        "/opt/node/bin",
+      ].join(":"),
+      platform: "linux",
+      run: (command) => {
+        candidates.push(command);
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            version: "24.14.1",
+            bunVersion: null,
+            execPath: command,
+          }),
+        };
+      },
+    });
+
+    expect(candidates).toEqual(["/opt/tools/node_modules/.bin/node"]);
+    expect(runtime?.version).toBe("24.14.1");
+  });
+
+  it("checks a duplicate lifecycle-looking entry inherited in the original PATH", () => {
+    const candidates: string[] = [];
+    const runtime = probePackageCliNodeRuntime({
+      cwd: "/work/openclaw",
+      pathEnv: [
+        "/work/openclaw/node_modules/.bin",
+        "/work/node_modules/.bin",
+        "/node_modules/.bin",
+        "/work/openclaw/node_modules/.bin",
+        "/opt/node/bin",
+      ].join(":"),
+      platform: "linux",
+      run: (command) => {
+        candidates.push(command);
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            version: "24.14.1",
+            bunVersion: null,
+            execPath: command,
+          }),
+        };
+      },
+    });
+
+    expect(candidates).toEqual(["/work/openclaw/node_modules/.bin/node"]);
+    expect(runtime?.version).toBe("24.14.1");
+  });
+
+  it("fails closed when Bun's lifecycle PATH prefix cannot be proven", () => {
+    const run = vi.fn();
+    expect(
+      probePackageCliNodeRuntime({
+        cwd: "/work/openclaw",
+        pathEnv: ["/unproven/node_modules/.bin", "/opt/node/bin"].join(":"),
+        platform: "linux",
+        run,
+      }),
+    ).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on a Bun-backed candidate from the original PATH", () => {
+    const candidates: string[] = [];
+    expect(
+      probePackageCliNodeRuntime({
+        cwd: "/work/openclaw",
+        pathEnv: [
+          "/work/openclaw/node_modules/.bin",
+          "/work/node_modules/.bin",
+          "/node_modules/.bin",
+          "/opt/bun-wrapper",
+          "/opt/node/bin",
+        ].join(":"),
+        platform: "linux",
+        run: (command) => {
+          candidates.push(command);
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              version: "24.15.0",
+              bunVersion: "1.3.14",
+              execPath: "/opt/bun/bin/bun",
+            }),
+          };
+        },
+      }),
+    ).toBeNull();
+    expect(candidates).toEqual(["/opt/bun-wrapper/node"]);
+  });
+
+  it.each(["", ".", "relative/bin"])(
+    "fails closed before a relative PATH component %j",
+    (relativeEntry) => {
+      const run = vi.fn();
+      expect(
+        probePackageCliNodeRuntime({
+          cwd: "/work/openclaw",
+          pathEnv: [
+            "/work/openclaw/node_modules/.bin",
+            "/work/node_modules/.bin",
+            "/node_modules/.bin",
+            relativeEntry,
+            "/opt/node/bin",
+          ].join(":"),
+          platform: "linux",
+          run,
+        }),
+      ).toBeNull();
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["\\tools", "/tools"])(
+    "fails closed before a Windows root-relative PATH component %j",
+    (relativeEntry) => {
+      const run = vi.fn();
+      expect(
+        probePackageCliNodeRuntime({
+          cwd: "C:\\work\\openclaw",
+          pathEnv: [
+            "C:\\work\\openclaw\\node_modules\\.bin",
+            "C:\\work\\node_modules\\.bin",
+            "C:\\node_modules\\.bin",
+            relativeEntry,
+            "C:\\node",
+          ].join(";"),
+          platform: "win32",
+          run,
+        }),
+      ).toBeNull();
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  it("removes NODE_OPTIONS case-insensitively from a Windows probe", () => {
+    let childEnv: NodeJS.ProcessEnv | undefined;
+    expect(
+      probePackageCliNodeRuntime({
+        cwd: "C:\\work\\openclaw",
+        env: {
+          PATH: [
+            "C:\\work\\openclaw\\node_modules\\.bin",
+            "C:\\work\\node_modules\\.bin",
+            "C:\\node_modules\\.bin",
+            "C:\\node",
+          ].join(";"),
+          NODE_OPTIONS: "--require=first.cjs",
+          Node_Options: "--require=second.cjs",
+          OPENCLAW_PROBE_SENTINEL: "preserved",
+        },
+        platform: "win32",
+        run: (_command, _args, options) => {
+          childEnv = options.env;
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              version: "24.15.0",
+              bunVersion: null,
+              execPath: "C:\\node\\node.exe",
+            }),
+          };
+        },
+      }),
+    ).toEqual({
+      version: "24.15.0",
+      bunVersion: null,
+      execPath: "C:\\node\\node.exe",
+    });
+    expect(childEnv).toEqual({
+      PATH: [
+        "C:\\work\\openclaw\\node_modules\\.bin",
+        "C:\\work\\node_modules\\.bin",
+        "C:\\node_modules\\.bin",
+        "C:\\node",
+      ].join(";"),
+      OPENCLAW_PROBE_SENTINEL: "preserved",
+    });
   });
 
   it("removes the install guard after runtime validation", () => {

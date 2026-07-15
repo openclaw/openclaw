@@ -2264,6 +2264,8 @@ describe("active-memory plugin", () => {
       updatedAt: 0,
       fastMode: false,
     };
+    api.pluginConfig = { agents: ["main"], logging: true };
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await requireHook("before_prompt_build")(
       {
@@ -2279,6 +2281,8 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().fastMode).toBe(false);
+    let infoLines = vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "fast=off start");
 
     delete hoisted.sessionStore["agent:main:main"].fastMode;
     await requireHook("before_prompt_build")(
@@ -2295,6 +2299,8 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().fastMode).toBe(true);
+    infoLines = vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "fast=on start");
   });
 
   it("allows appending extra prompt instructions without replacing the base prompt", async () => {
