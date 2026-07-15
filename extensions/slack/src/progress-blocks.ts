@@ -14,7 +14,7 @@ const SLACK_PROGRESS_CHUNK_TEXT_MAX = 256;
 const SLACK_PROGRESS_TASK_TITLE_MAX = 120;
 const SLACK_PROGRESS_PLAN_FALLBACK_TITLE = "Thinking";
 
-type SlackPlanTaskStatus = "in_progress" | "complete" | "error";
+type SlackPlanTaskStatus = "pending" | "in_progress" | "complete" | "error";
 
 type SlackPlanTask = {
   id: string;
@@ -94,6 +94,12 @@ function lineTaskTitle(line: ChannelProgressDraftLine, maxLineChars: number): st
 function lineTaskStatus(line: ChannelProgressDraftLine): SlackPlanTaskStatus {
   const normalized = line.status?.replace(/\s+/g, " ").trim().toLowerCase();
   if (!normalized) {
+    return "pending";
+  }
+  if (normalized === "pending" || normalized === "requested") {
+    return "pending";
+  }
+  if (normalized === "in_progress" || normalized === "in progress" || normalized === "running") {
     return "in_progress";
   }
   if (
@@ -186,7 +192,7 @@ function buildSlackProgressStreamChunks(params: {
       id: task.id,
       title: task.title,
       status:
-        task.status === "in_progress"
+        task.status === "pending" || task.status === "in_progress"
           ? (params.finalInProgressStatus ?? (params.completeInProgress ? "complete" : task.status))
           : task.status,
     })),
