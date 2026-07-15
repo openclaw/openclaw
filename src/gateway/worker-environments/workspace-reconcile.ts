@@ -22,11 +22,8 @@ export {
   parseWorkerWorkspaceManifest,
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
-  type WorkerWorkspaceManifest,
-  type WorkerWorkspaceManifestEntry,
   type WorkerWorkspaceReconciliationJournal,
   type WorkerWorkspaceReconciliationJournalAdapter,
-  type WorkerWorkspaceReconciliationPlan,
 } from "./workspace-manifest.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;

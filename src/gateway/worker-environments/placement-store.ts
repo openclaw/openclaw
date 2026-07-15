@@ -24,15 +24,12 @@ import {
   query,
   transitionValues,
 } from "./placement-row-codec.js";
+import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   canTransitionWorkerSessionPlacement,
   type WorkerSessionPlacementState,
 } from "./placement-state.js";
-import {
-  createPlacementTurnClaimOps,
-  signalTurnClaimRelease,
-  type PlacementStoreRuntime,
-} from "./placement-turn-claims.js";
+import { createPlacementTurnClaimOps, signalTurnClaimRelease } from "./placement-turn-claims.js";
 import {
   clearWorkerWorkspaceReconciliation,
   createPlacementWorkspaceJournalOps,

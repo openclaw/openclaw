@@ -103,7 +103,7 @@ export async function readTransferredManifest(filePath: string): Promise<string>
   return await fs.readFile(filePath, "utf8");
 }
 
-export async function inboundDirectoryUsage(
+async function inboundDirectoryUsage(
   root: string,
   limits: { bytes: number; entries: number },
 ): Promise<{ bytes: number; entries: number }> {

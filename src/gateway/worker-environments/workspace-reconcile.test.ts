@@ -5,13 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import type {
+  WorkerWorkspaceManifest,
+  WorkerWorkspaceManifestEntry,
+} from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspace,
   MAX_RECONCILIATION_FILE_BYTES,
   parseWorkerWorkspaceManifest,
   recoverWorkerWorkspaceReconciliation,
-  type WorkerWorkspaceManifest,
-  type WorkerWorkspaceManifestEntry,
   type WorkerWorkspaceReconciliationJournal,
   workerWorkspaceTransferPaths,
 } from "./workspace-reconcile.js";

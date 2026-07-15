@@ -24,10 +24,7 @@ export type WorkerWorkspaceReconciliationJournal = {
   basePack: Uint8Array;
 };
 
-export type WorkerWorkspaceReconciliationPlan = Omit<
-  WorkerWorkspaceReconciliationJournal,
-  "basePack"
->;
+type WorkerWorkspaceReconciliationPlan = Omit<WorkerWorkspaceReconciliationJournal, "basePack">;
 
 export type WorkerWorkspaceReconciliationJournalAdapter = {
   load(): WorkerWorkspaceReconciliationJournal | undefined;

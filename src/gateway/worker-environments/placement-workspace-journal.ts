@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { getRequired } from "./placement-row-codec.js";
-import type { PlacementStoreRuntime } from "./placement-turn-claims.js";
+import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
@@ -17,7 +17,7 @@ type WorkspaceJournalDatabase = Pick<
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceJournalDatabase>(db);
 
-export type WorkerWorkspaceJournalOwner = {
+type WorkerWorkspaceJournalOwner = {
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;

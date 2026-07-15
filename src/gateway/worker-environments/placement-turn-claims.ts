@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   advanceCursor,
@@ -11,6 +10,7 @@ import {
   type WorkerSessionTurnOwner,
 } from "./placement-record.js";
 import { ensureLocal, find, getRequired, query, transitionValues } from "./placement-row-codec.js";
+import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import {
   clearWorkerWorkspacePendingResult,
@@ -18,15 +18,6 @@ import {
   hasWorkerWorkspacePendingResult,
   insertWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
-
-/** One database path backs many store instances; waits and releases meet here. */
-export type PlacementStoreRuntime = {
-  path: string;
-  instanceId: string;
-  now: () => number;
-  read: () => DatabaseSync;
-  write: <T>(operation: (db: DatabaseSync) => T) => T;
-};
 
 type TurnClaimReleaseWaiter = () => void;
 const turnClaimReleaseWaiters = new Map<string, Map<string, Set<TurnClaimReleaseWaiter>>>();

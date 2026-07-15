@@ -3,7 +3,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { getRequired } from "./placement-row-codec.js";
-import type { PlacementStoreRuntime } from "./placement-turn-claims.js";
+import type { PlacementStoreRuntime } from "./placement-runtime.js";
 
 type WorkspaceResultDatabase = Pick<
   StateDatabase,
@@ -12,7 +12,7 @@ type WorkspaceResultDatabase = Pick<
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
-export type WorkerWorkspacePendingResult = {
+type WorkerWorkspacePendingResult = {
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;
@@ -122,7 +122,7 @@ export function insertWorkerWorkspacePendingResult(
   }
 }
 
-export function markWorkerWorkspacePendingResultAccepted(
+function markWorkerWorkspacePendingResultAccepted(
   db: DatabaseSync,
   claim: WorkerSessionTurnClaim,
   nowMs: number,
