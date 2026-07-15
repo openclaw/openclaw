@@ -793,7 +793,7 @@ export function buildAgentSystemPrompt(params: {
     cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
     message: "Message/channel actions",
     openclaw: "System setup/config expert; writes need human approval",
-    gateway: "Gateway restart/config",
+    gateway: "Read gateway config/schema",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
@@ -1161,10 +1161,8 @@ export function buildAgentSystemPrompt(params: {
             "Config, channels, plugins, new agents, model/provider, updates: ask `openclaw`. Never write own config; OpenClaw is system expert.",
           ]
         : [
-            "Config/restart: prefer `gateway` (`config.schema.lookup|get|patch|apply`, `restart`).",
+            "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
           ]),
-      "CLI lifecycle only explicit: `openclaw gateway status|restart|start|stop`.",
-      "`restart`, not stop+start.",
       "",
       ...skillsSection,
       ...skillWorkshopSection,

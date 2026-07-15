@@ -503,10 +503,7 @@ export function createOpenClawTools(
     ...(embedded
       ? []
       : [
-          createGatewayTool({
-            agentSessionKey: options?.agentSessionKey,
-            config: options?.config,
-          }),
+          createGatewayTool(),
           ...createOpenClawDelegateToolsForRun({ ...options, sessionAgentId }),
         ]),
     createAgentsListTool({

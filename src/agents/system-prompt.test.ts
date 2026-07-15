@@ -298,10 +298,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw Control");
-    expect(prompt).toContain("prefer `gateway`");
-    expect(prompt).toContain("CLI lifecycle only explicit");
-    expect(prompt).toContain("openclaw gateway status|restart|start|stop");
-    expect(prompt).toContain("`restart`, not stop+start");
+    expect(prompt).toContain("Config read: `gateway`");
+    expect(prompt).not.toContain("openclaw gateway status|restart|start|stop");
     expect(prompt).toContain("Do not invent commands");
   });
 
@@ -733,13 +731,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
-  it("keeps update.run out of gateway guidance", () => {
+  it("keeps gateway guidance read-only", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway", "exec"],
     });
 
-    expect(prompt).toContain("config.schema.lookup");
+    expect(prompt).toContain(
+      "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
+    );
+    expect(prompt).not.toContain("config.patch");
+    expect(prompt).not.toContain("config.apply");
+    expect(prompt).not.toContain("`config.schema.lookup|get|patch|apply`, `restart`");
     expect(prompt).not.toContain("update.run");
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
