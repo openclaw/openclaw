@@ -914,6 +914,12 @@ export function startGatewayConfigReloader(opts: {
     next.on("add", scheduleFromWatcher);
     next.on("change", scheduleFromWatcher);
     next.on("unlink", scheduleFromWatcher);
+    
+    // New logic: Trigger reconciliation when the watcher is ready
+    next.on("ready", () => {
+      scheduleFromWatcher();
+    });
+
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });
