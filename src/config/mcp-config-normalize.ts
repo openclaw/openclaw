@@ -80,6 +80,14 @@ export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers 
   return Object.fromEntries(
     Object.entries(value)
       .filter(([, server]) => isRecord(server))
-      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
+      .map(([name, server]) => {
+        const next = { ...(server as Record<string, unknown>) };
+        // Normalize disabled: true → enabled: false for compatibility so
+        // downstream checks that only read `enabled` skip disabled servers.
+        if (next.disabled === true && next.enabled === undefined) {
+          next.enabled = false;
+        }
+        return [name, next];
+      }),
   );
 }

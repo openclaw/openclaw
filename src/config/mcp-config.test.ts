@@ -8,6 +8,7 @@ import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "./mcp-config.js";
+import { normalizeConfiguredMcpServers } from "./mcp-config-normalize.js";
 import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 
 function validationOk(raw: unknown) {
@@ -362,5 +363,38 @@ describe("config mcp config", () => {
         clientKey: "/tmp/client.key",
       });
     });
+  });
+});
+
+describe("normalizeConfiguredMcpServers", () => {
+  it("normalizes disabled:true to enabled:false", () => {
+    const result = normalizeConfiguredMcpServers({
+      myServer: { command: "claude", args: ["mcp", "serve"], disabled: true },
+      activeServer: { command: "node", args: ["server.js"] },
+    });
+    expect(result.myServer.enabled).toBe(false);
+    expect(result.myServer.disabled).toBe(true);
+    expect(result.activeServer.enabled).toBeUndefined();
+  });
+
+  it("preserves explicit enabled:false over disabled:true", () => {
+    const result = normalizeConfiguredMcpServers({
+      myServer: { command: "claude", args: ["mcp", "serve"], enabled: false, disabled: true },
+    });
+    expect(result.myServer.enabled).toBe(false);
+  });
+
+  it("does not override explicit enabled:true with disabled:true", () => {
+    const result = normalizeConfiguredMcpServers({
+      myServer: { command: "claude", args: ["mcp", "serve"], enabled: true, disabled: true },
+    });
+    expect(result.myServer.enabled).toBe(true);
+  });
+
+  it("handles disabled:false without affecting enabled", () => {
+    const result = normalizeConfiguredMcpServers({
+      myServer: { command: "claude", args: ["mcp", "serve"], disabled: false },
+    });
+    expect(result.myServer.enabled).toBeUndefined();
   });
 });
