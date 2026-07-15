@@ -15469,6 +15469,11 @@
       "translated": "正在要求權限…"
     },
     {
+      "id": "native.apple.198f59c97d7afe11",
+      "source": "Start failed: %@",
+      "translated": "啟動失敗：%@"
+    },
+    {
       "id": "native.apple.a1910b5c2e008b6c",
       "source": "Microphone permission denied",
       "translated": "麥克風權限遭拒"
@@ -15477,11 +15482,6 @@
       "id": "native.apple.6a48b93f46ea3b08",
       "source": "Speech recognition",
       "translated": "語音辨識"
-    },
-    {
-      "id": "native.apple.198f59c97d7afe11",
-      "source": "Start failed: %@",
-      "translated": "啟動失敗：%@"
     },
     {
       "id": "native.apple.c09f4e3bbef8177a",

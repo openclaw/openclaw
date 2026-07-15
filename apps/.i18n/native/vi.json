@@ -15469,6 +15469,11 @@
       "translated": "Đang yêu cầu quyền…"
     },
     {
+      "id": "native.apple.198f59c97d7afe11",
+      "source": "Start failed: %@",
+      "translated": "Không thể khởi động: %@"
+    },
+    {
       "id": "native.apple.a1910b5c2e008b6c",
       "source": "Microphone permission denied",
       "translated": "Quyền truy cập micrô bị từ chối"
@@ -15477,11 +15482,6 @@
       "id": "native.apple.6a48b93f46ea3b08",
       "source": "Speech recognition",
       "translated": "Nhận dạng giọng nói"
-    },
-    {
-      "id": "native.apple.198f59c97d7afe11",
-      "source": "Start failed: %@",
-      "translated": "Không thể khởi động: %@"
     },
     {
       "id": "native.apple.c09f4e3bbef8177a",

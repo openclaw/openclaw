@@ -15469,6 +15469,11 @@
       "translated": "Meminta izin…"
     },
     {
+      "id": "native.apple.198f59c97d7afe11",
+      "source": "Start failed: %@",
+      "translated": "Gagal memulai: %@"
+    },
+    {
       "id": "native.apple.a1910b5c2e008b6c",
       "source": "Microphone permission denied",
       "translated": "Izin mikrofon ditolak"
@@ -15477,11 +15482,6 @@
       "id": "native.apple.6a48b93f46ea3b08",
       "source": "Speech recognition",
       "translated": "Pengenalan ucapan"
-    },
-    {
-      "id": "native.apple.198f59c97d7afe11",
-      "source": "Start failed: %@",
-      "translated": "Gagal memulai: %@"
     },
     {
       "id": "native.apple.c09f4e3bbef8177a",

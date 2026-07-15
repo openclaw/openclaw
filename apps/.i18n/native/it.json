@@ -15469,6 +15469,11 @@
       "translated": "Richiesta delle autorizzazioni…"
     },
     {
+      "id": "native.apple.198f59c97d7afe11",
+      "source": "Start failed: %@",
+      "translated": "Avvio non riuscito: %@"
+    },
+    {
       "id": "native.apple.a1910b5c2e008b6c",
       "source": "Microphone permission denied",
       "translated": "Autorizzazione per il microfono negata"
@@ -15477,11 +15482,6 @@
       "id": "native.apple.6a48b93f46ea3b08",
       "source": "Speech recognition",
       "translated": "Riconoscimento vocale"
-    },
-    {
-      "id": "native.apple.198f59c97d7afe11",
-      "source": "Start failed: %@",
-      "translated": "Avvio non riuscito: %@"
     },
     {
       "id": "native.apple.c09f4e3bbef8177a",

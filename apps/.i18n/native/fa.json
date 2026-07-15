@@ -15469,6 +15469,11 @@
       "translated": "در حال درخواست مجوزها…"
     },
     {
+      "id": "native.apple.198f59c97d7afe11",
+      "source": "Start failed: %@",
+      "translated": "شروع ناموفق بود: %@"
+    },
+    {
       "id": "native.apple.a1910b5c2e008b6c",
       "source": "Microphone permission denied",
       "translated": "مجوز میکروفون رد شده است"
@@ -15477,11 +15482,6 @@
       "id": "native.apple.6a48b93f46ea3b08",
       "source": "Speech recognition",
       "translated": "تشخیص گفتار"
-    },
-    {
-      "id": "native.apple.198f59c97d7afe11",
-      "source": "Start failed: %@",
-      "translated": "شروع ناموفق بود: %@"
     },
     {
       "id": "native.apple.c09f4e3bbef8177a",

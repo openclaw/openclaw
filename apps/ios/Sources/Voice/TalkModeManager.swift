@@ -1023,33 +1023,9 @@ final class TalkModeManager: NSObject {
             }
             #endif
             self.setStatus(String(localized: "Requesting permissions…"), phase: .connecting)
-            if !self.allowSimulatorCapture {
-                let micOk = await Self.requestMicrophonePermission()
-                try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
-                guard micOk else {
-                    self.setStatus(
-                        String(localized: "Microphone permission denied"),
-                        phase: .idle,
-                        watchPresentation: .localized("Microphone permission denied"))
-                    throw NSError(domain: "TalkMode", code: 4, userInfo: [
-                        NSLocalizedDescriptionKey: "Microphone permission denied",
-                    ])
-                }
-                let speechOk = await Self.requestSpeechPermission()
-                try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
-                guard speechOk else {
-                    let status = Self.permissionMessage(
-                        kind: String(localized: "Speech recognition"),
-                        status: SFSpeechRecognizer.authorizationStatus())
-                    self.setStatus(
-                        status,
-                        phase: .idle,
-                        watchPresentation: .verbatim(status))
-                    throw NSError(domain: "TalkMode", code: 5, userInfo: [
-                        NSLocalizedDescriptionKey: "Speech recognition permission denied",
-                    ])
-                }
-            }
+            try await self.requestPushToTalkPermissions(
+                captureId: captureId,
+                canStartCapture: canStartCapture)
 
             try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
             try configureOwnedAudioSession()
@@ -1316,6 +1292,40 @@ final class TalkModeManager: NSObject {
         try Task.checkCancellation()
         guard self.activePTTCaptureId == captureId, canStartCapture() else {
             throw Self.pushToTalkStartCancelledError()
+        }
+    }
+
+    private func requestPushToTalkPermissions(
+        captureId: String,
+        canStartCapture: @MainActor () -> Bool) async throws
+    {
+        guard !self.allowSimulatorCapture else { return }
+
+        let micOk = await Self.requestMicrophonePermission()
+        try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
+        guard micOk else {
+            self.setStatus(
+                String(localized: "Microphone permission denied"),
+                phase: .idle,
+                watchPresentation: .localized("Microphone permission denied"))
+            throw NSError(domain: "TalkMode", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Microphone permission denied",
+            ])
+        }
+
+        let speechOk = await Self.requestSpeechPermission()
+        try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
+        guard speechOk else {
+            let status = Self.permissionMessage(
+                kind: String(localized: "Speech recognition"),
+                status: SFSpeechRecognizer.authorizationStatus())
+            self.setStatus(
+                status,
+                phase: .idle,
+                watchPresentation: .verbatim(status))
+            throw NSError(domain: "TalkMode", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "Speech recognition permission denied",
+            ])
         }
     }
 
