@@ -58,8 +58,8 @@ export type QuickSettingsChannel = {
 };
 
 type QuickSettingsAutomation = {
-  cronJobCount: number;
-  skillCount: number;
+  cronJobCount: number | null;
+  skillCount: number | null;
   mcpServerCount: number;
 };
 
@@ -469,7 +469,7 @@ function renderAutomationsSection(props: QuickSettingsProps) {
           cronJobCount === 1
             ? "quickSettings.automation.scheduledTask"
             : "quickSettings.automation.scheduledTasks",
-          { count: String(cronJobCount) },
+          { count: cronJobCount == null ? "—" : String(cronJobCount) },
         ),
         t("quickSettings.automation.manage"),
         props.onManageCron,
@@ -479,7 +479,7 @@ function renderAutomationsSection(props: QuickSettingsProps) {
           skillCount === 1
             ? "quickSettings.automation.installedSkill"
             : "quickSettings.automation.installedSkills",
-          { count: String(skillCount) },
+          { count: skillCount == null ? "—" : String(skillCount) },
         ),
         t("quickSettings.automation.browse"),
         props.onBrowseSkills,

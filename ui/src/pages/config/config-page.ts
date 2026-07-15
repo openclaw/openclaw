@@ -4,7 +4,7 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode } from "../../api/types.ts";
+import type { CronJobsListResult, FastMode, SkillStatusReport } from "../../api/types.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -243,6 +243,8 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
+  @state() private cronJobCount: number | null = null;
+  @state() private skillCount: number | null = null;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
   @state() private microphoneLoading = false;
   @state() private microphoneError: string | null = null;
@@ -278,6 +280,8 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
+  private quickAutomationClient: GatewayBrowserClient | null = null;
+  private quickAutomationRequestId = 0;
   private readonly systemInfoPolling = new PollController(
     this,
     SYSTEM_INFO_POLL_INTERVAL_MS,
@@ -331,6 +335,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.resetConfigViewState();
     this.systemInfoGatewaySource = null;
     this.systemInfoClient = null;
+    this.quickAutomationClient = null;
+    this.quickAutomationRequestId += 1;
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -348,6 +354,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.invalidateSystemInfoRequest();
     }
     this.syncSystemInfoPolling();
+    this.syncQuickAutomationInventory();
     this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants mic permission; the
     // refresh button next to the picker requests it explicitly.
@@ -436,11 +443,15 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (gateway !== this.systemInfoGatewaySource) {
       this.systemInfoPolling.stop();
       this.invalidateSystemInfoRequest();
+      this.quickAutomationRequestId += 1;
       this.systemInfoGatewaySource = gateway;
       this.resetConfigViewState();
       this.systemInfoClient = null;
+      this.quickAutomationClient = null;
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
+      this.cronJobCount = null;
+      this.skillCount = null;
     }
     this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
   }
@@ -461,6 +472,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     } else if (!snapshot.connected) {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
+    }
+    if (!snapshot.connected) {
+      this.quickAutomationRequestId += 1;
+      this.quickAutomationClient = null;
+      this.cronJobCount = null;
+      this.skillCount = null;
     }
     if (snapshot.connected && snapshot.hello) {
       this.systemInfoUnavailable = !hasSystemInfo;
@@ -551,6 +568,47 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.systemInfoLoading = false;
       }
     }
+  }
+
+  private syncQuickAutomationInventory() {
+    const gatewaySource = this.systemInfoGatewaySource;
+    const gateway = gatewaySource?.snapshot;
+    if (
+      !this.isConnected ||
+      !this.isSystemInfoVisible() ||
+      !gatewaySource ||
+      gatewaySource !== this.context.gateway ||
+      !gateway?.connected ||
+      !gateway.client ||
+      gateway.client === this.quickAutomationClient
+    ) {
+      return;
+    }
+    const requestId = ++this.quickAutomationRequestId;
+    this.quickAutomationClient = gateway.client;
+    void this.loadQuickAutomationInventory(gatewaySource, gateway.client, requestId);
+  }
+
+  private async loadQuickAutomationInventory(
+    gatewaySource: ApplicationContext["gateway"],
+    client: GatewayBrowserClient,
+    requestId: number,
+  ) {
+    const [cron, skills] = await Promise.all([
+      client
+        .request<CronJobsListResult>("cron.list", { includeDisabled: true, limit: 1, offset: 0 })
+        .catch(() => null),
+      client.request<SkillStatusReport>("skills.status", {}).catch(() => null),
+    ]);
+    if (
+      requestId !== this.quickAutomationRequestId ||
+      gatewaySource !== this.systemInfoGatewaySource ||
+      client !== this.quickAutomationClient
+    ) {
+      return;
+    }
+    this.cronJobCount = typeof cron?.total === "number" ? cron.total : null;
+    this.skillCount = Array.isArray(skills?.skills) ? skills.skills.length : null;
   }
 
   private navigate(routeId: RouteId) {
@@ -846,8 +904,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
       channels: quickChannels(configObject),
       automation: {
-        cronJobCount: 0,
-        skillCount: 0,
+        cronJobCount: this.cronJobCount,
+        skillCount: this.skillCount,
         mcpServerCount: mcpServerCount(configObject),
       },
       security: extractQuickSettingsSecurity(configObject),

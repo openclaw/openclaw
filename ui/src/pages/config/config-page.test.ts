@@ -167,6 +167,51 @@ describe("ConfigPage system info", () => {
   });
 });
 
+describe("ConfigPage automation inventory", () => {
+  it("loads Cron and Skills counts from the current Gateway", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "cron.list") {
+        return Promise.resolve({ jobs: [], total: 4 });
+      }
+      if (method === "skills.status") {
+        return Promise.resolve({ skills: [{}, {}] });
+      }
+      return Promise.reject(new Error(`Unexpected method: ${method}`));
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client, connected: true },
+    } as ApplicationGateway;
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      systemInfoGatewaySource: ApplicationGateway;
+      quickAutomationClient: GatewayBrowserClient;
+      quickAutomationRequestId: number;
+      cronJobCount: number | null;
+      skillCount: number | null;
+      loadQuickAutomationInventory: (
+        gateway: ApplicationGateway,
+        client: GatewayBrowserClient,
+        requestId: number,
+      ) => Promise<void>;
+    };
+    state.systemInfoGatewaySource = gateway;
+    state.quickAutomationClient = client;
+    state.quickAutomationRequestId = 1;
+
+    await state.loadQuickAutomationInventory(gateway, client, 1);
+
+    expect(request).toHaveBeenCalledWith("cron.list", {
+      includeDisabled: true,
+      limit: 1,
+      offset: 0,
+    });
+    expect(request).toHaveBeenCalledWith("skills.status", {});
+    expect(state.cronJobCount).toBe(4);
+    expect(state.skillCount).toBe(2);
+  });
+});
+
 describe("ConfigPage runtime config lifecycle", () => {
   it("loads replacement sources and clears sensitive reveal state", async () => {
     const page = new ConfigPage();
