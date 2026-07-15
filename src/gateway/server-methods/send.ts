@@ -42,7 +42,12 @@ import {
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
+import {
+  beginTerminalSourceReplyDelivery,
+  cancelTerminalSourceReplyDelivery,
+  mirrorDeliveredSourceReplyToTranscript,
+  reconcileTerminalSourceReplyDelivery,
+} from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -621,6 +626,24 @@ export const sendHandlers: GatewayRequestHandlers = {
             }),
           });
         }
+        const sourceReplyMirror = {
+          action: request.action,
+          channel,
+          actionParams: request.params,
+          cfg,
+          sessionKey,
+          sessionId: trustedContext.sessionId,
+          agentId,
+          toolContext: trustedContext.toolContext,
+          idempotencyKey: request.idempotencyKey,
+          ...(trustedContext.sourceReplyFinal !== undefined
+            ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
+            : {}),
+        };
+        const terminalDeliveryReceipt =
+          trustedContext.sourceReplyFinal === true
+            ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
+            : undefined;
         const gatewayClientScopes = client?.connect?.scopes ?? [];
         const handled = await dispatchChannelMessageAction({
           channel,
@@ -644,6 +667,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           gatewayClientScopes,
         });
         if (!handled) {
+          await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
           const error = errorShape(
             ErrorCodes.INVALID_REQUEST,
             `Message action ${request.action} not supported for channel ${channel}.`,
@@ -652,21 +676,25 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error, meta: { channel } };
         }
         const payload = extractToolPayload(handled);
+        try {
+          await reconcileTerminalSourceReplyDelivery({
+            deliveredPayload: payload,
+            mirror: sourceReplyMirror,
+            receipt: terminalDeliveryReceipt,
+          });
+        } catch (err) {
+          // The pre-send intent remains durable. Return the provider result so
+          // the model does not retry an external effect with an unknown outcome.
+          context.logGateway?.warn?.("Terminal source reply receipt reconciliation failed.", {
+            error: formatForLog(err),
+            channel,
+            sessionKey,
+          });
+        }
         await scheduleDeliveredSourceReplyTranscriptMirror({
           context,
           mirror: {
-            action: request.action,
-            channel,
-            actionParams: request.params,
-            cfg,
-            sessionKey,
-            sessionId: trustedContext.sessionId,
-            agentId,
-            toolContext: trustedContext.toolContext,
-            idempotencyKey: request.idempotencyKey,
-            ...(trustedContext.sourceReplyFinal !== undefined
-              ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
-              : {}),
+            ...sourceReplyMirror,
             deliveredPayload: payload,
           },
         });

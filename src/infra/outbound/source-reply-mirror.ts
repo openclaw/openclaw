@@ -11,7 +11,12 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { markRestartRecoveryTerminalReceiptFailure } from "../../config/sessions/restart-recovery-receipt.js";
+import {
+  beginRestartRecoveryTerminalDelivery,
+  cancelRestartRecoveryTerminalDelivery,
+  completeRestartRecoveryTerminalDelivery,
+  type RestartRecoveryTerminalDeliveryScope,
+} from "../../config/sessions/restart-recovery-receipt.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
@@ -34,6 +39,8 @@ type SourceReplyTranscriptMirrorParams = {
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
   sessionKey: string;
 };
+
+export type TerminalSourceReplyDeliveryReceipt = RestartRecoveryTerminalDeliveryScope;
 
 type SourceReplyThreadPlacement = "match" | "mismatch" | "unknown";
 
@@ -147,6 +154,94 @@ function resolveCurrentSourceTurnId(
   return normalizeOptionalString(toolContext?.currentSourceTurnId);
 }
 
+function resolveTerminalSourceReplyDeliveryReceipt(
+  params: SourceReplyTranscriptMirrorParams,
+): TerminalSourceReplyDeliveryReceipt | undefined {
+  if (
+    params.sourceReplyFinal !== true ||
+    !params.sessionId ||
+    !isCurrentSourceConversation(params)
+  ) {
+    return undefined;
+  }
+  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  if (!sourceTurnId) {
+    return undefined;
+  }
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  return {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sourceTurnId,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+  };
+}
+
+/** Arms the fail-closed state before a terminal source reply can reach a provider. */
+export async function beginTerminalSourceReplyDelivery(
+  params: SourceReplyTranscriptMirrorParams,
+): Promise<TerminalSourceReplyDeliveryReceipt | undefined> {
+  const receipt = resolveTerminalSourceReplyDeliveryReceipt(params);
+  if (!receipt) {
+    return undefined;
+  }
+  const result = await beginRestartRecoveryTerminalDelivery(receipt);
+  if (result === "blocked") {
+    throw new Error("terminal source reply already has a durable delivery outcome");
+  }
+  if (result === "stale") {
+    throw new Error("terminal source reply lost restart recovery ownership");
+  }
+  return receipt;
+}
+
+/** Cancels a pre-send intent only when dispatch proved that no send occurred. */
+export async function cancelTerminalSourceReplyDelivery(
+  receipt: TerminalSourceReplyDeliveryReceipt | undefined,
+): Promise<void> {
+  if (receipt) {
+    await cancelRestartRecoveryTerminalDelivery(receipt);
+  }
+}
+
+/** Reconciles the provider result while an unresolved intent remains fail closed. */
+export async function reconcileTerminalSourceReplyDelivery(params: {
+  deliveredPayload: unknown;
+  mirror: SourceReplyTranscriptMirrorParams;
+  receipt: TerminalSourceReplyDeliveryReceipt | undefined;
+}): Promise<"delivered" | "not-delivered" | "not-source" | "not-applicable"> {
+  if (!params.receipt) {
+    return "not-applicable";
+  }
+  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+    await cancelRestartRecoveryTerminalDelivery(params.receipt);
+    return "not-delivered";
+  }
+  if (
+    !isExactCurrentSourceConversation({
+      ...params.mirror,
+      deliveredPayload: params.deliveredPayload,
+    })
+  ) {
+    return "not-source";
+  }
+  await completeRestartRecoveryTerminalDelivery(params.receipt);
+  return "delivered";
+}
+
+function resolveTranscriptMirrorIdempotencyKey(params: {
+  idempotencyKey?: string;
+  sourceReplyFinal?: boolean;
+  sourceTurnId?: string;
+}): string | undefined {
+  if (params.sourceReplyFinal !== true || !params.idempotencyKey || !params.sourceTurnId) {
+    return params.idempotencyKey;
+  }
+  // Progress and terminal mirrors may share provider idempotency. Transcript
+  // receipts need distinct keys so a progress row cannot mask the terminal marker.
+  return `${params.idempotencyKey}:terminal-receipt:${params.sourceTurnId}`;
+}
+
 function isCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
 ): params is MirrorableSourceReplyTranscriptParams {
@@ -201,6 +296,14 @@ function isCurrentSourceConversation(
   );
 }
 
+function isExactCurrentSourceConversation(
+  params: SourceReplyTranscriptMirrorParams,
+): params is MirrorableSourceReplyTranscriptParams {
+  return (
+    resolveSourceReplyThreadPlacement(params) !== "unknown" && isCurrentSourceConversation(params)
+  );
+}
+
 /** Mirrors successful outbound source replies into the owning session transcript. */
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
@@ -211,20 +314,9 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   if (!isCurrentSourceConversation(params)) {
     return false;
   }
-
-  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
-  const markTerminalReceiptFailure = async (): Promise<void> => {
-    if (params.sourceReplyFinal !== true || !params.sessionId || !sourceTurnId) {
-      return;
-    }
-    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-    await markRestartRecoveryTerminalReceiptFailure({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sourceTurnId,
-      storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
-    });
-  };
+  if (params.sourceReplyFinal === true && !isExactCurrentSourceConversation(params)) {
+    return false;
+  }
 
   const plan = createOutboundPayloadPlan([
     {
@@ -244,36 +336,33 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   ]);
   const mirror = projectOutboundPayloadPlanForMirror(plan);
   if (!mirror.text && mirror.mediaUrls.length === 0) {
-    await markTerminalReceiptFailure();
     return false;
   }
-  let result: Awaited<ReturnType<typeof appendAssistantMessageToSessionTranscript>>;
-  try {
-    result = await appendAssistantMessageToSessionTranscript({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      ...(params.sessionId ? { expectedSessionId: params.sessionId } : {}),
-      text: mirror.text,
-      mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
+  const sourceTurnId = resolveCurrentSourceTurnId(params.toolContext);
+  const result = await appendAssistantMessageToSessionTranscript({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    ...(params.sessionId ? { expectedSessionId: params.sessionId } : {}),
+    text: mirror.text,
+    mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
+    idempotencyKey: resolveTranscriptMirrorIdempotencyKey({
       idempotencyKey: params.idempotencyKey,
-      ...(params.sourceReplyFinal !== undefined
-        ? {
-            deliveryMirror: {
-              kind: "message-tool-source-reply" as const,
-              final: params.sourceReplyFinal,
-              ...(sourceTurnId ? { sourceTurnId } : {}),
-            },
-          }
-        : {}),
-      config: params.cfg,
-    });
-  } catch (error) {
-    await markTerminalReceiptFailure();
-    throw error;
-  }
+      sourceReplyFinal: params.sourceReplyFinal,
+      sourceTurnId,
+    }),
+    ...(params.sourceReplyFinal !== undefined
+      ? {
+          deliveryMirror: {
+            kind: "message-tool-source-reply" as const,
+            final: params.sourceReplyFinal,
+            ...(sourceTurnId ? { sourceTurnId } : {}),
+          },
+        }
+      : {}),
+    config: params.cfg,
+  });
   if (result.ok) {
     return true;
   }
-  await markTerminalReceiptFailure();
   return false;
 }

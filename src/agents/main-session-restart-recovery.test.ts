@@ -2068,7 +2068,7 @@ describe("main-session-restart-recovery", () => {
     expect(firstGatewayParams()).toMatchObject({ deliver: true });
   });
 
-  it("fails closed when a delivered terminal reply receipt could not be recorded", async () => {
+  it("fails closed while a terminal provider outcome remains unknown", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:discord:direct:123";
@@ -2079,7 +2079,7 @@ describe("main-session-restart-recovery", () => {
         status: "running",
         abortedLastRun: true,
         restartRecoveryBeforeAgentReplyState: "continue",
-        restartRecoveryDeliveryReceiptState: "unrecorded-terminal",
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
         restartRecoveryDeliveryRunId: "recovery-1",
         restartRecoveryDeliverySourceRunId: "discord-message-1",
         restartRecoveryDeliveryContext: {
@@ -2104,6 +2104,44 @@ describe("main-session-restart-recovery", () => {
     const failed = loadSessionEntry({ sessionKey, storePath });
     expect(failed?.status).toBe("failed");
     expect(failed?.restartRecoveryDeliveryReceiptState).toBeUndefined();
+  });
+
+  it("completes from a durable terminal provider receipt without replaying", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryBeforeAgentReplyState: "continue",
+        restartRecoveryDeliveryReceiptState: "delivered-terminal",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+      restartRecoveryTerminalRunIds: ["discord-message-1"],
+    });
   });
 
   it("completes a checkpointed silent before_agent_reply result without dispatch", async () => {

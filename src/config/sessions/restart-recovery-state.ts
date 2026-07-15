@@ -100,8 +100,9 @@ export function normalizeRestartRecoveryEntryFields(
   );
   assign(
     "restartRecoveryDeliveryReceiptState",
-    entry.restartRecoveryDeliveryReceiptState === "unrecorded-terminal"
-      ? "unrecorded-terminal"
+    entry.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
+      entry.restartRecoveryDeliveryReceiptState === "delivered-terminal"
+      ? entry.restartRecoveryDeliveryReceiptState
       : undefined,
   );
   assign(

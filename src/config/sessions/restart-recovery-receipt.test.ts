@@ -1,60 +1,80 @@
 import { describe, expect, it } from "vitest";
-import { markRestartRecoveryTerminalReceiptFailure } from "./restart-recovery-receipt.js";
+import {
+  beginRestartRecoveryTerminalDelivery,
+  cancelRestartRecoveryTerminalDelivery,
+  completeRestartRecoveryTerminalDelivery,
+} from "./restart-recovery-receipt.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
-describe("restart recovery terminal receipt failure", () => {
+describe("restart recovery terminal delivery receipt", () => {
   const fixture = useTempSessionsFixture("restart-receipt-");
   const sessionKey = "agent:main:discord:direct:123";
 
-  it("marks only the exact active source claim fail closed", async () => {
+  async function seedClaim(params?: { sessionId?: string; sourceTurnId?: string }) {
     await replaceSessionEntry(
       { sessionKey, storePath: fixture.storePath() },
       {
-        sessionId: "session-1",
+        sessionId: params?.sessionId ?? "session-1",
         status: "running",
         restartRecoveryDeliveryRunId: "recovery-1",
-        restartRecoveryDeliverySourceRunId: "source-1",
+        restartRecoveryDeliverySourceRunId: params?.sourceTurnId ?? "source-1",
         updatedAt: 1,
       },
     );
+  }
 
-    await expect(
-      markRestartRecoveryTerminalReceiptFailure({
-        sessionId: "session-1",
-        sessionKey,
-        sourceTurnId: "source-1",
-        storePath: fixture.storePath(),
-      }),
-    ).resolves.toBe("marked");
-    expect(loadSessionEntry({ sessionKey, storePath: fixture.storePath() })).toMatchObject({
-      restartRecoveryDeliveryReceiptState: "unrecorded-terminal",
-    });
+  function scope(params?: { sessionId?: string; sourceTurnId?: string }) {
+    return {
+      sessionId: params?.sessionId ?? "session-1",
+      sessionKey,
+      sourceTurnId: params?.sourceTurnId ?? "source-1",
+      storePath: fixture.storePath(),
+    };
+  }
+
+  it("persists pending before delivery and completion after provider success", async () => {
+    await seedClaim();
+
+    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("started");
+    expect(
+      loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
+        ?.restartRecoveryDeliveryReceiptState,
+    ).toBe("terminal-pending");
+
+    await expect(completeRestartRecoveryTerminalDelivery(scope())).resolves.toBe("recorded");
+    expect(
+      loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
+        ?.restartRecoveryDeliveryReceiptState,
+    ).toBe("delivered-terminal");
   });
 
-  it("does not write a late receipt failure into a replacement session", async () => {
-    const replacementSessionKey = "agent:main:discord:direct:456";
-    await replaceSessionEntry(
-      { sessionKey: replacementSessionKey, storePath: fixture.storePath() },
-      {
-        sessionId: "session-2",
-        status: "running",
-        restartRecoveryDeliveryRunId: "recovery-2",
-        restartRecoveryDeliverySourceRunId: "source-2",
-        updatedAt: 1,
-      },
-    );
+  it("blocks a repeated terminal send while its outcome is already durable", async () => {
+    await seedClaim();
+    await beginRestartRecoveryTerminalDelivery(scope());
 
-    await expect(
-      markRestartRecoveryTerminalReceiptFailure({
-        sessionId: "session-1",
-        sessionKey: replacementSessionKey,
-        sourceTurnId: "source-1",
-        storePath: fixture.storePath(),
-      }),
-    ).resolves.toBe("stale");
+    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("blocked");
+  });
+
+  it("clears pending only after a proven non-delivery", async () => {
+    await seedClaim();
+    await beginRestartRecoveryTerminalDelivery(scope());
+
+    await expect(cancelRestartRecoveryTerminalDelivery(scope())).resolves.toBe("cleared");
     expect(
-      loadSessionEntry({ sessionKey: replacementSessionKey, storePath: fixture.storePath() })
+      loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
+        ?.restartRecoveryDeliveryReceiptState,
+    ).toBeUndefined();
+  });
+
+  it("does not mutate a replacement session", async () => {
+    await seedClaim({ sessionId: "session-2", sourceTurnId: "source-2" });
+
+    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("stale");
+    await expect(completeRestartRecoveryTerminalDelivery(scope())).resolves.toBe("stale");
+    await expect(cancelRestartRecoveryTerminalDelivery(scope())).resolves.toBe("stale");
+    expect(
+      loadSessionEntry({ sessionKey, storePath: fixture.storePath() })
         ?.restartRecoveryDeliveryReceiptState,
     ).toBeUndefined();
   });

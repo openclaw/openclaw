@@ -1,53 +1,138 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadSessionEntry, updateSessionEntry } from "./session-accessor.js";
+import type { SessionEntry } from "./types.js";
 
-/**
- * Makes a delivered-but-unrecorded terminal reply fail closed on restart.
- * A rotated or completed claim is already safe and must not mutate its successor.
- */
-export async function markRestartRecoveryTerminalReceiptFailure(params: {
+export type RestartRecoveryTerminalDeliveryScope = {
   sessionId: string;
   sessionKey: string;
   sourceTurnId: string;
   storePath: string;
-}): Promise<"marked" | "stale"> {
+};
+
+function hasExactActiveClaim(
+  entry: SessionEntry | undefined,
+  scope: RestartRecoveryTerminalDeliveryScope,
+): entry is SessionEntry {
+  return (
+    entry?.sessionId === scope.sessionId &&
+    entry.status === "running" &&
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== undefined &&
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) === scope.sourceTurnId
+  );
+}
+
+function loadCurrent(scope: RestartRecoveryTerminalDeliveryScope): SessionEntry | undefined {
+  return loadSessionEntry({
+    sessionKey: scope.sessionKey,
+    storePath: scope.storePath,
+    readConsistency: "latest",
+  });
+}
+
+/** Persists ambiguity before a terminal external send is allowed to start. */
+export async function beginRestartRecoveryTerminalDelivery(
+  scope: RestartRecoveryTerminalDeliveryScope,
+): Promise<"started" | "blocked" | "stale"> {
+  let started = false;
   const updated = await updateSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+    { sessionKey: scope.sessionKey, storePath: scope.storePath },
     (entry) => {
-      if (
-        entry.sessionId !== params.sessionId ||
-        entry.status !== "running" ||
-        !normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ||
-        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !== params.sourceTurnId
-      ) {
+      if (!hasExactActiveClaim(entry, scope) || entry.restartRecoveryDeliveryReceiptState) {
         return null;
       }
+      started = true;
       return {
-        restartRecoveryDeliveryReceiptState: "unrecorded-terminal",
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
         updatedAt: Date.now(),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },
   );
   if (
-    updated?.sessionId === params.sessionId &&
-    normalizeOptionalString(updated.restartRecoveryDeliverySourceRunId) === params.sourceTurnId &&
-    updated.restartRecoveryDeliveryReceiptState === "unrecorded-terminal"
+    started &&
+    hasExactActiveClaim(updated, scope) &&
+    updated.restartRecoveryDeliveryReceiptState === "terminal-pending"
   ) {
-    return "marked";
+    return "started";
   }
-  const current = loadSessionEntry({
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    readConsistency: "latest",
-  });
-  const claimStillActive =
-    current?.sessionId === params.sessionId &&
-    current.status === "running" &&
-    normalizeOptionalString(current.restartRecoveryDeliveryRunId) !== undefined &&
-    normalizeOptionalString(current.restartRecoveryDeliverySourceRunId) === params.sourceTurnId;
-  if (claimStillActive) {
-    throw new Error("failed to persist fail-closed terminal reply receipt state");
+  const current = loadCurrent(scope);
+  if (!hasExactActiveClaim(current, scope)) {
+    return "stale";
   }
-  return "stale";
+  if (current.restartRecoveryDeliveryReceiptState) {
+    return "blocked";
+  }
+  throw new Error("failed to persist terminal delivery intent");
+}
+
+/** Resolves a pre-send ambiguity only after the provider confirms delivery. */
+export async function completeRestartRecoveryTerminalDelivery(
+  scope: RestartRecoveryTerminalDeliveryScope,
+): Promise<"recorded" | "stale"> {
+  const updated = await updateSessionEntry(
+    { sessionKey: scope.sessionKey, storePath: scope.storePath },
+    (entry) => {
+      if (
+        !hasExactActiveClaim(entry, scope) ||
+        entry.restartRecoveryDeliveryReceiptState !== "terminal-pending"
+      ) {
+        return null;
+      }
+      return {
+        restartRecoveryDeliveryReceiptState: "delivered-terminal",
+        updatedAt: Date.now(),
+      };
+    },
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
+  if (
+    hasExactActiveClaim(updated, scope) &&
+    updated.restartRecoveryDeliveryReceiptState === "delivered-terminal"
+  ) {
+    return "recorded";
+  }
+  const current = loadCurrent(scope);
+  if (!hasExactActiveClaim(current, scope)) {
+    return "stale";
+  }
+  if (current.restartRecoveryDeliveryReceiptState === "delivered-terminal") {
+    return "recorded";
+  }
+  throw new Error("failed to persist terminal delivery completion");
+}
+
+/** Clears the pre-send intent only when the provider proves no delivery occurred. */
+export async function cancelRestartRecoveryTerminalDelivery(
+  scope: RestartRecoveryTerminalDeliveryScope,
+): Promise<"cleared" | "stale"> {
+  const updated = await updateSessionEntry(
+    { sessionKey: scope.sessionKey, storePath: scope.storePath },
+    (entry) => {
+      if (
+        !hasExactActiveClaim(entry, scope) ||
+        entry.restartRecoveryDeliveryReceiptState !== "terminal-pending"
+      ) {
+        return null;
+      }
+      return {
+        restartRecoveryDeliveryReceiptState: undefined,
+        updatedAt: Date.now(),
+      };
+    },
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
+  if (hasExactActiveClaim(updated, scope) && !updated.restartRecoveryDeliveryReceiptState) {
+    return "cleared";
+  }
+  const current = loadCurrent(scope);
+  if (!hasExactActiveClaim(current, scope)) {
+    return "stale";
+  }
+  if (!current.restartRecoveryDeliveryReceiptState) {
+    return "cleared";
+  }
+  if (current.restartRecoveryDeliveryReceiptState === "delivered-terminal") {
+    return "stale";
+  }
+  throw new Error("failed to clear terminal delivery intent");
 }

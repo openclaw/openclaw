@@ -658,7 +658,10 @@ function isApprovalPendingToolResult(message: unknown): boolean {
 }
 
 type MainSessionResumePolicy =
-  | { action: "complete"; reason: "delivered-terminal" | "handled-silent" }
+  | {
+      action: "complete";
+      reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
+    }
   | { action: "fail"; reason: string }
   | { action: "resume"; forceRestartSafeTools: boolean };
 
@@ -672,8 +675,11 @@ function resolveMainSessionResumePolicy(
   if (hasDeliveredTerminalSourceReply(messages, expectedSourceTurnId)) {
     return { action: "complete", reason: "delivered-terminal" };
   }
-  if (deliveryReceiptState === "unrecorded-terminal") {
-    return { action: "fail", reason: "terminal source reply receipt was not durable" };
+  if (deliveryReceiptState === "delivered-terminal") {
+    return { action: "complete", reason: "delivered-terminal-receipt" };
+  }
+  if (deliveryReceiptState === "terminal-pending") {
+    return { action: "fail", reason: "terminal source reply delivery outcome is unknown" };
   }
   if (beforeAgentReplyState === "handled-silent") {
     return { action: "complete", reason: "handled-silent" };
@@ -794,7 +800,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   expectedRecoveryRunId?: string;
   expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
-  reason: "delivered-terminal" | "handled-silent";
+  reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
   storePath: string;
   sessionKey: string;
 }): Promise<boolean> {
@@ -849,7 +855,7 @@ async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   });
   if (marked) {
     log.info(
-      params.reason === "delivered-terminal"
+      params.reason === "delivered-terminal" || params.reason === "delivered-terminal-receipt"
         ? `reconciled delivered terminal reply after restart: ${params.sessionKey}`
         : `reconciled handled silent reply after restart: ${params.sessionKey}`,
     );
