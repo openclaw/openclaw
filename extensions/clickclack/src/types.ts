@@ -22,6 +22,8 @@ export type ClickClackAccountConfig = {
   reconnectMs?: number;
   /** Opt-in: publish durable agent activity (commentary + tool) rows. */
   agentActivity?: boolean;
+  /** Publish the native command catalog to ClickClack composer autocomplete. */
+  commandMenu?: boolean;
 };
 
 /** Root ClickClack channel config with optional named accounts. */
@@ -57,6 +59,7 @@ export type ResolvedClickClackAccount = {
   allowFrom: string[];
   reconnectMs: number;
   agentActivity: boolean;
+  commandMenu: boolean;
   config: ClickClackAccountConfig;
 };
 
