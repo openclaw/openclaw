@@ -348,6 +348,7 @@ const TalkSchema = z
 const McpServerSchema = z
   .object({
     enabled: z.boolean().optional(),
+    disabled: z.boolean().optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     env: z

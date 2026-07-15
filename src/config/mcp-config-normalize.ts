@@ -38,6 +38,11 @@ export function canonicalizeConfiguredMcpServer(
   server: Record<string, unknown>,
 ): Record<string, unknown> {
   const next = { ...server };
+  // Normalize `disabled: true` → canonical `enabled: false` so the flag is never silently ignored.
+  if (next.disabled === true && next.enabled === undefined) {
+    next.enabled = false;
+    delete next.disabled;
+  }
   const transportAlias = resolveOpenClawMcpTransportAlias(next.type);
   // `transport` is OpenClaw's canonical field; legacy `type` only fills a gap.
   if (typeof next.transport !== "string" && transportAlias) {
