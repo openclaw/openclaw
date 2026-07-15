@@ -167,9 +167,24 @@ async function connect() {
       // The subscription is per-socket state; the reconnect must resubscribe.
       subscribedKey = null;
       setWsStatus("err", "Disconnected");
+      abandonInFlightTurn("Disconnected");
       scheduleReconnect();
     }
   });
+}
+
+// The composer only re-enables when a run's terminal chat event arrives, and a
+// dead socket can never deliver one, so a drop mid-turn would lock input for
+// good. Abandon the turn with the socket: fail waiting requests fast (the 30s
+// timeout is the only other escape) and hand the composer back.
+function abandonInFlightTurn(reason) {
+  for (const [id, pending] of pendingReqs) {
+    pendingReqs.delete(id);
+    pending.reject(new Error(reason));
+  }
+  finalizeBubble();
+  resetChatStream(stream);
+  setInputEnabled(true);
 }
 
 // Null `ws` BEFORE close(): the close listener only retries for the CURRENT
@@ -180,6 +195,7 @@ function dropSocket() {
   ws = null;
   subscribedKey = null;
   old?.close();
+  abandonInFlightTurn("Disconnected");
 }
 
 function scheduleReconnect() {
@@ -483,7 +499,13 @@ async function deliverTurn(text) {
 
 async function sendMessage() {
   const text = msgInput.value.trim();
-  if (!text || !ws || ws.readyState !== WebSocket.OPEN) {
+  if (!text) {
+    return;
+  }
+  // Say so rather than swallowing the turn: the composer is live while the
+  // panel is reconnecting, so a silent no-op reads as the panel being broken.
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    addMessage("system", "Not connected to the gateway yet — reconnecting.");
     return;
   }
   msgInput.value = "";
@@ -568,6 +590,10 @@ async function onNewChat() {
   messagesEl.innerHTML = "";
   resetChatStream(stream);
   streamingEl = null;
+  // Starting a fresh thread mid-run swaps sessionKey, so the old run's terminal
+  // event is filtered by handleChatEvent and can no longer re-enable the
+  // composer. A new conversation always accepts input.
+  setInputEnabled(true);
   addMessage("system", "Fresh conversation for this tab.");
 }
 newBtn.addEventListener("click", () => void onNewChat());
