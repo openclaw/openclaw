@@ -313,7 +313,7 @@ export function resolveUsableCustomProviderApiKey(params: {
       return null;
     }
     const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[envVarName]);
-    if (!envValue) {
+    if (!envValue || isNonSecretApiKeyMarker(envValue)) {
       return null;
     }
     const applied = new Set(getShellEnvAppliedKeys());

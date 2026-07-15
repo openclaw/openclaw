@@ -151,6 +151,9 @@ export function resolveProviderAuthOverview(params: {
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
 
   const effective: ProviderAuthOverview["effective"] = (() => {
+    if (cfg.models?.providers?.[provider]?.auth === "api-key" && usableCustomKey) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
     if (profiles.length > 0) {
       // Profiles win over env/config markers because runtime auth selection uses
       // the profile store before provider-wide fallback material.
@@ -174,9 +177,6 @@ export function resolveProviderAuthOverview(params: {
         kind: "env",
         detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
       };
-    }
-    if (usableCustomKey) {
-      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };

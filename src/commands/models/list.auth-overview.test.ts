@@ -38,7 +38,13 @@ vi.mock("../../agents/auth-profiles/usage.js", () => ({
 
 vi.mock("../../agents/model-auth.js", () => {
   const resolveConfigKey = (
-    cfg: { models?: { providers?: Record<string, { apiKey?: string }> } } | undefined,
+    cfg:
+      | {
+          models?: {
+            providers?: Record<string, { apiKey?: string; auth?: string }>;
+          };
+        }
+      | undefined,
     provider: string,
   ) => cfg?.models?.providers?.[provider]?.apiKey;
 
@@ -204,6 +210,52 @@ describe("resolveProviderAuthOverview", () => {
       kind: "profiles",
       detail: "/tmp/auth-profiles.json",
     });
+  });
+
+  it("reports models.json as effective only when api-key auth opts in", () => {
+    const store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "profile-key",
+        },
+      },
+    };
+    const baseConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "models-json-key",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const profileFirst = resolveProviderAuthOverview({
+      provider: "openai",
+      cfg: baseConfig as never,
+      store,
+      modelsPath: "/tmp/models.json",
+    });
+    const configFirst = resolveProviderAuthOverview({
+      provider: "openai",
+      cfg: {
+        models: {
+          providers: {
+            openai: { ...baseConfig.models.providers.openai, auth: "api-key" },
+          },
+        },
+      },
+      store,
+      modelsPath: "/tmp/models.json",
+    });
+
+    expect(profileFirst.effective.kind).toBe("profiles");
+    expect(configFirst.effective.kind).toBe("models.json");
   });
 
   it("renders marker-backed models.json auth as marker detail", () => {
