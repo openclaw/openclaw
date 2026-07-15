@@ -61,6 +61,7 @@ function decodePointerSegment(value: string): string {
 }
 
 function parseJsonPointerArrayIndex(segment: string): number | undefined {
+  // RFC 6901 array tokens are canonical decimal indices; object tokens remain opaque keys.
   if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
     return undefined;
   }

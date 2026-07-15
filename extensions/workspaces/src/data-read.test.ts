@@ -73,13 +73,26 @@ describe("workspace data binding resolver", () => {
       );
 
       await expect(
+        resolveBinding({ source: "file", path: "items.json", pointer: "/items/0" }, { stateDir }),
+      ).resolves.toBe("zero");
+      await expect(
         resolveBinding({ source: "file", path: "items.json", pointer: "/items/1" }, { stateDir }),
       ).resolves.toBe("one");
       await expect(
         resolveBinding({ source: "file", path: "items.json", pointer: "/lookup/01" }, { stateDir }),
       ).resolves.toBe("object-key");
 
-      for (const segment of ["", " ", "01", "+1", "-0", "1.0", "1e0", "0x1"]) {
+      for (const segment of [
+        "",
+        " ",
+        "01",
+        "+1",
+        "-0",
+        "1.0",
+        "1e0",
+        "0x1",
+        "9007199254740993",
+      ]) {
         await expect(
           resolveBinding(
             { source: "file", path: "items.json", pointer: `/items/${segment}` },
