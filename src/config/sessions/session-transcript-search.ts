@@ -2,24 +2,22 @@
 // inside the accessor's write transactions (session-transcript-index.ts);
 // this module owns the query path and the lazy reconcile that backfills
 // doctor-migrated transcripts and rebuilds branch-rewound sessions.
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import {
-  deleteOrphanedTranscriptIndexRowsInTransaction,
-  listSessionsNeedingTranscriptIndexReconcile,
-  rebuildSessionTranscriptIndexInTransaction,
-} from "./session-transcript-index.js";
+import { resolveStateDir } from "../paths.js";
+import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 
 const log = createSubsystemLogger("sessions/search-index");
 const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
+const RECONCILE_WORKER_TIMEOUT_MS = 60_000;
+const RECONCILE_PLANNING_TIMEOUT_MS = 30 * 60_000;
 
 type SessionTranscriptSearchHit = {
   sessionKey: string;
@@ -38,75 +36,171 @@ type SessionTranscriptSearchResult = {
 };
 
 const runningReconciles = new Map<string, Promise<void>>();
+const activeReconciles = new Map<string, Promise<void>>();
+let reconcileQueue = Promise.resolve();
 
 /**
- * Rebuilds every session whose index state lags its transcript rows, then
- * sweeps orphaned index rows. One write transaction per session keeps the
- * agent DB responsive to live appends between rebuilds.
+ * Starts one worker-owned reconcile per agent. The worker plans outside
+ * transactions and commits bounded batches so Gateway-thread SQLite writers
+ * never wait behind a whole transcript rebuild.
  */
-async function reconcileSessionTranscriptIndex(params: {
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const database = openOpenClawAgentDatabase({
-    agentId: params.agentId,
-    ...(params.env ? { env: params.env } : {}),
-  });
-  const sessionIds = listSessionsNeedingTranscriptIndexReconcile(database.db);
-  for (const sessionId of sessionIds) {
-    runOpenClawAgentWriteTransaction(
-      (agentDatabase) => {
-        // Rows are reread inside the transaction: a live append that landed
-        // after the dirty scan is either included here or re-flagged by its
-        // own in-transaction hook, so the rebuild can never go stale.
-        const rows = executeSqliteQuerySync(
-          agentDatabase.db,
-          getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "transcript_events">>(
-            agentDatabase.db,
-          )
-            .selectFrom("transcript_events")
-            .select(["seq", "event_json"])
-            .where("session_id", "=", sessionId)
-            .orderBy("seq", "asc"),
-        ).rows;
-        if (rows.length === 0) {
-          return;
-        }
-        const events = rows.map((row) => JSON.parse(row.event_json) as unknown);
-        const maxSeq = rows[rows.length - 1]?.seq ?? -1;
-        rebuildSessionTranscriptIndexInTransaction(agentDatabase.db, sessionId, events, maxSeq);
-      },
-      { agentId: params.agentId, ...(params.env ? { env: params.env } : {}) },
-      { operationLabel: "sessions.search.reconcile" },
+function resolveReconcileWorkerUrl(currentModuleUrl = import.meta.url): URL {
+  const currentPath = fileURLToPath(currentModuleUrl);
+  const normalized = currentPath.replaceAll(path.sep, "/");
+  const distIndex = normalized.lastIndexOf("/dist/");
+  if (distIndex >= 0) {
+    return pathToFileURL(
+      path.join(
+        currentPath.slice(0, distIndex + 6),
+        "config",
+        "sessions",
+        "session-transcript-reconcile.worker.js",
+      ),
     );
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
   }
-  runOpenClawAgentWriteTransaction(
-    (agentDatabase) => {
-      deleteOrphanedTranscriptIndexRowsInTransaction(agentDatabase.db);
-    },
-    { agentId: params.agentId, ...(params.env ? { env: params.env } : {}) },
-    { operationLabel: "sessions.search.orphan-sweep" },
-  );
+  const extension = path.extname(currentPath) || ".js";
+  return new URL(`./session-transcript-reconcile.worker${extension}`, currentModuleUrl);
+}
+
+function reconcileKey(params: { agentId: string; env?: NodeJS.ProcessEnv }): string {
+  return `${resolveStateDir(params.env)}\0${params.agentId}`;
+}
+
+function runReconcileWorker(params: {
+  agentId: string;
+  stateDir: string;
+  workerUrl?: URL;
+  timeoutMs?: number;
+  planningTimeoutMs?: number;
+  onStarted?: () => void;
+}): Promise<void> {
+  const workerUrl = params.workerUrl ?? resolveReconcileWorkerUrl();
+  let worker: Worker;
+  try {
+    worker = new Worker(workerUrl, {
+      workerData: { agentId: params.agentId, stateDir: params.stateDir },
+      execArgv: workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined,
+    });
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+  }
+  worker.unref?.();
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    const scheduleTimeout = (timeoutMs: number) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        finish(() => reject(new Error("session transcript reconcile worker timed out")), true);
+      }, timeoutMs);
+      timeout.unref?.();
+    };
+    const finish = (done: () => void, terminate: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      worker.removeAllListeners();
+      if (terminate) {
+        void worker.terminate();
+      }
+      done();
+    };
+    worker.on("message", (message: { status?: unknown; error?: unknown }) => {
+      if (message.status === "ready") {
+        // Planning is read-only and can be large, so it gets a generous
+        // watchdog distinct from bounded-write inactivity.
+        scheduleTimeout(
+          resolveTimerTimeoutMs(params.planningTimeoutMs, RECONCILE_PLANNING_TIMEOUT_MS),
+        );
+        return;
+      }
+      if (message.status === "started") {
+        scheduleTimeout(resolveTimerTimeoutMs(params.timeoutMs, RECONCILE_WORKER_TIMEOUT_MS));
+        params.onStarted?.();
+        return;
+      }
+      if (message.status === "progress") {
+        scheduleTimeout(resolveTimerTimeoutMs(params.timeoutMs, RECONCILE_WORKER_TIMEOUT_MS));
+        return;
+      }
+      finish(
+        () =>
+          message.status === "ok"
+            ? resolve()
+            : reject(
+                new Error(
+                  typeof message.error === "string"
+                    ? message.error
+                    : "session transcript reconcile worker failed",
+                ),
+              ),
+        false,
+      );
+    });
+    worker.once("error", (error) =>
+      finish(
+        () =>
+          reject(
+            error instanceof Error
+              ? new Error(error.message, { cause: error })
+              : new Error(String(error)),
+          ),
+        true,
+      ),
+    );
+    worker.once("exit", (code) =>
+      finish(
+        () =>
+          reject(
+            new Error(
+              `session transcript reconcile worker exited before completing (code ${code})`,
+            ),
+          ),
+        false,
+      ),
+    );
+    scheduleTimeout(resolveTimerTimeoutMs(params.timeoutMs, RECONCILE_WORKER_TIMEOUT_MS));
+  });
 }
 
 function startReconcile(params: { agentId: string; env?: NodeJS.ProcessEnv }): void {
-  if (runningReconciles.has(params.agentId)) {
+  const key = reconcileKey(params);
+  if (runningReconciles.has(key)) {
     return;
   }
-  const pending = reconcileSessionTranscriptIndex(params)
+  let markStarted!: () => void;
+  activeReconciles.set(
+    key,
+    new Promise<void>((resolve) => {
+      markStarted = resolve;
+    }),
+  );
+  // Reconcile is cache maintenance, not request work. One process-wide slot
+  // bounds worker/SQLite pressure while the DB claim protects other processes.
+  const pending = reconcileQueue
+    .then(() =>
+      runReconcileWorker({
+        agentId: params.agentId,
+        stateDir: resolveStateDir(params.env),
+        onStarted: markStarted,
+      }),
+    )
     .catch((error: unknown) => {
-      // The next search re-detects dirty sessions and retries.
+      // Leave the dirty marker intact. A later search retries without ever
+      // falling back to a Gateway-thread rebuild.
       log.warn(
         `session transcript reconcile failed agent=${params.agentId} error=${error instanceof Error ? error.message : String(error)}`,
       );
     })
     .finally(() => {
-      runningReconciles.delete(params.agentId);
+      markStarted();
+      runningReconciles.delete(key);
+      activeReconciles.delete(key);
     });
-  runningReconciles.set(params.agentId, pending);
+  runningReconciles.set(key, pending);
+  reconcileQueue = pending;
 }
 
 function toFtsQuery(query: string): string {
@@ -140,7 +234,7 @@ export function searchSessionTranscripts(params: {
   if (dirtySessions.length > 0) {
     startReconcile(params);
   }
-  const indexing = dirtySessions.length > 0 || runningReconciles.has(params.agentId);
+  const indexing = dirtySessions.length > 0 || runningReconciles.has(reconcileKey(params));
   const limit = Math.min(Math.max(1, params.limit ?? 10), SEARCH_LIMIT_MAX);
   const sessionKeys = params.sessionKeys ?? [];
   const whereSession =
@@ -152,7 +246,9 @@ export function searchSessionTranscripts(params: {
   // never leave stale keys inside the index. Sessions flagged needs_rebuild
   // are excluded: their rows may still hold rewound-away branch text that
   // sessions_history no longer exposes, so they stay hidden until reconcile
-  // rebuilds them (indexing=true tells the caller to retry).
+  // rebuilds them (indexing=true tells the caller to retry). Requiring a
+  // current clean watermark also hides stale FTS rows before a worker has
+  // claimed a missing or lagging index-state row.
   const statement = database.db.prepare(/* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 */ `
     SELECT sessions.session_key AS session_key, session_transcript_fts.session_id AS session_id,
       message_id, role, timestamp,
@@ -160,10 +256,15 @@ export function searchSessionTranscripts(params: {
       bm25(session_transcript_fts) AS rank
     FROM session_transcript_fts
     JOIN sessions ON sessions.session_id = session_transcript_fts.session_id
+    JOIN session_transcript_index_state AS index_state
+      ON index_state.session_id = session_transcript_fts.session_id
+      AND index_state.needs_rebuild = 0
+      AND index_state.indexed_seq >= COALESCE((
+        SELECT MAX(transcript_events.seq)
+        FROM transcript_events
+        WHERE transcript_events.session_id = session_transcript_fts.session_id
+      ), -1)
     WHERE session_transcript_fts MATCH ?${whereSession}
-      AND session_transcript_fts.session_id NOT IN (
-        SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild != 0
-      )
     ORDER BY rank ASC, timestamp DESC, message_id ASC
     LIMIT ?
   `);
@@ -206,3 +307,21 @@ export function searchSessionTranscripts(params: {
   });
   return { hits: hits.slice(0, limit), indexing, truncated: hits.length > limit };
 }
+
+/** Await active reconcile passes in focused tests. */
+export async function waitForSessionTranscriptReconcileForTest(): Promise<void> {
+  await Promise.all(runningReconciles.values());
+}
+
+/** Await worker startup in focused responsiveness tests. */
+export async function waitForSessionTranscriptReconcileActiveForTest(): Promise<void> {
+  await Promise.all(activeReconciles.values());
+}
+
+/** Test-only worker lifecycle and packaging seams. */
+export const sessionTranscriptSearchTesting = {
+  reconcileWorkerTimeoutMs: RECONCILE_WORKER_TIMEOUT_MS,
+  reconcilePlanningTimeoutMs: RECONCILE_PLANNING_TIMEOUT_MS,
+  resolveReconcileWorkerUrl,
+  runReconcileWorker,
+};

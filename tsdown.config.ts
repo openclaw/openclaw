@@ -259,10 +259,8 @@ function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
-    // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
+    // Stable entries keep CLI shims resolvable and running gateways off stale hashed chunks.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
-    // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
-    // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
@@ -270,6 +268,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "audit/audit-event-writer.worker": "src/audit/audit-event-writer.worker.ts",
+    "config/sessions/session-transcript-reconcile.worker":
+      "src/config/sessions/session-transcript-reconcile.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
