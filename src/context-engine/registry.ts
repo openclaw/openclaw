@@ -557,6 +557,10 @@ export function registerContextEngineForOwner(
     // not replace the runtime-safe factory with a closure that captured a read-only plugin mode.
     return { ok: true };
   }
+  if (existing?.lifecycle === "readOnlyDiscovery" && lifecycle === "runtime") {
+    // Runtime activation after read-only discovery — upgrade lifecycle and factory.
+    // Falls through to the registry update below.
+  }
   if (existing && opts?.allowSameOwnerRefresh !== true) {
     return { ok: false, existingOwner: existing.owner };
   }
