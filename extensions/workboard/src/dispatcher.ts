@@ -231,9 +231,10 @@ function selectStartableCards(
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
     const consumesOwnerSlot =
-      card.status === "running" ||
-      Boolean(card.metadata?.claim) ||
-      card.execution?.status === "running";
+      card.status !== "done" &&
+      (card.status === "running" ||
+        Boolean(card.metadata?.claim) ||
+        card.execution?.status === "running");
     if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
     }
