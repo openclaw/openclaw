@@ -2376,7 +2376,6 @@ describe("createCodexDynamicToolBridge", () => {
       frameToolCallId?: string;
       frameImageIdentity?: string;
     } = { value: 0 };
-    let started = true;
     const bridge = createCodexDynamicToolBridge({
       tools: [
         createTool({
@@ -2395,17 +2394,6 @@ describe("createCodexDynamicToolBridge", () => {
       ],
       signal: new AbortController().signal,
       computerContextEpoch,
-      hookContext: {
-        toolExecutionRuntime: {
-          consumeStarted: () => {
-            const value = started;
-            started = false;
-            return value;
-          },
-          peekArguments: () => undefined,
-          peekStarted: () => started,
-        },
-      },
     });
 
     const result = await bridge.handleToolCall({
@@ -3321,6 +3309,59 @@ describe("createCodexDynamicToolBridge", () => {
       expect.any(AbortSignal),
       undefined,
     );
+  });
+
+  it("retains hook-adjusted arguments until post-execution middleware completes", async () => {
+    const runId = "run-delayed-middleware";
+    const callId = "call-delayed-middleware";
+    const beforeToolCall = vi.fn(async () => ({ params: { target: "channel:adjusted" } }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    let releaseMiddleware: (() => void) | undefined;
+    const middlewareGate = new Promise<void>((resolve) => {
+      releaseMiddleware = resolve;
+    });
+    const registry = createEmptyPluginRegistry();
+    const middleware = vi.fn(async (event: { result: AgentToolResult<unknown> }) => {
+      await middlewareGate;
+      return { result: event.result };
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "delayed",
+      pluginName: "Delayed",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message", execute: vi.fn(async () => textToolResult("ok")) })],
+      signal: new AbortController().signal,
+      hookContext: { runId },
+    });
+
+    const result = bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId,
+      namespace: null,
+      tool: "message",
+      arguments: { action: "send", target: "channel:original", text: "hello" },
+    });
+    await vi.waitFor(() => expect(middleware).toHaveBeenCalledOnce());
+
+    expect(bridge.consumeToolExecutionSnapshot?.(callId)).toEqual({
+      executedArguments: {
+        action: "send",
+        target: "channel:adjusted",
+        text: "hello",
+      },
+    });
+    releaseMiddleware?.();
+    await result;
+    expect(bridge.consumeToolExecutionSnapshot?.(callId)).toBeUndefined();
   });
 
   it("does not execute dynamic tools blocked by before_tool_call", async () => {

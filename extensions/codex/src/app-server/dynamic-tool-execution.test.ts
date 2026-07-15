@@ -311,6 +311,10 @@ describe("dynamic tool execution helpers", () => {
       signal: new AbortController().signal,
       timeoutMs: 1,
       onAgentToolResult,
+      observeToolTerminal: () => ({
+        executionStarted: true,
+        sideEffectEvidence: true,
+      }),
       onFallbackSelected,
       onTimeout,
     });
@@ -351,7 +355,10 @@ describe("dynamic tool execution helpers", () => {
 
   it("marks a timeout during pre-execution hooks as unstarted", async () => {
     vi.useFakeTimers();
-    const consumeStarted = vi.fn(() => false);
+    const observeToolTerminal = vi.fn(() => ({
+      executionStarted: false,
+      sideEffectEvidence: false,
+    }));
     const response = handleDynamicToolCallWithTimeout({
       call: {
         threadId: "thread-1",
@@ -364,24 +371,23 @@ describe("dynamic tool execution helpers", () => {
       toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
       signal: new AbortController().signal,
       timeoutMs: 1,
-      executionState: {
-        runId: "run-prehook-timeout",
-        toolExecutionRuntime: {
-          consumeStarted,
-          peekArguments: () => undefined,
-          peekStarted: () => false,
-        },
-      },
+      observeToolTerminal,
     });
 
     await vi.advanceTimersByTimeAsync(1);
 
     await expect(response).resolves.toMatchObject({ executionStarted: false, success: false });
     expect((await response).sideEffectEvidence).toBeUndefined();
-    expect(consumeStarted).toHaveBeenCalledWith("call-prehook-timeout", "run-prehook-timeout");
+    expect(observeToolTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCallId: "call-prehook-timeout",
+        toolName: "message",
+        outcome: "failure",
+      }),
+    );
   });
 
-  it("uses the dispatched fallback for untracked custom tools", async () => {
+  it("uses a conservative dispatched fallback without a terminal observer", async () => {
     vi.useFakeTimers();
     const response = handleDynamicToolCallWithTimeout({
       call: {
@@ -395,14 +401,6 @@ describe("dynamic tool execution helpers", () => {
       toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
       signal: new AbortController().signal,
       timeoutMs: 1,
-      executionState: {
-        runId: "run-untracked-timeout",
-        toolExecutionRuntime: {
-          consumeStarted: () => undefined,
-          peekArguments: () => undefined,
-          peekStarted: () => undefined,
-        },
-      },
     });
 
     await vi.advanceTimersByTimeAsync(1);
@@ -690,14 +688,11 @@ describe("dynamic tool execution helpers", () => {
       },
       signal: new AbortController().signal,
       timeoutMs: 1,
-      executionState: {
-        runId: "run-timeout",
-        toolExecutionRuntime: {
-          consumeStarted: () => true,
-          peekArguments: () => ({ action: "poll", sessionId: "adjusted-session" }),
-          peekStarted: () => true,
-        },
-      },
+      observeToolTerminal: () => ({
+        executionStarted: true,
+        executedArguments: { action: "poll", sessionId: "adjusted-session" },
+        sideEffectEvidence: true,
+      }),
     });
 
     await vi.advanceTimersByTimeAsync(1);

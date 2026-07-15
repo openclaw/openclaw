@@ -23,7 +23,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { createCodexTestModel, createCodexTestToolMutationRuntime } from "./test-support.js";
+import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
 const TURN_ID = "turn-1";
@@ -78,7 +78,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(),
     thinkLevel: "medium",
-    toolMutationRuntime: createCodexTestToolMutationRuntime(),
+    observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -4627,27 +4627,10 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("preserves distinct native mutation failures when only one action recovers", async () => {
-    const pending = new Map<
-      string,
-      Parameters<NonNullable<EmbeddedRunAttemptParams["toolMutationRuntime"]>["mergeError"]>[0]
-    >();
-    const actionKey = (action: { toolName: string; meta?: string; actionFingerprint?: string }) =>
-      action.actionFingerprint ?? `${action.toolName}:${action.meta ?? ""}`;
-    const toolMutationRuntime = createCodexTestToolMutationRuntime();
-    toolMutationRuntime.mergeError = vi.fn((next, current) => {
-      if (next.mutatingAction !== true) {
-        return current?.mutatingAction ? current : next;
-      }
-      pending.set(actionKey(next), next);
-      return [...pending.values()].at(-1) ?? next;
-    });
-    toolMutationRuntime.resolveSuccess = vi.fn((_current, success) => {
-      pending.delete(actionKey(success));
-      return [...pending.values()].at(-1);
-    });
+    const observeToolTerminal = vi.fn(createCodexTestToolTerminalObserver());
     const projector = await createProjector({
       ...(await createParams()),
-      toolMutationRuntime,
+      observeToolTerminal,
     });
     const commandItem = (
       id: string,
@@ -4700,8 +4683,7 @@ describe("CodexAppServerEventProjector", () => {
     );
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
-    expect(toolMutationRuntime.mergeError).toHaveBeenCalledTimes(2);
-    expect(toolMutationRuntime.resolveSuccess).toHaveBeenCalledTimes(2);
+    expect(observeToolTerminal).toHaveBeenCalledTimes(4);
   });
 
   it("does not clear a declined native tool error with a different action", async () => {
@@ -5203,7 +5185,8 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("does not keep side-effect evidence for pre-execution dynamic tool errors", async () => {
-    const projector = await createProjector();
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
 
     projector.recordDynamicToolCall({
       callId: "call-unknown-message",
@@ -5213,6 +5196,14 @@ describe("CodexAppServerEventProjector", () => {
     projector.recordDynamicToolResult({
       callId: "call-unknown-message",
       tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-unknown-message",
+        toolName: "message",
+        arguments: { action: "send", text: "hello" },
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "Unknown OpenClaw tool: message" },
+      }),
       success: false,
       terminalType: "error",
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: message" }],
@@ -5228,14 +5219,21 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("does not mark a blocked pre-execution dynamic mutation as attempted", async () => {
-    const projector = await createProjector();
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
     const messageArgs = { action: "send", to: "channel:123", message: "hello" };
 
     projector.recordDynamicToolResult({
       callId: "call-message-preflight-blocked",
       tool: "message",
-      executionStarted: false,
-      mutationState: createCodexTestToolMutationRuntime().classify("message", messageArgs),
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-preflight-blocked",
+        toolName: "message",
+        arguments: messageArgs,
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "blocked before execution" },
+      }),
       success: false,
       terminalType: "blocked",
       contentItems: [{ type: "inputText", text: "blocked before execution" }],
@@ -5248,7 +5246,8 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("keeps a blocked dynamic mutation until the same action succeeds", async () => {
-    const projector = await createProjector();
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
     const messageArgs = {
       action: "send",
       provider: "discord",
@@ -5259,12 +5258,15 @@ describe("CodexAppServerEventProjector", () => {
     projector.recordDynamicToolResult({
       callId: "call-message-blocked",
       tool: "message",
-      executionStarted: true,
-      mutationState: createCodexTestToolMutationRuntime().classify(
-        "message",
-        messageArgs,
-        "send to channel:123",
-      ),
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-blocked",
+        toolName: "message",
+        arguments: messageArgs,
+        meta: "send to channel:123",
+        executionStarted: true,
+        outcome: "failure",
+        failure: { error: "cross-context messaging denied" },
+      }),
       success: false,
       terminalType: "blocked",
       contentItems: [{ type: "inputText", text: "cross-context messaging denied" }],
@@ -5280,9 +5282,13 @@ describe("CodexAppServerEventProjector", () => {
     projector.recordDynamicToolResult({
       callId: "call-read-failed",
       tool: "read",
-      executionStarted: true,
-      mutationState: createCodexTestToolMutationRuntime().classify("read", {
-        path: "/tmp/missing",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-read-failed",
+        toolName: "read",
+        arguments: { path: "/tmp/missing" },
+        executionStarted: true,
+        outcome: "failure",
+        failure: { error: "file not found" },
       }),
       success: false,
       terminalType: "error",
@@ -5297,10 +5303,12 @@ describe("CodexAppServerEventProjector", () => {
     projector.recordDynamicToolResult({
       callId: "call-heartbeat-response",
       tool: "heartbeat_respond",
-      executionStarted: true,
-      mutationState: createCodexTestToolMutationRuntime().classify("heartbeat_respond", {
-        notify: false,
-        summary: "nothing else changed",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-heartbeat-response",
+        toolName: "heartbeat_respond",
+        arguments: { notify: false, summary: "nothing else changed" },
+        executionStarted: true,
+        outcome: "success",
       }),
       success: true,
       terminalType: "completed",
@@ -5315,12 +5323,14 @@ describe("CodexAppServerEventProjector", () => {
     projector.recordDynamicToolResult({
       callId: "call-message-retry",
       tool: "message",
-      executionStarted: true,
-      mutationState: createCodexTestToolMutationRuntime().classify(
-        "message",
-        messageArgs,
-        "send to channel:123",
-      ),
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-retry",
+        toolName: "message",
+        arguments: messageArgs,
+        meta: "send to channel:123",
+        executionStarted: true,
+        outcome: "success",
+      }),
       success: true,
       terminalType: "completed",
       contentItems: [{ type: "inputText", text: "sent" }],

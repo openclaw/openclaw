@@ -490,7 +490,7 @@ export async function runCodexAppServerSideQuestion(
             toolBridge,
             signal: runAbortController.signal,
             timeoutMs,
-            executionState: sideRunParams,
+            observeToolTerminal: sideRunParams.observeToolTerminal,
           });
           emitDynamicToolTerminalDiagnostic({
             ...diagnosticContext,

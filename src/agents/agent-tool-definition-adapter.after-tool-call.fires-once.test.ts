@@ -103,6 +103,8 @@ async function loadFreshAfterToolCallModulesForTest() {
     consumePreExecutionBlockedToolCall: vi.fn(() => false),
     consumeTrackedToolExecutionStarted: vi.fn(() => undefined),
     consumeStructuredReplaySafeToolCall: vi.fn(() => false),
+    peekAdjustedParamsForToolCall: vi.fn(() => undefined),
+    peekPreExecutionBlockedToolCall: vi.fn(() => false),
   }));
   vi.doMock("./agent-tools.before-tool-call.js", () => ({
     BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,

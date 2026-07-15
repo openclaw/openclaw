@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeUnresolvedMutationError, resolveSuccessfulToolMutation } from "./tool-error-state.js";
+import { createToolErrorState } from "./tool-error-state.js";
 
 describe("unresolved tool mutation errors", () => {
   it("retains action A after action B fails and then succeeds", () => {
@@ -16,22 +16,21 @@ describe("unresolved tool mutation errors", () => {
       actionFingerprint: "tool=message|action=send|to=channel:b",
     } as const;
 
-    const bothFailed = mergeUnresolvedMutationError(
-      actionB,
-      mergeUnresolvedMutationError(actionA, undefined),
-    );
+    const state = createToolErrorState();
+    state.recordFailure(actionA);
+    const bothFailed = state.recordFailure(actionB);
     expect(bothFailed).toMatchObject({
       actionFingerprint: actionB.actionFingerprint,
     });
-    expect(Object.keys(bothFailed)).not.toContain("unresolvedMutations");
+    expect(Object.getOwnPropertySymbols(bothFailed)).toHaveLength(0);
     expect(JSON.stringify(bothFailed)).not.toContain(actionA.error);
 
-    const afterBRecovers = resolveSuccessfulToolMutation({ ...bothFailed }, actionB);
+    const afterBRecovers = state.recordSuccess(actionB);
     expect(afterBRecovers).toMatchObject({
       actionFingerprint: actionA.actionFingerprint,
       error: actionA.error,
     });
-    expect(resolveSuccessfulToolMutation(afterBRecovers, actionA)).toBeUndefined();
+    expect(state.recordSuccess(actionA)).toBeUndefined();
   });
 
   it("updates repeated failures for the same action without duplicating state", () => {
@@ -43,9 +42,9 @@ describe("unresolved tool mutation errors", () => {
     } as const;
     const latest = { ...first, error: "latest failure" };
 
-    expect(
-      mergeUnresolvedMutationError(latest, mergeUnresolvedMutationError(first, undefined)),
-    ).toEqual(latest);
+    const state = createToolErrorState();
+    state.recordFailure(first);
+    expect(state.recordFailure(latest)).toEqual(latest);
   });
 
   it("moves a repeated action failure to the latest public position", () => {
@@ -61,12 +60,12 @@ describe("unresolved tool mutation errors", () => {
       mutatingAction: true,
       actionFingerprint: "tool=message|action=send|to=channel:b",
     } as const;
-    const state = mergeUnresolvedMutationError(
-      actionA,
-      mergeUnresolvedMutationError(actionB, mergeUnresolvedMutationError(actionA, undefined)),
-    );
+    const state = createToolErrorState();
+    state.recordFailure(actionA);
+    state.recordFailure(actionB);
+    const latest = state.recordFailure(actionA);
 
-    expect(state.error).toBe("A failed again");
-    expect(resolveSuccessfulToolMutation(state, actionA)?.error).toBe("B failed");
+    expect(latest.error).toBe("A failed again");
+    expect(state.recordSuccess(actionA)?.error).toBe("B failed");
   });
 });

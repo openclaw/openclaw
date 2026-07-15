@@ -5,7 +5,7 @@ import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
-import { TOOL_EXECUTION_RUNTIME, TOOL_MUTATION_RUNTIME } from "../../tool-runtime.js";
+import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
@@ -100,6 +100,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   cancellationRequested: boolean;
 }> {
   const { params, runtime, control } = input;
+  const observeToolTerminal = createToolTerminalObserver(params.runId);
   const attemptAbortController = new AbortController();
   control.setPostCompactionAbortController(attemptAbortController);
   const parentAbortSignal = params.abortSignal;
@@ -242,8 +243,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         }
       : {}),
     runtimePlan: runtime.runtimePlan,
-    toolExecutionRuntime: TOOL_EXECUTION_RUNTIME,
-    toolMutationRuntime: TOOL_MUTATION_RUNTIME,
+    observeToolTerminal,
     model: applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(runtime.model, runtime.apiKeyInfo),
       runtime.runtimeAuthActive ? null : runtime.apiKeyInfo,

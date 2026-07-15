@@ -52,17 +52,36 @@ type EmbeddedRunContextWindowInfo = {
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
 
-type EmbeddedRunAttemptToolMutationRuntime = {
-  classify: typeof import("../../tool-mutation.js").buildToolMutationState;
-  mergeError: typeof import("../../tool-error-state.js").mergeUnresolvedMutationError;
-  resolveSuccess: typeof import("../../tool-error-state.js").resolveSuccessfulToolMutation;
+type EmbeddedRunAttemptToolTerminalObservation = {
+  toolCallId?: string;
+  toolName: string;
+  arguments?: unknown;
+  meta?: string;
+  executionStarted?: boolean;
+  outcome: "success" | "failure";
+  failure?: Omit<
+    ToolErrorSummary,
+    "toolName" | "meta" | "mutatingAction" | "actionFingerprint" | "fileTarget"
+  >;
+  /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
+  nativeMutation?: {
+    mutatingAction: boolean;
+    replaySafe: boolean;
+    actionFingerprint?: string;
+    fileTarget?: ToolErrorSummary["fileTarget"];
+  };
 };
 
-type EmbeddedRunAttemptToolExecutionRuntime = {
-  consumeStarted: typeof import("../../agent-tools.before-tool-call.state.js").consumeTrackedToolExecutionStarted;
-  peekArguments: typeof import("../../agent-tools.before-tool-call.state.js").peekAdjustedParamsForToolCall;
-  peekStarted: typeof import("../../agent-tools.before-tool-call.state.js").peekTrackedToolExecutionStarted;
+type EmbeddedRunAttemptToolTerminalResolution = {
+  lastToolError?: ToolErrorSummary;
+  executionStarted: boolean;
+  executedArguments?: Record<string, unknown>;
+  sideEffectEvidence: boolean;
 };
+
+type EmbeddedRunAttemptToolTerminalObserver = (
+  observation: EmbeddedRunAttemptToolTerminalObservation,
+) => EmbeddedRunAttemptToolTerminalResolution;
 
 /** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
 export type EmbeddedRunAttemptTrajectoryRecorder = {
@@ -104,10 +123,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
-  /** Host-owned mutation policy shared by built-in and plugin harnesses. */
-  toolMutationRuntime?: EmbeddedRunAttemptToolMutationRuntime;
-  /** Host-owned evidence for the exact boundary where a wrapped tool body starts. */
-  toolExecutionRuntime?: EmbeddedRunAttemptToolExecutionRuntime;
+  /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
+  observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */

@@ -4,45 +4,43 @@ import type {
   CodexDynamicToolDiagnosticTerminalReason,
 } from "./protocol.js";
 
-type ToolExecutionContext = {
-  runId?: string;
-  toolExecutionRuntime?: EmbeddedRunAttemptParams["toolExecutionRuntime"];
-};
-
-export function readDynamicToolExecutionStarted(
-  context: ToolExecutionContext | undefined,
-  toolCallId: string,
-  fallback: boolean,
-): boolean {
-  return context?.toolExecutionRuntime?.peekStarted(toolCallId, context.runId) ?? fallback;
-}
-
-function readDynamicToolExecutedArguments(
-  context: ToolExecutionContext | undefined,
-  toolCallId: string,
-): Record<string, unknown> | undefined {
-  const value = context?.toolExecutionRuntime?.peekArguments(toolCallId, context.runId);
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-export function readDynamicToolExecutionState(
-  context: ToolExecutionContext | undefined,
-  toolCallId: string,
-  fallback: boolean,
-) {
-  return {
-    executedArguments: readDynamicToolExecutedArguments(context, toolCallId),
-    executionStarted: readDynamicToolExecutionStarted(context, toolCallId, fallback),
-  };
-}
-
 /** OpenClaw-only dynamic-tool facts that never cross into the Codex protocol. */
 export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   executionStarted?: boolean;
   executedArguments?: Record<string, unknown>;
+  terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
 };
+
+export function withDynamicToolTerminalResolution<T extends CodexDynamicToolRuntimeResponse>(
+  response: T,
+  terminalResolution: T["terminalResolution"],
+): T {
+  if (terminalResolution) {
+    Object.defineProperties(response, {
+      terminalResolution: {
+        configurable: true,
+        enumerable: false,
+        value: terminalResolution,
+      },
+      executionStarted: {
+        configurable: true,
+        enumerable: false,
+        value: terminalResolution.executionStarted,
+      },
+      ...(terminalResolution.executedArguments
+        ? {
+            executedArguments: {
+              configurable: true,
+              enumerable: false,
+              value: terminalResolution.executedArguments,
+            },
+          }
+        : {}),
+    });
+    withDynamicToolSideEffectEvidence(response, terminalResolution.sideEffectEvidence);
+  }
+  return response;
+}
 
 export function withDynamicToolExecutionState<T extends CodexDynamicToolRuntimeResponse>(
   response: T,
@@ -73,13 +71,15 @@ function withDynamicToolSideEffectEvidence<T extends CodexDynamicToolRuntimeResp
   response: T,
   sideEffectEvidence: boolean,
 ): T {
-  if (sideEffectEvidence) {
-    Object.defineProperty(response, "sideEffectEvidence", {
-      configurable: true,
-      enumerable: false,
-      value: true,
-    });
+  if (!sideEffectEvidence) {
+    delete response.sideEffectEvidence;
+    return response;
   }
+  Object.defineProperty(response, "sideEffectEvidence", {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
   return response;
 }
 

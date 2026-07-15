@@ -13,53 +13,68 @@ import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
 
-/** Minimal deterministic host mutation policy for Codex harness tests. */
-export function createCodexTestToolMutationRuntime(): NonNullable<
-  EmbeddedRunAttemptParams["toolMutationRuntime"]
+/** Minimal deterministic host terminal observer for Codex harness tests. */
+export function createCodexTestToolTerminalObserver(): NonNullable<
+  EmbeddedRunAttemptParams["observeToolTerminal"]
 > {
-  return {
-    classify: (toolName, args) => {
-      const record =
-        typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
-      const action = typeof record.action === "string" ? record.action : undefined;
-      const to = typeof record.to === "string" ? record.to : undefined;
-      const mutatingAction = toolName === "message" && action === "send";
-      const actionFingerprint = mutatingAction
-        ? [`tool=${toolName}`, `action=${action}`, ...(to ? [`to=${to}`] : [])].join("|")
-        : undefined;
-      return {
-        mutatingAction,
-        replaySafe: !mutatingAction,
-        ...(actionFingerprint ? { actionFingerprint } : {}),
-      };
-    },
-    mergeError: (next, current) =>
-      current?.mutatingAction && next.mutatingAction !== true ? current : next,
-    resolveSuccess: (current, success) => {
-      if (current?.mutatingAction !== true) {
-        return undefined;
-      }
-      if (current.actionFingerprint || success.actionFingerprint) {
-        return current.actionFingerprint &&
-          success.actionFingerprint &&
-          current.actionFingerprint === success.actionFingerprint
-          ? undefined
-          : current;
-      }
-      return current.toolName === success.toolName && (current.meta ?? "") === (success.meta ?? "")
-        ? undefined
-        : current;
-    },
-  };
-}
+  const unresolved = new Map<
+    string,
+    NonNullable<
+      ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>["lastToolError"]
+    >
+  >();
+  let nonMutatingFailure: ReturnType<
+    NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>
+  >["lastToolError"];
 
-export function createCodexTestToolExecutionRuntime(): NonNullable<
-  EmbeddedRunAttemptParams["toolExecutionRuntime"]
-> {
-  return {
-    consumeStarted: () => true,
-    peekArguments: () => undefined,
-    peekStarted: () => true,
+  return (observation) => {
+    const record =
+      typeof observation.arguments === "object" && observation.arguments !== null
+        ? (observation.arguments as Record<string, unknown>)
+        : {};
+    const action = typeof record.action === "string" ? record.action : undefined;
+    const to = typeof record.to === "string" ? record.to : undefined;
+    const mutation = observation.nativeMutation ?? {
+      mutatingAction: observation.toolName === "message" && action === "send",
+      replaySafe: !(observation.toolName === "message" && action === "send"),
+      actionFingerprint:
+        observation.toolName === "message" && action === "send"
+          ? [`tool=${observation.toolName}`, `action=${action}`, ...(to ? [`to=${to}`] : [])].join(
+              "|",
+            )
+          : undefined,
+    };
+    const key = mutation.actionFingerprint ?? `${observation.toolName}:${observation.meta ?? ""}`;
+    const executionStarted = observation.executionStarted !== false;
+    if (observation.outcome === "failure") {
+      const mutatingAction = executionStarted && mutation.mutatingAction;
+      const failure = {
+        toolName: observation.toolName,
+        ...(observation.meta ? { meta: observation.meta } : {}),
+        ...observation.failure,
+        mutatingAction,
+        ...(mutatingAction && mutation.actionFingerprint
+          ? { actionFingerprint: mutation.actionFingerprint }
+          : {}),
+      };
+      if (mutatingAction) {
+        unresolved.set(key, failure);
+        nonMutatingFailure = undefined;
+      } else if (unresolved.size === 0) {
+        nonMutatingFailure = failure;
+      }
+    } else if (mutation.mutatingAction) {
+      unresolved.delete(key);
+    } else if (unresolved.size === 0) {
+      nonMutatingFailure = undefined;
+    }
+    const lastToolError = [...unresolved.values()].at(-1) ?? nonMutatingFailure;
+    return {
+      ...(lastToolError ? { lastToolError } : {}),
+      executionStarted,
+      ...(Object.keys(record).length > 0 ? { executedArguments: record } : {}),
+      sideEffectEvidence: executionStarted && !mutation.replaySafe,
+    };
   };
 }
 

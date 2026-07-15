@@ -39,6 +39,11 @@ export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: s
   return blocked;
 }
 
+/** Snapshot whether policy prevented execution without stealing cleanup from the tool owner. */
+export function peekPreExecutionBlockedToolCall(toolCallId: string, runId?: string): boolean {
+  return preExecutionBlockedToolCallIds.has(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
 /** Record that the OpenClaw wrapper owns execution-boundary evidence for this call. */
 export function recordToolExecutionTracked(toolCallId: string, runId?: string): void {
   trackedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));

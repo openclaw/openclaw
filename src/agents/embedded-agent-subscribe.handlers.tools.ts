@@ -89,7 +89,6 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { mergeUnresolvedMutationError, resolveSuccessfulToolMutation } from "./tool-error-state.js";
 import {
   createToolValidationErrorSummary,
   summarizeToolValidationError,
@@ -97,6 +96,7 @@ import {
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
+import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -110,6 +110,20 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
 );
+const fallbackToolTerminalObservers = new WeakMap<
+  ToolHandlerContext["state"],
+  ReturnType<typeof createToolTerminalObserver>
+>();
+
+function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
+  const existing = fallbackToolTerminalObservers.get(ctx.state);
+  if (existing) {
+    return existing;
+  }
+  const created = createToolTerminalObserver(ctx.params.runId);
+  fallbackToolTerminalObservers.set(ctx.state, created);
+  return created;
+}
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
@@ -1308,7 +1322,6 @@ export async function handleToolExecutionEnd(
   // retain the prior default unless they explicitly report false.
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
-  const attemptedMutatingAction = callSummary.mutatingAction && executionStarted;
   const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
@@ -1329,36 +1342,32 @@ export async function handleToolExecutionEnd(
   }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
-  if (isToolError) {
-    const errorMessage = extractToolErrorMessage(sanitizedResult);
-    const errorCode = extractToolErrorCode(sanitizedResult);
-    const validationErrorSummary =
-      evt.executionStarted === false && evt.errorKind === "argument-validation"
-        ? createToolValidationErrorSummary(toolName)
-        : undefined;
-    ctx.state.lastToolError = mergeUnresolvedMutationError(
-      {
-        toolName,
-        meta,
-        ...(errorCode ? { errorCode } : {}),
-        error: errorMessage,
-        ...(validationErrorSummary ? { validationErrorSummary } : {}),
-        timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
-        middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
-        mutatingAction: attemptedMutatingAction,
-        actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
-        fileTarget: attemptedMutatingAction ? callSummary.fileTarget : undefined,
-      },
-      ctx.state.lastToolError,
-    );
-  } else if (ctx.state.lastToolError) {
-    ctx.state.lastToolError = resolveSuccessfulToolMutation(ctx.state.lastToolError, {
-      toolName,
-      meta,
-      actionFingerprint: callSummary.actionFingerprint,
-      fileTarget: callSummary.fileTarget,
-    });
-  }
+  const errorMessage = isToolError ? extractToolErrorMessage(sanitizedResult) : undefined;
+  const errorCode = isToolError ? extractToolErrorCode(sanitizedResult) : undefined;
+  const validationErrorSummary =
+    isToolError && evt.executionStarted === false && evt.errorKind === "argument-validation"
+      ? createToolValidationErrorSummary(toolName)
+      : undefined;
+  const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
+    toolCallId,
+    toolName,
+    arguments: startArgs,
+    ...(meta ? { meta } : {}),
+    executionStarted,
+    outcome: isToolError ? "failure" : "success",
+    ...(isToolError
+      ? {
+          failure: {
+            ...(errorCode ? { errorCode } : {}),
+            ...(errorMessage ? { error: errorMessage } : {}),
+            ...(validationErrorSummary ? { validationErrorSummary } : {}),
+            timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
+            middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
+          },
+        }
+      : {}),
+  });
+  ctx.state.lastToolError = terminal.lastToolError;
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;

@@ -212,9 +212,10 @@ export function createCodexAttemptServerRequestController(
             toolBridge,
             signal: runAbortController.signal,
             timeoutMs: dynamicToolTimeoutMs,
+            toolMeta,
             toolCallOrdinal,
             onAgentToolResult: params.onAgentToolResult,
-            executionState: params,
+            observeToolTerminal: params.observeToolTerminal,
             onFallbackSelected: () => {
               if (toolCallOrdinal !== undefined) {
                 suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
@@ -253,14 +254,7 @@ export function createCodexAttemptServerRequestController(
           success: protocolResponse.success,
           contentItems: protocolResponse.contentItems,
         });
-        recordCodexDynamicToolResult(
-          projector,
-          call,
-          response,
-          protocolResponse,
-          toolMeta,
-          params.toolMutationRuntime,
-        );
+        recordCodexDynamicToolResult(projector, call, response, protocolResponse);
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
           void emitCodexAppServerEvent(params, {

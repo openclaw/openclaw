@@ -32,8 +32,7 @@ import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from ".
 import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
-  createCodexTestToolExecutionRuntime,
-  createCodexTestToolMutationRuntime,
+  createCodexTestToolTerminalObserver,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
@@ -210,8 +209,7 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
-    toolExecutionRuntime: createCodexTestToolExecutionRuntime(),
-    toolMutationRuntime: createCodexTestToolMutationRuntime(),
+    observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
 }
 

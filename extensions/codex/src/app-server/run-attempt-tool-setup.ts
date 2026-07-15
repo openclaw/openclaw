@@ -244,7 +244,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       onToolOutcome: onCodexToolOutcome,
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
-      toolExecutionRuntime: params.toolExecutionRuntime,
     },
   });
   return {

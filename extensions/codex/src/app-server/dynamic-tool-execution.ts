@@ -19,8 +19,8 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFailedDynamicToolResponse,
-  readDynamicToolExecutionState,
   type CodexDynamicToolRuntimeResponse,
+  withDynamicToolTerminalResolution,
 } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
@@ -30,6 +30,7 @@ import {
   isJsonObject,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
+  type CodexDynamicToolDiagnosticTerminalReason,
   type JsonValue,
 } from "./protocol.js";
 
@@ -142,25 +143,46 @@ function formatDynamicToolTimeoutDetails(params: {
  */
 export async function handleDynamicToolCallWithTimeout(params: {
   call: CodexDynamicToolCallParams;
-  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall">;
+  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot">;
   signal: AbortSignal;
   timeoutMs: number;
+  toolMeta?: string;
   toolCallOrdinal?: number;
   onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
   onFallbackSelected?: () => void;
   onTimeout?: () => void;
-  executionState?: Pick<EmbeddedRunAttemptParams, "runId" | "toolExecutionRuntime">;
+  observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
 }): Promise<CodexDynamicToolRuntimeResponse> {
   // Timeout or run abort can win while a tool ignores cancellation. Keep the
   // private observer terminal result exactly once across those competing paths.
   let didNotifyAgentToolResult = false;
-  const readExecutionState = (fallback: boolean) =>
-    readDynamicToolExecutionState(params.executionState, params.call.callId, fallback);
-  const consumeExecutionTracking = () =>
-    params.executionState?.toolExecutionRuntime?.consumeStarted(
-      params.call.callId,
-      params.executionState.runId,
-    );
+  const finalizeTerminal = (response: CodexDynamicToolRuntimeResponse) => {
+    const executionSnapshot = params.toolBridge.consumeToolExecutionSnapshot?.(params.call.callId);
+    const terminalResolution = params.observeToolTerminal?.({
+      toolCallId: params.call.callId,
+      toolName: params.call.tool,
+      arguments:
+        response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
+      ...(params.toolMeta ? { meta: params.toolMeta } : {}),
+      ...(response.executionStarted !== undefined
+        ? { executionStarted: response.executionStarted }
+        : {}),
+      outcome: response.success ? "success" : "failure",
+      ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
+    });
+    return withDynamicToolTerminalResolution(response, terminalResolution);
+  };
+  // The host observer replaces these conservative facts with exact boundary evidence.
+  // Direct/older callers without one must still treat a raced terminal as dispatched.
+  const createFailedAfterPossibleDispatch = (
+    message: string,
+    terminalReason: CodexDynamicToolDiagnosticTerminalReason,
+  ) =>
+    createFailedDynamicToolResponse(message, {
+      executionStarted: true,
+      sideEffectEvidence: true,
+      terminalReason,
+    });
   const notifyAgentToolResult = (
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentToolResult"]>>[0],
   ) => {
@@ -194,10 +216,12 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
     params.onFallbackSelected?.();
     notifyFailedToolResult(message, terminalReason);
-    return createFailedDynamicToolResponse(message, {
-      executionStarted: false,
-      terminalReason,
-    });
+    return finalizeTerminal(
+      createFailedDynamicToolResponse(message, {
+        executionStarted: false,
+        terminalReason,
+      }),
+    );
   }
 
   const controller = new AbortController();
@@ -210,18 +234,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     params.onFallbackSelected?.();
     controller.abort(params.signal.reason ?? new Error(message));
     notifyFailedToolResult(message, terminalReason);
-    const executionState = readExecutionState(true);
-    consumeExecutionTracking();
-    resolveAbort?.(
-      createFailedDynamicToolResponse(message, {
-        executionStarted: executionState.executionStarted,
-        ...(executionState.executedArguments
-          ? { executedArguments: executionState.executedArguments }
-          : {}),
-        sideEffectEvidence: executionState.executionStarted,
-        terminalReason,
-      }),
-    );
+    resolveAbort?.(createFailedAfterPossibleDispatch(message, terminalReason));
   };
   const abortPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
     resolveAbort = resolve;
@@ -239,18 +252,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
         consoleMessage: timeoutDetails.consoleMessage,
       });
       notifyFailedToolResult(timeoutDetails.responseMessage, "timed_out");
-      const executionState = readExecutionState(true);
-      consumeExecutionTracking();
-      resolve(
-        createFailedDynamicToolResponse(timeoutDetails.responseMessage, {
-          executionStarted: executionState.executionStarted,
-          ...(executionState.executedArguments
-            ? { executedArguments: executionState.executedArguments }
-            : {}),
-          sideEffectEvidence: executionState.executionStarted,
-          terminalReason: "timed_out",
-        }),
-      );
+      resolve(createFailedAfterPossibleDispatch(timeoutDetails.responseMessage, "timed_out"));
     }, timeoutMs);
     timeout.unref?.();
   });
@@ -275,22 +277,14 @@ export async function handleDynamicToolCallWithTimeout(params: {
         response.diagnosticTerminalReason ?? "failed",
       );
     }
-    return response;
+    return finalizeTerminal(response);
   } catch (error) {
     const terminalReason = params.signal.aborted
       ? resolveCodexToolAbortTerminalReason(params.signal)
       : resolveToolExecutionErrorKind(error);
     const message = formatToolExecutionErrorMessage(error, "OpenClaw dynamic tool call failed.");
     notifyFailedToolResult(message, terminalReason);
-    const executionState = readExecutionState(true);
-    return createFailedDynamicToolResponse(message, {
-      ...(executionState.executedArguments
-        ? { executedArguments: executionState.executedArguments }
-        : {}),
-      executionStarted: executionState.executionStarted,
-      sideEffectEvidence: executionState.executionStarted,
-      terminalReason,
-    });
+    return finalizeTerminal(createFailedAfterPossibleDispatch(message, terminalReason));
   } finally {
     if (timeout) {
       clearTimeout(timeout);

@@ -51,7 +51,6 @@ import { resolveAgentContextLimitValue } from "./agent-context-limits.js";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import {
   createFailedDynamicToolResponse,
-  readDynamicToolExecutionStarted,
   type CodexDynamicToolRuntimeResponse,
   withDynamicToolExecutionState,
 } from "./dynamic-tool-response-state.js";
@@ -88,7 +87,6 @@ type CodexDynamicToolHookContext = {
   sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
   onToolOutcome?: EmbeddedRunAttemptParams["onToolOutcome"];
   allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
-  toolExecutionRuntime?: EmbeddedRunAttemptParams["toolExecutionRuntime"];
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -352,6 +350,10 @@ export type CodexDynamicToolBridge = {
       toolCallOrdinal?: number;
     },
   ) => Promise<CodexDynamicToolRuntimeResponse>;
+  /** Consume in-flight arguments retained while post-execution processing is incomplete. */
+  consumeToolExecutionSnapshot?: (
+    toolCallId: string,
+  ) => { executedArguments: Record<string, unknown> } | undefined;
   telemetry: {
     didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
@@ -479,6 +481,7 @@ export function createCodexDynamicToolBridge(params: {
   };
   const legacyExtensionRunner =
     createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
+  const executionSnapshots = new Map<string, { executedArguments: Record<string, unknown> }>();
   const directToolNames = new Set([
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
@@ -495,6 +498,11 @@ export function createCodexDynamicToolBridge(params: {
       directToolNames,
     }),
     telemetry,
+    consumeToolExecutionSnapshot: (toolCallId) => {
+      const snapshot = executionSnapshots.get(toolCallId);
+      executionSnapshots.delete(toolCallId);
+      return snapshot;
+    },
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
@@ -530,21 +538,20 @@ export function createCodexDynamicToolBridge(params: {
       let didDispatchExecution = false;
       let executionPrevented = false;
       let executedArgs = structuredClone(args);
-      const executionRuntime = params.hookContext?.toolExecutionRuntime;
       const captureExecutionBoundary = () => {
-        const observedStart = readDynamicToolExecutionStarted(
-          params.hookContext,
+        didStartExecution ||= didDispatchExecution;
+        const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
           call.callId,
-          didDispatchExecution,
+          toolResultHookContext.runId,
         );
-        didStartExecution ||= observedStart;
-        // Retain state so timeouts racing post-processing fingerprint the executed action.
-        const adjustedExecutedArgs = executionRuntime
-          ? executionRuntime.peekArguments(call.callId, toolResultHookContext.runId)
-          : consumeAdjustedParamsForToolCall(call.callId, toolResultHookContext.runId);
         if (isRecord(adjustedExecutedArgs)) {
           executedArgs = adjustedExecutedArgs;
         }
+        // Outer timeouts can win while result middleware is still pending. Carry the
+        // executed identity forward so terminal policy does not fall back to raw args.
+        executionSnapshots.set(call.callId, {
+          executedArguments: structuredClone(executedArgs),
+        });
       };
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
@@ -826,10 +833,8 @@ export function createCodexDynamicToolBridge(params: {
           },
         );
       } finally {
-        executionRuntime?.consumeStarted(call.callId, toolResultHookContext.runId);
-        if (executionRuntime) {
-          consumeAdjustedParamsForToolCall(call.callId, toolResultHookContext.runId);
-        }
+        executionSnapshots.delete(call.callId);
+        consumeAdjustedParamsForToolCall(call.callId, toolResultHookContext.runId);
       }
     },
   };
