@@ -1458,6 +1458,9 @@ importers:
 
   extensions/qa-lab:
     dependencies:
+      '@openclaw/crabline':
+        specifier: 0.1.11
+        version: 0.1.11
       '@openclaw/matrix':
         specifier: workspace:*
         version: link:../matrix
@@ -1489,9 +1492,6 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
-      '@openclaw/crabline':
-        specifier: 0.1.11
-        version: 0.1.11
       '@openclaw/discord':
         specifier: workspace:*
         version: link:../discord

@@ -185,9 +185,9 @@ precedence over `--profile`.
 
 | Profile      | Scenarios | Purpose                                                                                                                                  |
 | ------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `all`        | 92        | Complete catalog (default).                                                                                                              |
+| `all`        | 93        | Complete catalog (default).                                                                                                              |
 | `release`    | 2         | Release-critical channel baseline and live allowlist reload.                                                                             |
-| `fast`       | 11        | Focused threading, reactions, approvals, policy, bot-gating, and encrypted-reply coverage.                                               |
+| `fast`       | 12        | Focused threading, reactions, approvals, policy, bot-gating, and encrypted-reply coverage.                                               |
 | `transport`  | 50        | Threading, DM/room routing, autojoin, approvals, reactions, restarts, mention/allowlist policy, edits, and multi-actor ordering.         |
 | `media`      | 7         | Image, generated-image, voice, attachment, unsupported-media, and encrypted-media coverage.                                              |
 | `e2ee-smoke` | 8         | Minimum encrypted reply, threading, bootstrap, recovery, restart, redaction, and failure coverage.                                       |
@@ -463,11 +463,12 @@ accept the same flags:
 | `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
 | `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
 | `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
-| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                                            |
+| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                    |
 | `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
 | `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
 | `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
 | `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
+| `--allow-failures`                    | off                                                | Write artifacts without returning a failing exit code when scenarios fail.                                                                      |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
 artifacts without setting a failing exit code. Telegram also accepts
@@ -491,11 +492,12 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
 - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
 
-Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts`):
+The `release` profile selects the maintained Telegram YAML scenarios; `all`
+adds opt-in session, usage, reply-chain, and streaming stress checks. Explicit
+`--scenario` values override the profile.
 
-- `telegram-canary`
-- `telegram-mention-gating`
-- `telegram-mentioned-message-reply`
+- `channel-canary`
+- `channel-mention-gating`
 - `telegram-help-command`
 - `telegram-commands-command`
 - `telegram-tools-compact-command`
@@ -511,19 +513,21 @@ Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime
 - `telegram-long-final-reuses-preview`
 - `telegram-long-final-three-chunks`
 
-The implicit default set always covers canary, mention gating, native command
+The `release` profile always covers canary, mention gating, native command
 replies, command addressing, and bot-to-bot group replies. `mock-openai`
-defaults also include deterministic reply-chain and final-message streaming
-checks. `telegram-current-session-status-tool` and
+also includes the deterministic long-final preview check.
+`telegram-current-session-status-tool` and
 `telegram-tool-only-usage-footer` remain opt-in: the former is only stable
 when threaded directly after canary, and the latter is a real-Telegram proof
 of the `/usage` footer on tool-only replies. Use `pnpm openclaw qa telegram
 --list-scenarios --provider-mode mock-openai` to print the current
-default/optional split with regression refs.
+default/optional split with regression refs. Use `--profile all` for every
+Telegram live-adapter scenario.
 
 Output artifacts:
 
-- `telegram-qa-report.md`
+- `qa-suite-report.md`
+- `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks,
   including profile, coverage, provider, channel, artifacts, result, and RTT
   fields.
@@ -542,7 +546,7 @@ When `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` is set, the package live wrapper
 leases a `kind: "telegram"` credential, exports the leased group/driver/SUT
 bot env into the installed-package run, heartbeats the lease, and releases it
 on shutdown. The package wrapper defaults to 20 RTT checks of
-`telegram-mentioned-message-reply`, a 30s RTT timeout, and Convex role
+`channel-canary`, a 30s RTT timeout, and Convex role
 `maintainer` outside CI when Convex is selected. Override
 `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`, `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`,
 or `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune RTT measurement without
@@ -571,13 +575,11 @@ Required env when `--credential-source env`:
 
 Optional:
 
-- `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1` keeps message bodies in
-  observed-message artifacts.
 - `OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID` selects the voice/stage channel for
   `discord-voice-autojoin`; without it, the scenario picks the first visible
   voice/stage channel for the SUT bot.
 
-Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts:36`):
+Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
 
 - `discord-canary`
 - `discord-mention-gating`
@@ -586,7 +588,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.t
   `channels.discord.voice.autoJoin`, and verifies the SUT bot's current
   Discord voice state is the target voice/stage channel. Convex Discord
   credentials may include optional `voiceChannelId`; otherwise the runner
-  discovers the first visible voice/stage channel in the guild.
+  adapter discovers the first visible voice/stage channel in the guild.
 - `discord-status-reactions-tool-only` - opt-in Mantis scenario. Runs by
   itself because it switches the SUT to always-on, tool-only guild replies
   with `messages.statusReactions.enabled=true`, then captures a REST
@@ -617,10 +619,9 @@ pnpm openclaw qa discord \
 
 Output artifacts:
 
-- `discord-qa-report.md`
+- `qa-suite-report.md`
+- `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks.
-- `discord-qa-observed-messages.json` - bodies redacted unless
-  `OPENCLAW_QA_DISCORD_CAPTURE_CONTENT=1`.
 - `discord-qa-reaction-timelines.json` and
   `discord-status-reactions-tool-only-timeline.png` when the status-reaction
   scenario runs.
@@ -644,10 +645,8 @@ Required env when `--credential-source env`:
 
 Optional:
 
-- `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1` keeps message bodies in
-  observed-message artifacts.
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR` enables visual approval
-  checkpoints for Mantis. The runner writes `<scenario>.pending.json` and
+  checkpoints for Mantis. The adapter writes `<scenario>.pending.json` and
   `<scenario>.resolved.json`, then waits for matching `.ack.json` files.
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
   acknowledgement timeout. The default is `120000`.
@@ -657,7 +656,7 @@ Canonical YAML scenarios exposed through the Slack live adapter:
 - `thread-follow-up`
 - `thread-isolation`
 
-Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
+Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
 
 - `slack-canary`
 - `slack-mention-gating`
@@ -683,9 +682,8 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
   plus its header through the
   production Slack send path, proves Slack itself returns `invalid_blocks`,
   and verifies the stored formatting-disabled fallback is complete and has no
-  native data block. The report keeps only safe error-code, count, and boolean
-  evidence; raw synthetic table text follows
-  `OPENCLAW_QA_SLACK_CAPTURE_CONTENT`.
+  native data block. Scenario details keep only safe error-code, count, and
+  boolean evidence.
 - `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
   Requests an exec approval through the gateway, verifies the Slack message
   has native approval buttons, resolves it, and verifies the resolved Slack
@@ -708,16 +706,15 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
 
 The Codex approval scenarios require an `openai/*` or `codex/*` `--model`, the
 normal live model credentials, and Codex auth or API-key auth accepted by the Codex plugin.
-The Slack report includes the Codex app-server method, selected Codex model key,
-final Codex turn status, and operation-marker verification alongside the
+The scenario details include the Codex app-server method, selected Codex model
+key, final Codex turn status, and operation-marker verification alongside the
 redacted Slack approval metadata.
 
 Output artifacts:
 
-- `slack-qa-report.md`
+- `qa-suite-report.md`
+- `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks.
-- `slack-qa-observed-messages.json` - bodies redacted unless
-  `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
 - `approval-checkpoints/` - only when Mantis sets
   `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
   acknowledgement JSON, and pending/resolved screenshots.
@@ -922,7 +919,7 @@ pnpm openclaw qa slack \
   --output-dir .artifacts/qa-e2e/slack-local
 ```
 
-A green run completes in well under 30 seconds and `slack-qa-report.md`
+A green run completes in well under 30 seconds and `qa-suite-report.md`
 shows both `slack-canary` and `slack-mention-gating` at status `pass`. If the
 lane hangs for ~90 seconds and exits with `Convex credential pool exhausted
 for kind "slack"`, either the pool is empty or every row is leased - `qa
@@ -952,10 +949,8 @@ Optional:
   `whatsapp-broadcast-group-fanout`, `whatsapp-group-activation-always`,
   `whatsapp-group-reply-to-bot-triggers`, group action/media/poll scenarios,
   and `whatsapp-group-allowlist-block`.
-- `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1` keeps message bodies in
-  observed-message artifacts.
 
-Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
+WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
 
 - Baseline and group gating: `whatsapp-canary`, `whatsapp-pairing-block`,
   `whatsapp-mention-gating`, `whatsapp-group-pending-history-context`,
@@ -1010,8 +1005,8 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   `whatsapp-status-reaction-lifecycle`.
 
 The catalog currently contains 52 scenarios. The `live-frontier` default lane
-is kept small at 10 scenarios for fast smoke coverage. The `mock-openai`
-default lane runs 45 scenarios deterministically through the real WhatsApp
+is kept small at 8 scenarios for fast smoke coverage. The `mock-openai`
+default lane runs 39 scenarios deterministically through the real WhatsApp
 transport while mocking only model output; approval scenarios and a few
 heavier/blocking checks remain explicit by scenario id.
 
@@ -1028,16 +1023,15 @@ agent choose the same action. User-path action proof comes from scenarios
 such as `whatsapp-agent-message-action-react` and
 `whatsapp-group-agent-message-action-react`, where the driver sends a normal
 WhatsApp message and QA Lab observes the resulting native WhatsApp artifact.
-WhatsApp reports include each scenario's posture (`user-path`,
+WhatsApp scenario details include each scenario's posture (`user-path`,
 `direct-gateway`, or `native-approval`) so evidence cannot be mistaken for a
 stronger contract than it actually proves.
 
 Output artifacts:
 
-- `whatsapp-qa-report.md`
+- `qa-suite-report.md`
+- `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks.
-- `whatsapp-qa-observed-messages.json` - bodies redacted unless
-  `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1`.
 
 ### Convex credential pool
 

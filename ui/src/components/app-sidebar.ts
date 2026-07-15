@@ -124,7 +124,11 @@ import {
 } from "./lobster-pet.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
-import { type CloudPlacementState, renderSessionRowBadges } from "./session-row-badges.ts";
+import {
+  type CloudPlacementState,
+  isStoppableCloudWorkerPlacement,
+  renderSessionRowBadges,
+} from "./session-row-badges.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -147,6 +151,7 @@ type SidebarRecentSession = {
   workSession?: boolean;
   worktreeId?: string;
   placementState?: CloudPlacementState;
+  cloudWorkerActive: boolean;
   hasAutomation: boolean;
   unread: boolean;
 };
@@ -1045,6 +1050,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         workSession: Boolean(row.worktree || row.execNode),
         worktreeId: row.worktree?.id,
         placementState: row.placement?.state,
+        cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
         unread: row.unread === true,
       };
@@ -2024,6 +2030,34 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
+  private async stopCloudWorker(session: SidebarRecentSession) {
+    if (
+      !session.cloudWorkerActive ||
+      session.hasActiveRun ||
+      !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: session.label }))
+    ) {
+      return;
+    }
+    const scope = this.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+    try {
+      await scope.client.request(
+        "sessions.reclaim",
+        { key: session.key, agentId },
+        { timeoutMs: 10 * 60_000 },
+      );
+      if (!this.isSessionMutationScopeCurrent(scope)) {
+        return;
+      }
+      await scope.sessions.refresh({ agentId, force: true });
+    } catch (error) {
+      this.publishSessionMutationError(scope, error);
+    }
+  }
+
   private renderCustomizeMenu() {
     const position = this.customizeMenuPosition;
     const trigger = this.customizeMenuTrigger;
@@ -2129,6 +2163,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           .disabled=${!this.connected}
           .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
           .archiveAllowed=${archiveAllowed}
+          .cloudWorkerStopAllowed=${Boolean(
+            !batchRows &&
+            session.cloudWorkerActive &&
+            !session.hasActiveRun &&
+            context &&
+            isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim") === true,
+          )}
           .groups=${this.knownSessionGroups()}
           .canOpenChat=${true}
           .work=${batchRows ? null : this.sessionMenuWork}
@@ -2180,6 +2221,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 break;
               case "toggle-archived":
                 void this.patchSession(session, { archived: true });
+                break;
+              case "stop-cloud-worker":
+                void this.stopCloudWorker(session);
                 break;
               case "delete":
                 void this.deleteSession(session);

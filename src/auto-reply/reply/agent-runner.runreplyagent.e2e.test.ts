@@ -29,11 +29,8 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import {
-  createReplyOperation,
-  testing as replyRunTesting,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { createMockTypingController } from "./test-helpers.js";
 

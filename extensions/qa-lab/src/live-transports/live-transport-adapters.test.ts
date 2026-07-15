@@ -19,8 +19,10 @@ vi.mock("./whatsapp/adapter.runtime.js", () => ({
 }));
 
 import { slackQaCliRegistration } from "./slack/cli.js";
+import { SLACK_QA_DEFAULT_SCENARIO_IDS } from "./slack/profiles.js";
 import { telegramQaCliRegistration } from "./telegram/cli.js";
 import { whatsappQaCliRegistration } from "./whatsapp/cli.js";
+import { resolveWhatsAppQaScenarioIds } from "./whatsapp/profiles.js";
 
 const slackQaAdapterFactory = slackQaCliRegistration.adapterFactory;
 const telegramQaAdapterFactory = telegramQaCliRegistration.adapterFactory;
@@ -36,26 +38,14 @@ const factories = [
 ] as const;
 
 describe("live transport adapter factories", () => {
-  it("assigns shared thread scenarios to Slack", () => {
-    expect(slackQaAdapterFactory.scenarioIds).toEqual([
-      "channel-chat-baseline",
-      "channel-canary",
-      "channel-mention-gating",
-      "channel-top-level-reply-shape",
-      "thread-follow-up",
-      "thread-isolation",
-    ]);
+  it("assigns the canonical live scenario defaults to Slack", () => {
+    expect(slackQaAdapterFactory.scenarioIds).toEqual(SLACK_QA_DEFAULT_SCENARIO_IDS);
   });
 
-  it("keeps WhatsApp routing flows available without making them DM-safe CLI defaults", () => {
-    expect(whatsappQaAdapterFactory.scenarioIds).toEqual([
-      "dm-chat-baseline",
-      "channel-canary",
-      "channel-dm-group-routing",
-      "channel-mention-gating",
-      "channel-top-level-reply-shape",
-      "whatsapp-help-command",
-    ]);
+  it("assigns the canonical live-frontier scenario defaults to WhatsApp", () => {
+    expect(whatsappQaAdapterFactory.scenarioIds).toEqual(
+      resolveWhatsAppQaScenarioIds({ providerMode: "live-frontier" }),
+    );
   });
 
   it.each([

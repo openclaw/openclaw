@@ -44,7 +44,6 @@ import {
 } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
-import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
@@ -158,6 +157,9 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   runtimePair?: string;
   runtimeParityTier?: string[];
   sutAccountId?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+  explicitScenarioSelection?: boolean;
 };
 
 function normalizeQaSuiteChannelDriver(
@@ -1119,6 +1121,10 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
             adapterOptions: {
               repoRoot,
               sutAccountId: opts.sutAccountId,
+              credentialSource: opts.credentialSource,
+              credentialRole: opts.credentialRole,
+              explicitScenarioSelection:
+                opts.explicitScenarioSelection ?? Boolean(opts.scenarioIds?.length),
             },
           }
         : {}),
@@ -1362,9 +1368,7 @@ export async function runQaCoverageReportCommand(opts: {
         : renderQaScenarioMatchesMarkdownReport({ query, matches });
       outputLabel = "QA scenario match report";
     } else {
-      const inventory = buildQaCoverageInventory(scenarios, {
-        nonYamlScenarios: await loadNonYamlScenarioRefs(),
-      });
+      const inventory = buildQaCoverageInventory(scenarios);
       body = opts.json
         ? `${JSON.stringify(inventory, null, 2)}\n`
         : renderQaCoverageMarkdownReport(inventory);

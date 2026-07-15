@@ -106,8 +106,14 @@ const FOLLOW_INTERVAL_MS = 1_000;
 let followIntervalMsForTests: number | undefined;
 
 /** Overrides the follow polling interval for tests. */
-export function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
+function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
   followIntervalMsForTests = intervalMs;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsTailTestApi")] = {
+    setSessionsTailFollowIntervalMsForTests,
+  };
 }
 
 function resolveFollowIntervalMs(): number {

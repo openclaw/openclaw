@@ -58,6 +58,10 @@ import {
 } from "./state-migrations.managed-outgoing-images.js";
 import { mergeNotices } from "./state-migrations.messages.js";
 import {
+  detectLegacyNodeHostConfig,
+  migrateLegacyNodeHostConfig,
+} from "./state-migrations.node-host.js";
+import {
   migrateLegacyInstalledPluginIndex,
   migrateLegacyPluginStateSidecar,
   runLegacyMigrationPlans,
@@ -119,6 +123,7 @@ import {
   migrateLegacyUpdateCheckState,
   resolveLegacyUpdateCheckPath,
 } from "./state-migrations.update-check.js";
+import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
 
 let autoMigrateChecked = false;
 
@@ -397,6 +402,14 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const webPush = detectLegacyWebPush({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const nodeHost = detectLegacyNodeHostConfig({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const rescuePending = detectLegacyRescuePending({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -555,6 +568,12 @@ export async function detectLegacyStateMigrations(params: {
   if (managedOutgoingImages.hasLegacy) {
     preview.push("- Managed outgoing images: legacy record JSON → shared SQLite state");
   }
+  if (webPush.hasLegacy) {
+    preview.push("- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state");
+  }
+  if (nodeHost.hasLegacy) {
+    preview.push("- Node-host config: legacy node.json → shared SQLite state");
+  }
   if (rescuePending.hasLegacy) {
     preview.push("- System-agent rescue approvals: discard retired pending JSON capabilities");
   }
@@ -646,6 +665,8 @@ export async function detectLegacyStateMigrations(params: {
     tuiLastSessions,
     commitments,
     managedOutgoingImages,
+    webPush,
+    nodeHost,
     rescuePending,
     channelPairing,
     execApprovals,
@@ -837,6 +858,16 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.managedOutgoingImages,
     stateDir: detected.stateDir,
   });
+  const webPush = await migrateLegacyWebPush({
+    detected: detected.webPush,
+    env,
+    stateDir: detected.stateDir,
+  });
+  const nodeHost = await migrateLegacyNodeHostConfig({
+    detected: detected.nodeHost,
+    env,
+    stateDir: detected.stateDir,
+  });
   const rescuePending = discardLegacyRescuePending({
     detected: detected.rescuePending,
     stateDir: detected.stateDir,
@@ -874,6 +905,8 @@ export async function runLegacyStateMigrations(params: {
     tuiLastSessions,
     commitments,
     managedOutgoingImages,
+    webPush,
+    nodeHost,
     pluginPlans,
   ]);
   return {
@@ -892,6 +925,8 @@ export async function runLegacyStateMigrations(params: {
       ...tuiLastSessions.changes,
       ...commitments.changes,
       ...managedOutgoingImages.changes,
+      ...webPush.changes,
+      ...nodeHost.changes,
       ...rescuePending.changes,
       ...channelPairing.changes,
       ...execApprovals.changes,
@@ -918,6 +953,8 @@ export async function runLegacyStateMigrations(params: {
       ...tuiLastSessions.warnings,
       ...commitments.warnings,
       ...managedOutgoingImages.warnings,
+      ...webPush.warnings,
+      ...nodeHost.warnings,
       ...rescuePending.warnings,
       ...channelPairing.warnings,
       ...execApprovals.warnings,

@@ -652,6 +652,8 @@ export const ko: TranslationMap = {
     archiveSession: "세션 보관",
     archiveSessionCount: "{count}개 보관",
     restoreSession: "세션 복원",
+    stopCloudWorker: "클라우드 워커 중지…",
+    stopCloudWorkerConfirm: '"{session}"의 클라우드 워커를 중지하시겠습니까?',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "{count}개 삭제…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

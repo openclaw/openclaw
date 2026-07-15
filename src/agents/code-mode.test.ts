@@ -19,8 +19,8 @@ import {
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
   resolveCodeModeConfig,
-  testing,
 } from "./code-mode.js";
+import { testing } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
