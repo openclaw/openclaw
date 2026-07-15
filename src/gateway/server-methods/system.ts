@@ -26,6 +26,7 @@ import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -60,6 +61,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     port,
     nodeVersion: process.version,
     pid: process.pid,
+    processInstanceId: getGatewayProcessInstanceId(),
     uptimeMs: Math.round(process.uptime() * 1000),
     cpuCount: cpus.length,
     ...(cpuModel ? { cpuModel } : {}),
@@ -179,7 +181,11 @@ export const systemHandlers: GatewayRequestHandlers = {
       const reasonValue = next.reason ?? reason;
       const normalizedReason = normalizeLowercaseStringOrEmpty(reasonValue);
       const ignoreReason =
-        normalizedReason.startsWith("periodic") || normalizedReason === "heartbeat";
+        normalizedReason.startsWith("periodic") ||
+        normalizedReason === "heartbeat" ||
+        normalizedReason === "connect" ||
+        normalizedReason === "launch" ||
+        normalizedReason === "instances-refresh";
       const hostChanged = changed.has("host");
       const ipChanged = changed.has("ip");
       const versionChanged = changed.has("version");

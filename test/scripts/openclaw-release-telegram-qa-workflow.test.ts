@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -207,6 +207,44 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
+  it("attributes GitHub web-flow and unsigned release merges to their exact maintainer merger", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(source.match(/associatedPullRequests\(first:10\)/gu)).toHaveLength(2);
+    expect(source.match(/if \.signature == null then "missing"/gu)).toHaveLength(2);
+    expect(source.match(/\$signature_status" == "invalid"/gu)).toHaveLength(2);
+    expect(
+      source.match(/\$signature_status" == "missing" \|\| "\$signer" == "web-flow"/gu),
+    ).toHaveLength(2);
+    expect(source.match(/\.mergeCommit\.oid == \$sha/gu)).toHaveLength(2);
+    expect(source.match(/\.baseRefName == \$base/gu)).toHaveLength(2);
+    expect(source.match(/\.baseRepository\.nameWithOwner == \$repo/gu)).toHaveLength(2);
+    expect(source.match(/\.mergedBy\.login\] \| unique \| select\(length == 1\)/gu)).toHaveLength(
+      2,
+    );
+    expect(source.match(/collaborators\/\$\{permission_actor\}\/permission/gu)).toHaveLength(2);
+    expect((source.match(/extended-stable\/\[0-9\]/gu) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(source).not.toContain("collaborators/${signer}/permission");
+  });
+
+  it("resolves only candidate-specific provenance refs without fetching histories", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(source.match(/branches-where-head/gu)).toHaveLength(2);
+    expect(source.match(/gh api --paginate/gu)).toHaveLength(2);
+    expect(
+      source.match(/git(?: -C \.candidate)? ls-remote --exit-code --refs origin/gu),
+    ).toHaveLength(2);
+    expect(
+      source.match(/git(?: -C \.candidate)? ls-remote origin 'refs\/tags\/v\*'/gu),
+    ).toHaveLength(2);
+    expect(source).not.toContain("'+refs/heads/release/*:refs/remotes/origin/release/*'");
+    expect(source).not.toContain(
+      "'+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'",
+    );
+    expect(source).not.toContain("'+refs/tags/v*:refs/tags/v*'");
+  });
+
   it("dispatches one accepted trusted-main child from release checks", () => {
     const releaseSource = readFileSync(RELEASE_CHECKS_PATH, "utf8");
     const reusableSource = readFileSync(WORKFLOW_PATH, "utf8");
@@ -310,6 +348,11 @@ describe("release Telegram QA workflow", () => {
   });
 
   it("binds dispatched and legacy reusable OIDC identity to the resolved main SHA", () => {
+    expect(
+      workflowStep(workflowJob("trusted_identity"), "Verify dispatched-main identity").env
+        ?.TARGET_REF,
+    ).toBe("${{ inputs.target_ref }}");
+
     const trustedSha = "b".repeat(40);
     const success = runIdentityVerification({
       expectedTrustedWorkflowSha: trustedSha,
@@ -478,16 +521,97 @@ describe("release Telegram QA workflow", () => {
       (step) => step.name === "Validate required QA credential env",
     );
     expect(validateStep?.env?.RUNNER_ENVIRONMENT).toBe("${{ runner.environment }}");
+    expect(validateStep?.env?.CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("600000");
     expect(validateStep?.env?.JOB_TIMEOUT_MINUTES).toBe("60");
     expect(validateStep?.env?.LEASE_TTL_MS).toBe("7200000");
     expect(validateStep?.run).toContain('[[ "$RUNNER_ENVIRONMENT" == "github-hosted" ]]');
     expect(validateStep?.run).toContain("JOB_TIMEOUT_MINUTES * 60 * 1000 < LEASE_TTL_MS");
 
     const runStep = job?.steps?.find((step) => step.name === "Run Telegram live lane");
+    expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("600000");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
+    expect(runStep?.env?.OPENCLAW_LOG_LEVEL).toBe("trace");
     expect(runStep?.env?.OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS).toBe("60000");
     expect(runStep?.run).toContain("trap terminate_sut_uid_on_exit EXIT");
     expect(runStep?.run).toContain('"$OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND" --terminate-uid');
+    expect(runStep?.run).toContain("run_qa_attempt preflight --scenario channel-canary");
+    expect(runStep?.run).toContain('candidate_telegram_qa="$CANDIDATE_ROOT/extensions/qa-lab');
+    expect(runStep?.run).toContain("grep -Fq '\"openai/gpt-5.5\": {'");
+    expect(runStep?.run).toContain("! grep -Fq '\"openai/gpt-5.6-luna\": {'");
+    expect(runStep?.run).toContain('qa_model="mock-openai/gpt-5.5"');
+    expect(runStep?.run).toContain('--model "$qa_model"');
+    expect(runStep?.run).toContain(
+      "Telegram channel canary failed; skipping the remaining scenarios.",
+    );
+    expect(runStep?.run).toContain("--list-scenarios");
+    expect(runStep?.run).toContain('"$scenario_id" != "channel-canary"');
+    expect(runStep?.run).toContain(
+      'run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"',
+    );
+    expect(
+      runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary"),
+    ).toBeLessThan(runStep?.run?.indexOf("for attempt in 1 2") ?? -1);
+
+    const finalizeStep = job?.steps?.find(
+      (step) => step.name === "Finalize trusted Telegram process-boundary evidence",
+    );
+    expect(finalizeStep?.env?.RUN_LANE_OUTCOME).toBe("${{ steps.run_lane.outcome }}");
+    expect(finalizeStep?.run).toContain('--arg runLaneOutcome "$RUN_LANE_OUTCOME"');
+    expect(finalizeStep?.run).toContain('if $runLaneOutcome == "success" then 2 else 1 end');
+
+    const captureStep = job?.steps?.find(
+      (step) => step.name === "Capture isolated Telegram runtime diagnostics",
+    );
+    expect(captureStep?.if).toContain("steps.terminate_sut.outputs.quiescent == 'true'");
+    expect(captureStep?.env?.OUTPUT_DIR).toBe("${{ steps.run_lane.outputs.output_dir }}");
+    expect(captureStep?.env?.RUNTIME_ROOT).toBe("${{ steps.create_sut.outputs.runtime_root }}");
+    expect(captureStep?.env?.RUN_LANE_OUTCOME).toBe("${{ steps.run_lane.outcome }}");
+    expect(captureStep?.run).toContain('[[ "$RUN_LANE_OUTCOME" != "success" ]]');
+    expect(captureStep?.run).toContain("((${#gateway_logs[@]} > 0))");
+    expect(captureStep?.run).toContain("mapfile -d '' -t gateway_logs");
+    expect(captureStep?.run).toContain("-printf '%T@\\t%p\\0'");
+    expect(captureStep?.run).toContain("sort -z -nr");
+    expect(captureStep?.run).toContain("sed -z -n '1,8p'");
+    expect(captureStep?.run).toContain("cut -z -f2-");
+    expect(captureStep?.run).toContain("((${#gateway_logs[@]} <= 8))");
+    expect(captureStep?.run).toContain("((${#model_config_proofs[@]} > 0))");
+    expect(captureStep?.run).toContain("-name 'openclaw-*.log'");
+    expect(captureStep?.run).toContain(
+      'trusted_temp_root="$(mktemp -d "${RUNNER_TEMP}/openclaw-telegram-diagnostics.XXXXXX")"',
+    );
+    expect(captureStep?.run).not.toContain(".raw");
+    expect(captureStep?.run).toContain(
+      'sudo cat "$log_path" | node --import tsx "$redactor_script" "$output_path"',
+    );
+    expect(captureStep?.run).toContain("const redactedLine =");
+    expect(captureStep?.run).toContain("const limitBytes = 131_072");
+    expect(captureStep?.run).toContain("const maxInputRecordBytes = 1_048_576");
+    expect(captureStep?.run).toContain("safeVerboseMessagePrefixes");
+    expect(captureStep?.run).toContain("shouldRetainRecord");
+    expect(captureStep?.run).toContain('"[trace:embedded-run] prep stages:"');
+    expect(captureStep?.run).toContain('"[context-diag] pre-prompt:"');
+    expect(captureStep?.run).toContain('"model.call.started"');
+    expect(captureStep?.run).toContain("[truncated oversized gateway log record]");
+    expect(captureStep?.run).toContain("[omitted oversized gateway log record]");
+    expect(captureStep?.run).toContain("chunk.indexOf(0x0a, offset)");
+    expect(captureStep?.run).not.toContain("readline.createInterface");
+    expect(captureStep?.run).toContain("while (retained.length > 0");
+    expect(captureStep?.run).toContain("redactQaGatewayDebugText");
+    expect(captureStep?.run).toContain("model_config_proofs");
+    expect(captureStep?.run).toContain("proof_bytes > 0 && proof_bytes <= 65536");
+    expect(captureStep?.run).not.toContain("-name openclaw.json");
+    expect(
+      job?.steps?.findIndex(
+        (step) => step.name === "Capture isolated Telegram runtime diagnostics",
+      ),
+    ).toBeLessThan(
+      job?.steps?.findIndex(
+        (step) => step.name === "Finalize trusted Telegram process-boundary evidence",
+      ) ?? -1,
+    );
+
+    const recordStep = job?.steps?.find((step) => step.name === "Record Telegram execution status");
+    expect(recordStep?.env?.OUTCOMES).toContain("${{ steps.capture_diagnostics.outcome }}");
   });
 
   it("serializes stderr behind the workflow-command pause", () => {
@@ -498,9 +622,105 @@ describe("release Telegram QA workflow", () => {
       (step) => step.name === "Run Telegram live lane",
     );
     expect(runStep?.run).toMatch(
-      /run_qa_attempt\(\) \(\n\s+set -euo pipefail\n\s+exec 2>&1\n\s+attempt=/u,
+      /run_qa_attempt\(\) \(\n\s+set -euo pipefail\n\s+exec 2>&1\n\s+output_name=/u,
     );
     expect(runStep?.run).toContain("::stop-commands::%s");
+  });
+
+  it.runIf(process.platform === "linux")("keeps only the newest eight gateway logs", () => {
+    const captureStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Capture isolated Telegram runtime diagnostics",
+    );
+    const selectorSource = captureStep.run?.match(
+      /mapfile -d '' -t gateway_logs < <\([\s\S]*?^\)$/mu,
+    )?.[0];
+    expect(selectorSource).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-log-selector-");
+    const runtimeRoot = join(workdir, "runtime");
+    const fakeBin = join(workdir, "bin");
+    mkdirSync(join(runtimeRoot, "tmp"), { recursive: true });
+    mkdirSync(fakeBin);
+    writeFileSync(join(fakeBin, "sudo"), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+
+    const logPaths = Array.from({ length: 12 }, (_, index) => {
+      const logDir = join(runtimeRoot, "tmp", `gateway-${index}`);
+      const logPath = join(logDir, `openclaw-${index}.log`);
+      mkdirSync(logDir);
+      writeFileSync(logPath, `${index}\n`);
+      utimesSync(logPath, index + 1, index + 1);
+      return logPath;
+    });
+    const result = spawnSync(
+      "bash",
+      ["-c", `set -euo pipefail\n${selectorSource}\nprintf '%s\\0' "\${gateway_logs[@]}"`],
+      {
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, RUNTIME_ROOT: runtimeRoot },
+      },
+    );
+    expect(result.status, result.stderr.toString()).toBe(0);
+    const selected = result.stdout.toString().split("\0").filter(Boolean);
+    expect(selected).toEqual(logPaths.slice(4).reverse());
+  });
+
+  it("retains only allowlisted verbose runtime diagnostics", () => {
+    const captureStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Capture isolated Telegram runtime diagnostics",
+    );
+    const redactorSource = captureStep.run?.match(
+      /cat >"\$redactor_script" <<'NODE'\n([\s\S]*?)\nNODE/u,
+    )?.[1];
+    expect(redactorSource).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-log-filter-");
+    const scriptPath = join(workdir, "redact-gateway-tail.mts");
+    const outputPath = join(workdir, "gateway.log");
+    writeFileSync(scriptPath, redactorSource ?? "");
+    const inputRecords = [
+      { 0: '{"subsystem":"gateway"}', 1: "ordinary info", _meta: { logLevelName: "INFO" } },
+      {
+        0: '{"subsystem":"agents/embedded"}',
+        1: "embedded run start: safe milestone",
+        _meta: { logLevelName: "DEBUG" },
+      },
+      {
+        0: '{"subsystem":"agents/embedded","details":"embedded run start: marker outside message"}',
+        1: { details: "[context-diag] pre-prompt: structured marker outside message" },
+        2: "verbose payload must drop",
+        _meta: { logLevelName: "DEBUG" },
+      },
+      {
+        0: '{"subsystem":"agents/embedded"}',
+        1: "[context-diag] pre-prompt: safe counts",
+        _meta: { logLevelName: "TRACE" },
+      },
+      {
+        0: '{"subsystem":"agents/embedded"}',
+        1: "trace payload must drop",
+        message: "embedded run prompt end: convenience field must not authorize",
+        _meta: { logLevelName: "TRACE" },
+      },
+    ]
+      .map((record) => JSON.stringify(record))
+      .join("\n");
+    const input = `${inputRecords}\n{"0":"truncated verbose payload must drop"`;
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, outputPath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      input,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const output = readFileSync(outputPath, "utf8");
+    expect(output).toContain("ordinary info");
+    expect(output).toContain("embedded run start: safe milestone");
+    expect(output).toContain("[context-diag] pre-prompt: safe counts");
+    expect(output).not.toContain("verbose payload must drop");
+    expect(output).not.toContain("marker outside message");
+    expect(output).not.toContain("convenience field must not authorize");
+    expect(output).not.toContain("truncated verbose payload must drop");
+    expect(output).not.toContain("trace payload must drop");
   });
 
   it("derives SUT-writable paths from the verified runtime root after sudo", () => {
@@ -508,27 +728,52 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain("Telegram SUT launcher failed: stage=%s line=%s status=%s");
     expect(source).toContain("launcher_stage=root-run-setup");
     expect(source).toContain("launcher_stage=enter-mount-namespace");
-    expect(source).toContain("launcher_stage=mask-host-paths");
-    expect(source).toContain("launcher_stage=mount-proc");
-    expect(source).toContain("launcher_stage=write-identity");
+    expect(source).toContain("set_launcher_stage mask-host-paths");
+    expect(source).toContain('launcher_stage_file="${RUNTIME_ROOT}/launcher-stage-${BASHPID}"');
+    expect(source).toContain('set_launcher_stage "mask-host-path:${masked_path}"');
+    expect(source).toContain("set_launcher_stage mount-proc");
+    expect(source).toContain("set_launcher_stage write-identity");
+    expect(source).toContain("set_launcher_stage launch-runtime");
+    expect(source).toMatch(/set_launcher_stage launch-runtime\n\s+unset launcher_stage_file/u);
+    expect(source).toContain("Telegram SUT runtime preflight failed: stage=%s line=%s status=%s");
+    expect(source).toContain("runtime_stage=verify-runtime-identity");
+    expect(source).toContain("runtime_stage=verify-runtime-privileges");
+    expect(source).toContain("runtime_stage=verify-parent-proc-hidden");
+    expect(source).toContain("runtime_stage=verify-proc-visibility");
+    expect(source).toContain("for _ in {1..100}; do");
+    expect(source).toMatch(
+      /if tr "\\0" "\\n" <"\/proc\/\$\{control_pid\}\/environ" 2>\/dev\/null \|\n\s+grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"; then/u,
+    );
+    expect(source).toContain("proc_marker_visible=true\n                        break");
+    expect(source).toContain("sleep 0.05");
+    expect(source).toContain('[[ "$proc_marker_visible" == "true" ]]');
+    expect(source).toMatch(
+      /kill "\$control_pid" >\/dev\/null 2>&1 \|\| true\n\s+wait "\$control_pid" \|\| true/u,
+    );
+    expect(source).toContain("runtime_stage=verify-secret-env-hidden");
+    expect(source).toContain("runtime_stage=verify-runner-fds-hidden");
+    expect(source).toContain("runtime_stage=verify-runtime-files");
+    expect(source).toContain("runtime_stage=verify-host-paths-hidden");
+    expect(source).toContain("runtime_stage=sanitize-runtime-env");
+    expect(source).toContain("runtime_stage=verify-runtime-env");
+    expect(source).toContain("runtime_stage=write-sandbox-proof");
+    expect(source).toContain("runtime_stage=exec-runtime");
     expect(source).toContain('TMPDIR="${SUT_RUNTIME_ROOT}/tmp"');
     expect(source).toContain('"$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*');
-    expect(source).toMatch(/launcher_stage=enter-mount-namespace\n\s+\/usr\/bin\/unshare/u);
+    expect(source.indexOf("launcher_stage=enter-mount-namespace")).toBeLessThan(
+      source.indexOf("/usr/bin/unshare"),
+    );
     expect(source).not.toContain("exec /usr/bin/unshare");
     expect(source).not.toContain("set -x");
     expect(source).toContain('source_node_bin="$(realpath -e "$(command -v node)")"');
     expect(source).toContain('node_bin="${runtime_root}/node"');
-    expect(source).toContain(
-      'sudo install -o root -g root -m 0555 "$source_node_bin" "$node_bin"',
-    );
+    expect(source).toContain('sudo install -o root -g root -m 0555 "$source_node_bin" "$node_bin"');
     expect(source).toContain(
       '[[ "$(stat -c \'%F:%a:%u:%g\' "$node_bin")" == "regular file:555:0:0" ]]',
     );
     expect(source).toContain('"$node_bin" --version >/dev/null');
-    expect(source).toContain("for masked_path in \"$RUNNER_HOME\" /tmp /var/tmp /dev/shm");
-    expect(source).not.toMatch(
-      /^\s+node_bin="\$\(realpath -e "\$\(command -v node\)"\)"$/mu,
-    );
+    expect(source).toContain('for masked_path in "$RUNNER_HOME" /tmp /var/tmp /dev/shm');
+    expect(source).not.toMatch(/^\s+node_bin="\$\(realpath -e "\$\(command -v node\)"\)"$/mu);
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
     expect(source).toContain("sudo install -d -o root -g root -m 0700 /tmp/openclaw");
     expect(source).toContain(
@@ -544,6 +789,150 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('export HOME="${temp_root}/home"');
     expect(source).toContain('export XDG_CONFIG_HOME="${temp_root}/xdg-config"');
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
+    expect(source).toContain("OPENCLAW_LOG_LEVEL");
+    expect(source).toContain("capture_live_model_config() {");
+    expect(source).toContain('capture_live_model_config "$config_path"');
+    expect(source).toContain('proof_tmp="${RUNTIME_ROOT}/gateway-model-config-${BASHPID}.json"');
+    expect(source).toContain("proof_bytes > 0 && proof_bytes <= 65536");
+    expect(source).toContain("before the QA suite removes its temp config");
+    expect(source).toContain("agentDefaultModel:");
+    expect(source).toContain("modelIds: ([.value.models[]?.id][:128]");
+  });
+
+  it("keeps the generated SUT launcher valid bash", () => {
+    const createSutStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const launcherSource = createSutStep.run?.match(
+      /<<'LAUNCHER'\n([\s\S]*?)\nLAUNCHER(?:\n|$)/u,
+    )?.[1];
+    expect(launcherSource).toBeTruthy();
+
+    const result = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: launcherSource,
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.runIf(process.platform === "linux")(
+    "captures only bounded model routing facts before candidate launch",
+    () => {
+      const createSutStep = workflowStep(
+        workflowJob("run_telegram"),
+        "Create isolated Telegram SUT identity and launcher",
+      );
+      const launcherSource = createSutStep.run?.match(
+        /<<'LAUNCHER'\n([\s\S]*?)\nLAUNCHER(?:\n|$)/u,
+      )?.[1];
+      const captureSource = launcherSource?.match(
+        /^capture_live_model_config\(\) \{[\s\S]*?^\}/mu,
+      )?.[0];
+      expect(captureSource).toBeTruthy();
+
+      const workdir = tempDirs.make("openclaw-telegram-model-proof-");
+      const runtimeRoot = join(workdir, "runtime");
+      const evidenceRoot = join(workdir, "evidence");
+      const configPath = join(workdir, "openclaw.json");
+      const duplicateConfigPath = join(workdir, "openclaw-duplicate.json");
+      mkdirSync(runtimeRoot);
+      mkdirSync(evidenceRoot);
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              model: { primary: "mock-openai/gpt-5.5", fallbacks: ["mock-openai/fallback"] },
+              models: { "mock-openai/gpt-5.5": {}, "mock-openai/fallback": {} },
+            },
+          },
+          models: {
+            providers: {
+              "mock-openai": {
+                api: "openai-responses",
+                endpoint: "https://example.invalid",
+                ignoredField: "not-exported",
+                models: [{ id: "gpt-5.5", ignoredField: "not-exported" }],
+              },
+            },
+          },
+        }),
+      );
+      writeFileSync(
+        duplicateConfigPath,
+        readFileSync(configPath, "utf8").replace("not-exported", "different-ignored-value"),
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail\n${captureSource}\ncapture_live_model_config "$CONFIG_PATH"\ncapture_live_model_config "$DUPLICATE_CONFIG_PATH"\nfind "$EVIDENCE_ROOT/trusted-runtime-diagnostics" -type f -name 'gateway-model-config-*.json' -print`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CONFIG_PATH: configPath,
+            DUPLICATE_CONFIG_PATH: duplicateConfigPath,
+            EVIDENCE_ROOT: evidenceRoot,
+            RUNTIME_ROOT: runtimeRoot,
+            RUNNER_GID: String(process.getgid?.() ?? 0),
+            RUNNER_UID: String(process.getuid?.() ?? 0),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const proofPaths = result.stdout.trim().split("\n");
+      expect(proofPaths).toHaveLength(1);
+      const proofPath = proofPaths[0]!;
+      const proofText = readFileSync(proofPath, "utf8");
+      expect(JSON.parse(proofText)).toEqual({
+        agentDefaultModel: {
+          primary: "mock-openai/gpt-5.5",
+          fallbacks: ["mock-openai/fallback"],
+        },
+        agentModelRefs: ["mock-openai/fallback", "mock-openai/gpt-5.5"],
+        providers: [{ id: "mock-openai", api: "openai-responses", modelIds: ["gpt-5.5"] }],
+      });
+      expect(proofText).not.toContain("not-exported");
+      expect(proofText).not.toContain("example.invalid");
+    },
+  );
+
+  it("arms the boundary preload only in the gateway main thread", () => {
+    const createSutStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const preloadSource = createSutStep.run?.match(/<<'PRELOAD'\n([\s\S]*?)\nPRELOAD/u)?.[1];
+    expect(preloadSource).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-preload-");
+    const preloadPath = join(workdir, "preload.mjs");
+    writeFileSync(preloadPath, preloadSource ?? "");
+    const env = { ...process.env };
+    delete env.OPENCLAW_QA_SUT_PREENTRY_STOP;
+
+    const mainResult = spawnSync(process.execPath, ["--import", preloadPath, "-e", ""], {
+      encoding: "utf8",
+      env,
+    });
+    expect(mainResult.status).not.toBe(0);
+    expect(mainResult.stderr).toContain("trusted Telegram SUT preload was not armed");
+
+    const workerResult = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `const { Worker } = require("node:worker_threads");\n` +
+          `const worker = new Worker('require("node:worker_threads").parentPort.postMessage("ready")', { eval: true, execArgv: ["--import", ${JSON.stringify(preloadPath)}] });\n` +
+          `worker.once("message", () => process.exit(0));\n` +
+          `worker.once("error", (error) => { console.error(error); process.exit(1); });`,
+      ],
+      { encoding: "utf8", env, killSignal: "SIGKILL", timeout: 5_000 },
+    );
+    expect(workerResult.status, workerResult.stderr).toBe(0);
   });
 
   it("reports the namespace-entry stage when its supervised child fails", () => {
@@ -563,6 +952,46 @@ describe("release Telegram QA workflow", () => {
     expect(result.status).toBe(23);
     expect(result.stderr).toMatch(
       /Telegram SUT launcher failed: stage=enter-mount-namespace line=[0-9]+ status=23/u,
+    );
+  });
+
+  it("reports the persisted inner launcher stage when namespace supervision fails", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+    const trapLine = source.match(/^\s+(trap 'exit_status=.*' ERR)$/mu)?.[1];
+    expect(trapLine).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-launcher-stage-");
+    const stagePath = join(workdir, "stage");
+    writeFileSync(stagePath, "mount-proc\n");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -Eeuo pipefail\nlauncher_stage=enter-mount-namespace\nlauncher_stage_file=${JSON.stringify(stagePath)}\n${trapLine}\nbash -c 'exit 23'`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stderr).toMatch(
+      /Telegram SUT launcher failed: stage=mount-proc line=[0-9]+ status=23/u,
+    );
+  });
+
+  it("reports the exact failing runtime preflight line", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+    const diagnosticSource = source.match(
+      /^\s+(fail_runtime_stage\(\) \{[\s\S]*?^\s+\}\n\s+trap "fail_runtime_stage \\?\$\? \\?\$LINENO" ERR)$/mu,
+    )?.[1];
+    expect(diagnosticSource).toBeTruthy();
+
+    const script = `set -Eeuo pipefail\nruntime_stage=runtime-test\n${diagnosticSource}\nfalse`;
+    const failureLine = script.split("\n").findIndex((line) => line === "false") + 1;
+    const result = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `Telegram SUT runtime preflight failed: stage=runtime-test line=${failureLine} status=1`,
     );
   });
 });

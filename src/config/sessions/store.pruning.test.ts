@@ -9,19 +9,16 @@ import {
   registerSessionMaintenancePreserveKeysProvider,
 } from "./store-maintenance-preserve.js";
 import {
-  isGatewayModelRunSessionKey,
-  isProtectedSessionMaintenanceEntry,
-  resolveMaintenanceConfigFromInput,
-  resolveQuotaSuspensionEntryMaintenance,
-  resolveSessionEntryMaintenanceHighWater,
-  shouldRunModelRunPrune,
-} from "./store-maintenance.js";
-import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
-} from "./store.js";
+  resolveMaintenanceConfigFromInput,
+  resolveQuotaSuspensionEntryMaintenance,
+  shouldPreserveMaintenanceEntry,
+  shouldRunModelRunPrune,
+  shouldRunSessionEntryMaintenance,
+} from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -42,6 +39,23 @@ function makeEntry(updatedAt: number): SessionEntry {
 
 function makeStore(entries: Array<[string, SessionEntry]>): Record<string, SessionEntry> {
   return Object.fromEntries(entries);
+}
+
+function isGatewayModelRunSessionKey(sessionKey: string): boolean {
+  const store = makeStore([[sessionKey, makeEntry(Date.now() - 10 * DAY_MS)]]);
+  return pruneStaleModelRunEntries(store, DAY_MS) === 1;
+}
+
+function isProtectedSessionMaintenanceEntry(key: string, entry: SessionEntry | undefined): boolean {
+  return shouldPreserveMaintenanceEntry({ key, entry });
+}
+
+function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
+  let entryCount = 0;
+  while (!shouldRunSessionEntryMaintenance({ entryCount, maxEntries })) {
+    entryCount += 1;
+  }
+  return entryCount;
 }
 
 function createMaintenanceArtifacts() {
@@ -92,6 +106,21 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty("agent:main:slack:channel:C999");
     expect(store).toHaveProperty("agent:main:telegram:group:-100123");
     expect(store).toHaveProperty("agent:main:discord:channel:ops");
+  });
+
+  it("preserves model-locked harness sessions even when stale", () => {
+    const now = Date.now();
+    const lockedKey = "agent:main:harness-owned:locked";
+    const store = makeStore([
+      [lockedKey, { ...makeEntry(now - 31 * DAY_MS), modelSelectionLocked: true }],
+      ["old", makeEntry(now - 31 * DAY_MS)],
+    ]);
+
+    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store).toHaveProperty(lockedKey);
+    expect(store.old).toBeUndefined();
   });
 });
 
@@ -507,6 +536,16 @@ describe("pruneStaleModelRunEntries", () => {
     expect(store).toHaveProperty(staleModelRun);
   });
 
+  it("preserves model-locked harness sessions from model-run pruning", () => {
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const store = makeStore([
+      [staleModelRun, { ...makeEntry(Date.now() - 10 * DAY_MS), modelSelectionLocked: true }],
+    ]);
+
+    expect(pruneStaleModelRunEntries(store, DAY_MS)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+  });
+
   it("matches only explicit model-run uuid session keys", () => {
     expect(
       isGatewayModelRunSessionKey(
@@ -615,6 +654,23 @@ describe("capEntryCount", () => {
     expect(store).toHaveProperty("newest");
     expect(store).toHaveProperty("recent");
     expect(store.oldest).toBeUndefined();
+    expect(store.old).toBeUndefined();
+  });
+
+  it("preserves model-locked harness sessions when capping", () => {
+    const now = Date.now();
+    const lockedKey = "agent:main:harness-owned:locked";
+    const store = makeStore([
+      [lockedKey, { ...makeEntry(now - 10 * DAY_MS), modelSelectionLocked: true }],
+      ["recent", makeEntry(now)],
+      ["old", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    expect(evicted).toBe(1);
+    expect(store).toHaveProperty(lockedKey);
+    expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
   });
 
@@ -763,6 +819,32 @@ describe("resolveMaintenanceConfigFromInput", () => {
 
   it("defaults gateway model-run probes to fixed 24h retention", () => {
     expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
+  });
+
+  it("keeps archived transcripts by default and bounds growth with a disk budget", () => {
+    const maintenance = resolveMaintenanceConfigFromInput();
+
+    expect(maintenance.resetArchiveRetentionMs).toBeNull();
+    expect(maintenance.maxDiskBytes).toBe(2 * 1024 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(2 * 1024 * 1024 * 1024 * 0.8));
+  });
+
+  it("honors explicit archive retention and disk budget opt-outs", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      resetArchiveRetention: "7d",
+      maxDiskBytes: false,
+    });
+
+    expect(maintenance.resetArchiveRetentionMs).toBe(7 * DAY_MS);
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("disables the disk budget when an explicit maxDiskBytes fails to parse", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "lots" });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
   });
 
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {

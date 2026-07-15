@@ -908,3 +908,4 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

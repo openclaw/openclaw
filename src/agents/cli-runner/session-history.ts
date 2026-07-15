@@ -10,6 +10,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import {
+  parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
   selectSessionTranscriptLeafControlledPath,
 } from "../../config/sessions/transcript-tree.js";
@@ -26,13 +27,13 @@ import { migrateSessionEntries, parseSessionEntries } from "../sessions/session-
 import { cliBackendLog } from "./log.js";
 
 /** Maximum transcript size read for CLI session history. */
-export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 /** Maximum transcript messages exposed to CLI hook history. */
-export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 /** Minimum reseed-history prompt budget for fresh CLI sessions. */
-export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
+const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 /** Maximum automatic reseed-history prompt budget derived from context size. */
-export const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
+const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const CLI_SESSION_HISTORY_HEADER_READ_BYTES = 64 * 1024;
@@ -346,26 +347,34 @@ function isSafeTruncatedCliSessionTail(entries: readonly unknown[]): boolean {
   if (tree.hasLeafControl) {
     return !tree.hasInvalidLeafControl;
   }
+  const rawIds = new Set<string>();
   const childParentIds = new Set<string>();
   let truncatedRootParentId: string | undefined;
-  for (const node of tree.nodes) {
+  for (const entry of entries) {
+    const node = parseSessionTranscriptTreeEntry(entry);
+    if (!node) {
+      continue;
+    }
     if (node.appendMode === "side") {
       return false;
     }
     if (node.parentId === null) {
+      rawIds.add(node.id);
       continue;
     }
-    if (!tree.byId.has(node.parentId)) {
+    if (!rawIds.has(node.parentId)) {
       if (truncatedRootParentId !== undefined || childParentIds.size > 0) {
         return false;
       }
       truncatedRootParentId = node.parentId;
+      rawIds.add(node.id);
       continue;
     }
     if (childParentIds.has(node.parentId)) {
       return false;
     }
     childParentIds.add(node.parentId);
+    rawIds.add(node.id);
   }
   return true;
 }
@@ -443,6 +452,13 @@ async function loadCliSessionEntries(params: {
     const transcript = await readBoundedCliSessionTranscript(realSessionFile, stat.size);
     const entries = parseCliSessionEntries(transcript.content);
     if (!entries) {
+      return [];
+    }
+    const rawSessionEntries = entries.filter((entry) => entry.type !== "session");
+    if (transcript.truncated && !isSafeTruncatedCliSessionTail(rawSessionEntries)) {
+      cliBackendLog.warn(
+        `cli session history truncated tail skipped because branch controls are incomplete: ${realSessionFile}`,
+      );
       return [];
     }
     migrateSessionEntries(entries);

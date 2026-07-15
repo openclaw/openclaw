@@ -1,5 +1,6 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
@@ -12,6 +13,7 @@ import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   collectExecPolicyScopeSnapshots,
+  SESSION_EXEC_OVERRIDES_NOTE,
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
@@ -341,7 +343,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
 function formatCliError(err: unknown): string {
   const msg = formatErrorMessage(err);
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
-  const safe = sanitizeForLog(firstLine);
+  const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
   return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
 }
 
@@ -413,7 +415,9 @@ function buildEffectivePolicyReport(params: {
         hostDefaults: params.resolvedDefaults,
         hostDefaultSource: "node-reported resolved defaults",
       }),
-      note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+      note:
+        "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy. " +
+        SESSION_EXEC_OVERRIDES_NOTE,
     };
   }
   if (!cfg) {
@@ -428,7 +432,9 @@ function buildEffectivePolicyReport(params: {
       approvals: params.approvals,
       hostPath: params.hostPath,
     }),
-    note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+    note:
+      "Effective exec policy is the host approvals file intersected with requested tools.exec policy. " +
+      SESSION_EXEC_OVERRIDES_NOTE,
   };
 }
 
@@ -902,3 +908,4 @@ export const testing = {
   formatCliError,
   readStdin,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

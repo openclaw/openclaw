@@ -32,7 +32,7 @@ describeControlUiE2e("embedded terminal document", () => {
     await server?.close();
   });
 
-  it("renders only the terminal while native authentication connects", async () => {
+  it("renders only the terminal with a centered close control while native auth connects", async () => {
     const context = await browser.newContext({ serviceWorkers: "block" });
     const page = await context.newPage();
     await page.addInitScript(() => {
@@ -81,6 +81,34 @@ describeControlUiE2e("embedded terminal document", () => {
       });
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       expect(await page.locator("openclaw-terminal-panel").count()).toBe(1);
+      const closeControlMetrics = await page
+        .locator("openclaw-terminal-panel")
+        .locator(".tp-tab__close")
+        .evaluate((close) => {
+          const header = close.closest<HTMLElement>(".tp-header");
+          if (!header) {
+            throw new Error("Terminal close control must stay inside the tab header");
+          }
+          const headerBounds = header.getBoundingClientRect();
+          const closeBounds = close.getBoundingClientRect();
+          return {
+            centerOffset: Math.abs(
+              closeBounds.top +
+                closeBounds.height / 2 -
+                (headerBounds.top + headerBounds.height / 2),
+            ),
+            height: closeBounds.height,
+            width: closeBounds.width,
+          };
+        });
+      expect(closeControlMetrics.width).toBe(26);
+      expect(closeControlMetrics.height).toBe(26);
+      expect(closeControlMetrics.centerOffset).toBeLessThanOrEqual(0.5);
+      const closeControl = page.locator("openclaw-terminal-panel").locator(".tp-tab__close");
+      expect(await closeControl.getAttribute("aria-label")).toBe("Close terminal session: bash");
+      await closeControl.click();
+      const terminalClose = await gateway.waitForRequest("terminal.close");
+      expect(terminalClose.params).toEqual({ sessionId: "terminal-e2e" });
     } finally {
       await context.close();
     }

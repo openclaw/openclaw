@@ -1192,3 +1192,4 @@ export function createCoreHealthChecks(
 }
 
 export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

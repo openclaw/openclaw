@@ -302,6 +302,7 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `onboarding activation screens build across appearance and type size`() {
         let screens: [AnyView] = [
             AnyView(OnboardingIntroStep(onContinue: {})),
+            AnyView(OnboardingPermissionsStep(onContinue: {})),
             AnyView(OnboardingWelcomeStep(
                 statusLine: "",
                 isConnecting: false,
@@ -369,6 +370,37 @@ struct SwiftUIRenderSmokeTests {
         await Self.waitForPresentedAlert(in: window)
 
         #expect(window.rootViewController?.presentedViewController is UIAlertController)
+    }
+
+    @Test @MainActor func `exec approval dialog builds on compact screens with accessibility text`() throws {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
+        let layouts: [(CGSize, DynamicTypeSize)] = [
+            (CGSize(width: 320, height: 568), .accessibility5),
+            (CGSize(width: 568, height: 320), .accessibility3),
+        ]
+        for (size, typeSize) in layouts {
+            let appModel = NodeAppModel()
+            let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-layout",
+                commandText: String(repeating: "/usr/bin/find /private/var/mobile/Documents ", count: 12),
+                warningText: String(
+                    repeating: "This command can modify files outside the current workspace. ",
+                    count: 12),
+                allowedDecisions: ["allow-once", "allow-always", "deny"],
+                host: "gateway.example.com",
+                nodeId: "node-mobile",
+                agentId: "main",
+                expiresAtMs: Int64.max))
+            appModel._test_presentExecApprovalPrompt(prompt)
+
+            let root = Color.clear
+                .execApprovalPromptDialog()
+                .environment(appModel)
+                .environment(\.dynamicTypeSize, typeSize)
+            windows.append(Self.host(root, size: size))
+        }
     }
 
     @Test @MainActor func `root prompt alert stack presents gateway trust prompt`() async {

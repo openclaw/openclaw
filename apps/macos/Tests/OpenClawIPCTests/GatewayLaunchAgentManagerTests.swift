@@ -28,7 +28,7 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
-    @Test func `attach only runtime override does not uninstall gateway launch agent`() throws {
+    @Test func `attach only runtime override blocks gateway launch agent writes`() async throws {
         let dir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)
         let marker = dir.appendingPathComponent("disable-launchagent")
@@ -45,8 +45,10 @@ struct GatewayLaunchAgentManagerTests {
         GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
         let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
+        let kickstartError = await GatewayLaunchAgentManager.kickstart()
 
         #expect(error == nil)
+        #expect(kickstartError == nil)
         #expect(FileManager().fileExists(atPath: marker.path))
         #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
     }

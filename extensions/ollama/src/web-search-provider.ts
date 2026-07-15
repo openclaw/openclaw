@@ -161,7 +161,7 @@ function buildOllamaWebSearchAttempts(params: {
   return attempts;
 }
 
-export async function runOllamaWebSearch(params: {
+async function runOllamaWebSearch(params: {
   config?: OpenClawConfig;
   query: string;
   count?: number;
@@ -348,4 +348,3 @@ export const testing = {
   readOllamaWebSearchResponse,
   warnOllamaWebSearchPrereqs,
 };
-export { testing as __testing };

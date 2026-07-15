@@ -49,16 +49,27 @@ export type WizardProgress = {
   stop: (message?: string) => void;
 };
 
+type WizardDeviceCodeParams = {
+  title: string;
+  code: string;
+  expiresInMinutes?: number;
+  message?: string;
+};
+
 export type WizardPrompter = {
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;
+  /** Present a browser device code as structured UI when the client supports it. */
+  deviceCode?: (params: WizardDeviceCodeParams) => Promise<void>;
   plain?: (message: string) => Promise<void>;
   select: <T>(params: WizardSelectParams<T>) => Promise<T>;
   multiselect: <T>(params: WizardMultiSelectParams<T>) => Promise<T[]>;
   text: (params: WizardTextParams) => Promise<string>;
   confirm: (params: WizardConfirmParams) => Promise<boolean>;
   progress: (label: string) => WizardProgress;
+  /** Queue an explicit browser destination for the next interactive client step. */
+  openUrl?: (url: string) => Promise<void>;
   disableBackNavigation?: () => void;
 };
 

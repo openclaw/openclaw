@@ -47,10 +47,6 @@ const loadMatrixDirectManagementModule = createLazyRuntimeModule(
   () => import("./matrix/direct-management.js"),
 );
 
-export function resetMatrixCliStateForTests(): void {
-  matrixCliExitScheduled = false;
-}
-
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
     return;
@@ -2316,3 +2312,4 @@ export function registerMatrixCli(params: { program: Command }): void {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

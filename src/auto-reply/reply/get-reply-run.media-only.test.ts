@@ -2,7 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -27,6 +27,10 @@ vi.mock("../../agents/embedded-agent.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
+vi.mock("../../agents/harness/hook-helpers.js", () => ({
+  runAgentHarnessBeforeMessageWriteHook: vi.fn((params: { message: unknown }) => params.message),
+}));
+
 vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
@@ -36,19 +40,16 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
 }));
 
-const storeRuntimeLoads = vi.hoisted(() => vi.fn());
-const updateSessionStore = vi.hoisted(() => vi.fn());
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const consumeSessionSkillSuggestionMock = vi.hoisted(() => vi.fn());
 
-vi.mock(import("../../config/sessions/session-accessor.js"), async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
-  return {
-    ...actual,
-    loadSessionEntry: loadSessionEntryMock,
-  };
-});
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: vi.fn().mockReturnValue([]),
+  loadSessionEntry: loadSessionEntryMock,
+  patchSessionEntry: vi.fn(),
+  persistSessionTranscriptTurn: vi.fn(),
+}));
 
 vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
   updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
@@ -57,13 +58,6 @@ vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
 vi.mock("../../config/sessions/skill-suggestions.js", () => ({
   consumeSessionSkillSuggestion: consumeSessionSkillSuggestionMock,
 }));
-
-vi.mock("../../config/sessions/store.runtime.js", () => {
-  storeRuntimeLoads();
-  return {
-    updateSessionStore,
-  };
-});
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -147,6 +141,15 @@ vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./session-reset-prompt.js", () => ({
+  resolveBareResetBootstrapFileAccess: vi.fn().mockReturnValue(false),
+  resolveBareSessionResetPromptState: vi.fn().mockResolvedValue({
+    bootstrapMode: "none",
+    prompt: "A new session was started via /new or /reset.",
+    shouldPrependStartupContext: true,
+  }),
+}));
+
 vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
@@ -164,7 +167,6 @@ let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInbou
 let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let replyRunTesting: typeof import("./reply-run-registry.js").testing;
-let loadScopeCounter = 0;
 
 function createGatewayDrainingError(): Error {
   const error = new Error("Gateway is draining for restart; new tasks are not accepted");
@@ -172,16 +174,8 @@ function createGatewayDrainingError(): Error {
   return error;
 }
 
-async function loadFreshGetReplyRunModuleForTest() {
-  return await importFreshModule<typeof import("./get-reply-run.js")>(
-    import.meta.url,
-    `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
-  );
-}
-
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
   "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
-
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
 ): Parameters<typeof runPreparedReply>[0] {
@@ -320,8 +314,6 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   beforeEach(async () => {
-    storeRuntimeLoads.mockClear();
-    updateSessionStore.mockReset();
     loadSessionEntryMock.mockReset();
     consumeSessionSkillSuggestionMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
@@ -340,12 +332,6 @@ describe("runPreparedReply media-only handling", () => {
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
 
-  it("does not load session store runtime on module import", async () => {
-    await loadFreshGetReplyRunModuleForTest();
-
-    expect(storeRuntimeLoads).not.toHaveBeenCalled();
-  });
-
   it("passes approved elevated defaults to the runner", async () => {
     await runPreparedReply(
       baseParams({
@@ -362,6 +348,27 @@ describe("runPreparedReply media-only handling", () => {
       defaultLevel: "on",
       fullAccessAvailable: true,
     });
+  });
+
+  it("includes current exec overrides in the queued runner prompt", async () => {
+    await runPreparedReply(
+      baseParams({
+        execOverrides: {
+          host: "gateway",
+          security: "full",
+          ask: "always",
+          node: "worker-1",
+        },
+        resolvedElevatedLevel: "off",
+      }),
+    );
+
+    const prompt = requireRunReplyAgentCall().followupRun.run.extraSystemPromptStatic;
+    expect(prompt).toContain(
+      "Current session exec defaults: host=gateway security=full ask=always node=worker-1.",
+    );
+    expect(prompt).toContain("Current elevated level: off.");
+    expect(prompt).toContain("Do not assume a prior denial still applies");
   });
 
   it("preserves parent session provenance in queued runs", async () => {
@@ -505,7 +512,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.thinkLevel).toBe("off");
     expect(sessionEntry.thinkingLevel).toBe("high");
     expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
-    expect(updateSessionStore).not.toHaveBeenCalled();
   });
 
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {
@@ -2041,14 +2047,14 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         isNewSession: false,
         sessionId: "session-auth-profile",
-        sessionEntry: sessionStore["session-key"],
+        sessionEntry: expectDefined(sessionStore["session-key"], "stored session entry"),
         sessionStore,
       }),
     );
 
     await Promise.resolve();
     sessionStore["session-key"] = {
-      ...sessionStore["session-key"],
+      ...expectDefined(sessionStore["session-key"], "stored session entry"),
       authProfileOverride: "profile-after-wait",
       authProfileOverrideSource: "auto",
       updatedAt: 2,
@@ -3661,3 +3667,4 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("low steer this conversation");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

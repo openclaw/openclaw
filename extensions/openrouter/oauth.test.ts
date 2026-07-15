@@ -138,6 +138,27 @@ function createOpenRouterOAuthContext(params: {
   return { ctx, progress, note, text, log, openUrl };
 }
 
+async function requestLocalOpenRouterOAuthCallback(
+  query: string,
+): Promise<{ callback: Promise<unknown>; response: Response; body: string }> {
+  let markReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    markReady = resolve;
+  });
+  const callback = waitForOpenRouterOAuthCallback({
+    expectedState: "state-1",
+    timeoutMs: 1000,
+    onProgress: markReady,
+  });
+  callback.catch(() => undefined);
+  await ready;
+
+  const response = await fetch(`${OPENROUTER_OAUTH_REDIRECT_URI}?${query}`, {
+    headers: { Connection: "close" },
+  });
+  return { callback, response, body: await response.text() };
+}
+
 describe("OpenRouter OAuth", () => {
   it("builds the documented PKCE authorize URL", () => {
     const url = new URL(
@@ -167,6 +188,30 @@ describe("OpenRouter OAuth", () => {
       code: "AUTHCODE",
       state: "state-1",
     });
+    expect(() =>
+      parseOpenRouterOAuthCallbackInput(
+        `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&error=access_denied&error_description=Denied`,
+        "state-1",
+      ),
+    ).toThrow("OpenRouter OAuth error: access_denied: Denied");
+    expect(() =>
+      parseOpenRouterOAuthCallbackInput(
+        "state=state-1&error=access_denied&error_description=Denied",
+        "state-1",
+      ),
+    ).toThrow("OpenRouter OAuth error: access_denied: Denied");
+    expect(() =>
+      parseOpenRouterOAuthCallbackInput(
+        `${OPENROUTER_OAUTH_REDIRECT_URI}?error=access_denied&error_description=Denied`,
+        "state-1",
+      ),
+    ).toThrow("Missing OpenRouter OAuth state");
+    expect(() =>
+      parseOpenRouterOAuthCallbackInput(
+        `${OPENROUTER_OAUTH_REDIRECT_URI}?state=wrong&error=access_denied&error_description=Denied`,
+        "state-1",
+      ),
+    ).toThrow("OpenRouter OAuth state mismatch");
     expect(buildOpenRouterOAuthRedirectUri({ state: "state-1" })).toBe(
       `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1`,
     );
@@ -282,7 +327,7 @@ describe("OpenRouter OAuth", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({ key: "sk-or-v1-test", user_id: "user-1" }),
     );
-    const { ctx, progress, text, log, openUrl } = createOpenRouterOAuthContext({
+    const { ctx, progress, note, text, log, openUrl } = createOpenRouterOAuthContext({
       isRemote: true,
     });
 
@@ -292,8 +337,12 @@ describe("OpenRouter OAuth", () => {
       fetchImpl,
     });
 
-    expect(openUrl).not.toHaveBeenCalled();
+    expect(openUrl).toHaveBeenCalledWith(expect.stringContaining("https://openrouter.ai/auth?"));
     expect(log.mock.calls[0]?.[0]).toContain("https://openrouter.ai/auth?");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("https://openrouter.ai/auth?"),
+      "OpenRouter OAuth",
+    );
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Paste the OpenRouter redirect URL",
@@ -342,6 +391,29 @@ describe("OpenRouter OAuth", () => {
     );
     expect(openUrl).toHaveBeenCalledWith(expect.stringContaining("https://openrouter.ai/auth?"));
     expect(text).not.toHaveBeenCalled();
+  });
+
+  it("validates local callback state before surfacing OpenRouter OAuth errors", async () => {
+    const denied = await requestLocalOpenRouterOAuthCallback(
+      "state=state-1&error=access_denied&error_description=Denied",
+    );
+    expect(denied.response.status).toBe(400);
+    expect(denied.body).toBe("OpenRouter authentication failed: access_denied: Denied");
+    await expect(denied.callback).rejects.toThrow("OpenRouter OAuth error: access_denied: Denied");
+
+    const missingState = await requestLocalOpenRouterOAuthCallback(
+      "error=access_denied&error_description=Denied",
+    );
+    expect(missingState.response.status).toBe(400);
+    expect(missingState.body).toBe("Invalid OAuth state");
+    await expect(missingState.callback).rejects.toThrow("Missing OpenRouter OAuth state");
+
+    const wrongState = await requestLocalOpenRouterOAuthCallback(
+      "state=wrong&error=access_denied&error_description=Denied",
+    );
+    expect(wrongState.response.status).toBe(400);
+    expect(wrongState.body).toBe("Invalid OAuth state");
+    await expect(wrongState.callback).rejects.toThrow("OpenRouter OAuth state mismatch");
   });
 
   it("exposes stable auth choice metadata", () => {

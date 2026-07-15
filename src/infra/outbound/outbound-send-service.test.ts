@@ -350,6 +350,7 @@ describe("executeSendAction", () => {
         channel: "demo-outbound",
         params: {},
         sessionKey: "agent:main:directchat:group:ops",
+        conversationType: "channel",
         requesterAccountId: "source-account",
         requesterSenderId: "attacker",
         accountId: "destination-account",
@@ -361,6 +362,7 @@ describe("executeSendAction", () => {
 
     expectSingleCallFields(mocks.sendMessage, {
       requesterSessionKey: "agent:main:directchat:group:ops",
+      conversationType: "channel",
       requesterAccountId: "source-account",
       requesterSenderId: "attacker",
       accountId: "destination-account",
@@ -999,6 +1001,7 @@ describe("executeSendAction", () => {
       message: "hello",
       payload: { text: "hello", presentation },
       replyToId: "reply-1",
+      replyToIdSource: "explicit",
       threadId: "thread-1",
     });
 
@@ -1008,6 +1011,7 @@ describe("executeSendAction", () => {
           sessionKey: "discord-session",
           inboundEventKind: "room_event",
         }),
+        replyToIdSource: "explicit",
       }),
     );
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
@@ -1160,3 +1164,4 @@ describe("executeSendAction", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

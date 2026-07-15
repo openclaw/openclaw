@@ -2,7 +2,9 @@
 import { createServer } from "node:http";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { startMatrixQaFaultProxy, type MatrixQaFaultProxy } from "./fault-proxy.js";
+import { startMatrixQaFaultProxy } from "./fault-proxy.js";
+
+type MatrixQaFaultProxy = Awaited<ReturnType<typeof startMatrixQaFaultProxy>>;
 
 const servers: Array<{ close(): Promise<void> }> = [];
 

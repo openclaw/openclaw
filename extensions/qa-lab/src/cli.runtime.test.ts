@@ -285,7 +285,7 @@ describe("qa cli runtime", () => {
       summaryPath: "/tmp/character-summary.json",
     });
     runQaManualLane.mockResolvedValue({
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-luna",
       waited: { status: "ok" },
       reply: "done",
       watchUrl: "http://127.0.0.1:43124",
@@ -382,7 +382,7 @@ describe("qa cli runtime", () => {
     await runQaSuiteCommand({
       repoRoot: process.cwd(),
       outputDir: ".artifacts/qa-e2e/scenario-test",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       scenarioIds: ["control-ui-chat-flow-playwright"],
     });
 
@@ -392,7 +392,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       channelDriver: undefined,
       channelDriverSelection: undefined,
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       alternateModel: undefined,
       fastMode: undefined,
       scenarioIds: ["control-ui-chat-flow-playwright"],
@@ -449,8 +449,8 @@ describe("qa cli runtime", () => {
                     id: "openai",
                     live: false,
                     model: {
-                      name: "gpt-5.5",
-                      ref: "mock-openai/gpt-5.5",
+                      name: "gpt-5.6-luna",
+                      ref: "mock-openai/gpt-5.6-luna",
                     },
                     fixture: "mock-openai",
                   },
@@ -671,7 +671,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/frontier",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
       thinking: "medium",
@@ -685,7 +685,7 @@ describe("qa cli runtime", () => {
       channelDriver: undefined,
       channelDriverSelection: undefined,
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
       thinkingDefault: "medium",
@@ -782,14 +782,66 @@ describe("qa cli runtime", () => {
         capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
+        providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
         smokeArtifactPath: "crabline-fake-provider-smoke.json",
       },
+      evidenceMode: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
       fastMode: undefined,
       scenarioIds: ["channel-chat-baseline"],
     });
+  });
+
+  it("defers mixed Crabline channels to the host suite launcher", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriver: "crabline",
+        channelDriverSelection: undefined,
+        scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+      }),
+    );
+  });
+
+  it("forwards resolved catalog scenarios for automatic mixed-channel host runs", async () => {
+    await runQaSuiteCommand({
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.scenarioIds).toEqual(
+      expect.arrayContaining(["telegram-help-command", "matrix-restart-resume"]),
+    );
+    const scenarioById = new Map(
+      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
+    );
+    expect(
+      (suiteArgs.scenarioIds as string[]).every(
+        (scenarioId) => scenarioById.get(scenarioId)?.execution.kind === "flow",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps mixed Crabline channels unsupported on the Multipass runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        providerMode: "mock-openai",
+        channelDriver: "crabline",
+        runner: "multipass",
+        scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+      }),
+    ).rejects.toThrow("Selected QA scenarios require multiple channels (telegram, matrix)");
+    expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
   it("passes Crabline channel-driver selection through to the multipass runner", async () => {
@@ -809,6 +861,7 @@ describe("qa cli runtime", () => {
           capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
           channel: "telegram",
           channelDriver: "crabline",
+          providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
           smokeArtifactPath: "crabline-fake-provider-smoke.json",
         },
       }),
@@ -936,8 +989,8 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/telegram",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       scenarioIds: ["telegram-help-command"],
       sutAccountId: "sut-live",
@@ -950,8 +1003,8 @@ describe("qa cli runtime", () => {
           repoRoot: path.resolve("/tmp/openclaw-repo"),
           outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/telegram"),
           providerMode: "live-frontier",
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna",
           fastMode: true,
           sutAccountId: "sut-live",
         }),
@@ -1413,7 +1466,7 @@ describe("qa cli runtime", () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-opus-4-8",
       preflight: true,
     });
@@ -1423,7 +1476,7 @@ describe("qa cli runtime", () => {
       repoRoot,
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-opus-4-8",
       scenarioIds: ["approval-turn-tool-followthrough"],
       concurrency: 1,
@@ -1626,7 +1679,6 @@ describe("qa cli runtime", () => {
       scenarioIds: [
         "runtime-long-context-cache-stability",
         "runtime-soak-100-turn",
-        "runtime-tool-image-generate",
         "runtime-tool-memory-add",
         "runtime-tool-memory-recall",
         "runtime-tool-message-tool",
@@ -1636,6 +1688,10 @@ describe("qa cli runtime", () => {
         "runtime-tool-tts",
       ],
     });
+    expectWriteContains(
+      stderrWrite,
+      "excluded lane-incompatible scenario(s): runtime-tool-image-generate",
+    );
   });
 
   it("keeps runtime-pair tier selection on flow scenarios and reports exclusions", async () => {
@@ -1648,6 +1704,7 @@ describe("qa cli runtime", () => {
     const scenarioIds = mockFirstObjectArg(runQaSuite).scenarioIds as string[];
     expect(scenarioIds).toContain("runtime-first-hour-20-turn");
     expect(scenarioIds).toContain("streaming-final-integrity");
+    expect(scenarioIds).not.toContain("gateway-restart-inflight-run");
     expect(scenarioIds).not.toContain("hosted-image-generation-providers-live");
     expect(scenarioIds).not.toContain("hosted-video-generation-providers-live");
     expectFields(mockFirstObjectArg(runQaSuite), {
@@ -1656,6 +1713,10 @@ describe("qa cli runtime", () => {
     expectWriteContains(
       stderrWrite,
       "excluded incompatible non-flow scenario(s): hosted-image-generation-providers-live (script), hosted-video-generation-providers-live (script)",
+    );
+    expectWriteContains(
+      stderrWrite,
+      "excluded lane-incompatible scenario(s): gateway-restart-inflight-run",
     );
   });
 
@@ -1807,7 +1868,7 @@ describe("qa cli runtime", () => {
           counts: { total: 1, passed: 1, failed: 0 },
           run: {
             providerMode: "mock-openai",
-            primaryModel: "openai/gpt-5.5",
+            primaryModel: "openai/gpt-5.6-luna",
             runtimePair: ["openclaw", "codex"],
           },
         }),
@@ -1880,7 +1941,7 @@ describe("qa cli runtime", () => {
           counts: { total: 1, passed: 1, failed: 0 },
           run: {
             providerMode: "live-frontier",
-            primaryModel: "openai/gpt-5.5",
+            primaryModel: "openai/gpt-5.6-luna",
             runtimePair: ["openclaw", "codex"],
           },
         }),
@@ -2079,14 +2140,17 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/character",
       model: [
-        "openai/gpt-5.5,thinking=xhigh,fast=false",
+        "openai/gpt-5.6-luna,thinking=xhigh,fast=false",
         "codex-cli/test-model,thinking=high,fast",
       ],
       scenario: "character-vibes-gollum",
       fast: true,
       thinking: "medium",
       modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-8,thinking=high"],
+      judgeModel: [
+        "openai/gpt-5.6-luna,thinking=xhigh,fast",
+        "anthropic/claude-opus-4-8,thinking=high",
+      ],
       judgeTimeoutMs: 180_000,
       blindJudgeModels: true,
       concurrency: 4,
@@ -2098,18 +2162,18 @@ describe("qa cli runtime", () => {
     expectFields(characterEvalArgs, {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/character"),
-      models: ["openai/gpt-5.5", "codex-cli/test-model"],
+      models: ["openai/gpt-5.6-luna", "codex-cli/test-model"],
       scenarioId: "character-vibes-gollum",
       candidateFastMode: true,
       candidateThinkingDefault: "medium",
       candidateThinkingByModel: { "codex-cli/test-model": "medium" },
       candidateModelOptions: {
-        "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
+        "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: false },
         "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
       },
-      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-8"],
+      judgeModels: ["openai/gpt-5.6-luna", "anthropic/claude-opus-4-8"],
       judgeModelOptions: {
-        "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
+        "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: true },
         "anthropic/claude-opus-4-8": { thinkingDefault: "high" },
       },
       judgeTimeoutMs: 180_000,
@@ -2122,7 +2186,7 @@ describe("qa cli runtime", () => {
   it("lets character eval auto-select candidate fast mode when --fast is omitted", async () => {
     await runQaCharacterEvalCommand({
       repoRoot: "/tmp/openclaw-repo",
-      model: ["openai/gpt-5.5"],
+      model: ["openai/gpt-5.6-luna"],
     });
 
     const characterEvalArgs = mockFirstObjectArg(runQaCharacterEval);
@@ -2130,7 +2194,7 @@ describe("qa cli runtime", () => {
     expectFields(characterEvalArgs, {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
-      models: ["openai/gpt-5.5"],
+      models: ["openai/gpt-5.6-luna"],
       scenarioId: undefined,
       candidateFastMode: undefined,
       candidateThinkingDefault: undefined,
@@ -2149,7 +2213,7 @@ describe("qa cli runtime", () => {
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.5"],
+        model: ["openai/gpt-5.6-luna"],
         thinking: "enormous",
       }),
     ).rejects.toThrow("--thinking must be one of");
@@ -2157,22 +2221,22 @@ describe("qa cli runtime", () => {
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.5,thinking=galaxy"],
+        model: ["openai/gpt-5.6-luna,thinking=galaxy"],
       }),
     ).rejects.toThrow("--model thinking must be one of");
 
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.5,warp"],
+        model: ["openai/gpt-5.6-luna,warp"],
       }),
     ).rejects.toThrow("--model options must be thinking=<level>");
 
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.5"],
-        modelThinking: ["openai/gpt-5.5"],
+        model: ["openai/gpt-5.6-luna"],
+        modelThinking: ["openai/gpt-5.6-luna"],
       }),
     ).rejects.toThrow("--model-thinking must use provider/model=level");
   });
@@ -2181,8 +2245,8 @@ describe("qa cli runtime", () => {
     await runQaManualLaneCommand({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       message: "read qa kickoff and reply short",
       timeoutMs: 45_000,
@@ -2192,8 +2256,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       message: "read qa kickoff and reply short",
       timeoutMs: 45_000,
@@ -2271,8 +2335,8 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       runner: "multipass",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       allowFailures: true,
       scenarioIds: ["channel-chat-baseline"],
@@ -2282,8 +2346,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       allowFailures: true,
       scenarioIds: ["channel-chat-baseline"],
@@ -2496,7 +2560,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       parityPack: "agentic",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-opus-4-8",
     });
 
@@ -2507,7 +2571,7 @@ describe("qa cli runtime", () => {
       channelDriver: undefined,
       channelDriverSelection: undefined,
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-opus-4-8",
       fastMode: undefined,
       scenarioIds: [
@@ -2548,8 +2612,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -2567,8 +2631,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "aimock",
-      primaryModel: "aimock/gpt-5.5",
-      alternateModel: "aimock/gpt-5.5-alt",
+      primaryModel: "aimock/gpt-5.6-luna",
+      alternateModel: "aimock/gpt-5.6-luna-alt",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -2616,7 +2680,7 @@ describe("qa cli runtime", () => {
   it("defaults manual frontier runs onto Codex OAuth when the runtime resolver prefers it", async () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"
-        ? "openai/gpt-5.5"
+        ? "openai/gpt-5.6-luna"
         : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
@@ -2629,8 +2693,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -2751,3 +2815,4 @@ describe("qa cli runtime", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -20,4 +20,4 @@ channels: raft
 
 ## Related docs
 
-- [raft](/channels/raft)
+- [Raft](/channels/raft)

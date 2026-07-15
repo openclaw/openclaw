@@ -103,7 +103,7 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
 }
 
-export function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
+function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
   if (typeof parameters !== "string" || !parameters.trim()) {
     return undefined;
   }
@@ -114,7 +114,11 @@ export function parseOllamaNumCtxParameter(parameters: unknown): number | undefi
     if (!match) {
       continue;
     }
-    const parsed = Number.parseInt(match[1], 10);
+    const rawValue = match[1];
+    if (!rawValue) {
+      continue;
+    }
+    const parsed = Number.parseInt(rawValue, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       lastValue = parsed;
     }

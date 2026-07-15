@@ -696,7 +696,7 @@ export type ChannelDirectoryEntry = {
   raw?: unknown;
 };
 
-export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {
@@ -753,6 +753,8 @@ export type ChannelMessagePreparedSendPayloadContext = {
   to: string;
   payload: ReplyPayload;
   replyToId?: string | null;
+  /** Preserve caller intent when plugins translate reply ids into durable payloads. */
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number | null;
 };
 

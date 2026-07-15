@@ -39,8 +39,6 @@ import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-export { pickInformativeStatusText } from "./reply-stream-controller.js";
-
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -180,9 +178,9 @@ export function createMSTeamsReplyDispatcher(params: {
   streamActiveRef.current = () => streamController.isStreamActive();
   streamCanceledRef.current = () => streamController.wasCanceled();
 
-  // Resolve block-streaming preference from new-shape config first
-  // (`streaming.mode = "block"` or `streaming.block.enabled = true`), falling
-  // back to the legacy `blockStreaming` boolean.
+  // Resolve block-streaming preference from the canonical nested config
+  // (`streaming.mode = "block"` or `streaming.block.enabled = true`); legacy
+  // flat `blockStreaming` is migrated by `openclaw doctor --fix`.
   const teamsStreamMode = resolveChannelPreviewStreamMode(msteamsCfg, "partial");
   const blockStreamingResolved =
     teamsStreamMode === "block" ? true : resolveChannelStreamingBlockEnabled(msteamsCfg);
@@ -561,8 +559,8 @@ export function createMSTeamsReplyDispatcher(params: {
         ? { suppressDefaultToolProgressMessages: true }
         : {}),
       // Pass-through to the reply pipeline. `false` = "use block streaming"
-      // (the default when streaming.mode=block or streaming.block.enabled=true,
-      // or the legacy blockStreaming=true boolean). `true` = "do not use it".
+      // (the default when streaming.mode=block or streaming.block.enabled=true).
+      // `true` = "do not use it".
       // `undefined` = "no preference" — let the pipeline decide.
       disableBlockStreaming: blockStreamingResolved == null ? undefined : !blockStreamingResolved,
       onModelSelected,

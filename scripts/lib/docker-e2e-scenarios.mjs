@@ -456,10 +456,7 @@ export const mainLanes = [
       stateScenario: "empty",
     },
   ),
-  lane("crestodian-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-rescue", {
-    stateScenario: "empty",
-  }),
-  lane("crestodian-planner", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-planner", {
+  lane("system-agent-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:system-agent-rescue", {
     stateScenario: "empty",
   }),
   serviceLane(
@@ -526,8 +523,8 @@ export const mainLanes = [
     stateScenario: "empty",
   }),
   lane(
-    "crestodian-first-run",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
+    "system-agent-first-run",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:system-agent-first-run",
     { stateScenario: "empty" },
   ),
   lane(

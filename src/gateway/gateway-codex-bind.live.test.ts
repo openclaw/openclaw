@@ -13,7 +13,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { pluginCommands } from "../plugins/command-registry-state.js";
-import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
@@ -42,7 +42,7 @@ const CODEX_BIND_REQUEST_TIMEOUT_MS = resolveLiveTimeoutMs(
   process.env.OPENCLAW_LIVE_CODEX_BIND_REQUEST_TIMEOUT_MS,
   300_000,
 );
-const DEFAULT_CODEX_BIND_MODEL = "gpt-5.5";
+const DEFAULT_CODEX_BIND_MODEL = "gpt-5.6-luna";
 
 type CapturedOutboundReply = {
   accountId?: string;

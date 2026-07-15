@@ -67,11 +67,8 @@ const {
 } = harness;
 const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
   await import("./bot-core.js");
-const {
-  runWithTelegramSpooledReplayUpdate,
-  runWithTelegramUpdateProcessingFrame,
-  withTelegramSpooledReplayUpdate,
-} = await import("./bot-processing-outcome.js");
+const { runWithTelegramSpooledReplayUpdate, runWithTelegramUpdateProcessingFrame } =
+  await import("./bot-processing-outcome.js");
 const { MediaFetchError } = await import("./telegram-media.runtime.js");
 
 let createTelegramBot: (
@@ -84,6 +81,13 @@ const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
 } as const;
+
+async function withTelegramSpooledReplayUpdate<T>(
+  update: object,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
+}
 
 function setOpenChannelPostConfig() {
   loadConfig.mockReturnValue({

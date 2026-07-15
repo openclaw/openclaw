@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
@@ -14,6 +13,7 @@ import {
   allReleasePathLanes,
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
 } from "../../scripts/lib/docker-e2e-scenarios.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const orderLanes = <T>(lanes: T[]) => lanes;
@@ -587,10 +587,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const scripts = packageJson.scripts ?? {};
     const missing = plan.lanes
       .flatMap((lane) =>
-        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu), (match) => ({
-          lane: lane.name,
-          script: match[1],
-        })),
+        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu)).flatMap((match) =>
+          match[1] === undefined ? [] : [{ lane: lane.name, script: match[1] }],
+        ),
       )
       .filter(({ script }) => !scripts[script]);
 
@@ -678,9 +677,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
         withOpenWebUI.lanes.filter((lane) => lane.name === "openwebui"),
         releaseChunk,
       ).toHaveLength(1);
-      expect(withoutOpenWebUI.lanes.map((lane) => lane.name), releaseChunk).not.toContain(
-        "openwebui",
-      );
+      expect(
+        withoutOpenWebUI.lanes.map((lane) => lane.name),
+        releaseChunk,
+      ).not.toContain("openwebui");
     }
   });
 
@@ -1090,9 +1090,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "mcp-code-mode-gateway",
         "cron-mcp-cleanup",
         "agent-bundle-mcp-tools",
-        "crestodian-first-run",
-        "crestodian-planner",
-        "crestodian-rescue",
+        "system-agent-first-run",
+        "system-agent-rescue",
         "config-reload",
         "plugin-update",
         "plugins",
@@ -1120,9 +1119,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "mcp-code-mode-gateway", stateScenario: "empty" },
       { name: "cron-mcp-cleanup", stateScenario: "empty" },
       { name: "agent-bundle-mcp-tools", stateScenario: "empty" },
-      { name: "crestodian-first-run", stateScenario: "empty" },
-      { name: "crestodian-planner", stateScenario: "empty" },
-      { name: "crestodian-rescue", stateScenario: "empty" },
+      { name: "system-agent-first-run", stateScenario: "empty" },
+      { name: "system-agent-rescue", stateScenario: "empty" },
       { name: "config-reload", stateScenario: "empty" },
       { name: "plugin-update", stateScenario: "empty" },
       { name: "plugins", stateScenario: "empty" },

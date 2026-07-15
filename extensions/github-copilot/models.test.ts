@@ -1,4 +1,6 @@
 // Github Copilot tests cover models plugin behavior.
+import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
@@ -359,6 +361,7 @@ describe("github-copilot token", () => {
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
       integrationId: "vscode-chat",
+      sourceCredentialFingerprint: createHash("sha256").update("gh").digest("hex"),
       domain: "github.com",
     });
 
@@ -652,7 +655,7 @@ describe("fetchCopilotModelCatalog", () => {
     });
 
     expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("GPT-5.5");
+    expect(expectDefined(out[0], "GitHub Copilot model").name).toBe("GPT-5.5");
   });
 
   it("falls back from malformed live token limits", async () => {

@@ -46,13 +46,6 @@ export function recordMSTeamsSentMessage(conversationId: string, messageId: stri
   void sentMessages.register(makeKey(conversationId, messageId), { sentAt }, { at: sentAt });
 }
 
-export function wasMSTeamsMessageSent(conversationId: string, messageId: string): boolean {
-  if (!conversationId || !messageId) {
-    return false;
-  }
-  return sentMessages.peek(makeKey(conversationId, messageId));
-}
-
 export async function wasMSTeamsMessageSentWithPersistence(params: {
   conversationId: string;
   messageId: string;

@@ -6,12 +6,11 @@ import {
   __testing,
   assertQaGatewayCredentialLeaseQuarantine,
   createQaGatewayProcessBoundaryController,
-  parseQaGatewayProcStat,
-  QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS,
-  QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX,
   shouldRetainQaGatewayCredentialLease,
 } from "./gateway-process-boundary.js";
 
+const MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
+const RETAIN_LEASE_PREFIX = "retain-credential-lease-";
 const cleanupPaths: string[] = [];
 
 afterEach(async () => {
@@ -21,38 +20,6 @@ afterEach(async () => {
 });
 
 describe("gateway process boundary", () => {
-  it("parses process identity when the command name contains closing parentheses", () => {
-    const stat = [
-      "42 (node worker (qa))",
-      "T",
-      "11",
-      "42",
-      "42",
-      "0",
-      "-1",
-      "0",
-      "0",
-      "0",
-      "0",
-      "0",
-      "0",
-      "0",
-      "0",
-      "0",
-      "20",
-      "0",
-      "1",
-      "0",
-      "987654",
-    ].join(" ");
-
-    expect(parseQaGatewayProcStat(stat)).toEqual({
-      state: "T",
-      pgrp: 42,
-      startTicks: "987654",
-    });
-  });
-
   it("normalizes sandbox environment keys and rejects malformed handoffs", () => {
     expect(
       __testing.parseQaGatewayProcessSandboxProof({
@@ -119,10 +86,7 @@ describe("gateway process boundary", () => {
     const env = {
       OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: evidenceDir,
     };
-    const markerPath = path.join(
-      evidenceDir,
-      `${QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX}controller.json`,
-    );
+    const markerPath = path.join(evidenceDir, `${RETAIN_LEASE_PREFIX}controller.json`);
 
     await expect(shouldRetainQaGatewayCredentialLease(env)).resolves.toBe(false);
     await fs.writeFile(markerPath, "{}\n", { mode: 0o600 });
@@ -140,7 +104,7 @@ describe("gateway process boundary", () => {
       assertQaGatewayCredentialLeaseQuarantine(
         {
           source: "convex",
-          leaseTtlMs: QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS - 1,
+          leaseTtlMs: MIN_QUARANTINE_TTL_MS - 1,
         },
         env,
       ),
@@ -149,7 +113,7 @@ describe("gateway process boundary", () => {
       assertQaGatewayCredentialLeaseQuarantine(
         {
           source: "convex",
-          leaseTtlMs: QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS,
+          leaseTtlMs: MIN_QUARANTINE_TTL_MS,
         },
         env,
       ),

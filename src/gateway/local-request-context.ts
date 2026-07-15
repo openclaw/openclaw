@@ -1,6 +1,6 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadManifestModelCatalog } from "../agents/model-catalog.js";
+import { loadManifestModelCatalog, loadModelCatalogSnapshot } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -82,6 +82,8 @@ function createLocalGatewayRequestContext(
     isTerminalEnabled: () => false,
     loadGatewayModelCatalog: async () =>
       loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
+    loadGatewayModelCatalogSnapshot: async ({ readOnly } = {}) =>
+      loadModelCatalogSnapshot({ config: params.getRuntimeConfig(), readOnly }),
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
@@ -129,7 +131,7 @@ function createLocalGatewayRequestContext(
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
-    subscribeSessionMessageEvents: () => {},
+    subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {
       sessionEvents.delete(connId);
@@ -138,7 +140,7 @@ function createLocalGatewayRequestContext(
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
     wizardSessions: new Map(),
-    crestodianSessions: new Map(),
+    systemAgentSessions: new Map(),
     findRunningWizard: () => null,
     purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,
@@ -151,6 +153,11 @@ function createLocalGatewayRequestContext(
     markChannelLoggedOut: () => {},
     wizardRunner: async () => {
       throw new Error("Onboarding wizard is unavailable in local embedded agent gateway context.");
+    },
+    channelWizardRunner: async () => {
+      throw new Error(
+        "Channel setup wizard is unavailable in local embedded agent gateway context.",
+      );
     },
     broadcastVoiceWakeChanged: () => {},
     broadcastVoiceWakeRoutingChanged: () => {},

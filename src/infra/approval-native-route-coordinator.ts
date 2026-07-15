@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Coordinates native approval delivery routing and notices.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -197,7 +198,7 @@ function resolveApprovalRouteNotice(params: {
     return {
       requestGateway:
         params.reports.find((report) => activeApprovalRouteRuntimes.has(report.runtimeId))
-          ?.requestGateway ?? params.reports[0].requestGateway,
+          ?.requestGateway ?? expectDefined(params.reports[0], "reports entry at 0").requestGateway,
       target,
       text: resolveApprovalDeliveryFailedNoticeText({
         approvalId: params.request.id,
@@ -439,13 +440,4 @@ export function createApprovalNativeRouteReporter(params: {
       }
     },
   };
-}
-
-/** Clears in-memory native approval route coordination state between tests. */
-export function clearApprovalNativeRouteStateForTest(): void {
-  for (const approvalId of Array.from(pendingApprovalRouteNotices.keys())) {
-    clearPendingApprovalRouteNotice(approvalId);
-  }
-  activeApprovalRouteRuntimes.clear();
-  approvalRouteRuntimeSeq = 0;
 }

@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
@@ -1674,6 +1675,24 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("propagates harness-owned session rejection from embedded gateway fallback", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:harness:codex:supervision:missing-fallback";
+      callGateway.mockRejectedValue(createGatewayClosedError());
+      agentCommand.mockRejectedValueOnce(new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE));
+
+      await expect(agentCliCommand({ message: "hi", sessionKey }, runtime)).rejects.toThrow(
+        AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+      );
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(agentCommand).toHaveBeenCalledOnce();
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "options"),
+      ).toMatchObject({ sessionKey });
+    });
+  });
+
   it("does not fall back to embedded agent for gateway request errors", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(
@@ -1959,6 +1978,23 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("propagates harness-owned session rejection from --local dispatch", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:harness:codex:supervision:missing-local";
+      agentCommand.mockRejectedValueOnce(new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE));
+
+      await expect(
+        agentCliCommand({ message: "hi", sessionKey, local: true }, runtime),
+      ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledOnce();
+      expect(
+        requireRecord(requireFirstCallArg(agentCommand, "embedded agent"), "options"),
+      ).toMatchObject({ sessionKey });
+    });
+  });
+
   it("scopes legacy explicit session keys before local embedded runs", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();
@@ -2093,3 +2129,4 @@ describe("agentCliCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

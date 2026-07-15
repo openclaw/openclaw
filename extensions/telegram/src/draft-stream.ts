@@ -4,12 +4,13 @@ import {
   createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import {
   escapeTelegramHtml,
+  markdownToTelegramChunks,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -92,7 +93,7 @@ export type TelegramDraftStream = {
   sendMayHaveLanded?: () => boolean;
 };
 
-export type TelegramDraftMessageSnapshot = {
+type TelegramDraftMessageSnapshot = {
   text: string;
   sourceText: string;
   sourceTextMode?: "html" | "markdown";
@@ -102,6 +103,10 @@ export type TelegramDraftPreview = {
   text: string;
   parseMode?: "HTML";
   richMessage?: TelegramInputRichMessage;
+  markdownSource?: {
+    text: string;
+    tableMode?: MarkdownTableMode;
+  };
 };
 
 type PlannedTelegramDraftPage = TelegramDraftMessageSnapshot & {
@@ -171,6 +176,17 @@ function planTelegramDraftPages(
       pages.push(...planPages);
     }
     return pages;
+  }
+  if (preview.markdownSource) {
+    // Keep streaming-final pagination on the durable send funnel's chunker;
+    // splitting pre-rendered HTML loses Markdown word and block boundaries.
+    return markdownToTelegramChunks(preview.markdownSource.text, maxChars, {
+      tableMode: preview.markdownSource.tableMode,
+    }).map((chunk) => ({
+      text: chunk.text,
+      sourceText: chunk.html,
+      sourceTextMode: "html",
+    }));
   }
   const htmlText = preview.richMessage?.html
     ? telegramRichHtmlToParseModeHtml(preview.richMessage.html)
@@ -896,3 +912,4 @@ export function createTelegramDraftStream(params: {
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

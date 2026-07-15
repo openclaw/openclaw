@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 const { createMatrixQaClient } = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
@@ -54,36 +55,27 @@ vi.mock("./scenario-runtime-cli.js", () => ({
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
-} from "../../shared/live-transport-scenarios.js";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   MATRIX_QA_MEDIA_TYPE_COVERAGE_CASES,
   MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
   MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
 } from "./scenario-media-fixtures.js";
+import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 import {
   testing as scenarioTesting,
   MATRIX_QA_SCENARIOS,
   runMatrixQaScenario,
-  type MatrixQaScenarioContext,
 } from "./scenarios.js";
 
-function matrixInboundDedupePluginStateKey(params: {
-  accountId: string;
-  eventId: string;
-  roomId: string;
-}): string {
-  const accountId = params.accountId.trim() || "sut";
-  const digest = createHash("sha256")
-    .update(accountId)
-    .update("\0")
-    .update(params.roomId.trim())
-    .update("\0")
-    .update(params.eventId.trim())
-    .digest("hex");
-  return `${accountId}:${digest}`;
+function sha256Hex32(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
+// Mirrors the matrix plugin's core claimable-dedupe rows: the shared "global"
+// namespace under `matrix.inbound-dedupe.`, a hashed `k.` entry key, and a
+// `{key, seenAt}` value recording the NUL-joined (account, room, event) key.
 async function writeMatrixInboundDedupePluginStateEntry(params: {
   accountId: string;
   eventId: string;
@@ -94,6 +86,7 @@ async function writeMatrixInboundDedupePluginStateEntry(params: {
   const databasePath = path.join(params.stateRoot, "state", "openclaw.sqlite");
   await mkdir(path.dirname(databasePath), { recursive: true });
   const db = new sqlite.DatabaseSync(databasePath);
+  const eventKey = `${params.accountId.trim() || "default"}\0${params.roomId.trim()}\0${params.eventId.trim()}`;
   try {
     db.exec(`
       CREATE TABLE IF NOT EXISTS plugin_state_entries (
@@ -116,12 +109,11 @@ async function writeMatrixInboundDedupePluginStateEntry(params: {
         expires_at = excluded.expires_at
     `).run(
       "matrix",
-      "inbound-dedupe",
-      matrixInboundDedupePluginStateKey(params),
+      `matrix.inbound-dedupe.${sha256Hex32("global")}`,
+      `k.${sha256Hex32(eventKey)}`,
       JSON.stringify({
-        roomId: params.roomId,
-        eventId: params.eventId,
-        ts: Date.now(),
+        key: eventKey,
+        seenAt: Date.now(),
       }),
       Date.now(),
       null,
@@ -370,13 +362,7 @@ describe("matrix live qa scenarios", () => {
   beforeEach(() => {
     createMatrixQaClient.mockReset();
     createMatrixQaE2eeScenarioClient.mockReset();
-    loadMatrixQaE2eeRuntime.mockReset().mockResolvedValue({
-      openMatrixInboundDedupeStoreOptions: ({ stateDir }: { stateDir?: string }) => ({
-        namespace: "inbound-dedupe",
-        maxEntries: 20_000,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      }),
-    });
+    loadMatrixQaE2eeRuntime.mockReset();
     runMatrixQaE2eeBootstrap.mockReset();
     runMatrixQaOpenClawCli.mockReset();
     startMatrixQaOpenClawCli.mockReset();
@@ -954,7 +940,7 @@ describe("matrix live qa scenarios", () => {
       scenarioTesting.buildMatrixQaTopologyForScenarios({
         defaultRoomName: "OpenClaw Matrix QA run",
         scenarios: [
-          MATRIX_QA_SCENARIOS[0],
+          expectDefined(MATRIX_QA_SCENARIOS[0], "first Matrix QA scenario"),
           {
             id: "matrix-secondary-room-open-trigger",
             standardId: "canary",
@@ -3941,7 +3927,7 @@ describe("matrix live qa scenarios", () => {
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
       const callIndex = waitForRoomEvent.mock.calls.length - 1;
       const mediaCaseIndex = Math.floor(callIndex / 2);
-      const mediaCase = mediaCases[mediaCaseIndex];
+      const mediaCase = expectDefined(mediaCases[mediaCaseIndex], `media case ${mediaCaseIndex}`);
       const sendOpts = sendMediaMessage.mock.calls[mediaCaseIndex]?.[0];
       if (callIndex % 2 === 0) {
         return {
@@ -6469,3 +6455,4 @@ describe("matrix live qa scenarios", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

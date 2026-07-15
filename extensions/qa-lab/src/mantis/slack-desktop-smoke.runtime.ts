@@ -55,7 +55,7 @@ export type MantisSlackDesktopSmokeOptions = {
 
 export type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
 
-export type MantisSlackDesktopSmokeResult = {
+type MantisSlackDesktopSmokeResult = {
   approvalCheckpointScreenshotPaths?: string[];
   outputDir: string;
   reportPath: string;
@@ -1581,3 +1581,4 @@ export async function runMantisSlackDesktopSmoke(
 function toErrorObject(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

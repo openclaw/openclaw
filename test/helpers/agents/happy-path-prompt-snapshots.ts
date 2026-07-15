@@ -12,7 +12,7 @@ import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../../src/auto-reply/reply/inbound-meta.js";
-import { buildReplyPromptBodies } from "../../../src/auto-reply/reply/prompt-prelude.js";
+import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import { normalizeChatType } from "../../../src/channels/chat-type.js";
@@ -60,6 +60,7 @@ const HAPPY_PATH_TOOL_NAMES = new Set([
   "agents_list",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "sessions_send",
   "sessions_spawn",
   "sessions_yield",
@@ -107,7 +108,10 @@ type CodexPromptSnapshotApi = {
     developerInstructions: string;
     threadStartParams: Record<string, unknown>;
     threadResumeParams: Record<string, unknown>;
-    turnStartParams: Record<string, unknown>;
+    turnStartParams: Record<string, unknown> & {
+      input?: unknown;
+      collaborationMode?: { settings?: { developer_instructions?: string } };
+    };
   };
   createCodexDynamicToolSpecsForPromptSnapshot: (params: {
     tools: AnyAgentTool[];
@@ -249,25 +253,7 @@ const baseConfig: OpenClawConfig = {
   agents: {
     defaults: {
       heartbeat: {
-        enabled: true,
         every: "30m",
-      },
-    },
-  },
-  tools: {
-    profiles: {
-      coding: {
-        allow: [
-          "message",
-          "heartbeat_respond",
-          "sessions_spawn",
-          "sessions_list",
-          "sessions_yield",
-          "cron",
-          "memory_search",
-          "memory_get",
-          "session_status",
-        ],
       },
     },
   },
@@ -337,11 +323,16 @@ function textStats(value: string): { chars: number; roughTokens: number } {
 
 function createPrompt(ctx: TemplateContext, body: string): string {
   const inboundUserContext = buildInboundUserContextPrefix(ctx);
-  return buildReplyPromptBodies({
+  const promptBody = [inboundUserContext, body].filter(Boolean).join("\n\n");
+  return buildReplyPromptEnvelope({
     ctx,
     sessionCtx: ctx,
-    effectiveBaseBody: [inboundUserContext, body].filter(Boolean).join("\n\n"),
-    prefixedBody: [inboundUserContext, body].filter(Boolean).join("\n\n"),
+    baseBody: promptBody,
+    hasUserBody: true,
+    inboundUserContext: "",
+    isBareSessionReset: false,
+    startupAction: "new",
+    prefixedBody: promptBody,
   }).prefixedCommandBody;
 }
 

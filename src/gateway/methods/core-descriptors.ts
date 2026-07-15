@@ -18,7 +18,7 @@ type CoreGatewayMethodSpec = {
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
-export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
+const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "health", scope: "operator.read" },
   { name: "diagnostics.stability", scope: "operator.read" },
   { name: "doctor.memory.status", scope: "operator.read" },
@@ -66,9 +66,12 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugin.approval.resolve", scope: "operator.approvals" },
   { name: "plugins.uiDescriptors", scope: "operator.read" },
   { name: "plugins.sessionAction", scope: "dynamic" },
-  { name: "crestodian.chat", scope: "operator.admin" },
-  { name: "crestodian.setup.detect", scope: "operator.admin" },
-  { name: "crestodian.setup.activate", scope: "operator.admin" },
+  { name: "openclaw.chat", scope: "operator.admin" },
+  { name: "openclaw.setup.detect", scope: "operator.admin" },
+  // Failed activation candidates are non-mutating probes. Keep this admin-only
+  // without the shared three-write budget so the automatic ladder can finish.
+  { name: "openclaw.setup.activate", scope: "operator.admin" },
+  { name: "openclaw.setup.auth.start", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
   { name: "wizard.cancel", scope: "operator.admin" },
@@ -85,6 +88,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "talk.session.endTurn", scope: "operator.write" },
   { name: "talk.session.cancelTurn", scope: "operator.write" },
   { name: "talk.session.cancelOutput", scope: "operator.write" },
+  { name: "talk.session.acknowledgeMark", scope: "operator.write" },
   { name: "talk.session.submitToolResult", scope: "operator.write" },
   { name: "talk.session.steer", scope: "operator.write" },
   { name: "talk.session.close", scope: "operator.write" },
@@ -97,7 +101,14 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tools.catalog", scope: "operator.read" },
   { name: "tools.effective", scope: "operator.read", startup: true },
   { name: "tools.invoke", scope: "operator.write" },
+  { name: "mcp.app.view", scope: "operator.read" },
+  { name: "mcp.app.listTools", scope: "operator.read" },
+  { name: "mcp.app.listResources", scope: "operator.read" },
+  { name: "mcp.app.listResourceTemplates", scope: "operator.read" },
+  { name: "mcp.app.readResource", scope: "operator.read" },
+  { name: "mcp.app.callTool", scope: "operator.write" },
   { name: "audit.list", scope: "operator.read" },
+  { name: "audit.activity.list", scope: "operator.read" },
   { name: "tasks.list", scope: "operator.read" },
   { name: "tasks.get", scope: "operator.read" },
   { name: "tasks.cancel", scope: "operator.write" },
@@ -111,6 +122,9 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
   // same bar as starting worktree sessions instead of plain read scope.
   { name: "worktrees.branches", scope: "operator.write" },
+  // Arbitrary host-path directory listing backs the new-session folder picker;
+  // same trust bar as sessions.create with an explicit cwd.
+  { name: "fs.listDir", scope: "operator.admin" },
   { name: "worktrees.create", scope: "operator.admin", controlPlaneWrite: true },
   { name: "worktrees.remove", scope: "operator.admin", controlPlaneWrite: true },
   { name: "worktrees.restore", scope: "operator.admin", controlPlaneWrite: true },
@@ -124,6 +138,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.files.set", scope: "operator.admin" },
   { name: "sessions.files.list", scope: "operator.read" },
   { name: "sessions.files.get", scope: "operator.read" },
+  // Workspace file writes require the same admin scope as agents.files.set.
+  { name: "sessions.files.set", scope: "operator.admin" },
   { name: "artifacts.list", scope: "operator.read" },
   { name: "artifacts.get", scope: "operator.read" },
   { name: "artifacts.download", scope: "operator.read" },
@@ -144,6 +160,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.curator.restore", scope: "operator.admin" },
   { name: "skills.proposals.list", scope: "operator.read" },
   { name: "skills.proposals.inspect", scope: "operator.read" },
+  { name: "skills.proposals.historyStatus", scope: "operator.read" },
+  { name: "skills.proposals.historyScan", scope: "operator.admin" },
   { name: "skills.proposals.create", scope: "operator.admin" },
   { name: "skills.proposals.update", scope: "operator.admin" },
   { name: "skills.proposals.revise", scope: "operator.admin" },
@@ -209,11 +227,14 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.list", scope: "operator.read" },
   { name: "node.describe", scope: "operator.read" },
   { name: "node.pluginSurface.refresh", scope: "node" },
+  { name: "node.pluginTools.update", scope: "node" },
+  { name: "node.skills.update", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
   { name: "node.pending.enqueue", scope: "operator.write" },
   { name: "node.invoke", scope: "operator.write" },
   { name: "node.pending.pull", scope: "node" },
   { name: "node.pending.ack", scope: "node" },
+  { name: "node.invoke.progress", scope: "node" },
   { name: "node.invoke.result", scope: "node" },
   { name: "node.event", scope: "node" },
   { name: "cron.get", scope: "operator.read" },
@@ -303,6 +324,40 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Session checkout diff reads the session's own git worktree, matching the
   // sessions.files.* trusted-operator read domain.
   { name: "sessions.diff", scope: "operator.read" },
+  // Additive protocol methods append here to preserve existing advertised indices.
+  { name: "openclaw.setup.verify", scope: "operator.admin" },
+  // Cloud-worker mutations depend on the loaded provider registry and owned
+  // reconciler, so advertise them early but gate dispatch until sidecars are ready.
+  {
+    name: "environments.create",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
+  {
+    name: "environments.destroy",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
+  { name: "sessions.catalog.list", scope: "operator.read" },
+  { name: "sessions.catalog.read", scope: "operator.read" },
+  { name: "terminal.upload", scope: "operator.admin" },
+  { name: "sessions.catalog.continue", scope: "operator.write" },
+  { name: "sessions.catalog.archive", scope: "operator.write" },
+  { name: "approval.get", scope: "operator.approvals" },
+  { name: "approval.resolve", scope: "operator.approvals" },
+  { name: "sessions.search", scope: "operator.read" },
+  {
+    name: "sessions.dispatch",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
+  { name: "models.probe", scope: "operator.admin" },
+  // Memory migration reads host assistant state and writes agent workspaces.
+  { name: "migrations.memory.plan", scope: "operator.admin" },
+  { name: "migrations.memory.apply", scope: "operator.admin", controlPlaneWrite: true },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

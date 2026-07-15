@@ -2,8 +2,8 @@
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-let parseMattermostTarget: typeof import("./send.js").parseMattermostTarget;
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
+let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
 let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
 
 type SendMessageMattermostOptions = NonNullable<
@@ -23,7 +23,6 @@ const mockState = vi.hoisted(() => ({
     config: {},
   })),
   createMattermostClient: vi.fn(),
-  createMattermostDirectChannel: vi.fn(),
   createMattermostDirectChannelWithRetry: vi.fn(),
   createMattermostPost: vi.fn(),
   fetchMattermostChannelByName: vi.fn(),
@@ -154,7 +153,6 @@ vi.mock("./accounts.js", () => ({
 
 vi.mock("./client.js", () => ({
   createMattermostClient: mockState.createMattermostClient,
-  createMattermostDirectChannel: mockState.createMattermostDirectChannel,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
   fetchMattermostChannelByName: mockState.fetchMattermostChannelByName,
@@ -202,7 +200,6 @@ describe("sendMessageMattermost", () => {
     });
     mockState.loadOutboundMediaFromUrl.mockReset();
     mockState.createMattermostClient.mockReset();
-    mockState.createMattermostDirectChannel.mockReset();
     mockState.createMattermostDirectChannelWithRetry.mockReset();
     mockState.createMattermostPost.mockReset();
     mockState.fetchMattermostChannelByName.mockReset();
@@ -218,8 +215,9 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
-    ({ parseMattermostTarget, sendMessageMattermost } = await import("./send.js"));
-    ({ resetMattermostOpaqueTargetCacheForTests } = await import("./target-resolution.js"));
+    ({ sendMessageMattermost } = await import("./send.js"));
+    ({ parseMattermostTarget, resetMattermostOpaqueTargetCacheForTests } =
+      await import("./target-resolution.js"));
     resetMattermostOpaqueTargetCacheForTests();
   });
 
@@ -544,7 +542,6 @@ describe("sendMessageMattermost user-first resolution", () => {
     vi.clearAllMocks();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
-    mockState.createMattermostDirectChannel.mockResolvedValue({ id: "dm-channel-id" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
   });

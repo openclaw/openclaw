@@ -4,6 +4,7 @@
  * Provides screenshots, target creation, JavaScript evaluation, ARIA/role
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -20,15 +21,10 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import { finalizeRoleSnapshot } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-export {
-  appendCdpPath,
-  fetchJson,
-  fetchOk,
-  getHeadersWithAuth,
-  isWebSocketUrl,
-} from "./cdp.helpers.js";
+export { appendCdpPath } from "./cdp.helpers.js";
 
 /** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
@@ -516,7 +512,7 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
         continue;
       }
       tree[index]?.children.push(childIndex);
-      tree[childIndex].parent = index;
+      expectDefined(tree[childIndex], "CDP child node index").parent = index;
       childIndexes.add(childIndex);
     }
   }
@@ -528,7 +524,7 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     if (!current) {
       break;
     }
-    tree[current.index].depth = current.depth;
+    expectDefined(tree[current.index], "CDP traversal node index").depth = current.depth;
     for (const child of (tree[current.index]?.children ?? []).toReversed()) {
       stack.push({ index: child, depth: current.depth + 1 });
     }
@@ -564,6 +560,14 @@ function cursorSuffix(info?: CursorInteractiveInfo): string {
   return parts.length ? ` [${parts.join(", ")}]` : "";
 }
 
+function escapeRoleSnapshotValue(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n");
+}
+
 function renderRoleTree(
   tree: RoleTreeNode[],
   index: number,
@@ -577,10 +581,10 @@ function renderRoleTree(
   }
   if (shouldIncludeRoleNode(node, options)) {
     const indent = "  ".repeat(Math.max(0, node.depth + indentOffset));
-    const name = node.name ? ` "${node.name.replaceAll('"', '\\"')}"` : "";
+    const name = node.name ? ` "${escapeRoleSnapshotValue(node.name)}"` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
-    const value = node.value ? ` value="${node.value.replaceAll('"', '\\"')}"` : "";
+    const value = node.value ? ` value="${escapeRoleSnapshotValue(node.value)}"` : "";
     const url = node.url ? ` [url=${node.url}]` : "";
     output.push(
       `${indent}- ${node.role}${name}${ref}${nth}${value}${url}${cursorSuffix(node.cursorInfo)}`,
@@ -775,7 +779,6 @@ async function buildCdpRoleSnapshot(params: {
 }): Promise<{
   lines: string[];
   refs: Record<string, CdpRoleRef>;
-  stats: { refs: number; interactive: number };
 }> {
   const res = (await params.send(
     "Accessibility.getFullAXTree",
@@ -849,7 +852,7 @@ async function buildCdpRoleSnapshot(params: {
     if (node.backendDOMNodeId && iframeFrameIds.has(node.backendDOMNodeId)) {
       node.frameId = iframeFrameIds.get(node.backendDOMNodeId);
       if (node.ref && refs[node.ref]) {
-        refs[node.ref].frameId = node.frameId;
+        expectDefined(refs[node.ref], "owned CDP role reference").frameId = node.frameId;
       }
     }
   }
@@ -889,14 +892,9 @@ async function buildCdpRoleSnapshot(params: {
     }
   }
 
-  const refValues = Object.values(refs);
   return {
     lines,
     refs,
-    stats: {
-      refs: refValues.length,
-      interactive: refValues.filter((ref) => INTERACTIVE_ROLES.has(ref.role)).length,
-    },
   };
 }
 
@@ -906,8 +904,10 @@ export async function snapshotRoleViaCdp(opts: {
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
   timeoutMs?: number;
+  maxChars?: number;
 }): Promise<{
   snapshot: string;
+  truncated?: boolean;
   refs: Record<string, CdpRoleRef>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
 }> {
@@ -925,17 +925,13 @@ export async function snapshotRoleViaCdp(opts: {
       const snapshot =
         built.lines.join("\n").trim() ||
         (opts.options?.interactive ? "(no interactive elements)" : "(empty page)");
-      return {
+      return finalizeRoleSnapshot({
         snapshot,
         refs: built.refs,
-        stats: {
-          lines: snapshot.split("\n").length,
-          chars: snapshot.length,
-          refs: built.stats.refs,
-          interactive: built.stats.interactive,
-        },
-      };
+        maxChars: opts.maxChars,
+      });
     },
     { commandTimeoutMs: opts.timeoutMs ?? 5000 },
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

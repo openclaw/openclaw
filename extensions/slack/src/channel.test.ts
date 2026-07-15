@@ -5,7 +5,7 @@ import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
+import { setSlackRuntime } from "./runtime.js";
 
 const { handleSlackActionMock } = vi.hoisted(() => ({
   handleSlackActionMock: vi.fn(),
@@ -472,13 +472,13 @@ describe("slackPlugin actions", () => {
 
 describe("slackPlugin status", () => {
   it("uses the direct Slack probe helper when runtime is not initialized", async () => {
+    setSlackRuntime(null as never);
     const probeSpy = vi.spyOn(probeModule, "probeSlack").mockResolvedValueOnce({
       ok: true,
       status: 200,
       bot: { id: "B1", name: "openclaw-bot" },
       team: { id: "T1", name: "OpenClaw" },
     });
-    clearSlackRuntime();
     const cfg = {
       channels: {
         slack: {
@@ -574,7 +574,7 @@ describe("slackPlugin status", () => {
     if (!resolveRoute) {
       throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
     }
-    conversationsOpenMock.mockResolvedValueOnce({
+    conversationsInfoMock.mockResolvedValueOnce({
       channel: {
         id: "D0AEWSDHAQH",
         is_im: true,
@@ -597,11 +597,10 @@ describe("slackPlugin status", () => {
       threadId: "1778110574.653649",
     });
 
-    expect(conversationsOpenMock).toHaveBeenCalledWith({
+    expect(conversationsInfoMock).toHaveBeenCalledWith({
       channel: "D0AEWSDHAQH",
-      prevent_creation: true,
-      return_im: true,
     });
+    expect(conversationsOpenMock).not.toHaveBeenCalled();
     expectRecordFields(route, "Slack direct route", {
       sessionKey: "agent:main:slack:direct:u09g2dj0275:thread:1778110574.653649",
       baseSessionKey: "agent:main:slack:direct:u09g2dj0275",
@@ -622,7 +621,7 @@ describe("slackPlugin status", () => {
     if (!resolveRoute) {
       throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
     }
-    conversationsOpenMock.mockResolvedValueOnce({
+    conversationsInfoMock.mockResolvedValueOnce({
       channel: {
         id: "D123",
         is_im: true,
@@ -644,6 +643,8 @@ describe("slackPlugin status", () => {
       target: "channel:D123",
     });
 
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D123" });
+    expect(conversationsOpenMock).not.toHaveBeenCalled();
     expectRecordFields(route, "Slack explicit IM route", {
       sessionKey: "agent:main:slack:direct:u123",
     });
@@ -662,16 +663,24 @@ describe("slackPlugin status", () => {
     if (!resolveRoute) {
       throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
     }
-    conversationsOpenMock.mockResolvedValueOnce({ channel: { id: "D0NOUSER001", is_im: true } });
+    conversationsInfoMock.mockResolvedValueOnce({ channel: { id: "D0NOUSER001", is_im: true } });
 
     await expect(
       resolveRoute({
-        cfg: {} as OpenClawConfig,
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "test",
+            },
+          },
+        } as OpenClawConfig,
         agentId: "main",
         target: "D0NOUSER001",
         threadId: "1778110574.653649",
       }),
     ).resolves.toBeNull();
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D0NOUSER001" });
+    expect(conversationsOpenMock).not.toHaveBeenCalled();
   });
 
   it("keeps Slack MPIM outbound routing as group", async () => {
@@ -794,6 +803,10 @@ describe("slackPlugin outbound", () => {
         text: "hello",
       }),
     ).toBe(false);
+  });
+
+  it("prefers final assistant text for text-only cron announce delivery", () => {
+    expect(slackPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
   });
 
   it("advertises the 8000-character Slack default chunk limit", () => {
@@ -1269,6 +1282,7 @@ describe("slackPlugin outbound", () => {
         text: {
           type: "mrkdwn",
           text: "hello",
+          verbatim: true,
         },
       },
       {
@@ -1321,7 +1335,9 @@ describe("slackPlugin outbound", () => {
     });
 
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("user:U123");
-    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("Slack interactive smoke.");
+    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe(
+      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target",
+    );
     const blocks = requireArray(requireMockCallArg(sendSlack, 0, 2).blocks, "Slack blocks");
     expectRecordFields(blocks[0], "text block", { type: "section" });
     expectRecordFields(blocks[1], "button actions block", { type: "actions" });
@@ -1645,3 +1661,4 @@ describe("slackPlugin config", () => {
     expect(snapshot?.signingSecretStatus).toBe("configured_unavailable");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -10,7 +10,21 @@ vi.mock("./cli.runtime.js", () => ({
   runQaMatrixCommand,
 }));
 
-import { matrixQaAdapterFactory, matrixQaCliRegistration } from "./cli.js";
+import { qaRunnerCliRegistrations } from "./cli.js";
+
+const matrixQaCliRegistration = qaRunnerCliRegistrations[0];
+
+function requireMatrixQaAdapterFactory(): NonNullable<
+  (typeof matrixQaCliRegistration)["adapterFactory"]
+> {
+  const factory = matrixQaCliRegistration.adapterFactory;
+  if (!factory) {
+    throw new Error("Expected Matrix QA adapter factory");
+  }
+  return factory;
+}
+
+const matrixQaAdapterFactory = requireMatrixQaAdapterFactory();
 
 function mockProcessWrite(
   _chunk: string | Uint8Array,

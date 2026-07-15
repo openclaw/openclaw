@@ -17,6 +17,7 @@ import {
   renderQaMarkdownReport,
   type QaReportCheck,
 } from "openclaw/plugin-sdk/qa-runtime";
+import prettyMilliseconds from "pretty-ms";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
@@ -186,18 +187,14 @@ type MatrixQaTimings = {
 };
 
 function shouldWriteMatrixQaProgress() {
-  const override = process.env.OPENCLAW_QA_MATRIX_PROGRESS;
-  if (override === "0") {
-    return false;
-  }
-  if (override === "1") {
-    return true;
-  }
-  return true;
+  return process.env.OPENCLAW_QA_MATRIX_PROGRESS !== "0";
 }
 
 function formatMatrixQaDurationMs(durationMs: number) {
-  return durationMs >= 1_000 ? `${(durationMs / 1_000).toFixed(1)}s` : `${durationMs}ms`;
+  const roundedMs = durationMs < 1000 ? Math.round(durationMs) : Math.round(durationMs / 100) * 100;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    unitCount: 1,
+  });
 }
 
 function writeMatrixQaProgress(message: string) {
@@ -1349,4 +1346,4 @@ export const testing = {
   waitForMatrixChannelReady,
   withMatrixQaRunDeadline,
 };
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

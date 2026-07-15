@@ -20,4 +20,4 @@ providers: fireworks
 
 ## Related docs
 
-- [fireworks](/providers/fireworks)
+- [Fireworks](/providers/fireworks)

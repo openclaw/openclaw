@@ -20,4 +20,4 @@ channels: slack; skills
 
 ## Related docs
 
-- [slack](/channels/slack)
+- [Slack](/channels/slack)

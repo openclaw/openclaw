@@ -425,6 +425,9 @@ export async function writeRunSummary(logDir, summary, env = process.env) {
   const file = path.join(logDir, "summary.json");
   const payload = {
     ...summary,
+    // Summary reruns do not carry failure-index commands, so preserve this exact package intent.
+    allowUnreleasedChangelog:
+      env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG === "true" ? true : undefined,
     packageArtifactName: env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     finishedAt: new Date().toISOString(),
     github: {
@@ -1213,7 +1216,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
     while (pending.length > 0 || running.size > 0) {
       let started = false;
       if (!options.failFast || failures.length === 0) {
-        for (let index = 0; index < pending.length; ) {
+        for (let index = 0; index < pending.length;) {
           const candidate = pending[index];
           if (!canStartLane(candidate)) {
             index += 1;

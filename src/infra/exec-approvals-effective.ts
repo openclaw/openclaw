@@ -22,6 +22,8 @@ import {
 
 const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
 const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
+export const SESSION_EXEC_OVERRIDES_NOTE =
+  "Per-session /exec overrides are not included; run /exec in the relevant session to inspect its current defaults.";
 const REQUESTED_DEFAULT_LABEL = {
   security: DEFAULT_REQUESTED_SECURITY,
   ask: DEFAULT_REQUESTED_ASK,
@@ -111,7 +113,7 @@ function formatModeSource(params: { sourcePath: string; configPath: string }): s
 }
 
 type ExecPolicyField = "security" | "ask" | "askFallback";
-export type ExecPolicyHostDefaults = Pick<
+type ExecPolicyHostDefaults = Pick<
   Required<ExecApprovalsDefaults>,
   "security" | "ask" | "askFallback"
 >;

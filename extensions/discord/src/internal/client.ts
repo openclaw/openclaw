@@ -10,7 +10,7 @@ import { dispatchInteraction } from "./interaction-dispatch.js";
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, Message, User } from "./structures.js";
 
-export interface Route {
+interface Route {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: `/${string}`;
   handler(req: Request, ctx?: Context): Response | Promise<Response>;
@@ -18,7 +18,7 @@ export interface Route {
   disabled?: boolean;
 }
 
-export interface Context {
+interface Context {
   waitUntil?(promise: Promise<unknown>): void;
   env?: unknown;
 }
@@ -30,12 +30,12 @@ export abstract class Plugin {
   onRequest?(req: Request, ctx: Context): Promise<Response | undefined> | Response | undefined;
 }
 
-export type AnyListener = {
+type AnyListener = {
   type: string;
   handle(data: unknown, client: Client): Promise<void> | void;
 };
 
-export interface ClientOptions {
+interface ClientOptions {
   baseUrl: string;
   clientId: string;
   deploySecret?: string;

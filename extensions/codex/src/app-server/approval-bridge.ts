@@ -267,7 +267,7 @@ function recordNativeToolFailureDisposition(
 }
 
 /** Converts an OpenClaw approval outcome into the app-server method response. */
-export function buildApprovalResponse(
+function buildApprovalResponse(
   method: string,
   requestParams: JsonObject | undefined,
   outcome: AppServerApprovalOutcome,
@@ -1393,3 +1393,4 @@ function joinDescriptionLinesWithinLimit(lines: string[], maxLength: number): st
 function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

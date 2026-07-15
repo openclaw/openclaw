@@ -18,6 +18,7 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
@@ -39,7 +40,7 @@ type TranscriptRepairResult = {
   reason?: string;
 };
 
-export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+type SessionTranscriptHealthIssue = TranscriptRepairResult & {
   broken: true;
 };
 
@@ -278,7 +279,7 @@ async function writeTranscriptEntries(params: {
 }
 
 /** Repairs one transcript file by keeping the active branch and backing up the original file. */
-export async function repairBrokenSessionTranscriptFile(params: {
+async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
 }): Promise<TranscriptRepairResult> {
@@ -432,6 +433,8 @@ export function sessionTranscriptIssueToRepairEffect(
 
 /** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
+  env?: NodeJS.ProcessEnv;
+  sessionSqlite?: boolean;
   shouldRepair?: boolean;
   sessionDirs?: string[];
 }) {
@@ -445,40 +448,96 @@ export async function noteSessionTranscriptHealth(params?: {
   }
 
   const results: TranscriptRepairResult[] = [];
-  if (shouldRepair) {
-    const files = await listSessionTranscriptFiles(sessionDirs);
+  const files = await listSessionTranscriptFiles(sessionDirs);
+  if (files.length > 0 && shouldRepair) {
     for (const filePath of files) {
       results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
     }
-  } else {
+  } else if (files.length > 0) {
     results.push(...(await detectSessionTranscriptHealthIssues({ sessionDirs })));
   }
   const broken = results.filter((result) => result.broken);
-  if (broken.length === 0) {
+  if (broken.length > 0) {
+    const repairedCount = broken.filter((result) => result.repaired).length;
+    const lines = [
+      `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with legacy state.`,
+      ...broken.slice(0, 20).map((result) => {
+        const backup = result.backupPath ? ` backup=${shortenHomePath(result.backupPath)}` : "";
+        const status = result.repaired ? "repaired" : "needs repair";
+        const metadata =
+          result.legacyOpenAICodexEntries > 0
+            ? ` openai-codex=${result.legacyOpenAICodexEntries}`
+            : "";
+        return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}`;
+      }),
+    ];
+    if (broken.length > 20) {
+      lines.push(`- ...and ${broken.length - 20} more.`);
+    }
+    if (!shouldRepair) {
+      lines.push('- Run "openclaw doctor --fix" to rewrite affected files to their active branch.');
+    } else if (repairedCount > 0) {
+      lines.push(`- Repaired ${repairedCount} transcript file${repairedCount === 1 ? "" : "s"}.`);
+    }
+    note(lines.join("\n"), "Session transcripts");
+  }
+
+  if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
+    await noteSessionSqliteMigrationHealth({
+      env: params?.env ?? process.env,
+      shouldRepair,
+    });
+  }
+}
+
+async function noteSessionSqliteMigrationHealth(params: {
+  env: NodeJS.ProcessEnv;
+  shouldRepair: boolean;
+}): Promise<void> {
+  // Public doctor owns the operator-facing SQLite import; the targeted
+  // --session-sqlite subcommand remains the diagnostic/proof surface.
+  const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
+  const runSessionSqlite = async () =>
+    await runDoctorSessionSqlite({
+      allAgents: true,
+      env: params.env,
+      mode: params.shouldRepair ? "import" : "dry-run",
+    });
+  const report = params.shouldRepair
+    ? await withDoctorSqliteMaintenanceLock({
+        env: params.env,
+        operation: "session SQLite import",
+        run: runSessionSqlite,
+      })
+    : await runSessionSqlite();
+  if (
+    report.totals.legacyEntries === 0 &&
+    report.totals.unreferencedJsonlFiles === 0 &&
+    report.totals.issues === 0
+  ) {
     return;
   }
-
-  const repairedCount = broken.filter((result) => result.repaired).length;
   const lines = [
-    `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with legacy state.`,
-    ...broken.slice(0, 20).map((result) => {
-      const backup = result.backupPath ? ` backup=${shortenHomePath(result.backupPath)}` : "";
-      const status = result.repaired ? "repaired" : "needs repair";
-      const metadata =
-        result.legacyOpenAICodexEntries > 0
-          ? ` openai-codex=${result.legacyOpenAICodexEntries}`
-          : "";
-      return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}`;
-    }),
+    `- Legacy entries: ${report.totals.legacyEntries}; SQLite entries: ${report.totals.sqliteEntries}.`,
+    `- Transcript events: imported=${report.totals.importedTranscriptEvents}; validated=${report.totals.validatedTranscriptEvents}.`,
   ];
-  if (broken.length > 20) {
-    lines.push(`- ...and ${broken.length - 20} more.`);
+  if (report.totals.archivedTranscriptFiles > 0) {
+    lines.push(
+      `- Archived ${report.totals.archivedTranscriptFiles} legacy transcript artifact(s).`,
+    );
   }
-  if (!shouldRepair) {
-    lines.push('- Run "openclaw doctor --fix" to rewrite affected files to their active branch.');
-  } else if (repairedCount > 0) {
-    lines.push(`- Repaired ${repairedCount} transcript file${repairedCount === 1 ? "" : "s"}.`);
+  if (report.totals.archivedUnreferencedJsonlFiles > 0) {
+    lines.push(
+      `- Archived ${report.totals.archivedUnreferencedJsonlFiles} unreferenced JSONL artifact(s).`,
+    );
   }
-
-  note(lines.join("\n"), "Session transcripts");
+  if (report.totals.issues > 0) {
+    lines.push(`- Found ${report.totals.issues} session SQLite issue(s).`);
+  }
+  if (!params.shouldRepair) {
+    lines.push(
+      '- Run "openclaw doctor --fix" to migrate legacy session metadata/transcripts to SQLite.',
+    );
+  }
+  note(lines.join("\n"), "Session SQLite");
 }

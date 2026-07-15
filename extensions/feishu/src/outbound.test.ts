@@ -77,7 +77,9 @@ vi.mock("./comment-reaction.js", () => ({
   cleanupAmbientCommentTypingReaction: cleanupAmbientCommentTypingReactionMock,
 }));
 
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
+import { buildFeishuPostMessageContent } from "./markdown.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
@@ -324,6 +326,19 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     }
 
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
+  });
+
+  it("preserves single newlines in chunker text (card and comment text must not be modified)", () => {
+    const chunker = feishuOutbound.chunker;
+    if (!chunker) {
+      throw new Error("feishuOutbound.chunker missing");
+    }
+
+    const text = "line one\nline two\nline three";
+    const chunks = chunker(text, 100);
+    // All chunks joined should equal the original text with single newlines intact
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.join("")).not.toContain("\n\n");
   });
 
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
@@ -980,6 +995,143 @@ describe("feishuOutbound.sendPayload native cards", () => {
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["url", "web-app"] as const)(
+    "renders typed %s presentation actions as Feishu link buttons",
+    async (type) => {
+      const presentation: MessagePresentation = {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Review",
+                action: { type, url: "https://example.com/review" },
+              },
+            ],
+          },
+        ],
+      };
+      const payload = { presentation };
+      const rendered = await feishuOutbound.renderPresentation?.({
+        payload,
+        presentation,
+        ctx: {
+          cfg: emptyConfig,
+          to: "chat_1",
+          text: "",
+          accountId: "main",
+          payload,
+        },
+      });
+
+      const renderedChannelData = rendered?.channelData as
+        | { feishu?: { card?: Record<string, any> } }
+        | undefined;
+      expect(rendered?.text).toBe("- Review: https://example.com/review");
+      expect(renderedChannelData?.feishu?.card?.body?.elements).toEqual([
+        {
+          tag: "button",
+          text: { tag: "plain_text", content: "Review" },
+          type: "default",
+          behaviors: [{ type: "open_url", default_url: "https://example.com/review" }],
+        },
+      ]);
+    },
+  );
+
+  it("keeps explicit command actions authoritative over deprecated link fields", async () => {
+    const presentation: MessagePresentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req-1 deny" },
+              url: "https://example.com/stale",
+              webApp: { url: "https://example.com/stale-app" },
+            },
+          ],
+        },
+      ],
+    };
+    const payload = { presentation };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+
+    const renderedChannelData = rendered?.channelData as
+      | { feishu?: { card?: Record<string, any> } }
+      | undefined;
+    expect(renderedChannelData?.feishu?.card?.body?.elements).toEqual([
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Deny" },
+        type: "default",
+        behaviors: [
+          {
+            type: "callback",
+            value: createFeishuCardInteractionEnvelope({
+              k: "quick",
+              a: "feishu.payload.button",
+              q: "/approve req-1 deny",
+            }),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps typed approval actions out of Feishu callback envelopes", async () => {
+    const presentation: MessagePresentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow",
+              action: {
+                type: "approval",
+                approvalId: "approval-1",
+                approvalKind: "plugin",
+                decision: "allow-once",
+              },
+              value: "/approve approval-1 allow-once",
+            },
+          ],
+        },
+      ],
+    };
+    const payload = { presentation };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+
+    const renderedChannelData = rendered?.channelData as
+      | { feishu?: { card?: Record<string, any> } }
+      | undefined;
+    expect(rendered?.text).toBe("- Allow");
+    expect(renderedChannelData?.feishu?.card?.body?.elements).toEqual([
+      { tag: "markdown", content: "- Allow" },
+    ]);
   });
 
   it("does not duplicate title-only presentation cards in outbound fallbacks", async () => {
@@ -1645,7 +1797,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
     },
   );
 
-  it("omits command guidance when all command buttons have URLs overriding the fallback text", async () => {
+  it("prefers explicit command guidance over deprecated button URLs", async () => {
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
       to: "comment:docx:doxcn123:7623358762119646411",
@@ -1670,9 +1822,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
       },
     });
 
-    expect(commentThreadParams()?.content).toBe(
-      "Review this\n\n- Open URL: https://example.com/action",
-    );
+    expect(commentThreadParams()?.content).toBe("Review this\n\n- Open URL: `/approve req_1`");
     expectFeishuResult(result, "reply_msg");
   });
 
@@ -1963,6 +2113,92 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     expect(sendMessageCall()?.replyToMessageId).toBe("om_inline");
     expect(sendMessageCall()?.replyInThread).toBe(false);
   });
+
+  it("materializes post-md prose soft breaks after raw render-mode routing", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "first line\nsecond line",
+      accountId: "main",
+    });
+
+    expect(sendMessageCall()?.text).toBe("first line  \nsecond line");
+  });
+
+  it("re-chunks expanded post-md text and scopes reply metadata to the first send", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      replyToId: "om_reply_target",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [index, [params]] of sendMessageFeishuMock.mock.calls.entries()) {
+      expect(params.text.length).toBeLessThanOrEqual(4_000);
+      expect(params.replyToMessageId).toBe(index === 0 ? "om_reply_target" : undefined);
+    }
+  });
+
+  it("re-chunks expanded post-md text at the selected account limit", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: { textChunkLimit: 10 },
+            },
+          },
+        },
+      },
+      to: "chat_1",
+      text: Array.from({ length: 10 }, () => "a").join("\n"),
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.text.length).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it("re-chunks expanded post-md text at the serialized byte envelope", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            textChunkLimit: 25_000,
+          },
+        },
+      },
+      to: "chat_1",
+      text: Array.from({ length: 6_150 }, () => "a").join("\n"),
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      const content = buildFeishuPostMessageContent({ messageText: params.text });
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+    }
+  });
+
+  it("keeps every expanded post-md subchunk in the requested thread", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      threadId: "om_thread_root",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.replyToMessageId).toBe("om_thread_root");
+      expect(params.replyInThread).toBe(true);
+    }
+  });
 });
 
 describe("feishuOutbound.sendMedia replyToId forwarding", () => {
@@ -2230,3 +2466,4 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageCall()?.accountId).toBe("main");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

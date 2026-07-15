@@ -61,9 +61,66 @@ describe("signalMessageActions", () => {
     );
   });
 
-  it("skips send for plugin dispatch", () => {
+  it("supports only reactions for plugin dispatch", () => {
     expect(signalMessageActions.supportsAction?.({ action: "send" })).toBe(false);
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
+    expect(signalMessageActions.supportsAction?.({ action: "delete" })).toBe(false);
+    expect(signalMessageActions.supportsAction?.({ action: "pin" })).toBe(false);
+  });
+
+  it("keeps inherited Signal reply ids in the durable delivery context", async () => {
+    const prepared = await signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: { replyTo: "1700000000001" },
+      },
+      to: "+15550001111",
+      payload: { text: "reply" },
+      replyToId: "1700000000001",
+      replyToIdSource: "implicit",
+    });
+
+    expect(prepared).toEqual({ text: "reply" });
+  });
+
+  it("preserves explicit Signal reply ids that equal the current message", async () => {
+    const prepared = await signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: { replyTo: "1700000000001" },
+        toolContext: { currentMessageId: "1700000000001", replyToMode: "first" },
+      },
+      to: "+15550001111",
+      payload: { text: "reply" },
+      replyToId: "1700000000001",
+      replyToIdSource: "explicit",
+    });
+
+    expect(prepared).toEqual({ text: "reply", replyToId: "1700000000001" });
+  });
+
+  it("preserves explicit Signal replies when implicit replies are suppressed", async () => {
+    for (const replyToMode of ["off", "batched"] as const) {
+      const prepared = await signalMessageActions.prepareSendPayload?.({
+        ctx: {
+          channel: "signal",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { replyTo: "1700000000001" },
+          toolContext: { currentMessageId: "1700000000001", replyToMode },
+        },
+        to: "+15550001111",
+        payload: { text: "reply" },
+        replyToId: "1700000000001",
+        replyToIdSource: "explicit",
+      });
+
+      expect(prepared, replyToMode).toEqual({ text: "reply", replyToId: "1700000000001" });
+    }
   });
 
   it("blocks reactions when the action gate is disabled", async () => {

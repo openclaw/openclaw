@@ -46,7 +46,7 @@ always-on group chatter -> user request, or room event when configured
 
 For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`: the final assistant text posts to the room as the visible reply.
 
-Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best with tool-reliable models (for example GPT 5.5). If the model misses the tool and returns substantive final text, OpenClaw keeps that text private instead of posting it to the room.
+Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best with tool-reliable models (for example GPT-5.6 Sol). If the model misses the tool and returns substantive final text, OpenClaw keeps that text private instead of posting it to the room.
 
 Use `"automatic"` for models or runtimes that do not reliably follow tool-only delivery: normal text finals post directly to the room, and the agent may still call `message(action=send)` for files, images, or other attachments that cannot ride along with the final text.
 
@@ -349,7 +349,12 @@ Replying to a bot message counts as an implicit mention when the channel exposes
 
 ## Scope configured mention patterns
 
-Configured `mentionPatterns` are regex fallback triggers. Use them when the platform does not expose a native bot mention, or when plain text such as `openclaw:` should count as a mention. Native platform mentions are separate: when Discord, Slack, Telegram, Matrix, or another channel can prove the message explicitly mentioned the bot, that native mention still triggers even where configured regex patterns are denied.
+Configured `mentionPatterns` are regex fallback triggers. Use them when the
+platform does not expose a native bot mention, or when you want plain text such
+as `openclaw:` to count as a mention. Native platform mentions are separate:
+when Discord, Slack, Telegram, Matrix, Signal, or another channel can prove the message
+explicitly mentioned the bot, that native mention still triggers even if
+configured regex patterns are denied.
 
 By default, configured mention patterns apply everywhere the channel passes provider and conversation facts into mention detection. To keep broad patterns from waking the agent in every group, scope them per channel with `channels.<channel>.mentionPatterns`.
 
@@ -542,7 +547,7 @@ Group owners can toggle per-group activation with a standalone message:
 - `/activation mention`
 - `/activation always`
 
-`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches the channel's `allowFrom` / `commands.ownerAllowFrom` (when no allowlist is configured, the account's own id counts as owner). The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
+`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches `commands.ownerAllowFrom`; channel `allowFrom` lists only control ordinary channel and command access. The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
 
 ## Context fields
 

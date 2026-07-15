@@ -1323,3 +1323,4 @@ describe("marketplace plugins", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

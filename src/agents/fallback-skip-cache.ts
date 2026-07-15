@@ -15,6 +15,7 @@
  * `resetFallbackSkipCacheForTest()`.
  */
 
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { modelKey } from "./model-selection-normalize.js";
 
 /**
@@ -36,8 +37,8 @@ function resolveConfiguredSkipTtlMs(env: NodeJS.ProcessEnv = process.env): numbe
   if (!trimmed) {
     return DEFAULT_FALLBACK_SKIP_TTL_MS;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(trimmed);
+  if (parsed === undefined) {
     return DEFAULT_FALLBACK_SKIP_TTL_MS;
   }
   if (parsed === 0) {

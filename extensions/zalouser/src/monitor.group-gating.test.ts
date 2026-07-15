@@ -5,7 +5,7 @@ import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send.test-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
-import { testing, monitorZalouserProvider } from "./monitor.js";
+import { __testing as testing, monitorZalouserProvider } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
   sendMessageZalouserMock,

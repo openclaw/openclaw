@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import {
   type OwnedSessionTranscriptPublishedEntry,
   type OwnedSessionTranscriptWriteOptions,
@@ -126,7 +127,7 @@ type SessionFileFingerprint =
       ctimeNs: bigint;
     };
 
-export type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
+type TrustedSessionFileSnapshot = Extract<SessionFileFingerprint, { exists: true }>;
 
 const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
@@ -270,7 +271,7 @@ type PromptReleasedSessionEntry =
   | PromptReleasedOpaqueEntry;
 
 type PromptReleasedSessionMergeResult = {
-  sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
+  sessionFileSnapshot?: OwnedSessionTranscriptCacheSnapshot;
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
   requiresReload?: true;
 };
@@ -1161,6 +1162,9 @@ function isTrustedSessionFileState(
 }
 
 async function readSessionFileFingerprint(sessionFile: string): Promise<SessionFileFingerprint> {
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return { exists: false };
+  }
   try {
     return sessionFileFingerprintFromStat(await fs.stat(sessionFile, { bigint: true }));
   } catch (err) {
@@ -1172,6 +1176,9 @@ async function readSessionFileFingerprint(sessionFile: string): Promise<SessionF
 }
 
 function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerprint {
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return { exists: false };
+  }
   try {
     return sessionFileFingerprintFromStat(statSync(sessionFile, { bigint: true }));
   } catch (err) {
@@ -2200,3 +2207,4 @@ export function installPromptSubmissionLockRelease(params: {
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -17,8 +17,13 @@ import type {
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
+import {
+  fingerprintAuthProfileCredential,
+  fingerprintResolvedProviderAuth,
+} from "./execution-auth-binding.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   applySecretRefHeaderSentinels,
@@ -39,6 +44,7 @@ import {
   protectPreparedProviderRuntimeAuth,
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
+import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
@@ -64,6 +70,8 @@ export type PreparedSimpleCompletionModel =
   | {
       model: Model;
       auth: ResolvedProviderAuth;
+      /** Non-reversible owner proof captured from the same auth snapshot. */
+      sourceAuthFingerprint?: string;
     }
   | {
       error: string;
@@ -84,6 +92,7 @@ export type PreparedSimpleCompletionModelForAgent =
       selection: AgentSimpleCompletionSelection;
       model: Model;
       auth: ResolvedProviderAuth;
+      sourceAuthFingerprint?: string;
     }
   | {
       error: string;
@@ -182,7 +191,6 @@ async function setRuntimeApiKeyForCompletion(params: {
       config: params.cfg,
     });
     const protectedAuth = protectPreparedProviderRuntimeAuth({
-      sourceApiKey: params.apiKey,
       provider: params.model.provider,
       preparedAuth: {
         apiKey: copilotToken.token,
@@ -197,7 +205,6 @@ async function setRuntimeApiKeyForCompletion(params: {
     };
   }
   const preparedAuth = protectPreparedProviderRuntimeAuth({
-    sourceApiKey: params.apiKey,
     provider: params.model.provider,
     preparedAuth: await prepareProviderRuntimeAuth({
       provider: params.model.provider,
@@ -246,8 +253,10 @@ export async function prepareSimpleCompletionModel(params: {
   allowBundledStaticCatalogFallback?: boolean;
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
+  bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
+  const workspaceDir = resolveSimpleCompletionModelResolverWorkspace(params.modelResolver);
   const resolved =
     params.useAsyncModelResolution || params.skipAgentDiscovery
       ? await (params.modelResolver ?? resolveModelAsync)(
@@ -260,11 +269,13 @@ export async function prepareSimpleCompletionModel(params: {
               ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
               : {}),
             ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
+            workspaceDir,
             authProfileId: params.profileId,
             preferredProfile: params.preferredProfile,
           },
         )
       : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+          workspaceDir,
           authProfileId: params.profileId,
           preferredProfile: params.preferredProfile,
         });
@@ -275,13 +286,23 @@ export async function prepareSimpleCompletionModel(params: {
   }
 
   let auth: ResolvedProviderAuth;
+  const authStore = params.bindAuthOwner
+    ? ensureAuthProfileStore(params.agentDir, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        config: params.cfg,
+      })
+    : undefined;
   try {
     auth = await getApiKeyForModel({
       model: resolved.model,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      workspaceDir,
       profileId: params.profileId,
       preferredProfile: params.preferredProfile,
+      ...(authStore ? { store: authStore } : {}),
+      ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
       secretSentinels: true,
     });
   } catch (err) {
@@ -303,7 +324,7 @@ export async function prepareSimpleCompletionModel(params: {
     };
   }
 
-  let resolvedApiKey = rawApiKey;
+  let authValue = rawApiKey;
   let resolvedModel = resolved.model;
   if (rawApiKey) {
     const runtimeCredential = await setRuntimeApiKeyForCompletion({
@@ -312,17 +333,26 @@ export async function prepareSimpleCompletionModel(params: {
       apiKey: rawApiKey,
       authMode: auth.mode,
       cfg: params.cfg,
-      workspaceDir: params.agentDir,
+      workspaceDir: workspaceDir ?? params.agentDir,
       profileId: auth.profileId,
     });
-    resolvedApiKey = runtimeCredential.apiKey;
+    authValue = runtimeCredential.apiKey;
     resolvedModel = runtimeCredential.model;
   }
 
   const resolvedAuth: ResolvedProviderAuth = {
     ...auth,
-    apiKey: resolvedApiKey,
+    apiKey: authValue,
   };
+  const profileCredential = params.profileId ? authStore?.profiles[params.profileId] : undefined;
+  const sourceAuthFingerprint = params.bindAuthOwner
+    ? profileCredential?.type === "oauth" && params.profileId
+      ? fingerprintAuthProfileCredential({
+          profileId: params.profileId,
+          credential: profileCredential,
+        })
+      : fingerprintResolvedProviderAuth(auth)
+    : undefined;
 
   return {
     model: applySecretRefHeaderSentinels(
@@ -330,6 +360,7 @@ export async function prepareSimpleCompletionModel(params: {
       params.cfg,
     ),
     auth: resolvedAuth,
+    ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
   };
 }
 
@@ -344,6 +375,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   allowBundledStaticCatalogFallback?: boolean;
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
+  bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
@@ -371,6 +403,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       : {}),
     useAsyncModelResolution: params.useAsyncModelResolution,
     skipAgentDiscovery: params.skipAgentDiscovery,
+    bindAuthOwner: params.bindAuthOwner,
     modelResolver: params.modelResolver,
   });
   if ("error" in prepared) {
@@ -383,6 +416,9 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     selection,
     model: prepared.model,
     auth: prepared.auth,
+    ...(prepared.sourceAuthFingerprint
+      ? { sourceAuthFingerprint: prepared.sourceAuthFingerprint }
+      : {}),
   };
 }
 

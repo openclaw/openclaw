@@ -1107,11 +1107,9 @@ export function buildDirectIMessageReplyTarget(params: {
   return `imessage:${params.sender}`;
 }
 
-export function describeIMessageEchoDropLog(params: {
-  messageText: string;
-  messageId?: string;
-}): string {
+function describeIMessageEchoDropLog(params: { messageText: string; messageId?: string }): string {
   const preview = truncateUtf16Safe(params.messageText, 50);
   const messageIdPart = params.messageId ? ` id=${params.messageId}` : "";
   return `imessage: skipping echo message${messageIdPart}: "${preview}"`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

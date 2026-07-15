@@ -822,7 +822,7 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
       models: {
         providers: {
           openai: {
-            ...cfg.models!.providers!.openai,
+            ...cfg.models!.providers!.openai!,
             models: [
               { id: "gpt-5" },
               { id: "gpt-6-newly-configured" },
@@ -864,7 +864,7 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
       models: {
         providers: {
           openai: {
-            ...cfg.models!.providers!.openai,
+            ...cfg.models!.providers!.openai!,
             models: [
               "gpt-5",
               "gpt-6-newly-configured",
@@ -929,7 +929,7 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
       models: {
         providers: {
           openai: {
-            ...cfg.models!.providers!.openai,
+            ...cfg.models!.providers!.openai!,
             models: [
               { id: "gpt-5" },
               { id: 1234 },

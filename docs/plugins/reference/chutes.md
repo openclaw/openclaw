@@ -20,4 +20,4 @@ providers: chutes
 
 ## Related docs
 
-- [chutes](/providers/chutes)
+- [Chutes](/providers/chutes)

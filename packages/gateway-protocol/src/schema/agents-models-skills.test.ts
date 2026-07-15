@@ -3,6 +3,10 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
+  ModelsListParamsSchema,
+  ModelsListResultSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
   SkillsDetailResultSchema,
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
@@ -63,6 +67,57 @@ describe("AgentsListResultSchema", () => {
     };
 
     expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+  });
+});
+
+describe("ModelsListParamsSchema", () => {
+  it("accepts the provider-config inventory view", () => {
+    expect(Value.Check(ModelsListParamsSchema, { view: "provider-config" })).toBe(true);
+    expect(
+      Value.Check(ModelsListParamsSchema, {
+        view: "all",
+        includeProviderCapabilities: true,
+      }),
+    ).toBe(true);
+    expect(Value.Check(ModelsListParamsSchema, { view: "provider-route" })).toBe(false);
+  });
+});
+
+describe("ModelsListResultSchema", () => {
+  it("accepts stable public input capabilities", () => {
+    const model = {
+      id: "gpt-image",
+      name: "GPT Image",
+      provider: "openai",
+      input: ["text", "image", "audio", "video", "document"],
+    };
+
+    expect(Value.Check(ModelsListResultSchema, { models: [model] })).toBe(true);
+    expect(
+      Value.Check(ModelsListResultSchema, {
+        models: [{ ...model, input: ["text", "binary"] }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("ModelsProbe schemas", () => {
+  it("accepts bounded request and secret-free result shapes", () => {
+    expect(
+      Value.Check(ModelsProbeParamsSchema, {
+        provider: "openai",
+        profileId: "work",
+        timeoutMs: 20_000,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ModelsProbeResultSchema, {
+        provider: "openai",
+        status: "ok",
+        latencyMs: 125,
+        results: [{ profileId: "work", label: "Work", status: "ok", latencyMs: 125 }],
+      }),
+    ).toBe(true);
   });
 });
 

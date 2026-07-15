@@ -323,7 +323,7 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
       models: {
         providers: {
           openai: {
-            ...cfgOne.models!.providers!.openai,
+            ...cfgOne.models!.providers!.openai!,
             baseUrl: "https://alt.example.com/v1",
           },
         },

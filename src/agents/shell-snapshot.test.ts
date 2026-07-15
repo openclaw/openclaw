@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -10,19 +11,20 @@ import {
   resetShellSnapshotCacheForTests,
   resolveShellSnapshotDir,
 } from "./shell-snapshot.js";
-import { getPosixShellArgs, resolveShellFromPath } from "./shell-utils.js";
+import { getBashShellConfig, getShellConfig } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
+
+function getPosixShellArgs(shellPath: string): string[] {
+  return getShellConfig(shellPath).args;
+}
 
 function resolveBashForTest(): string | null {
   if (isWin) {
     return null;
   }
-  if (fs.existsSync("/bin/bash")) {
-    return "/bin/bash";
-  }
-  return resolveShellFromPath("bash") ?? null;
+  return getBashShellConfig().shell;
 }
 
 function resolveZshForTest(): string | null {
@@ -32,7 +34,16 @@ function resolveZshForTest(): string | null {
   if (fs.existsSync("/bin/zsh")) {
     return "/bin/zsh";
   }
-  return resolveShellFromPath("zsh") ?? null;
+  for (const entry of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(entry, "zsh");
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching the test host PATH.
+    }
+  }
+  return null;
 }
 
 function setSnapshotStateForTest(
@@ -208,7 +219,10 @@ describe("exec shell snapshots", () => {
       .filter((entry) => entry.endsWith(".sh"));
     expect(snapshotFiles).toHaveLength(1);
     const snapshot = fs.readFileSync(
-      path.join(resolveShellSnapshotDir(env), snapshotFiles[0]),
+      path.join(
+        resolveShellSnapshotDir(env),
+        expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant"),
+      ),
       "utf8",
     );
     expect(snapshot).toContain("oc_snap_fn");
@@ -396,7 +410,10 @@ describe("exec shell snapshots", () => {
       .filter((entry) => entry.endsWith(".sh"));
     expect(snapshotFiles).toHaveLength(1);
     const snapshot = fs.readFileSync(
-      path.join(resolveShellSnapshotDir(env), snapshotFiles[0]),
+      path.join(
+        resolveShellSnapshotDir(env),
+        expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant"),
+      ),
       "utf8",
     );
     expect(snapshot).not.toContain("virtual");
@@ -447,7 +464,11 @@ describe("exec shell snapshots", () => {
     const snapshotFiles = fs.readdirSync(snapshotDir).filter((entry) => entry.endsWith(".sh"));
     expect(snapshotFiles).toHaveLength(1);
     const staleTime = new Date(Date.now() - 10 * 60 * 1000);
-    fs.utimesSync(path.join(snapshotDir, snapshotFiles[0]), staleTime, staleTime);
+    fs.utimesSync(
+      path.join(snapshotDir, expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant")),
+      staleTime,
+      staleTime,
+    );
     resetShellSnapshotCacheForTests();
 
     await expect(runAlias()).resolves.toBe("new");
@@ -486,7 +507,10 @@ describe("exec shell snapshots", () => {
     const snapshotDir = resolveShellSnapshotDir(env);
     const snapshotFiles = fs.readdirSync(snapshotDir).filter((entry) => entry.endsWith(".sh"));
     expect(snapshotFiles).toHaveLength(1);
-    const snapshotPath = path.join(snapshotDir, snapshotFiles[0]);
+    const snapshotPath = path.join(
+      snapshotDir,
+      expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant"),
+    );
     fs.writeFileSync(
       snapshotPath,
       [

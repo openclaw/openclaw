@@ -37,18 +37,20 @@ import {
   TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
 } from "./spooled-update-retry-policy.js";
 import {
+  isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess,
+  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
+} from "./telegram-ingress-claim-owner.js";
+import {
   abandonTelegramSpooledUpdateClaim,
   claimNextTelegramSpooledUpdate,
   completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
-  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
   refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   resolveTelegramIngressSpoolDir,
-  TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
   writeTelegramSpooledUpdate,
   type ClaimedTelegramSpooledUpdate,
   type TelegramSpooledUpdate,
@@ -947,9 +949,10 @@ export class TelegramPollingSession {
       shouldRecover: (claim) =>
         !this.#isDeferredSpooledUpdateClaim(claim) &&
         !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)) &&
-        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
-          maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
-        }),
+        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
+      shouldRecoverCorrupt: (claim) =>
+        !(claim.laneKey && activeLaneKeys.has(claim.laneKey)) &&
+        !isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(claim),
     });
     const claimedLaneKeys = new Set(
       (
@@ -1787,3 +1790,4 @@ export const testing = {
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
     resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

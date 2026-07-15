@@ -236,6 +236,10 @@
     "target": "Skills 配置"
   },
   {
+    "source": "Self-learning",
+    "target": "自我学习"
+  },
+  {
     "source": "local loopback",
     "target": "local loopback"
   },
@@ -544,6 +548,14 @@
     "target": "Discord"
   },
   {
+    "source": "Fireworks",
+    "target": "Fireworks"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
     "source": "Matrix",
     "target": "Matrix"
   },
@@ -552,12 +564,36 @@
     "target": "Microsoft Teams"
   },
   {
+    "source": "Raft",
+    "target": "Raft"
+  },
+  {
+    "source": "Runway",
+    "target": "Runway"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
     "source": "Slack",
     "target": "Slack"
   },
   {
+    "source": "Synthetic",
+    "target": "Synthetic"
+  },
+  {
     "source": "Telegram",
     "target": "Telegram"
+  },
+  {
+    "source": "Tokenjuice",
+    "target": "Tokenjuice"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
   },
   {
     "source": "Discovery + transports",
@@ -657,7 +693,7 @@
   },
   {
     "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
+    "target": "身份验证：存储位置（重要）"
   },
   {
     "source": "agent",
@@ -814,6 +850,10 @@
   {
     "source": "Parallel search",
     "target": "Parallel 搜索"
+  },
+  {
+    "source": "Mxc plugin",
+    "target": "MXC 插件"
   },
   {
     "source": "CLI reference",
@@ -1450,5 +1490,41 @@
   {
     "source": "openclaw nodes approve",
     "target": "openclaw nodes approve"
+  },
+  {
+    "source": "Cloud workers plan",
+    "target": "云端工作节点计划"
+  },
+  {
+    "source": "Crabbox plugin",
+    "target": "Crabbox 插件"
+  },
+  {
+    "source": "Path 3 SQLite session artifact family",
+    "target": "Path 3 SQLite 会话工件族"
+  },
+  {
+    "source": "Path 3 live SQLite E2E harness",
+    "target": "Path 3 live SQLite E2E harness"
+  },
+  {
+    "source": "HealthKit summaries",
+    "target": "HealthKit 摘要"
+  },
+  {
+    "source": "iOS app",
+    "target": "iOS 应用"
+  },
+  {
+    "source": "Gateway configuration reference",
+    "target": "Gateway 配置参考"
+  },
+  {
+    "source": "v2026.7.1",
+    "target": "v2026.7.1"
+  },
+  {
+    "source": "Security audit",
+    "target": "安全审计"
   }
 ]

@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
+  ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
@@ -271,52 +272,6 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
-type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
-
-/**
- * Distinguishes a truly empty prompt/history from a blank follow-up in a visible
- * conversation. This lets callers skip model submission while reporting the
- * reason accurately.
- */
-export function resolvePromptSubmissionSkipReason(params: {
-  prompt: string;
-  messages: readonly unknown[];
-  imageCount: number;
-  runtimeOnly?: boolean;
-}): PromptSubmissionSkipReason | null {
-  if (params.prompt.trim().length > 0 || params.imageCount > 0) {
-    return null;
-  }
-  return params.messages.some(hasVisiblePromptHistory)
-    ? "blank_user_prompt"
-    : "empty_prompt_history_images";
-}
-
-function hasVisiblePromptHistory(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const record = message as { role?: unknown; content?: unknown };
-  if (record.role !== "user" && record.role !== "assistant") {
-    return false;
-  }
-  return hasNonEmptyContent(record.content);
-}
-
-function hasNonEmptyContent(content: unknown): boolean {
-  if (typeof content === "string") {
-    return content.trim().length > 0;
-  }
-  if (Array.isArray(content)) {
-    return content.some(hasNonEmptyContent);
-  }
-  if (!content || typeof content !== "object") {
-    return false;
-  }
-  const record = content as { text?: unknown; content?: unknown };
-  return hasNonEmptyContent(record.text) || hasNonEmptyContent(record.content);
-}
-
 const QUEUED_USER_MESSAGE_MARKER =
   "[Queued user message from a previous active turn; preserved as context only. " +
   "Continue with the active prompt below.]";
@@ -579,6 +534,7 @@ export function resolveAttemptMediaTaskSystemPromptAddition(params: {
 
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
+  | "sessionTarget"
   | "sessionKey"
   | "sandboxSessionKey"
   | "messageChannel"
@@ -593,15 +549,44 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "provider"
   | "modelId"
   | "agentHarnessId"
+  | "modelSelectionLocked"
   | "thinkLevel"
   | "reasoningLevel"
   | "bashElevated"
   | "extraSystemPrompt"
   | "ownerNumbers"
   | "authProfileId"
+  | "authProfileIdSource"
+  | "runtimePlan"
 > & {
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
+
+function resolveRuntimeContextSessionTarget(params: {
+  attempt: AfterTurnRuntimeContextAttempt;
+  activeAgentId?: string;
+}): ContextEngineSessionTarget | undefined {
+  const sessionTarget = params.attempt.sessionTarget;
+  const agentId = sessionTarget?.agentId ?? params.activeAgentId;
+  const sessionId = sessionTarget?.sessionId ?? params.attempt.sessionId;
+  const sessionKey = sessionTarget?.sessionKey ?? params.attempt.sessionKey;
+  if (
+    !agentId &&
+    !sessionId &&
+    !sessionKey &&
+    !sessionTarget?.storePath &&
+    sessionTarget?.threadId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(sessionTarget?.storePath ? { storePath: sessionTarget.storePath } : {}),
+    ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
+  };
+}
 
 /** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
@@ -615,6 +600,10 @@ export function buildAfterTurnRuntimeContext(params: {
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
+  const sessionTarget = resolveRuntimeContextSessionTarget({
+    attempt: params.attempt,
+    activeAgentId: params.activeAgentId,
+  });
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
@@ -625,6 +614,8 @@ export function buildAfterTurnRuntimeContext(params: {
       currentThreadTs: params.attempt.currentThreadTs,
       currentMessageId: params.attempt.currentMessageId,
       authProfileId: params.attempt.authProfileId,
+      authProfileIdSource: params.attempt.authProfileIdSource,
+      runtimeAuthPlan: params.attempt.runtimePlan?.auth,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
       agentDir: params.agentDir,
@@ -634,6 +625,7 @@ export function buildAfterTurnRuntimeContext(params: {
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
       harnessRuntime: params.attempt.agentHarnessId,
+      modelSelectionLocked: params.attempt.modelSelectionLocked,
       thinkLevel: params.attempt.thinkLevel,
       reasoningLevel: params.attempt.reasoningLevel,
       bashElevated: params.attempt.bashElevated,
@@ -666,6 +658,8 @@ export function buildAfterTurnRuntimeContext(params: {
       ? { currentTokenCount: Math.floor(params.currentTokenCount) }
       : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
+    transcriptStorage: { kind: "sqlite" },
+    ...(sessionTarget ? { sessionTarget } : {}),
   };
 }
 

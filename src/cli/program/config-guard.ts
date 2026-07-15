@@ -5,6 +5,7 @@ import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
+  isNamedProfile,
   resolveLegacyStateDirs,
   resolveNewStateDir,
   resolveOAuthDir,
@@ -88,9 +89,6 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   ) {
     return true;
   }
-  if (dirHasFile(path.join(stateDir, "feishu", "dedup"), (name) => name.endsWith(".json"))) {
-    return true;
-  }
   if (hasLegacyIMessageStateFiles(stateDir)) {
     return true;
   }
@@ -104,7 +102,7 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
 }
 
 function hasCrossStateDirApprovalMigrationInputs(stateDir: string): boolean {
-  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim() || isNamedProfile()) {
     return false;
   }
   const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
@@ -217,6 +215,8 @@ export async function ensureConfigReady(params: {
   suppressDoctorStdout?: boolean;
   allowInvalid?: boolean;
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
@@ -238,6 +238,12 @@ export async function ensureConfigReady(params: {
           : {}),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
+          : {}),
+        ...(params.skipPristineStartupStateMigrations
+          ? { skipPristineStartupStateMigrations: true }
+          : {}),
+        ...(params.skipPristineCoreStateMigrations
+          ? { skipPristineCoreStateMigrations: true }
           : {}),
       });
     try {
@@ -356,4 +362,3 @@ export async function ensureConfigReady(params: {
 export const testApi = {
   resetConfigGuardStateForTests,
 };
-export { testApi as __test__ };

@@ -305,9 +305,9 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Skill Workshop",
       detailKeys: ["action", "name", "proposal_id"],
     },
-    crestodian: {
+    openclaw: {
       emoji: "🦀",
-      title: "Crestodian",
+      title: "OpenClaw",
       detailKeys: ["action", "path", "model"],
     },
     gateway: {
@@ -364,6 +364,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧾",
       title: "Session History",
       detailKeys: ["sessionKey", "limit", "includeTools"],
+    },
+    sessions_search: {
+      emoji: "🔎",
+      title: "Session Search",
+      detailKeys: ["query", "sessionKey", "limit"],
     },
     transcripts: {
       emoji: "🎙️",

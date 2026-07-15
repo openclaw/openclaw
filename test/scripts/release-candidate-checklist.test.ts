@@ -12,6 +12,7 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   reconcileReleaseCandidateState,
+  releaseBranchForTag,
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
   run,
@@ -19,6 +20,7 @@ import {
   validateCandidateCheckout,
   validateCandidateReleaseNotes,
   validateFullManifest,
+  validateNpmPreflightRunSource,
   validatePreflightManifest,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
@@ -519,6 +521,34 @@ describe("release candidate checklist", () => {
     ).toThrow("invalid dependency tarball metadata");
   });
 
+  it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {
+    const workflowSha = "a".repeat(40);
+    const isTrustedWorkflowAncestor = vi.fn(() => true);
+
+    expect(
+      validateNpmPreflightRunSource({
+        workflowRun: { headSha: workflowSha },
+        workflowRef: "main",
+        isTrustedWorkflowAncestor,
+      }),
+    ).toEqual({
+      status: "passed",
+      headSha: workflowSha,
+      workflowRef: "main",
+    });
+    expect(isTrustedWorkflowAncestor).toHaveBeenCalledWith(workflowSha, "refs/remotes/origin/main");
+  });
+
+  it("rejects npm preflight workflow code outside the trusted ref", () => {
+    expect(() =>
+      validateNpmPreflightRunSource({
+        workflowRun: { headSha: "a".repeat(40) },
+        workflowRef: "main",
+        isTrustedWorkflowAncestor: () => false,
+      }),
+    ).toThrow("is not reachable from trusted main");
+  });
+
   it("requires run ids when dispatch is disabled", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
       "--skip-dispatch requires --full-release-run and --npm-preflight-run",
@@ -530,6 +560,16 @@ describe("release candidate checklist", () => {
     expect(() =>
       parseArgs(["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"]),
     ).toThrow("--workflow-ref must be main");
+  });
+
+  it("keeps release validation context on the canonical release branch", () => {
+    expect(releaseBranchForTag("v2026.7.1-beta.4")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
+
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain("target_context_ref: targetContextRef");
   });
 
   it("preserves the matching Tideclaw alpha workflow source", () => {
@@ -710,7 +750,9 @@ describe("release candidate checklist", () => {
     ) as {
       on: { workflow_dispatch: { inputs: Record<string, unknown> } };
     };
-    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].map((match) => match[1]);
+    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }

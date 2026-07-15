@@ -20,4 +20,4 @@ contracts: agentToolResultMiddleware
 
 ## Related docs
 
-- [tokenjuice](/tools/tokenjuice)
+- [Tokenjuice](/tools/tokenjuice)

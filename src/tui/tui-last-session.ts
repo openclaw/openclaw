@@ -16,7 +16,7 @@ type LastSessionRecord = {
 type LastSessionStore = Record<string, LastSessionRecord>;
 
 /** Resolves the private state file for remembered TUI sessions. */
-export function resolveTuiLastSessionStatePath(stateDir = resolveStateDir()): string {
+function resolveTuiLastSessionStatePath(stateDir = resolveStateDir()): string {
   return path.join(stateDir, "tui", "last-session.json");
 }
 
@@ -56,7 +56,7 @@ function isHeartbeatSessionKey(sessionKey: string): boolean {
 }
 
 /** Detects heartbeat/system sessions that should not become the remembered human session. */
-export function isHeartbeatLikeTuiSession(session: TuiSessionList["sessions"][number]): boolean {
+function isHeartbeatLikeTuiSession(session: TuiSessionList["sessions"][number]): boolean {
   if (isHeartbeatSessionKey(session.key)) {
     return true;
   }

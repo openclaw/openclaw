@@ -343,6 +343,13 @@ jobs:
           AI_RUNTIME_TARBALL_DIR: ${{ steps.ai_runtime_tarballs.outputs.dir }}
         run: |
           set -euo pipefail
+          mapfile -t AI_TARBALLS < <(find "$AI_RUNTIME_TARBALL_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | sort)
+          if [[ "${#AI_TARBALLS[@]}" -ne 1 ]]; then
+            echo "Expected exactly one prepared @openclaw/ai tarball, found ${#AI_TARBALLS[@]}." >&2
+            exit 1
+          fi
+          AI_TARBALL_PATH="${AI_TARBALLS[0]}"
+          node --import tsx scripts/prepare-openclaw-npm-shrinkwrap.ts "$AI_TARBALL_PATH"
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
           pnpm pack --json 2>&1 | tee "$PACK_OUTPUT"
           PACK_NAME="$(node - "$PACK_OUTPUT" <<'NODE'

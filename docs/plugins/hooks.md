@@ -40,7 +40,6 @@ export default definePluginEntry({
             description: `Allow search query: ${String(event.params.query ?? "")}`,
             severity: "info",
             timeoutMs: 60_000,
-            timeoutBehavior: "deny",
           },
         };
       },
@@ -92,6 +91,18 @@ A timed-out handler promise continues running because hook callbacks do not
 receive a cancellation signal. The hook dispatch can release its Gateway
 admission while that plugin work is still in progress. Plugins that own
 long-running work must provide their own cancellation and shutdown lifecycle.
+
+Outbound modifying hooks `message_sending` and `reply_payload_sending` use a
+15-second default per handler. If one times out, OpenClaw logs the plugin error
+and continues with the latest payload so the serialized delivery lane can
+settle. Set a larger per-hook budget for plugins that intentionally do slower
+work before delivery.
+
+Channel plugins that use `createReplyDispatcher` can likewise declare a larger
+positive per-stage budget with `beforeDeliverOptions: { timeoutMs }`, or when
+appending work with `dispatcher.appendBeforeDeliver(handler, { timeoutMs })`.
+Without an owner-declared budget, those callbacks use the same 15-second
+default so a hung callback cannot retain the serialized delivery lane.
 
 Each hook receives `event.context.pluginConfig`, the resolved config for the
 plugin that registered that handler. OpenClaw injects it per handler without
@@ -239,6 +250,7 @@ type BeforeToolCallResult = {
     description: string;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
+    /** @deprecated Unresolved approvals always deny. */
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
@@ -595,6 +607,9 @@ startup and scheduler replacement during config reload. The event reports
 cron still emits with `enabled: false`, allowing an external projection to
 clear stale wakes. Use `ctx.getCron?.()` for the exact scheduler instance that
 completed reconciliation; a later reload does not retarget that callback.
+`ctx.abortSignal` owns that same scheduler snapshot. The Gateway aborts it as
+soon as a newer scheduler is armed or shutdown starts. Pass it through every
+durable side effect and do not accept the snapshot after it aborts.
 This is a scheduler lifecycle signal, not a plugin-activation signal: a
 plugin-only hot reload does not replay it. A newly enabled consumer receives
 its first baseline on the next scheduler replacement or Gateway start.
@@ -661,6 +676,7 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
   let cron: CronReader | undefined;
   let enabled = false;
   let hasBaseline = false;
+  let reconciliationSignal: AbortSignal | undefined;
   let requestedRevision = 0;
   let appliedRevision = 0;
   let worker = Promise.resolve();
@@ -670,9 +686,13 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
     let retryMs = 1_000;
 
     while (!lifecycle.signal.aborted && appliedRevision < requestedRevision) {
+      const ownerSignal = reconciliationSignal;
+      if (!ownerSignal || ownerSignal.aborted) {
+        return;
+      }
       const targetRevision = requestedRevision;
       const attempt = new AbortController();
-      const signal = AbortSignal.any([lifecycle.signal, attempt.signal]);
+      const signal = AbortSignal.any([lifecycle.signal, ownerSignal, attempt.signal]);
       activeAttempt = attempt;
 
       try {
@@ -694,7 +714,7 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
         appliedRevision = targetRevision;
         retryMs = 1_000;
       } catch {
-        if (lifecycle.signal.aborted) {
+        if (lifecycle.signal.aborted || ownerSignal.aborted) {
           return;
         }
         if (attempt.signal.aborted) {
@@ -740,6 +760,7 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
     cron = reconciledCron;
     enabled = event.enabled;
     hasBaseline = true;
+    reconciliationSignal = ctx.abortSignal;
     return requestProjection();
   });
 

@@ -19,7 +19,7 @@ interface CleanupTarget {
   readonly rawPath?: string;
 }
 
-export interface LegacyPluginDependencyStateIssue {
+interface LegacyPluginDependencyStateIssue {
   readonly kind: "legacy-plugin-dependency-state";
   readonly path: string;
 }
@@ -480,4 +480,3 @@ export const testing = {
   detectLegacyPluginDependencyStateIssues,
   legacyPluginDependencyStateIssueToHealthFinding,
 };
-export { testing as __testing };

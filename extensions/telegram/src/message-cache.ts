@@ -111,7 +111,7 @@ export type PersistedTelegramMessageCacheValue = {
   threadId?: string;
 };
 
-export type TelegramMessageCachePersistentStore = {
+type TelegramMessageCachePersistentStore = {
   register(key: string, value: PersistedTelegramMessageCacheValue): Promise<void>;
   entries(): Promise<Array<{ key: string; value: unknown }>>;
 };
@@ -882,3 +882,4 @@ export async function buildTelegramConversationContext(params: {
     compareCachedMessageNodes(left.node, right.node),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

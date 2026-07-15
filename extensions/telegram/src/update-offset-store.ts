@@ -10,7 +10,7 @@ const STORE_VERSION = 3;
 export const TELEGRAM_UPDATE_OFFSET_NAMESPACE = "telegram.update-offsets";
 export const TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES = 1_000;
 
-export type TelegramUpdateOffsetState = {
+type TelegramUpdateOffsetState = {
   version: number;
   lastUpdateId: number | null;
   botId: string | null;

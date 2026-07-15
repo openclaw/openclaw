@@ -11,9 +11,9 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveUserPath } from "../utils.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
 
 const log = createSubsystemLogger("agents/auth-profiles");
@@ -55,6 +55,7 @@ export type ClaudeCliCredential =
       expires: number;
       subscriptionType?: string;
       rateLimitTier?: string;
+      email?: string;
     }
   | {
       type: "token";
@@ -63,6 +64,7 @@ export type ClaudeCliCredential =
       expires: number;
       subscriptionType?: string;
       rateLimitTier?: string;
+      email?: string;
     };
 
 /** Credential shape parsed from Codex CLI storage. */
@@ -99,7 +101,7 @@ export type GeminiCliCredential = {
 type ExecSyncFn = typeof execSync;
 
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
-  const baseDir = homeDir ?? resolveUserPath("~");
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
   return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
@@ -153,7 +155,9 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
 
 function resolveCodexHomePath(codexHome?: string) {
   const configured = codexHome ?? process.env.CODEX_HOME;
-  const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
+  // External CLI state belongs to the OS user, not OpenClaw's relocatable
+  // home. Otherwise an isolated OPENCLAW_HOME hides an already logged-in CLI.
+  const home = resolveOsHomeRelativePath(configured || "~/.codex");
   try {
     return fs.realpathSync.native(home);
   } catch {
@@ -170,12 +174,12 @@ function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean 
 }
 
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
-  const baseDir = homeDir ?? resolveUserPath("~");
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
   return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
 function resolveGeminiCliCredentialsPath(homeDir?: string) {
-  const baseDir = homeDir ?? resolveUserPath("~");
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
   return path.join(baseDir, GEMINI_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
@@ -248,8 +252,12 @@ function decodeJwtExpiryMs(token: string): number | null {
   if (parts.length < 2) {
     return null;
   }
+  const encodedPayload = parts.at(1);
+  if (!encodedPayload) {
+    return null;
+  }
   try {
-    const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payloadRaw = Buffer.from(encodedPayload, "base64url").toString("utf8");
     const payload = JSON.parse(payloadRaw) as { exp?: unknown };
     if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
       return null;
@@ -265,8 +273,12 @@ function decodeJwtIdentityClaims(token: string): { sub?: string; email?: string 
   if (parts.length < 2) {
     return {};
   }
+  const encodedPayload = parts.at(1);
+  if (!encodedPayload) {
+    return {};
+  }
   try {
-    const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payloadRaw = Buffer.from(encodedPayload, "base64url").toString("utf8");
     const payload = JSON.parse(payloadRaw) as { sub?: unknown; email?: unknown };
     const sub = typeof payload.sub === "string" && payload.sub ? payload.sub : undefined;
     const email = typeof payload.email === "string" && payload.email ? payload.email : undefined;
@@ -450,6 +462,35 @@ function readClaudeCliKeychainCredentials(
   }
 }
 
+// The CLI login flow writes the account identity to the config file next to
+// the credential store, so the pair describes one login. Capturing it here
+// keeps usage surfaces from re-reading ambient config at fetch time, where a
+// later account switch could mislabel another credential's quota.
+function readClaudeCliAccountEmail(homeDir?: string): string | undefined {
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
+  const raw = loadJsonFile(path.join(baseDir, ".claude.json"));
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const account = (raw as { oauthAccount?: unknown }).oauthAccount;
+  if (!account || typeof account !== "object") {
+    return undefined;
+  }
+  const email = (account as { emailAddress?: unknown }).emailAddress;
+  return typeof email === "string" && email.trim() ? email.trim() : undefined;
+}
+
+function withClaudeAccountEmail(
+  cliLogin: ClaudeCliCredential | null,
+  homeDir?: string,
+): ClaudeCliCredential | null {
+  if (!cliLogin) {
+    return null;
+  }
+  const email = readClaudeCliAccountEmail(homeDir);
+  return email ? { ...cliLogin, email } : cliLogin;
+}
+
 /** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
 export function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
@@ -464,7 +505,7 @@ export function readClaudeCliCredentials(options?: {
       log.info("read anthropic credentials from claude cli keychain", {
         type: keychainCreds.type,
       });
-      return keychainCreds;
+      return withClaudeAccountEmail(keychainCreds, options?.homeDir);
     }
   }
 
@@ -475,7 +516,10 @@ export function readClaudeCliCredentials(options?: {
   }
 
   const data = raw as Record<string, unknown>;
-  return parseClaudeCliOauthCredential(data.claudeAiOauth);
+  return withClaudeAccountEmail(
+    parseClaudeCliOauthCredential(data.claudeAiOauth),
+    options?.homeDir,
+  );
 }
 
 /** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */

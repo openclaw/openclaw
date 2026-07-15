@@ -1,5 +1,8 @@
 // Qa Matrix plugin module implements scenario runtime behavior.
-import { MATRIX_QA_SECONDARY_ROOM_KEY, type MatrixQaScenarioDefinition } from "./scenario-catalog.js";
+import {
+  MATRIX_QA_SECONDARY_ROOM_KEY,
+  type MatrixQaScenarioDefinition,
+} from "./scenario-catalog.js";
 import {
   runAllowBotsDefaultBlockScenario,
   runAllowBotsMentionsDmUnmentionedScenario,
@@ -102,23 +105,13 @@ import {
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
-  readMatrixQaSyncCursor,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
-  writeMatrixQaSyncCursor,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
-export {
-  buildMatrixReplyArtifact,
-  buildMatrixReplyDetails,
-  buildMentionPrompt,
-  readMatrixQaSyncCursor,
-  runMatrixQaCanary,
-  writeMatrixQaSyncCursor,
-};
-export type { MatrixQaScenarioContext };
+export { buildMatrixReplyArtifact, buildMatrixReplyDetails, buildMentionPrompt, runMatrixQaCanary };
 
 async function runDriverTopologyScopedScenario(params: {
   context: MatrixQaScenarioContext;
