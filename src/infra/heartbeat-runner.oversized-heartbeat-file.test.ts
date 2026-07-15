@@ -1,13 +1,21 @@
 // Regression test for bounded HEARTBEAT.md reads.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
+
+afterEach(() => {
+  loggingState.rawConsole = null;
+  setLoggerOverride(null);
+  resetLogger();
+});
 
 describe("runHeartbeatOnce oversized HEARTBEAT.md", () => {
   it("follows a symlinked HEARTBEAT.md to a regular file", async () => {
@@ -76,6 +84,10 @@ describe("runHeartbeatOnce oversized HEARTBEAT.md", () => {
       const oversizedContent = Buffer.alloc(16 * 1024 * 1024 + 1, "x");
       await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), oversizedContent);
 
+      const warn = vi.fn();
+      loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
       replySpy.mockResolvedValue({ text: "needs attention" });
       const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "C123" });
 
@@ -91,6 +103,10 @@ describe("runHeartbeatOnce oversized HEARTBEAT.md", () => {
 
       expect(res.status).toBe("ran");
       expect(sendSlack).toHaveBeenCalledTimes(1);
+      // Operators must see why their oversized heartbeat file no longer applies.
+      expect(
+        warn.mock.calls.some((call) => String(call[0]).includes("skipping oversized HEARTBEAT.md")),
+      ).toBe(true);
     });
   });
 });

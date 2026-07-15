@@ -1120,6 +1120,12 @@ async function resolveHeartbeatPreflight(params: {
       // The heartbeat prompt already says "if it exists".
       return basePreflight;
     }
+    // Oversized files loaded in full before the cap existed, so tell the
+    // operator why their heartbeat instructions no longer apply instead of
+    // dropping them silently. Other read errors keep proceeding as before.
+    if (err instanceof Error && err.message.startsWith("File exceeds")) {
+      log.warn(`heartbeat: skipping oversized ${DEFAULT_HEARTBEAT_FILENAME}: ${err.message}`);
+    }
     // For other read errors, proceed with heartbeat as before.
   }
 
