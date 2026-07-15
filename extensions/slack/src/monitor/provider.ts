@@ -26,7 +26,6 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   resolveSlackAccount,
@@ -35,6 +34,7 @@ import {
 } from "../accounts.js";
 import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
 import { resolveSlackWebClientOptions } from "../client-options.js";
+import { createSlackStartupAuthClient } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
@@ -382,9 +382,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
   try {
-    const auth = await withTimeout(app.client.auth.test(), 10_000, {
-      message: "slack startup auth.test timed out",
-    });
+    const auth = await createSlackStartupAuthClient(botToken, clientOptions).auth.test();
     const authUserId = normalizeOptionalString(auth.user_id) ?? "";
     botId = normalizeOptionalString((auth as { bot_id?: string }).bot_id) ?? "";
     // Slack documents bot_id only for bot-token identities. Never treat the user behind a
@@ -413,7 +411,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   if (authTestError !== undefined) {
     runtime.log?.(
       warn(
-        `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
+        `[${account.accountId}] slack auth.test failed at boot (${authTestError}); ` +
           "explicit bot-mention detection will be disabled until restart with a valid bot token; " +
           "required-mention channels will fail closed without another trusted activation signal",
       ),
