@@ -735,7 +735,7 @@ describe("resolveDriveCommentEventTurn", () => {
   });
 
   it("retries comment reply lookup when the requested reply is not immediately visible", async () => {
-    const waitMs = vi.fn(async () => {});
+    const waitMs = vi.fn(async () => true);
     const client = makeOpenApiClient({
       includeTargetReplyInBatch: false,
       repliesSequence: [
@@ -781,14 +781,63 @@ describe("resolveDriveCommentEventTurn", () => {
     expect(turn?.targetReplyText).toBe("Insert a sentence below this paragraph");
     expect(turn?.prompt).toContain("Insert a sentence below this paragraph");
     expect(waitMs).toHaveBeenCalledTimes(2);
-    expect(waitMs).toHaveBeenNthCalledWith(1, 1000);
-    expect(waitMs).toHaveBeenNthCalledWith(2, 1000);
+    expect(waitMs).toHaveBeenNthCalledWith(1, 1000, undefined);
+    expect(waitMs).toHaveBeenNthCalledWith(2, 1000, undefined);
     expect(
       client.request.mock.calls.filter(
         ([request]: [{ method: string; url: string }]) =>
           request.method === "GET" && request.url.includes("/replies"),
       ),
     ).toHaveLength(3);
+  });
+
+  it("stops the comment reply retry loop when the owning abortSignal fires", async () => {
+    const abortController = new AbortController();
+    // Simulate the owning monitor account calling abort mid-retry: the first
+    // waitMs returns false (abort observed), the loop must exit immediately,
+    // and the remaining attempts must not enqueue another fetchDriveCommentReplies.
+    const waitMs = vi.fn(async (_ms: number, signal?: AbortSignal) => {
+      if (signal?.aborted) {
+        return false;
+      }
+      abortController.abort();
+      return false;
+    });
+    const client = makeOpenApiClient({
+      includeTargetReplyInBatch: false,
+      repliesSequence: [
+        [
+          {
+            reply_id: "7623358762136374451",
+            text: "Earlier assistant summary",
+          },
+        ],
+      ],
+    });
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent({ reply_id: "7623358762999999999" }),
+      botOpenId: "ou_bot",
+      createClient: () => client as never,
+      abortSignal: abortController.signal,
+      waitMs,
+    });
+    expect(turn).not.toBeNull();
+    // First delay consumed the abort; no further waitMs calls and no further
+    // replies fetches after the initial miss.
+    expect(waitMs).toHaveBeenCalledTimes(1);
+    expect(waitMs).toHaveBeenNthCalledWith(1, 1000, abortController.signal);
+    expect(
+      client.request.mock.calls.filter(
+        ([request]: [{ method: string; url: string }]) =>
+          request.method === "GET" && request.url.includes("/replies"),
+      ),
+    ).toHaveLength(1);
+    // The requested reply never resolved (loop broke before retry could find it),
+    // so targetReplyText stays unset — the only fetched reply is the "earlier"
+    // one that is not the requested reply_id.
+    expect(turn?.targetReplyText).toBeUndefined();
   });
 
   it("ignores self-authored comment notices", async () => {

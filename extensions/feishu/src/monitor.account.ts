@@ -168,6 +168,12 @@ type RegisterEventHandlersContext = {
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
   /**
+   * Owning monitor account abort signal. Handlers that run retry/polling
+   * loops must propagate this so an account teardown short-circuits the
+   * loop instead of running through its full delay budget.
+   */
+  abortSignal?: AbortSignal;
+  /**
    * Optional status sink. When provided, the message handler will publish
    * `lastEventAt` on every inbound message for message recency. Transport
    * liveness is published by the transport layer.
@@ -274,7 +280,8 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget, abortSignal } =
+    context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
@@ -341,6 +348,7 @@ function registerEventHandlers(
       accountId,
       runtime,
       fireAndForget,
+      abortSignal,
     }),
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
@@ -506,6 +514,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      abortSignal,
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
 
