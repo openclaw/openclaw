@@ -819,6 +819,21 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes).toEqual([]);
   });
 
+  it("omits unsupported scenario-only survivor lanes without explicit baselines", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-scenario-only-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'const SCENARIOS = new Set(["unrelated"]);\n');
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+  });
+
   it("skips plugin dependency cleanup for baselines without packaged plugin dirs", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],

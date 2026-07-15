@@ -228,15 +228,18 @@ function expandUpgradeSurvivorBaselineLanes(
   const scenarios = filterUpgradeSurvivorScenariosForTarget(requestedScenarios, targetRoot);
   const targetSupportsNoRequestedScenario =
     Boolean(targetRoot) && requestedScenarios.length > 0 && scenarios.length === 0;
+  if (targetSupportsNoRequestedScenario) {
+    return poolLanes.filter(
+      (poolLane) =>
+        poolLane.name !== "published-upgrade-survivor" && poolLane.name !== "update-migration",
+    );
+  }
   if (baselineSpecs.length === 0 && scenarios.length === 0) {
     return poolLanes;
   }
   return poolLanes.flatMap((poolLane) => {
     if (poolLane.name !== "published-upgrade-survivor" && poolLane.name !== "update-migration") {
       return [poolLane];
-    }
-    if (targetSupportsNoRequestedScenario) {
-      return [];
     }
     const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
     const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
