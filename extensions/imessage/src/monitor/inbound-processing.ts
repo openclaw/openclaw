@@ -18,8 +18,9 @@ import {
   type ChannelIngressIdentityDescriptor,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
+  buildChannelGroupsScopeTree,
   resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
+  resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -777,11 +778,9 @@ export async function resolveIMessageInboundDecision(params: {
     : undefined;
 
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
-  const requireMention = resolveChannelGroupRequireMention({
-    cfg: params.cfg,
-    channel: "imessage",
-    accountId: params.accountId,
-    groupId,
+  const requireMention = resolveScopeRequireMention({
+    tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
+    path: groupId ? [groupId] : [],
     requireMentionOverride: params.opts?.requireMention,
     overrideOrder: "before-config",
   });

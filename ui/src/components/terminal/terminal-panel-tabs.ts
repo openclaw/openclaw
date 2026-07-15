@@ -8,7 +8,7 @@ export type TerminalPanelTab = {
   shellName: string | null;
   agentId: string | null;
   cwd: string | null;
-  status: "live" | "exited";
+  status: "connecting" | "live" | "exited";
   exitReason?: string;
   exitCode?: number | null;
 };
@@ -28,6 +28,9 @@ function terminalTabHint(tab: TerminalPanelTab): string | null {
 }
 
 function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
+  if (tab.status === "connecting") {
+    return t("terminal.connecting");
+  }
   if (tab.status !== "exited") {
     return null;
   }
@@ -47,6 +50,24 @@ export function renderTerminalPanelTabs(params: {
   onClose: (id: string) => void;
   onNew: () => void;
 }) {
+  const newButton = (slotted: boolean) => html`
+    <button
+      slot=${slotted ? "nav" : nothing}
+      class="tp-new"
+      type="button"
+      ?disabled=${params.booting}
+      title=${t("terminal.newSession")}
+      aria-label=${t("terminal.newSession")}
+      @click=${params.onNew}
+    >
+      ${PLUS_GLYPH}
+    </button>
+  `;
+  if (params.tabs.length === 0) {
+    // Web Awesome 3.10 dereferences its first tab when an empty group becomes
+    // visible. Keep the new-session control outside the group until one exists.
+    return newButton(false);
+  }
   return html`
     <wa-tab-group
       class="tp-tabs"
@@ -60,7 +81,7 @@ export function renderTerminalPanelTabs(params: {
         return html`
           <wa-tab
             id=${`terminal-tab-${tab.id}`}
-            class="tp-tab ${tab.status === "exited" ? "is-exited" : ""}"
+            class="tp-tab is-${tab.status}"
             panel=${tab.id}
             aria-controls="terminal-tab-panel"
             title=${terminalTabHint(tab) || nothing}
@@ -81,17 +102,7 @@ export function renderTerminalPanelTabs(params: {
           </button>
         `;
       })}
-      <button
-        slot="nav"
-        class="tp-new"
-        type="button"
-        ?disabled=${params.booting}
-        title=${t("terminal.newSession")}
-        aria-label=${t("terminal.newSession")}
-        @click=${params.onNew}
-      >
-        ${PLUS_GLYPH}
-      </button>
+      ${newButton(true)}
     </wa-tab-group>
   `;
 }

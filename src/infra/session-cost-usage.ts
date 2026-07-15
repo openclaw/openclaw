@@ -1152,9 +1152,17 @@ const applyCostBreakdown = (totals: CostUsageTotals, costBreakdown: CostBreakdow
 };
 
 // Legacy function for backwards compatibility (no cost breakdown available)
-const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) => {
+const applyCostTotal = (
+  totals: CostUsageTotals,
+  costTotal: number | undefined,
+  provider?: string,
+  model?: string,
+) => {
   if (costTotal === undefined) {
     totals.missingCostEntries += 1;
+    const modelKey = `${normalizeOptionalString(provider) ?? "unknown"}/${normalizeOptionalString(model) ?? "unknown"}`;
+    totals.missingCostByModel ??= {};
+    totals.missingCostByModel[modelKey] = (totals.missingCostByModel[modelKey] ?? 0) + 1;
     return;
   }
   totals.totalCost += costTotal;
@@ -1538,7 +1546,7 @@ export async function loadCostUsageSummary(params?: {
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(bucket, entry.costBreakdown);
         } else {
-          applyCostTotal(bucket, entry.costTotal);
+          applyCostTotal(bucket, entry.costTotal, entry.provider, entry.model);
         }
         dailyMap.set(dayKey, bucket);
 
@@ -1546,7 +1554,7 @@ export async function loadCostUsageSummary(params?: {
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(totals, entry.costBreakdown);
         } else {
-          applyCostTotal(totals, entry.costTotal);
+          applyCostTotal(totals, entry.costTotal, entry.provider, entry.model);
         }
       },
     });
@@ -1619,7 +1627,7 @@ async function scanUsageFileForCache(params: {
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(entryTotals, entry.costBreakdown);
         } else {
-          applyCostTotal(entryTotals, entry.costTotal);
+          applyCostTotal(entryTotals, entry.costTotal, entry.provider, entry.model);
         }
         addTotals(totals, entryTotals);
         if (ts !== undefined) {
@@ -2352,7 +2360,7 @@ export async function loadSessionCostSummary(params: {
       if (entry.costBreakdown?.total !== undefined) {
         applyCostBreakdown(totals, entry.costBreakdown);
       } else {
-        applyCostTotal(totals, entry.costTotal);
+        applyCostTotal(totals, entry.costTotal, entry.provider, entry.model);
       }
 
       if (dayKey !== undefined && quarterBucket) {
@@ -2428,7 +2436,7 @@ export async function loadSessionCostSummary(params: {
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(existing.totals, entry.costBreakdown);
         } else {
-          applyCostTotal(existing.totals, entry.costTotal);
+          applyCostTotal(existing.totals, entry.costTotal, entry.provider, entry.model);
         }
         modelUsageMap.set(key, existing);
       }

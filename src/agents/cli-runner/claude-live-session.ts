@@ -137,7 +137,7 @@ function sha256(value: string): string {
 }
 
 /** Closes all live Claude CLI sessions and clears creation promises for tests. */
-export function resetClaudeLiveSessionsForTest(): void {
+function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
     closeLiveSession(session, "restart");
   }
@@ -259,7 +259,7 @@ function stripLiveProcessArgs(
 }
 
 /** Builds Claude CLI args for stream-json live sessions, stripping one-shot session flags. */
-export function buildClaudeLiveArgs(params: {
+function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
   systemPrompt: string;
@@ -291,6 +291,13 @@ export function buildClaudeLiveArgs(params: {
   return params.permissionMode
     ? upsertArgValue(liveArgs, "--permission-mode", params.permissionMode)
     : liveArgs;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.claudeLiveSessionTestApi")] = {
+    buildClaudeLiveArgs,
+    resetClaudeLiveSessionsForTest,
+  };
 }
 
 type ClaudeLiveSessionOwner = {

@@ -632,14 +632,17 @@ export interface MacosPortGuardianRecords {
 }
 
 export interface ManagedOutgoingImageRecords {
+  agent_id: string | null;
   alt: string;
   attachment_id: string;
+  cleanup_pending: Generated<number>;
   created_at: string;
   message_id: string | null;
   original_content_type: string;
   original_filename: string | null;
   original_height: number | null;
   original_media_id: string;
+  original_media_root: string;
   original_media_subdir: string;
   original_size_bytes: number | null;
   original_width: number | null;
@@ -892,6 +895,13 @@ export interface SkillLifecycle {
   skill_name: string;
   state: string;
   state_changed_at_ms: number;
+}
+
+export interface SkillUploadChunks {
+  byte_offset: number;
+  chunk_blob: Uint8Array;
+  size_bytes: number;
+  upload_id: string;
 }
 
 export interface SkillUploads {
@@ -1270,6 +1280,7 @@ export interface DB {
   session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
+  skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
   state_leases: StateLeases;

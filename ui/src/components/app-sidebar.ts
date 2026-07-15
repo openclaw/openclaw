@@ -1843,7 +1843,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       this.sessionDropTarget = null;
       return;
     }
-    if (!sessionDragActive(dataTransfer) || sectionId === "pinned") {
+    if (!sessionDragActive(dataTransfer)) {
       return;
     }
     event.preventDefault();
@@ -1884,7 +1884,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     return undefined;
   }
 
-  private handleSessionSectionDrop(event: DragEvent, category?: string) {
+  private handleSessionSectionDrop(event: DragEvent, sectionId: string, category?: string) {
     event.preventDefault();
     const sourceGroup = readSessionGroupDragData(event.dataTransfer);
     if (sourceGroup && category && sourceGroup !== category) {
@@ -1898,9 +1898,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       // Rows can be dragged out of a browsed (non-active) agent section, so the
       // lookup must cover every agent's cached rows, not just the active scope.
       const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
-      const nextCategory = category ?? null;
-      if (session && (session.category !== nextCategory || session.pinned)) {
-        this.assignSessionCategory(session, nextCategory, session.pinned ? { pinned: false } : {});
+      if (session && sectionId === "pinned") {
+        if (!session.pinned) {
+          void this.patchSession(session, { pinned: true });
+        }
+      } else if (session) {
+        const nextCategory = category ?? null;
+        if (session.category !== nextCategory || session.pinned) {
+          this.assignSessionCategory(
+            session,
+            nextCategory,
+            session.pinned ? { pinned: false } : {},
+          );
+        }
       }
     }
     this.draggingSessionKey = null;
@@ -2536,14 +2546,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           : group
             ? group
             : t("chat.sidebar.chats");
-    // Smart channel/work sections classify rows automatically; only custom
-    // groups and Chats accept manual drops (a drop means category assignment).
+    // Smart channel/work sections classify rows automatically. Pinned accepts
+    // pin drops; custom groups and Chats accept category assignment drops.
     // Custom group headers drag as a whole (mirroring whole-row session drags);
     // the dot handle inside is a pure visual affordance.
     const acceptsSessions =
-      !isPinned &&
-      this.sessionsGrouping === "category" &&
-      (section.id === "ungrouped" || Boolean(group));
+      isPinned ||
+      (this.sessionsGrouping === "category" && (section.id === "ungrouped" || Boolean(group)));
     const sectionClass = [
       "sidebar-recent-sessions__group",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
@@ -2568,7 +2577,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           ? (event: DragEvent) => this.handleSessionSectionDragLeave(event, section.id, group)
           : nothing}
         @drop=${acceptsSessions || group
-          ? (event: DragEvent) => this.handleSessionSectionDrop(event, group)
+          ? (event: DragEvent) => this.handleSessionSectionDrop(event, section.id, group)
           : nothing}
       >
         ${showHeader

@@ -744,6 +744,61 @@ func TestValidateDocChunkTranslationAcceptsReorderedInlineCode(t *testing.T) {
 	}
 }
 
+func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		"- A Windows path can end in a backslash: `C:\\`.",
+		"- **`command`-typed actions** render as `` label: `command` `` so users can copy it.",
+		"- **`callback`-typed actions** and legacy **`value`** fields render label-only.",
+		"",
+	}, "\n")
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	wantLiterals := []string{"`command`", "`` label: `command` ``", "`callback`", "`value`", "`C:\\`"}
+	for _, literal := range wantLiterals {
+		if strings.Contains(masked, literal) {
+			t.Fatalf("expected %q to be masked:\n%s", literal, masked)
+		}
+	}
+	for _, prose := range []string{"typed actions", "so users can copy it", "fields render label-only", "A Windows path can end in a backslash"} {
+		if !strings.Contains(masked, prose) {
+			t.Fatalf("expected translatable prose %q to remain visible:\n%s", prose, masked)
+		}
+	}
+	maskedLiterals := []string{}
+	for _, value := range mapping {
+		if strings.HasPrefix(value, "`") {
+			maskedLiterals = append(maskedLiterals, value)
+		}
+	}
+	if !sameStringMultiset(wantLiterals, maskedLiterals) {
+		t.Fatalf("masked inline literals = %v, want %v", maskedLiterals, wantLiterals)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("inline-code round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
+func TestValidateDocBodyRejectsTranslatedInlineCode(t *testing.T) {
+	t.Parallel()
+
+	source := "- **`callback`-typed actions** and legacy **`value`** fields render label-only.\n"
+	translated := "- **`कॉलबैक`-typed actions** and legacy **`मान`** fields render label-only.\n"
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil || !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected final-document inline-code mismatch, got %v", err)
+	}
+
+	preserved := "- **`callback`-प्रकार की कार्रवाइयाँ** और पुराने **`value`** फ़ील्ड केवल लेबल दिखाते हैं।\n"
+	if err := validateDocBodyFencedLiterals(source, preserved); err != nil {
+		t.Fatalf("expected translated prose with preserved inline code to pass: %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTranslatedMultiBacktickCode(t *testing.T) {
 	t.Parallel()
 
@@ -2329,8 +2384,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 27") {
-		t.Fatalf("expected prompt version 27 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 29") {
+		t.Fatalf("expected prompt version 29 in output metadata:\n%s", text)
 	}
 }
 
@@ -2385,6 +2440,7 @@ func TestValidateDocChunkTranslationRejectsChangedCompositeLiteral(t *testing.T)
 
 	tests := [][2]string{
 		{"Supports 1:1 conversations.\n", "आमने-सामने की बातचीत को सपोर्ट करता है।\n"},
+		{"Available 24/7.\n", "Available around the clock.\n"},
 		{"Use mask 0xFF.\n", "Use mask 0xAA.\n"},
 		{"Use 1e-3.\n", "Use 1e -3.\n"},
 	}
@@ -2399,21 +2455,30 @@ func TestValidateDocChunkTranslationRejectsChangedCompositeLiteral(t *testing.T)
 func TestValidateDocBodyRejectsChangedCompositeLiteral(t *testing.T) {
 	t.Parallel()
 
-	err := validateDocBodyFencedLiterals("Supports 1:1 conversations.\n", "आमने-सामने की बातचीत को सपोर्ट करता है।\n")
-	if err == nil || !strings.Contains(err.Error(), "numeric value mismatch") {
-		t.Fatalf("expected final-document numeric mismatch, got %v", err)
+	tests := [][2]string{
+		{"Supports 1:1 conversations.\n", "आमने-सामने की बातचीत को सपोर्ट करता है।\n"},
+		{"Available 24/7.\n", "चौबीसों घंटे उपलब्ध।\n"},
+	}
+	for _, pair := range tests {
+		err := validateDocBodyFencedLiterals(pair[0], pair[1])
+		if err == nil || !strings.Contains(err.Error(), "numeric value mismatch") {
+			t.Fatalf("expected final-document numeric mismatch, got %v", err)
+		}
 	}
 }
 
 func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	t.Parallel()
 
-	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 1e-3 v1.2.3"), ",")
-	if want := "0xFF,0b101,0o755,1.5:1,1e-3"; got != want {
+	got := strings.Join(extractNumericValues("0xFF 0b101 0o755 1.5:1 24/7 1e-3 v1.2.3 v24/7 24/7z"), ",")
+	if want := "0xFF,0b101,0o755,1.5:1,24/7,1e-3"; got != want {
 		t.Fatalf("unexpected composite literals: got=%q want=%q", got, want)
 	}
 	if err := validateDocChunkTranslation("Supports 1:1 conversations.\n", "Unterstützt 1:1-Unterhaltungen.\n"); err != nil {
 		t.Fatalf("expected locale compound after exact ratio to pass: %v", err)
+	}
+	if err := validateDocChunkTranslation("Available 24/7.\n", "24/7 उपलब्ध।\n"); err != nil {
+		t.Fatalf("expected translated prose around exact slash ratio to pass: %v", err)
 	}
 }
 

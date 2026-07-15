@@ -977,6 +977,25 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
   });
 
+  it("preserves official external plugin entries before installation", () => {
+    const result = materializePluginAutoEnableCandidates({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+      },
+      candidates: [],
+      env,
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw", "codex"]);
+    expect(result.changes).toContain("codex plugin config present, added to plugin allowlist.");
+  });
+
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {

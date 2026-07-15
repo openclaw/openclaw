@@ -228,6 +228,107 @@ describe("npm registry provenance verification", () => {
         "https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@refs/heads/release/2026.3.23",
     });
 
+    verificationPolicy = undefined;
+    const protectedWorkflowSha = "a".repeat(40);
+    const protectedWorkflowRef = `refs/tags/release-publish/${protectedWorkflowSha.slice(0, 12)}-123`;
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(
+                  JSON.stringify({
+                    ...provenancePayload,
+                    predicate: {
+                      ...provenancePayload.predicate,
+                      buildDefinition: {
+                        ...provenancePayload.predicate.buildDefinition,
+                        externalParameters: {
+                          workflow: {
+                            ...provenancePayload.predicate.buildDefinition.externalParameters
+                              .workflow,
+                            ref: protectedWorkflowRef,
+                          },
+                        },
+                        resolvedDependencies: [
+                          {
+                            uri: `git+https://github.com/openclaw/openclaw@${protectedWorkflowRef}`,
+                            digest: { gitCommit: protectedWorkflowSha },
+                          },
+                        ],
+                      },
+                    },
+                  }),
+                  "utf8",
+                ).toString("base64"),
+              },
+            },
+          },
+        ],
+        expectedWorkflowRef: protectedWorkflowRef,
+        expectedWorkflowSha: protectedWorkflowSha,
+        verifyBundle: async (_bundle, policy) => {
+          verificationPolicy = policy;
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(verificationPolicy).toEqual({
+      certificateIssuer: "https://token.actions.githubusercontent.com",
+      certificateIdentityURI: `https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${protectedWorkflowRef}`,
+    });
+
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(
+                  JSON.stringify({
+                    ...provenancePayload,
+                    predicate: {
+                      ...provenancePayload.predicate,
+                      buildDefinition: {
+                        ...provenancePayload.predicate.buildDefinition,
+                        externalParameters: {
+                          workflow: {
+                            ...provenancePayload.predicate.buildDefinition.externalParameters
+                              .workflow,
+                            ref: protectedWorkflowRef,
+                          },
+                        },
+                        resolvedDependencies: [
+                          {
+                            uri: `git+https://github.com/openclaw/openclaw@${protectedWorkflowRef}`,
+                            digest: { gitCommit: protectedWorkflowSha },
+                          },
+                        ],
+                      },
+                    },
+                  }),
+                  "utf8",
+                ).toString("base64"),
+              },
+            },
+          },
+        ],
+        expectedWorkflowRef: protectedWorkflowRef,
+        expectedWorkflowSha: "b".repeat(40),
+        verifyBundle: async () => undefined,
+      }),
+    ).rejects.toThrow(
+      "npm provenance SHA-pinned release-publish ref does not match the approved workflow ref and SHA",
+    );
+
     await expect(
       verifyNpmProvenanceAttestation({
         packageName,

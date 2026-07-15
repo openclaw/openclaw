@@ -125,7 +125,7 @@ job budget.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 
-The `check-dependencies` shard runs production Knip dependency, unused-file, and unused-export checks. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically. The unused-export guard excludes test-support files, then fails on new findings or stale required baseline entries; after deleting dead exports, regenerate the shrink-only baseline with `pnpm deadcode:exports:update`. Historical targets run the export guard when they provide it and retain their older dead-code fallback otherwise.
+The `check-dependencies` shard runs production Knip dependency, unused-file, and unused-export checks. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically. The unused-export guard excludes test-support files and fails on every unused production export; intentional dynamic consumers must be modeled in `config/knip.config.ts`. Historical targets run the export guard when they provide it and retain their older dead-code fallback otherwise.
 
 ## ClawSweeper activity forwarding
 
@@ -538,7 +538,7 @@ QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic pa
 
 Release checks run Matrix and Telegram live transport lanes with the deterministic mock provider and mock-qualified models (`mock-openai/gpt-5.6-luna` and `mock-openai/gpt-5.6-luna-alt`) so the channel contract is isolated from live model latency and normal provider-plugin startup. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
 
-Matrix uses `--profile fast` for scheduled and release gates, adding `--fail-fast` only when the checked-out CLI supports it. The CLI default and manual workflow input remain `all`; manual `matrix_profile=all` dispatch always shards full Matrix coverage into `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs.
+Scheduled and release Matrix gates use the shared QA Lab suite host and live adapter with the release scenarios. The CLI default and manual workflow input remain `all`; manual `all` dispatches fan out the `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` profiles so the 92-scenario proof stays within per-job timeouts. Focused manual dispatches select `fast`, `release`, or `transport` in one job.
 
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 

@@ -32,11 +32,8 @@ import {
 import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import {
-  cleanupSystemAgentSession,
-  createSystemAgentSession,
-  runSystemAgentTurnWithDeps,
-} from "./agent-turn.js";
+import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
+import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";

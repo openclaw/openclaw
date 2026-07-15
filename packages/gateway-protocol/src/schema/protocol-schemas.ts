@@ -116,6 +116,7 @@ import {
   PendingSessionApprovalEventSchema,
   PluginApprovalPresentationSchema,
   PluginApprovalSeveritySchema,
+  SystemAgentApprovalPresentationSchema,
   TerminalApprovalSnapshotSchema,
   TerminalSessionApprovalEventSchema,
 } from "./approvals.js";
@@ -835,7 +836,6 @@ export const ProtocolSchemas = {
   SkillsUploadCommitParams: SkillsUploadCommitParamsSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
-
   // Scheduler, logs, approval, plugin control, device, chat, and lifecycle events.
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
@@ -861,6 +861,7 @@ export const ProtocolSchemas = {
   PluginApprovalSeverity: PluginApprovalSeveritySchema,
   ExecApprovalPresentation: ExecApprovalPresentationSchema,
   PluginApprovalPresentation: PluginApprovalPresentationSchema,
+  SystemAgentApprovalPresentation: SystemAgentApprovalPresentationSchema,
   ApprovalPresentation: ApprovalPresentationSchema,
   PendingApprovalSnapshot: PendingApprovalSnapshotSchema,
   AllowedApprovalSnapshot: AllowedApprovalSnapshotSchema,
@@ -942,7 +943,6 @@ export const ProtocolSchemas = {
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
 } satisfies Record<string, TSchema>;
-
 export {
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,

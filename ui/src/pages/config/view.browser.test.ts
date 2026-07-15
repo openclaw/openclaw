@@ -61,6 +61,8 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
+    chatFollowUpMode: "steer" as const,
+    setChatFollowUpMode: vi.fn(),
     catalogOpenTarget: "viewer" as const,
     setCatalogOpenTarget: vi.fn(),
     gatewayUrl: "",
@@ -1299,6 +1301,17 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const followUpSelect = queryRequired(
+      container,
+      "[data-settings-follow-up-mode]",
+      HTMLSelectElement,
+    );
+    expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
+    expect(followUpSelect.value).toBe("steer");
+    expect(Array.from(followUpSelect.options, (option) => option.value)).toEqual([
+      "steer",
+      "queue",
+    ]);
     const microphoneSelect = queryRequired(
       container,
       "[data-settings-microphone]",

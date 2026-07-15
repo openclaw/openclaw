@@ -373,6 +373,18 @@ export class CodexAppServerClient {
         ? this.threadSessionRequestGuard
         : undefined;
     if (guard) {
+      if (
+        !options.signal &&
+        !(
+          options.timeoutMs !== undefined &&
+          Number.isFinite(options.timeoutMs) &&
+          options.timeoutMs > 0
+        )
+      ) {
+        return Promise.reject(
+          new TypeError(`${method} requires a positive finite timeout or abort signal`),
+        );
+      }
       return (async () => {
         const guardStartedAt = Date.now();
         const timeoutMessage = `${method} timed out`;
