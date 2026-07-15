@@ -80,5 +80,7 @@ export function startBotIdentityRecovery(params: {
     `feishu[${accountId}]: requireMention group messages stay gated until bot identity recovery succeeds`,
   );
 
-  void retryBotIdentityProbe(account, accountId, runtime, abortSignal);
+  void retryBotIdentityProbe(account, accountId, runtime, abortSignal).catch((err: unknown) => {
+    log(`feishu[${accountId}]: bot identity background retry threw: ${String(err)}`);
+  });
 }

@@ -2925,7 +2925,9 @@ export const dispatchTelegramMessage = async ({
         ackReactionPromise,
         ackReactionValue: ackReactionPromise ? "ack" : null,
         remove: () =>
-          (reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve()).then(() => {}),
+          (reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve())
+            .then(() => {})
+            .catch(() => undefined),
         onError: (err) => {
           if (!msg.message_id) {
             return;
