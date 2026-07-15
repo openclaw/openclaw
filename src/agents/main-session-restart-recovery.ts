@@ -1441,8 +1441,20 @@ async function recoverStore(params: {
       entry.restartRecoveryDeliveryToolCallId,
     );
     if (resumePolicy.action === "complete") {
-      if (resumePolicy.reason === "delivered-terminal" && !expectedRecoverySourceRunId) {
-        result.skipped++;
+      if (
+        resumePolicy.reason !== "handled-silent" &&
+        (!expectedRecoverySourceRunId ||
+          !findSourceTurnRange(messages, expectedRecoverySourceRunId))
+      ) {
+        const disposition = await failUnresumableMainSession({
+          cfg: params.cfg,
+          entry,
+          expectedRecoverySourceRunId,
+          reason: "terminal delivery cannot be matched to its durable source turn",
+          sessionKey,
+          storePath: params.storePath,
+        });
+        result[disposition]++;
         continue;
       }
       const completed = await markSessionCompletedAfterRecoveryCheckpoint({

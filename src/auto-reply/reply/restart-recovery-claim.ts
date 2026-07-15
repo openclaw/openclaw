@@ -195,7 +195,20 @@ export function createReplyRestartRecoveryClaimController(params: {
     }
 
     const deliveryContext = params.resolveDeliveryContext(entry);
-    if (!deliveryContext && !activeClaimRunId) {
+    const recoverableDeliveryContext =
+      deliveryContext && sourceTurnId ? deliveryContext : undefined;
+    if (recoverableDeliveryContext) {
+      const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
+      const persistedSourceTurnId = normalizeOptionalString(
+        (sourceMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
+      );
+      if (!recorder || persistedSourceTurnId !== sourceTurnId) {
+        throw new Error("channel restart recovery requires source-keyed user-turn admission");
+      }
+    }
+    if (!recoverableDeliveryContext && !activeClaimRunId) {
+      // Source-less scheduled/ambient runs may execute, but cannot own a
+      // channel recovery claim that would be impossible to correlate after restart.
       await persistUserTurnOnly(recorder, sessionId);
       return;
     }
@@ -210,7 +223,7 @@ export function createReplyRestartRecoveryClaimController(params: {
           terminalSourceRunId: normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
         })
       : {};
-    const patch: SessionTranscriptTurnLifecyclePatch = deliveryContext
+    const patch: SessionTranscriptTurnLifecyclePatch = recoverableDeliveryContext
       ? {
           ...retiredClaim,
           abortedLastRun: false,
@@ -220,7 +233,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             : undefined,
           restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryToolCallId: undefined,
-          restartRecoveryDeliveryContext: deliveryContext,
+          restartRecoveryDeliveryContext: recoverableDeliveryContext,
           restartRecoveryDeliveryRequestFingerprint: undefined,
           restartRecoveryDeliveryRunId: recoveryRunId,
           restartRecoveryDeliverySourceRunId: sourceTurnId,

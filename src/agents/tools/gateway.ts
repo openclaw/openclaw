@@ -390,13 +390,24 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
 }): Promise<string | undefined> {
+  const terminalSourceReply = params.sourceReplyFinal === true;
+  const sourceReplyToolCallId = normalizeOptionalString(params.sourceReplyToolCallId);
+  if (terminalSourceReply && !sourceReplyToolCallId) {
+    throw new Error("terminal source reply requires tool-call correlation");
+  }
   const identity = getGatewayToolCallerIdentity();
   if (!identity) {
+    if (terminalSourceReply) {
+      throw new Error("terminal source reply requires trusted agent runtime identity");
+    }
     return undefined;
   }
   const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
   const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
   if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
+    if (terminalSourceReply) {
+      throw new Error("terminal source reply requires the trusted local gateway context");
+    }
     return undefined;
   }
   const messageActionContext = resolveMessageActionTurnCapability({
@@ -407,24 +418,28 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
     sessionId: params.sessionId,
   });
   if (!messageActionContext) {
+    if (terminalSourceReply) {
+      throw new Error("terminal source reply requires an active turn capability");
+    }
     return undefined;
   }
-  const sourceReplyToolCallId = normalizeOptionalString(params.sourceReplyToolCallId);
-  if (params.sourceReplyFinal === true && !sourceReplyToolCallId) {
-    throw new Error("terminal source reply requires tool-call correlation");
+  if (
+    terminalSourceReply &&
+    !normalizeOptionalString(messageActionContext.toolContext?.currentSourceTurnId)
+  ) {
+    throw new Error("terminal source reply requires source-turn correlation");
   }
-  const resolvedMessageActionContext =
-    params.sourceReplyFinal === true
-      ? {
-          ...messageActionContext,
-          sourceReplyFinal: true as const,
-          sourceReplyToolCallId: sourceReplyToolCallId!,
-        }
-      : {
-          ...messageActionContext,
-          ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
-          ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
-        };
+  const resolvedMessageActionContext = terminalSourceReply
+    ? {
+        ...messageActionContext,
+        sourceReplyFinal: true as const,
+        sourceReplyToolCallId: sourceReplyToolCallId!,
+      }
+    : {
+        ...messageActionContext,
+        ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
+        ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
+      };
   return await mintAgentRuntimeIdentityToken({
     ...identity,
     messageActionContext: resolvedMessageActionContext,

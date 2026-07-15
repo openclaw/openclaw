@@ -2176,6 +2176,57 @@ describe("main-session-restart-recovery", () => {
     ).toBeUndefined();
   });
 
+  it("fails a delivered receipt that lacks its durable source turn", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:123";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryBeforeAgentReplyState: "continue",
+        restartRecoveryDeliveryReceiptState: "delivered-terminal",
+        restartRecoveryDeliveryToolCallId: "message-call-1",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-missing",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "message-call-1",
+            name: "message",
+            arguments: { action: "send", message: "delivered answer" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 1,
+      skipped: 0,
+    });
+
+    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
+      method: "message.action",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "failed",
+      abortedLastRun: true,
+    });
+  });
+
   it("does not let another turn's reused tool-call id satisfy the current receipt", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
