@@ -4,12 +4,13 @@ import path from "node:path";
 // Canvas tests cover cli plugin behavior.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { A2UI_JSONL_FILE_MAX_BYTES } from "./a2ui-jsonl.js";
 import {
   createDefaultCanvasCliDependencies,
   registerNodesCanvasCommands,
   type CanvasCliDependencies,
 } from "./cli.js";
+
+const A2UI_JSONL_FILE_MAX_BYTES = 1024 * 1024;
 
 function createCanvasCliDeps() {
   const writtenFiles: Array<{ filePath: string; base64: string }> = [];

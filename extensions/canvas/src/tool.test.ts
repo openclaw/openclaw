@@ -3,8 +3,9 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { A2UI_JSONL_FILE_MAX_BYTES } from "./a2ui-jsonl.js";
 import { createCanvasTool } from "./tool.js";
+
+const A2UI_JSONL_FILE_MAX_BYTES = 1024 * 1024;
 
 const VALID_A2UI_V08_JSONL = [
   JSON.stringify({

@@ -2,6 +2,7 @@
  * Canvas node CLI command registration and runtime dependency wiring.
  */
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { runCommandWithRuntime, theme } from "openclaw/plugin-sdk/cli-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

@@ -3,7 +3,7 @@
  */
 import fs from "node:fs/promises";
 
-export const A2UI_JSONL_FILE_MAX_BYTES = 1024 * 1024;
+const A2UI_JSONL_FILE_MAX_BYTES = 1024 * 1024;
 const A2UI_JSONL_READ_CHUNK_BYTES = 64 * 1024;
 
 const A2UI_ACTION_KEYS = [
