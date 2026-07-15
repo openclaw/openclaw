@@ -1,9 +1,15 @@
+import { createHash } from "node:crypto";
+import { closeSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
-import { dirname, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
+import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readFileDescriptorBoundedSync } from "../infra/file-descriptor-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { AVATAR_MAX_BYTES, isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { readClawStatus, type ClawStatusResult } from "./lifecycle-state.js";
+import { resolveUserPath } from "../utils.js";
+import { readClawStatus } from "./lifecycle-state.js";
 import { parseClawManifest } from "./schema.js";
 import {
   CLAW_BOOTSTRAP_FILE_NAMES,
@@ -38,22 +44,23 @@ export class ClawExportError extends Error {
   }
 }
 
-function portableAgent(agent: AgentConfig): ClawAgent {
+function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawAgent {
+  const identity = {
+    ...(agent.identity?.name ? { name: agent.identity.name } : {}),
+    ...(agent.identity?.theme ? { theme: agent.identity.theme } : {}),
+    ...(agent.identity?.emoji ? { emoji: agent.identity.emoji } : {}),
+    ...(avatar ? { avatar } : {}),
+  };
+  const tools = {
+    ...(agent.tools?.allow?.length ? { allow: agent.tools.allow } : {}),
+    ...(agent.tools?.deny?.length ? { deny: agent.tools.deny } : {}),
+  };
   return {
     id: agent.id,
     ...(agent.name ? { name: agent.name } : {}),
     ...(agent.description ? { description: agent.description } : {}),
-    ...(agent.identity
-      ? {
-          identity: {
-            ...(agent.identity.name ? { name: agent.identity.name } : {}),
-            ...(agent.identity.theme ? { theme: agent.identity.theme } : {}),
-            ...(agent.identity.emoji ? { emoji: agent.identity.emoji } : {}),
-            ...(agent.identity.avatar ? { avatar: agent.identity.avatar } : {}),
-          },
-        }
-      : {}),
-    ...(agent.groupChat?.mentionPatterns
+    ...(Object.keys(identity).length > 0 ? { identity } : {}),
+    ...(agent.groupChat?.mentionPatterns?.length
       ? { groupChat: { mentionPatterns: agent.groupChat.mentionPatterns } }
       : {}),
     ...(agent.sandbox
@@ -67,14 +74,7 @@ function portableAgent(agent: AgentConfig): ClawAgent {
           },
         }
       : {}),
-    ...(agent.tools
-      ? {
-          tools: {
-            ...(agent.tools.allow ? { allow: agent.tools.allow } : {}),
-            ...(agent.tools.deny ? { deny: agent.tools.deny } : {}),
-          },
-        }
-      : {}),
+    ...(Object.keys(tools).length > 0 ? { tools } : {}),
     ...(agent.heartbeat
       ? {
           heartbeat: {
@@ -125,11 +125,46 @@ function normalizedRelativePath(value: string): string {
   return value.split(sep).join("/");
 }
 
-function exportedPackageName(record: ClawStatusResult["records"][number]): string {
-  return record.install.claw.kind === "package"
-    ? record.install.claw.name
-    : `openclaw-claw-${record.install.agentId}`;
+function readPortableAvatar(params: {
+  config: OpenClawConfig;
+  agent: AgentConfig;
+  workspace: string;
+}): { source?: string; sidecar?: { path: string; content: Buffer } } {
+  const source = params.agent.identity?.avatar?.trim();
+  if (!source) {
+    return {};
+  }
+  if (isAvatarHttpUrl(source) || isAvatarDataUrl(source)) {
+    return { source };
+  }
+  const opened = openLocalAgentAvatarFile({
+    cfg: params.config,
+    agentId: params.agent.id,
+    source,
+  });
+  if (!opened.ok) {
+    return {};
+  }
+  try {
+    const content = readFileDescriptorBoundedSync(opened.file.fd, AVATAR_MAX_BYTES);
+    const path = normalizedRelativePath(relative(params.workspace, opened.file.path));
+    return { source: path, sidecar: { path, content } };
+  } catch {
+    return {};
+  } finally {
+    closeSync(opened.file.fd);
+  }
 }
+
+function derivativePackageVersion(manifest: ClawManifest, contents: ExportContent[]): string {
+  const hash = createHash("sha256").update(JSON.stringify(manifest));
+  for (const file of contents.toSorted((left, right) => left.path.localeCompare(right.path))) {
+    hash.update(file.path).update("\0").update(file.content).update("\0");
+  }
+  return `0.0.0-export.${hash.digest("hex").slice(0, 12)}`;
+}
+
+type ExportContent = { path: string; content: Buffer };
 
 export async function exportClawAgent(
   agentId: string,
@@ -166,12 +201,21 @@ export async function exportClawAgent(
     maxBytes: MAX_EXPORT_FILE_BYTES,
     symlinks: "reject",
   });
-  const contents = await Promise.all(
+  const contents: ExportContent[] = await Promise.all(
     record.workspaceFiles.map(async (file) => ({
       path: normalizedRelativePath(file.path),
       content: await workspace.readBytes(file.path, { maxBytes: MAX_EXPORT_FILE_BYTES }),
     })),
   );
+  const avatar = readPortableAvatar({
+    config: options.config,
+    agent,
+    workspace: record.install.workspace,
+  });
+  const managedPaths = new Set(contents.map((file) => file.path));
+  if (avatar.sidecar && !managedPaths.has(avatar.sidecar.path)) {
+    contents.push(avatar.sidecar);
+  }
   const bootstrapFiles: ClawManifest["workspace"]["bootstrapFiles"] = {};
   const files: ClawManifest["workspace"]["files"] = [];
   for (const file of contents) {
@@ -184,7 +228,7 @@ export async function exportClawAgent(
   }
   const manifest: ClawManifest = {
     schemaVersion: CLAW_SCHEMA_VERSION,
-    agent: portableAgent(agent),
+    agent: portableAgent(agent, avatar.source),
     workspace: { bootstrapFiles, files },
     packages: record.packages
       .map((pkg) => ({ kind: pkg.kind, source: pkg.source, ref: pkg.ref, version: pkg.version }))
@@ -202,7 +246,7 @@ export async function exportClawAgent(
     );
   }
 
-  const target = resolve(outputDirectory);
+  const target = resolve(resolveUserPath(outputDirectory));
   await mkdir(dirname(target), { recursive: true });
   try {
     await mkdir(target);
@@ -224,9 +268,21 @@ export async function exportClawAgent(
       await output.write(path, file.content, { mkdir: true, overwrite: false });
       filesWritten.push(path);
     }
+    const exactRecordedState =
+      record.install.status === "complete" &&
+      record.agentState === "present" &&
+      record.workspaceFiles.every((file) => file.state === "unchanged") &&
+      record.packages.every((pkg) => pkg.status === "complete") &&
+      (!agent.identity?.avatar?.trim() || Boolean(avatar.source)) &&
+      (!avatar.sidecar || managedPaths.has(avatar.sidecar.path));
+    const preservePackageName = exactRecordedState && record.install.claw.kind === "package";
     const packageJson = {
-      name: exportedPackageName(record),
-      version: record.install.claw.version,
+      name: preservePackageName
+        ? record.install.claw.name
+        : `openclaw-claw-${record.install.agentId}`,
+      version: exactRecordedState
+        ? record.install.claw.version
+        : derivativePackageVersion(manifest, contents),
       type: "module",
       openclaw: { claw: "openclaw.claw.json" },
     };

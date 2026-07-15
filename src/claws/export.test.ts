@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
@@ -11,7 +11,10 @@ import { persistClawPackageRef } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+});
 
 async function installedFixture() {
   const root = await mkdtemp(join(tmpdir(), "openclaw-claw-export-"));
@@ -103,6 +106,70 @@ describe("exportClawAgent", () => {
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).resolves.toBe(
       "operator revision\n",
     );
+    await expect(readFile(join(out, "package.json"), "utf8")).resolves.toSatisfy((raw) => {
+      const pkg = JSON.parse(raw);
+      return (
+        pkg.name === "openclaw-claw-worker" && /^0\.0\.0-export\.[0-9a-f]{12}$/.test(pkg.version)
+      );
+    });
+  });
+
+  it("packages a safe workspace-relative avatar as a sidecar", async () => {
+    const fixture = await installedFixture();
+    const avatarPath = join(fixture.plan.agent.workspace, "avatars", "worker.png");
+    await mkdir(join(fixture.plan.agent.workspace, "avatars"), { recursive: true });
+    await writeFile(avatarPath, "avatar bytes");
+    fixture.config.agents!.list![0] = {
+      ...fixture.config.agents!.list![0],
+      identity: { avatar: "avatars/worker.png" },
+    };
+    const out = join(fixture.root, "exported-avatar");
+
+    const result = await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+    });
+
+    expect(result.manifest.agent.identity?.avatar).toBe("avatars/worker.png");
+    expect(result.manifest.workspace.files).toContainEqual({
+      source: "workspace/avatars/worker.png",
+      path: "avatars/worker.png",
+    });
+    await expect(readFile(join(out, "workspace", "avatars", "worker.png"), "utf8")).resolves.toBe(
+      "avatar bytes",
+    );
+  });
+
+  it("omits valid empty optional arrays", async () => {
+    const fixture = await installedFixture();
+    fixture.config.agents!.list![0] = {
+      ...fixture.config.agents!.list![0],
+      tools: { allow: [], deny: [] },
+      groupChat: { mentionPatterns: [] },
+    };
+
+    const result = await exportClawAgent("worker", join(fixture.root, "exported-empty-arrays"), {
+      env: fixture.env,
+      config: fixture.config,
+    });
+
+    expect(result.manifest.agent.tools).toBeUndefined();
+    expect(result.manifest.agent.groupChat).toBeUndefined();
+  });
+
+  it("expands a home-relative output directory", async () => {
+    const fixture = await installedFixture();
+    vi.stubEnv("HOME", fixture.root);
+
+    const result = await exportClawAgent("worker", "~/exported-home", {
+      env: fixture.env,
+      config: fixture.config,
+    });
+
+    expect(result.outputDirectory).toBe(join(fixture.root, "exported-home"));
+    await expect(
+      readFile(join(result.outputDirectory, "openclaw.claw.json"), "utf8"),
+    ).resolves.toContain('"schemaVersion": 1');
   });
 
   it("fails closed when a managed file is unavailable", async () => {
