@@ -1,18 +1,16 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   detectLegacyRescuePending,
   discardLegacyRescuePending,
 } from "./state-migrations.rescue-pending.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeStateDir(): string {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rescue-migration-"));
-  tempDirs.push(stateDir);
-  return stateDir;
+  return tempDirs.make("openclaw-rescue-migration-");
 }
 
 function writeLegacyApproval(stateDir: string, owner: "crestodian" | "openclaw"): string {
@@ -21,12 +19,6 @@ function writeLegacyApproval(stateDir: string, owner: "crestodian" | "openclaw")
   fs.writeFileSync(sourcePath, "{}\n");
   return sourcePath;
 }
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 describe("legacy rescue pending cleanup", () => {
   it("discards both retired stores only during explicit doctor migration", () => {

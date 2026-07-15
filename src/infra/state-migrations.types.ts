@@ -2,7 +2,11 @@ import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
-import type { LegacyRescuePendingDetection } from "./state-migrations.rescue-pending.js";
+
+export type LegacyRescuePendingDetection = {
+  sourcePaths: string[];
+  hasLegacy: boolean;
+};
 
 export type SessionStoreAliasPlan = {
   hasDistinctAliases: boolean;
