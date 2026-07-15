@@ -240,6 +240,62 @@ describe("runGatewayUpdate", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "prefers the invoking pnpm 11 project over its shared-store cwd",
+    async () => {
+      const globalRoot = path.join(tempDir, "pnpm-home", "global", "v11");
+      const installDir = path.join(globalRoot, "install-a");
+      const packageRoot = path.join(installDir, "node_modules", "openclaw");
+      const storeRoot = path.join(tempDir, "pnpm-home", "store", "v11", "links", "openclaw");
+      await fs.mkdir(path.dirname(packageRoot), { recursive: true });
+      await fs.mkdir(storeRoot, { recursive: true });
+      await Promise.all([
+        fs.writeFile(
+          path.join(installDir, "package.json"),
+          JSON.stringify({ private: true, dependencies: { openclaw: "1.0.0" } }),
+          "utf8",
+        ),
+        fs.writeFile(
+          path.join(storeRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+          "utf8",
+        ),
+      ]);
+      await Promise.all([
+        fs.symlink(storeRoot, packageRoot, "dir"),
+        fs.symlink(installDir, path.join(globalRoot, "hash-openclaw"), "dir"),
+      ]);
+
+      const runCommand = async (argv: string[]) => {
+        const command = argv.join(" ");
+        if (command.startsWith("git -C ")) {
+          return toCommandResult({ code: 1 });
+        }
+        if (command === "npm root -g") {
+          return toCommandResult({ stdout: `${path.join(tempDir, "npm", "node_modules")}\n` });
+        }
+        if (command === "pnpm root -g") {
+          return toCommandResult({ stdout: `${globalRoot}\n` });
+        }
+        throw new Error(`unexpected command: ${command}`);
+      };
+
+      await expect(
+        resolveUpdateInstallSurface({
+          cwd: storeRoot,
+          argv1: path.join(packageRoot, "openclaw.mjs"),
+          timeoutMs: 1000,
+          runCommand,
+        }),
+      ).resolves.toMatchObject({
+        kind: "global",
+        mode: "pnpm",
+        root: packageRoot,
+        packageRoot,
+      });
+    },
+  );
+
   async function setupUiIndex() {
     const uiIndexPath = path.join(tempDir, "dist", "control-ui", "index.html");
     await fs.mkdir(path.dirname(uiIndexPath), { recursive: true });

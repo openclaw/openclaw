@@ -93,6 +93,7 @@ const legacyStorePatterns = [
   /\btui\/last-session\.json\b/u,
   /\bcommitments\/commitments\.json\b/u,
   /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
+  /\btmp\/skill-uploads\b/u,
   /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
   /\bcron\/(?:runs\/[^"'`]+\.jsonl|jobs\.json|jobs-state\.json)\b/u,
   /\b(?:process-leases|session-toggles|known-users|msteams-conversations|msteams-polls|msteams-sso-tokens|bot-storage|sync-store|thread-bindings|inbound-dedupe|startup-verification|storage-meta|crypto-idb-snapshot|command-deploy-cache|plugin-binding-approvals|plugins\/installs|config-health|port-guard|restart-sentinel|gateway-restart-intent|gateway-supervisor-restart-handoff)\.json\b/u,
@@ -105,6 +106,7 @@ const legacyStorePatterns = [
 
 const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
+  "src/commands/doctor-usage-cost-cache.ts",
   "src/infra/session-state-migration.ts",
   "src/infra/state-migrations.ts",
   "src/infra/state-migrations.tui-last-session.ts",

@@ -3,8 +3,12 @@ import "./upload-store.js";
 
 type SkillUploadStoreTestApi = {
   createSkillUploadStore(options?: {
-    rootDir?: string;
+    env?: NodeJS.ProcessEnv;
+    installLeaseHeartbeatMs?: number;
+    installLeaseMs?: number;
     now?: () => number;
+    path?: string;
+    tempRootDir?: string;
     ttlMs?: number;
   }): SkillUploadStore;
 };
