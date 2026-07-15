@@ -85,6 +85,7 @@ describe("workspace data binding resolver", () => {
       for (const segment of [
         "",
         " ",
+        "00",
         "01",
         "+1",
         "-0",
