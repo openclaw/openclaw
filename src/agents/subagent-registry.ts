@@ -949,7 +949,18 @@ function restoreSubagentRunsOnce() {
     ensureListener();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     startSweeper();
-    for (const runId of subagentRuns.keys()) {
+    const restoredSessionCache: SubagentSessionStoreCache = new Map();
+    for (const [runId, entry] of subagentRuns) {
+      // An aborted persisted session belongs to orphan recovery. Waiting on its
+      // pre-restart run can terminalize it before the replacement turn starts.
+      if (
+        loadSubagentSessionEntry({
+          childSessionKey: entry.childSessionKey,
+          storeCache: restoredSessionCache,
+        })?.abortedLastRun === true
+      ) {
+        continue;
+      }
       resumeSubagentRun(runId);
     }
 
