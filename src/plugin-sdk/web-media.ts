@@ -11,3 +11,4 @@ export {
   type WebMediaResult,
 } from "../media/web-media.js";
 export type { LocalMediaAccessErrorCode } from "../media/web-media.js";
+export { MediaFetchError, type MediaFetchErrorCode } from "../media/fetch.js";

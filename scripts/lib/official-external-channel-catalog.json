@@ -161,6 +161,46 @@
       }
     },
     {
+      "name": "@openclaw/agentmail",
+      "description": "Official AgentMail channel plugin for durable, reply-only email conversations.",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "agentmail",
+          "label": "AgentMail",
+          "selectionLabel": "AgentMail (Email)",
+          "detailLabel": "AgentMail Email",
+          "docsPath": "/channels/agentmail",
+          "docsLabel": "agentmail",
+          "blurb": "Durable, allowlisted, reply-only email conversations through AgentMail.",
+          "envVars": [
+            "AGENTMAIL_API_KEY",
+            "AGENTMAIL_WEBHOOK_SECRET"
+          ],
+          "order": 89,
+          "quickstartAllowFrom": true
+        },
+        "channelConfigs": {
+          "agentmail": {
+            "label": "AgentMail",
+            "description": "Durable AgentMail webhook or WebSocket email channel.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/agentmail",
+          "npmSpec": "@openclaw/agentmail",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2",
+          "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
       "name": "@openclaw/clickclack",
       "description": "OpenClaw ClickClack channel plugin",
       "source": "official",

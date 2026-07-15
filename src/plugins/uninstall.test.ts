@@ -1066,6 +1066,7 @@ describe("uninstallPlugin", () => {
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
     expectNpmUninstallCommand({ packageName: "@openclaw/kitchen-sink", npmRoot });
     await expectPathAccessState(pluginDir, "missing");
+    await expectPathAccessState(npmRoot, "exists");
   });
 
   it("uninstalls per-plugin npm project packages through their project root", async () => {
@@ -1123,6 +1124,7 @@ describe("uninstallPlugin", () => {
         kind: "npm",
         npmRoot,
         packageName: "@openclaw/kitchen-sink",
+        removeProjectRoot: true,
       },
     });
 
@@ -1131,6 +1133,7 @@ describe("uninstallPlugin", () => {
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
     expectNpmUninstallCommand({ packageName: "@openclaw/kitchen-sink", npmRoot });
     await expectPathAccessState(pluginDir, "missing");
+    await expectPathAccessState(npmRoot, "missing");
   });
 
   it("repairs remaining npm plugin openclaw peer links after npm uninstall prunes them", async () => {

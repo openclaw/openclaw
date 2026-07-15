@@ -1,0 +1,186 @@
+import type { createAgentMailDurableInboundReceiveJournal } from "./durable-receive.js";
+import { createAgentMailDurableInboundId } from "./durable-receive.js";
+import type { AgentMailIngressRecord } from "./types.js";
+
+type AgentMailJournal = ReturnType<typeof createAgentMailDurableInboundReceiveJournal>;
+
+type DispatchParams = {
+  journal: AgentMailJournal;
+  id: string;
+  record: AgentMailIngressRecord;
+  dispatch: (record: AgentMailIngressRecord) => Promise<void>;
+  abortSignal?: AbortSignal;
+  retryDelay?: (attempt: number) => number;
+  initialAttempts: number;
+  dispatchCompleted?: boolean;
+};
+
+type ActiveDispatch = {
+  task: Promise<boolean>;
+  successor?: DispatchParams;
+};
+
+// Durable ids include account + inbox + message, so this also coordinates overlapping account
+// restarts that open separate journal facades over the same shared queue.
+const activeDispatches = new Map<string, ActiveDispatch>();
+
+function retryDelayMs(attempt: number): number {
+  return Math.min(1_000 * 2 ** Math.min(Math.max(attempt - 1, 0), 11), 30 * 60_000);
+}
+
+async function waitForRetry(signal: AbortSignal | undefined, delayMs: number): Promise<boolean> {
+  if (signal?.aborted) {
+    return false;
+  }
+  return await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export async function processAgentMailIngress(params: {
+  journal: AgentMailJournal;
+  record: AgentMailIngressRecord;
+  dispatch: (record: AgentMailIngressRecord) => Promise<void>;
+  abortSignal?: AbortSignal;
+  retryDelayMs?: (attempt: number) => number;
+}): Promise<"accepted" | "duplicate"> {
+  const id = createAgentMailDurableInboundId(params.record);
+  const accepted = await params.journal.accept(id, params.record, {
+    receivedAt: params.record.receivedAt,
+  });
+  if (accepted.kind === "completed") {
+    return "duplicate";
+  }
+  // A zero-attempt pending row is still owned by the first live delivery. Released rows carry an
+  // attempt count and can safely wake the same in-process retry worker.
+  if (accepted.kind === "pending" && accepted.record.attempts === 0) {
+    return "duplicate";
+  }
+  const record = accepted.kind === "pending" ? accepted.record.payload : params.record;
+  // Webhook acknowledgement is gated only on the durable accept above. Processing continues from
+  // the queue; one worker per durable id retries released rows without needing provider redelivery.
+  scheduleAgentMailIngressDispatch({
+    journal: params.journal,
+    id,
+    record,
+    dispatch: params.dispatch,
+    abortSignal: params.abortSignal,
+    retryDelay: params.retryDelayMs,
+    initialAttempts: accepted.kind === "pending" ? accepted.record.attempts : 0,
+  });
+  return "accepted";
+}
+
+function scheduleAgentMailIngressDispatch(params: DispatchParams): void {
+  const existing = activeDispatches.get(params.id);
+  if (existing) {
+    // If the current owner shuts down before settling the row, its replacement resumes it.
+    existing.successor = params;
+    return;
+  }
+  const active: ActiveDispatch = {
+    task: dispatchAgentMailIngressUntilSettled(params),
+  };
+  activeDispatches.set(params.id, active);
+  const finish = (completed: boolean) => {
+    if (activeDispatches.get(params.id) !== active) {
+      return;
+    }
+    activeDispatches.delete(params.id);
+    if (!completed && active.successor && !active.successor.abortSignal?.aborted) {
+      // Completion-marker retries must never repeat an agent turn that already finished.
+      active.successor.dispatchCompleted ||= params.dispatchCompleted;
+      scheduleAgentMailIngressDispatch(active.successor);
+    }
+  };
+  void active.task.then(finish, () => finish(false));
+}
+
+async function dispatchAgentMailIngressUntilSettled(params: DispatchParams): Promise<boolean> {
+  let attempts = params.initialAttempts;
+  while (!params.abortSignal?.aborted) {
+    if (!params.dispatchCompleted) {
+      try {
+        await params.dispatch(params.record);
+        params.dispatchCompleted = true;
+      } catch (error) {
+        attempts += 1;
+        const lastError = errorText(error);
+        while (!params.abortSignal?.aborted) {
+          try {
+            await params.journal.release(params.id, { lastError });
+            break;
+          } catch {
+            attempts += 1;
+            if (
+              !(await waitForRetry(
+                params.abortSignal,
+                (params.retryDelay ?? retryDelayMs)(attempts),
+              ))
+            ) {
+              return false;
+            }
+          }
+        }
+        if (params.abortSignal?.aborted) {
+          return false;
+        }
+        const shouldRetry = await waitForRetry(
+          params.abortSignal,
+          (params.retryDelay ?? retryDelayMs)(attempts),
+        );
+        if (!shouldRetry) {
+          return false;
+        }
+        continue;
+      }
+    }
+    try {
+      await params.journal.complete(params.id);
+      return true;
+    } catch {
+      attempts += 1;
+      // Dispatch already produced the agent turn. Keep the row pending and retry only the
+      // idempotent completion marker; releasing and redispatching would duplicate the reply.
+      const shouldRetry = await waitForRetry(
+        params.abortSignal,
+        (params.retryDelay ?? retryDelayMs)(attempts),
+      );
+      if (!shouldRetry) {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+export async function replayPendingAgentMailIngress(params: {
+  journal: AgentMailJournal;
+  dispatch: (record: AgentMailIngressRecord) => Promise<void>;
+  abortSignal?: AbortSignal;
+  retryDelayMs?: (attempt: number) => number;
+}): Promise<void> {
+  for (const pending of await params.journal.pending()) {
+    scheduleAgentMailIngressDispatch({
+      journal: params.journal,
+      id: pending.id,
+      record: pending.payload,
+      dispatch: params.dispatch,
+      abortSignal: params.abortSignal,
+      retryDelay: params.retryDelayMs,
+      initialAttempts: pending.attempts,
+    });
+  }
+}

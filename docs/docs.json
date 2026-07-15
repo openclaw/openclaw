@@ -1142,6 +1142,7 @@
               {
                 "group": "Mainstream messaging",
                 "pages": [
+                  "channels/agentmail",
                   "channels/discord",
                   "channels/discord-activities",
                   "channels/slack",

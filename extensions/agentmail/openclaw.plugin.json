@@ -1,0 +1,17 @@
+{
+  "id": "agentmail",
+  "name": "AgentMail",
+  "description": "Official AgentMail channel plugin for durable, reply-only email conversations.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["agentmail"],
+  "channelEnvVars": {
+    "agentmail": ["AGENTMAIL_API_KEY", "AGENTMAIL_WEBHOOK_SECRET"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

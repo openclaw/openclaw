@@ -940,6 +940,13 @@ describe("official external plugin catalog", () => {
         minHostVersion: ">=2026.6.11",
       });
     }
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("agentmail"))).toEqual({
+      clawhubSpec: "clawhub:@openclaw/agentmail",
+      npmSpec: "@openclaw/agentmail",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+      allowInvalidConfigRecovery: true,
+    });
   });
 
   it("advertises StepFun with its ClawHub package and plugin API floor", () => {

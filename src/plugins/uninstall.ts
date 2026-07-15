@@ -98,6 +98,7 @@ export type PluginUninstallDirectoryRemoval = {
         kind: "npm";
         npmRoot: string;
         packageName: string;
+        removeProjectRoot?: boolean;
       }
     | {
         kind: "git";
@@ -180,7 +181,12 @@ function resolveUninstallDirectoryTarget(params: {
 function resolveNpmManagedInstall(params: {
   installRecord?: PluginInstallRecord;
   extensionsDir?: string;
-}): { installPath: string; npmRoot: string; packageName: string } | null {
+}): {
+  installPath: string;
+  npmRoot: string;
+  packageName: string;
+  removeProjectRoot?: boolean;
+} | null {
   const installPath = params.installRecord?.installPath?.trim();
   if (params.installRecord?.source !== "npm" || !installPath) {
     return null;
@@ -212,10 +218,12 @@ function resolveNpmManagedInstall(params: {
   return null;
 }
 
-function resolveNpmManagedProjectInstall(params: {
+function resolveNpmManagedProjectInstall(params: { installPath: string; projectsDir: string }): {
   installPath: string;
-  projectsDir: string;
-}): { installPath: string; npmRoot: string; packageName: string } | null {
+  npmRoot: string;
+  packageName: string;
+  removeProjectRoot: true;
+} | null {
   if (
     !isPathInsideOrEqual(params.projectsDir, params.installPath) ||
     resolveComparablePath(params.projectsDir) === resolveComparablePath(params.installPath)
@@ -236,7 +244,9 @@ function resolveNpmManagedProjectInstall(params: {
     installPath: params.installPath,
     nodeModulesRoot,
   });
-  return packageName ? { installPath: params.installPath, npmRoot, packageName } : null;
+  return packageName
+    ? { installPath: params.installPath, npmRoot, packageName, removeProjectRoot: true }
+    : null;
 }
 
 function resolveNpmPackageNameFromInstallPath(params: {
@@ -580,6 +590,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
                   kind: "npm",
                   npmRoot: npmManagedInstall.npmRoot,
                   packageName: npmManagedInstall.packageName,
+                  ...(npmManagedInstall.removeProjectRoot ? { removeProjectRoot: true } : {}),
                 },
               }
             : gitManagedInstall && deleteTarget === gitManagedInstall.installPath
@@ -716,6 +727,11 @@ export async function applyPluginUninstallDirectoryRemoval(
   }
   try {
     await fs.rm(removal.target, { recursive: true, force: true });
+    if (removal.cleanup?.kind === "npm" && removal.cleanup.removeProjectRoot) {
+      // Per-package npm projects have no other owners. Remove the archive,
+      // lockfiles, and orphaned dependencies so uninstall leaves no project residue.
+      await fs.rm(removal.cleanup.npmRoot, { recursive: true, force: true });
+    }
     if (removal.cleanup?.kind === "git") {
       try {
         await fs.rmdir(removal.cleanup.parentDir);

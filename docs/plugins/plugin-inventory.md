@@ -195,6 +195,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
+- **[agentmail](/plugins/reference/agentmail)** (`@openclaw/agentmail`) - npm; ClawHub: `clawhub:@openclaw/agentmail`. Official AgentMail channel plugin for durable, reply-only email conversations.
+
 - **[amazon-bedrock](/plugins/reference/amazon-bedrock)** (`@openclaw/amazon-bedrock-provider`) - npm; ClawHub. OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and guardrail support.
 
 - **[amazon-bedrock-mantle](/plugins/reference/amazon-bedrock-mantle)** (`@openclaw/amazon-bedrock-mantle-provider`) - npm; ClawHub. OpenClaw Amazon Bedrock Mantle provider plugin for OpenAI-compatible model routing.

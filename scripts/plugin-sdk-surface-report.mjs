@@ -242,8 +242,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared speech-provider API key resolver.
       // +32: shared channel setup, config-schema, policy, and status helpers.
       // +2: shared channel replay-guard factory and claim handle.
+      // +2: MediaFetchError and its code let external plugins classify bounded-media rejection.
       // Harvest: retired AudioConfig type -1.
-      7985,
+      7987,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

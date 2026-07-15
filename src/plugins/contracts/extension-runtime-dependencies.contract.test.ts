@@ -256,6 +256,17 @@ function isDiscordPackageDependency(dependencyName: string): boolean {
   );
 }
 
+const AGENTMAIL_RUNTIME_DEPENDENCIES = ["@haraka/email-address", "agentmail", "svix"] as const;
+
+function agentMailDependencyVersions(manifest: PackageManifest): Record<string, string> {
+  return Object.fromEntries(
+    AGENTMAIL_RUNTIME_DEPENDENCIES.flatMap((dependencyName) => {
+      const version = manifest.dependencies?.[dependencyName];
+      return version ? [[dependencyName, version]] : [];
+    }),
+  );
+}
+
 describe("Discord dependency ownership", () => {
   it("keeps Discord packages out of the root manifest", () => {
     const manifest = readPackageManifest("package.json");
@@ -278,6 +289,22 @@ describe("Discord dependency ownership", () => {
       expect(discordDependencies).toStrictEqual([]);
     });
   }
+});
+
+describe("AgentMail dependency ownership", () => {
+  it("keeps AgentMail-specific packages out of the core manifest", () => {
+    expect(agentMailDependencyVersions(readPackageManifest("package.json"))).toStrictEqual({});
+  });
+
+  it("pins AgentMail-specific packages in the external plugin manifest", () => {
+    expect(
+      agentMailDependencyVersions(readPackageManifest("extensions/agentmail/package.json")),
+    ).toStrictEqual({
+      "@haraka/email-address": "3.1.6",
+      agentmail: "0.5.16",
+      svix: "1.96.1",
+    });
+  });
 });
 
 describe("extension runtime dependency manifests", () => {

@@ -1,0 +1,260 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  AGENTMAIL_DURABLE_COMPLETED_MAX_ENTRIES,
+  AGENTMAIL_DURABLE_COMPLETED_TTL_MS,
+  AGENTMAIL_DURABLE_PENDING_MAX_ENTRIES,
+  AGENTMAIL_DURABLE_PENDING_TTL_MS,
+  createAgentMailDurableInboundId,
+} from "./durable-receive.js";
+import { processAgentMailIngress, replayPendingAgentMailIngress } from "./ingress.js";
+import type { AgentMailIngressRecord } from "./types.js";
+
+const record: AgentMailIngressRecord = {
+  accountId: "default",
+  inboxId: "inbox_1",
+  messageId: "message_1",
+  transport: "webhook",
+  receivedAt: 1,
+};
+
+describe("AgentMail durable ingress", () => {
+  it("deduplicates the same message across transports", () => {
+    expect(createAgentMailDurableInboundId(record)).toBe(
+      createAgentMailDurableInboundId({ ...record, transport: "websocket", eventId: "other" }),
+    );
+  });
+
+  it("dispatches identical webhook and WebSocket deliveries only once", async () => {
+    const id = createAgentMailDurableInboundId(record);
+    let state: "new" | "pending" | "completed" = "new";
+    const dispatch = vi.fn(async () => undefined);
+    const journal = {
+      accept: vi.fn(async () => {
+        if (state === "completed") {
+          return { kind: "completed", duplicate: true, record: { id } };
+        }
+        if (state === "pending") {
+          return {
+            kind: "pending",
+            duplicate: true,
+            record: { id, payload: record, attempts: 0 },
+          };
+        }
+        state = "pending";
+        return { kind: "accepted", duplicate: false, record: { id } };
+      }),
+      complete: vi.fn(async () => {
+        state = "completed";
+      }),
+      release: vi.fn(),
+    } as never;
+
+    await Promise.all([
+      processAgentMailIngress({ journal, record, dispatch }),
+      processAgentMailIngress({
+        journal,
+        record: { ...record, transport: "websocket", eventId: "ws-event" },
+        dispatch,
+      }),
+    ]);
+    await vi.waitFor(() => expect(state).toBe("completed"));
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("commits before dispatch and completes only after dispatch", async () => {
+    const order: string[] = [];
+    const journal = {
+      accept: vi.fn(async () => {
+        order.push("accept");
+        return { kind: "accepted", duplicate: false, record: { id: "durable_1" } };
+      }),
+      complete: vi.fn(async () => {
+        order.push("complete");
+      }),
+      release: vi.fn(),
+    } as never;
+    await processAgentMailIngress({
+      journal,
+      record,
+      dispatch: async () => {
+        order.push("dispatch");
+      },
+    });
+    await vi.waitFor(() => expect(order).toHaveLength(3));
+    expect(order).toEqual(["accept", "dispatch", "complete"]);
+  });
+
+  it("returns after durable admission without waiting for agent dispatch", async () => {
+    let finishDispatch!: () => void;
+    const dispatch = vi.fn(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishDispatch = resolve;
+        }),
+    );
+    const complete = vi.fn(async () => undefined);
+    await expect(
+      processAgentMailIngress({
+        journal: {
+          accept: async () => ({ kind: "accepted", duplicate: false, record: {} }),
+          complete,
+          release: vi.fn(),
+        } as never,
+        record,
+        dispatch,
+      }),
+    ).resolves.toBe("accepted");
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(complete).not.toHaveBeenCalled();
+    finishDispatch();
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+  });
+
+  it("releases and retries failed background dispatch in-process", async () => {
+    const release = vi
+      .fn<() => Promise<boolean>>()
+      .mockRejectedValueOnce(new Error("database busy"))
+      .mockResolvedValueOnce(true);
+    const complete = vi.fn(async () => undefined);
+    const dispatch = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("temporary hydration failure"))
+      .mockResolvedValueOnce(undefined);
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({ kind: "accepted", duplicate: false, record: {} }),
+        complete,
+        release,
+      } as never,
+      record,
+      dispatch,
+      retryDelayMs: () => 0,
+    });
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+    expect(release).toHaveBeenCalledWith(createAgentMailDurableInboundId(record), {
+      lastError: "temporary hydration failure",
+    });
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a failed completion marker without repeating the agent dispatch", async () => {
+    const dispatch = vi.fn(async () => undefined);
+    const complete = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("database busy"))
+      .mockResolvedValueOnce(undefined);
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({ kind: "accepted", duplicate: false, record: {} }),
+        complete,
+        release: vi.fn(),
+      } as never,
+      record,
+      dispatch,
+      retryDelayMs: () => 0,
+    });
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("retries a released pending record but not an active pending record", async () => {
+    const dispatch = vi.fn(async () => undefined);
+    const complete = vi.fn(async () => undefined);
+    const pendingRecord = { id: "durable_1", payload: record, attempts: 1 };
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({ kind: "pending", duplicate: true, record: pendingRecord }),
+        complete,
+        release: vi.fn(),
+      } as never,
+      record: { ...record, transport: "websocket" },
+      dispatch,
+    });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+    expect(dispatch).toHaveBeenCalledWith(record);
+    expect(complete).toHaveBeenCalledWith(createAgentMailDurableInboundId(record));
+
+    dispatch.mockClear();
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({
+          kind: "pending",
+          duplicate: true,
+          record: { ...pendingRecord, attempts: 0 },
+        }),
+      } as never,
+      record,
+      dispatch,
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps WhatsApp-aligned retention values", () => {
+    expect(AGENTMAIL_DURABLE_PENDING_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(AGENTMAIL_DURABLE_COMPLETED_TTL_MS).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(AGENTMAIL_DURABLE_PENDING_MAX_ENTRIES).toBe(450);
+    expect(AGENTMAIL_DURABLE_COMPLETED_MAX_ENTRIES).toBe(450);
+  });
+
+  it("replays pending records after restart and completes them", async () => {
+    const dispatch = vi.fn(async () => undefined);
+    const complete = vi.fn(async () => undefined);
+    await replayPendingAgentMailIngress({
+      journal: {
+        pending: async () => [{ id: "durable_1", payload: record, attempts: 2 }],
+        complete,
+        release: vi.fn(),
+      } as never,
+      dispatch,
+    });
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledWith("durable_1"));
+    expect(dispatch).toHaveBeenCalledWith(record);
+  });
+
+  it("hands an in-flight record to a replacement journal without concurrent dispatch", async () => {
+    let rejectFirst!: (error: Error) => void;
+    const firstDispatch = vi.fn(
+      async () =>
+        await new Promise<void>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+    );
+    const replacementDispatch = vi.fn(async () => undefined);
+    const firstAbort = new AbortController();
+    const replacementAbort = new AbortController();
+    await processAgentMailIngress({
+      journal: {
+        accept: async () => ({ kind: "accepted", duplicate: false, record: {} }),
+        complete: vi.fn(),
+        release: vi.fn(async () => true),
+      } as never,
+      record,
+      dispatch: firstDispatch,
+      abortSignal: firstAbort.signal,
+      retryDelayMs: () => 0,
+    });
+    await vi.waitFor(() => expect(firstDispatch).toHaveBeenCalledOnce());
+
+    const replacementComplete = vi.fn(async () => undefined);
+    await replayPendingAgentMailIngress({
+      journal: {
+        pending: async () => [
+          { id: createAgentMailDurableInboundId(record), payload: record, attempts: 0 },
+        ],
+        complete: replacementComplete,
+        release: vi.fn(),
+      } as never,
+      dispatch: replacementDispatch,
+      abortSignal: replacementAbort.signal,
+      retryDelayMs: () => 0,
+    });
+    expect(replacementDispatch).not.toHaveBeenCalled();
+
+    firstAbort.abort();
+    rejectFirst(new Error("old account stopped"));
+    await vi.waitFor(() => expect(replacementComplete).toHaveBeenCalledOnce());
+    expect(replacementDispatch).toHaveBeenCalledOnce();
+    replacementAbort.abort();
+  });
+});

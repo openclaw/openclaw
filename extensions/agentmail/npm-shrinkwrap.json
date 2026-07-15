@@ -1,0 +1,108 @@
+{
+  "name": "@openclaw/agentmail",
+  "version": "2026.7.2",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/agentmail",
+      "version": "2026.7.2",
+      "dependencies": {
+        "@haraka/email-address": "3.1.6",
+        "agentmail": "0.5.16",
+        "svix": "1.96.1",
+        "zod": "4.4.3"
+      },
+      "peerDependencies": {
+        "openclaw": ">=2026.7.2"
+      },
+      "peerDependenciesMeta": {
+        "openclaw": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/@haraka/email-address": {
+      "version": "3.1.6",
+      "resolved": "https://registry.npmjs.org/@haraka/email-address/-/email-address-3.1.6.tgz",
+      "integrity": "sha512-albuxbQSCI8x/67zgo0kUUUyxsrTV6irss2f21Kfjgb+T8RJXU5SzScJYwhR86zYpQFfrSF3bkzKV/dc8pOAPw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=22"
+      }
+    },
+    "node_modules/@stablelib/base64": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/@stablelib/base64/-/base64-1.0.1.tgz",
+      "integrity": "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==",
+      "license": "MIT"
+    },
+    "node_modules/agentmail": {
+      "version": "0.5.16",
+      "resolved": "https://registry.npmjs.org/agentmail/-/agentmail-0.5.16.tgz",
+      "integrity": "sha512-QxUQOd21T4IhBnfDI5bz6RAXCSSpQW0owMnfeki+B0pRetqy5y73yMAR7ANBMLhLJ2futPF3yIyykLR4weUsWA==",
+      "license": "MIT",
+      "dependencies": {
+        "ws": "^8.20.0"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/fast-sha256": {
+      "version": "1.3.0",
+      "resolved": "https://registry.npmjs.org/fast-sha256/-/fast-sha256-1.3.0.tgz",
+      "integrity": "sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==",
+      "license": "Unlicense"
+    },
+    "node_modules/standardwebhooks": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/standardwebhooks/-/standardwebhooks-1.0.0.tgz",
+      "integrity": "sha512-BbHGOQK9olHPMvQNHWul6MYlrRTAOKn03rOe4A8O3CLWhNf4YHBqq2HJKKC+sfqpxiBY52pNeesD6jIiLDz8jg==",
+      "license": "MIT",
+      "dependencies": {
+        "@stablelib/base64": "^1.0.0",
+        "fast-sha256": "^1.3.0"
+      }
+    },
+    "node_modules/svix": {
+      "version": "1.96.1",
+      "resolved": "https://registry.npmjs.org/svix/-/svix-1.96.1.tgz",
+      "integrity": "sha512-l+GyPS6gjL0okiXplLazEY2GbBsv1jZ4UIwtjp553YkDDv635xMKbM5sABpIdiWy1BYxgyV8M6tHeTwY0gyXlQ==",
+      "license": "MIT",
+      "dependencies": {
+        "standardwebhooks": "1.0.0"
+      }
+    },
+    "node_modules/ws": {
+      "version": "8.21.0",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
+      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=10.0.0"
+      },
+      "peerDependencies": {
+        "bufferutil": "^4.0.1",
+        "utf-8-validate": ">=5.0.2"
+      },
+      "peerDependenciesMeta": {
+        "bufferutil": {
+          "optional": true
+        },
+        "utf-8-validate": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/zod": {
+      "version": "4.4.3",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
+      }
+    }
+  }
+}
