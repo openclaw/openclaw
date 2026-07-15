@@ -2,6 +2,7 @@
 import { clearCodeModeNamespacesForPlugin } from "../agents/code-mode-namespaces.js";
 import { clearContextEnginesForOwner } from "../context-engine/registry.js";
 import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
+import { clearPluginHostRuntimeState } from "./host-hook-runtime.js";
 import { clearPluginInteractiveHandlersForPlugin } from "./interactive-registry.js";
 import { createPluginApiFactory } from "./registry-api.js";
 import { createPluginRegistrars } from "./registry-registrars.js";
@@ -43,6 +44,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     clearPluginInteractiveHandlersForPlugin(pluginId);
     clearCodeModeNamespacesForPlugin(pluginId);
     clearContextEnginesForOwner(`plugin:${pluginId}`);
+    clearPluginHostRuntimeState({ pluginId });
     registrars.rollbackHooks(pluginId);
   };
 
