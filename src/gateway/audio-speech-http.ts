@@ -100,7 +100,7 @@ function resolveProducedFormatToken(
 /** Map a produced output format / file extension to a binary Content-Type. */
 function resolveAudioContentType(outputFormat?: string, fileExtension?: string): string {
   const token = resolveProducedFormatToken(outputFormat, fileExtension);
-  return token ? SUPPORTED_RESPONSE_FORMATS[token] : "application/octet-stream";
+  return (token ? SUPPORTED_RESPONSE_FORMATS[token] : undefined) ?? "application/octet-stream";
 }
 
 /** Handles OpenAI-compatible text-to-speech requests for configured TTS providers. */

@@ -88,9 +88,7 @@ type ResolvePluginNodeCapabilityRoute = (
   pathContext: PluginRoutePathContext,
 ) => PluginNodeCapabilitySurface | undefined;
 
-const getAudioSpeechHttpModule = createLazyRuntimeModule(
-  () => import("./audio-speech-http.js"),
-);
+const getAudioSpeechHttpModule = createLazyRuntimeModule(() => import("./audio-speech-http.js"));
 
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
 

@@ -3627,9 +3627,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Authentication
   - H2: When to use this endpoint
   - H2: Agent-first model contract
-
   - H2: Session behavior
   - H2: Request limits (config)
+  - H2: Enabling audio speech
   - H2: Chat tool contract
   - H3: Supported request fields
   - H3: Unsupported variants
@@ -8402,6 +8402,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: GLM models
   - H2: Getting started
   - H3: Endpoints
+  - H2: Rate limits and overloads
   - H2: Config example
   - H2: Built-in catalog
   - H2: Thinking levels

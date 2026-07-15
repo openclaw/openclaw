@@ -108,7 +108,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 425,
+  "config-types": 426,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 26,
@@ -218,7 +218,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
-      10612,
+      // +1: GatewayHttpAudioSpeechConfig gateway audio-speech config type (config-types compat mirror).
+      10613,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -233,7 +234,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       // +2: group scope encoder/key builder mirrored by deprecated compat.
       // Harvest: channel-ingress -8; dead channel-message dispatch aliases -23.
-      3262,
+      // +1: GatewayHttpAudioSpeechConfig via the config-types deprecated compat mirror.
+      3263,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
