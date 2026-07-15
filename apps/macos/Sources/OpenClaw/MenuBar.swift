@@ -270,6 +270,17 @@ final class StatusItemMouseRouter: NSResponder {
     {
         self.eventMonitorInstaller = eventMonitorInstaller
         self.eventMonitorRemover = eventMonitorRemover
+        super.init()
+    }
+
+    required init?(coder: NSCoder) {
+        self.eventMonitorInstaller = { mask, handler in
+            NSEvent.addLocalMonitorForEvents(matching: mask, handler: handler)
+        }
+        self.eventMonitorRemover = { monitor in
+            NSEvent.removeMonitor(monitor)
+        }
+        super.init(coder: coder)
     }
 
     func install(
