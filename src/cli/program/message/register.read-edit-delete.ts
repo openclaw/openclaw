@@ -1,8 +1,8 @@
-// Read, edit, and delete message command registration.
+// Read, edit, delete, and unsend message command registration.
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
-/** Register message read, edit, and delete commands. */
+/** Register message read, edit, delete, and unsend commands. */
 export function registerMessageReadEditDeleteCommands(
   message: Command,
   helpers: MessageCliHelpers,
@@ -50,5 +50,18 @@ export function registerMessageReadEditDeleteCommands(
     )
     .action(async (opts) => {
       await helpers.runMessageAction("delete", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      helpers.withRequiredMessageTarget(
+        message
+          .command("unsend")
+          .description("Unsend a message")
+          .requiredOption("--message-id <id>", "Message id"),
+      ),
+    )
+    .action(async (opts) => {
+      await helpers.runMessageAction("unsend", opts);
     });
 }

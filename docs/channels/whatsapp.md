@@ -514,8 +514,14 @@ Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct mes
 
 ## Tools, actions, and config writes
 
-- Agent tool support includes the WhatsApp reaction action (`react`).
-- Action gates: `channels.whatsapp.actions.reactions`, `channels.whatsapp.actions.polls` (existing actions default to `true`), `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above).
+- Agent tool support includes WhatsApp message actions: `react`, `poll`, `edit`, `delete`, and `unsend`.
+- `edit` updates bot-owned sent messages.
+- `delete` and `unsend` revoke bot-owned sent messages through the same WhatsApp/Baileys delete payload.
+- Action gates:
+  - `channels.whatsapp.actions.reactions`
+  - `channels.whatsapp.actions.polls`
+  - `channels.whatsapp.actions.sendMessage` for `edit`, `delete`, and `unsend`
+  - `channels.whatsapp.actions.calls` (default `false`, see MeowCaller above)
 - Channel-initiated config writes are enabled by default; disable via `channels.whatsapp.configWrites: false`.
 
 ## Troubleshooting
