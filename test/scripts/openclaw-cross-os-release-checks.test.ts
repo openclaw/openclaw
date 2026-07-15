@@ -183,14 +183,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       responseBody: `ab\u{1f600}tail`,
       expectedText: `ab\u{1f600}\n[truncated]`,
     },
-  ])("keeps cross-OS response truncation UTF-16 safe: $caseName", async ({
-    responseBody,
-    expectedText,
-  }) => {
-    const response = new Response(responseBody);
+  ])(
+    "keeps cross-OS response truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedText }) => {
+      const response = new Response(responseBody);
 
-    await expect(readBoundedCrossOsResponseText(response, 4)).resolves.toBe(expectedText);
-  });
+      await expect(readBoundedCrossOsResponseText(response, 4)).resolves.toBe(expectedText);
+    },
+  );
 
   it("keeps cross-OS fetch timeouts active while reading response bodies", async () => {
     let canceled = false;
