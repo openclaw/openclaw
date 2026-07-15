@@ -2210,6 +2210,115 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
         )
 
+    def test_secret_detector_allows_lifecycle_named_typescript_references(self) -> None:
+        key_term = "Api" + "Key"
+        key_field = key_term[0].lower() + key_term[1:]
+        credential_term = "Cred" + "ential"
+        source = (
+            f"const resolvedStream{key_term} = resolveAttemptDispatch{key_term}({{\n"
+            f"  {key_field}Info,\n"
+            "  runtimeAuthState,\n"
+            "});\n"
+            f"const successful{credential_term} = successfulProfileId\n"
+            "  ? attemptAuthProfileStore.profiles[successfulProfileId]\n"
+            "  : undefined;\n"
+            f"const successful{key_term}Info = get{key_term}Info();\n"
+            f"const {key_field} = successful{key_term}Info?.{key_field};\n"
+            f"const resolved{key_term} = resolveSecretSentinel({key_field});\n"
+            "return {\n"
+            f"  resolved{key_term}: resolvedStream{key_term},\n"
+            f"  {credential_term.lower()}: successful{credential_term},\n"
+            f"  {key_field}: resolved{key_term},\n"
+            "};\n"
+        )
+        literal_value = "actual-production-" + "secret"
+        unsafe_sources = (
+            f'const resolved{key_term} = "' + literal_value + '";',
+            "const config = { pass"
+            + "word: resolved"
+            + key_term
+            + ' + "'
+            + literal_value
+            + "\" };",
+            "const config = { pass"
+            + "word: Abcdefghijklmnop.Qrstuvwxyzabcdef };",
+        )
+
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                source,
+                javascript_dialect="typescript",
+            )
+        )
+        for unsafe_source in unsafe_sources:
+            with self.subTest(unsafe_source=unsafe_source):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        unsafe_source,
+                        javascript_dialect="typescript",
+                    )
+                )
+
+        store_reference = (
+            "const cred"
+            + "ential = attemptAuthProfileStore.profiles[successfulProfileId];"
+        )
+        optional_store_reference = (
+            "const cred"
+            + "ential = attemptAuthProfileStore?.[successfulProfileId];"
+        )
+        quoted_store_reference = (
+            "const cred"
+            + 'ential = attemptAuthProfileStore["profiles"][successfulProfileId];'
+        )
+        yaml_store_literal = (
+            "pass"
+            + 'word: attemptAuthProfileStore["'
+            + literal_value
+            + '"]'
+        )
+        quoted_secret_key = "N7xQ2mP9vK4r" + "T8wZ"
+        typescript_store_literal = (
+            "const pass"
+            + 'word = attemptAuthProfileStore["'
+            + quoted_secret_key
+            + '"];'
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                optional_store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                quoted_store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](yaml_store_literal))
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                typescript_store_literal,
+                javascript_dialect="typescript",
+            )
+        )
+
+    def test_lifecycle_reference_scan_is_bounded_for_non_matching_identifier(self) -> None:
+        source = "const value = resolved" + "A" * 100_000 + "X;"
+
+        started = time.monotonic()
+        spans = self.helper["javascript_reference_spans"](source)
+
+        self.assertEqual(spans, frozenset())
+        self.assertLess(time.monotonic() - started, 5.0)
+
     def test_review_patch_scopes_source_references_to_typescript_files(self) -> None:
         property_name = "pass" + "word"
         reference = "context.driverPass" + "word"

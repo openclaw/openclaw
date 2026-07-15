@@ -11,6 +11,7 @@ const SCENARIOS = new Set([
   "feishu-channel",
   "bootstrap-persona",
   "channel-post-core-restore",
+  "codex-allowlist-survival",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
@@ -307,6 +308,9 @@ function assertConfigSurvived() {
       assert(pluginAllow.includes("matrix"), "matrix plugin allow entry missing");
     } else {
       assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
+    }
+    if (getScenario() === "codex-allowlist-survival") {
+      assert(pluginAllow.includes("codex"), "Codex plugin allow entry missing");
     }
     if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
       assert(pluginAllow.includes("feishu"), "feishu plugin allow entry missing");

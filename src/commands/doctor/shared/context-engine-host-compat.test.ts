@@ -1,5 +1,5 @@
 // Context engine host compatibility tests cover doctor warnings for host/context mismatches.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getContextEngineFactory,
@@ -12,6 +12,36 @@ import {
   collectContextEngineHostCompatibilityWarnings,
   maybeRepairContextEngineHostCompatibility,
 } from "./context-engine-host-compat.js";
+
+vi.mock("../../../agents/agent-scope-config.js", () => ({
+  resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-doctor-host-compat"),
+}));
+
+vi.mock("../../../agents/cli-backends.js", () => ({
+  resolveCliBackendConfig: vi.fn((runtimeId: string) => ({ id: runtimeId })),
+}));
+
+vi.mock("../../../agents/harness/policy.js", () => ({
+  resolveAgentHarnessPolicy: vi.fn(
+    (params: { config: OpenClawConfig; modelId: string; provider: string }) => ({
+      runtime:
+        params.config.agents?.defaults?.models?.[`${params.provider}/${params.modelId}`]
+          ?.agentRuntime?.id ?? "openclaw",
+    }),
+  ),
+}));
+
+vi.mock("../../../agents/harness/registry.js", () => ({
+  getRegisteredAgentHarness: vi.fn(() => undefined),
+}));
+
+vi.mock("../../../context-engine/init.js", () => ({
+  ensureContextEnginesInitialized: vi.fn(),
+}));
+
+vi.mock("../../../plugins/runtime/runtime-registry-loader.js", () => ({
+  ensurePluginRegistryLoaded: vi.fn(),
+}));
 
 let engineCounter = 0;
 

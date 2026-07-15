@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
+import {
+  TerminalConnection,
+  type TerminalGatewayClient,
+  TerminalOpenTimeoutError,
+} from "./terminal-connection.ts";
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+const TERMINAL_OPEN_WATCHDOG_MS = 35_000;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -75,7 +80,11 @@ describe("TerminalConnection", () => {
     );
 
     expect(result.sessionId).toBe("s1");
-    expect(client.requests[0]).toEqual({ method: "terminal.open", params: { cols: 80, rows: 24 } });
+    expect(client.requests[0]).toEqual({
+      method: "terminal.open",
+      params: { cols: 80, rows: 24 },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
+    });
 
     client.emit("terminal.data", { sessionId: "s1", seq: 5, data: "hello" });
     client.emit("terminal.data", { sessionId: "s1", seq: 6, data: "!" });
@@ -176,7 +185,7 @@ describe("TerminalConnection", () => {
     const client = makeFakeClient();
     const conn = new TerminalConnection(client);
     const data: string[] = [];
-    const replays: string[] = [];
+    const replays: Array<{ snapshot: string; newlyObservedFrom: number }> = [];
     const recovery = deferred<{
       sessionId: string;
       agentId: string;
@@ -190,7 +199,7 @@ describe("TerminalConnection", () => {
       { cols: 80, rows: 24 },
       {
         onData: (chunk) => data.push(chunk),
-        onReplay: (snapshot) => replays.push(snapshot),
+        onReplay: (snapshot, newlyObservedFrom) => replays.push({ snapshot, newlyObservedFrom }),
         onExit: () => {},
       },
     );
@@ -219,11 +228,13 @@ describe("TerminalConnection", () => {
       shell: "/bin/zsh",
       cwd: "/work",
       confined: false,
-      buffer: "authoritative snapshot",
+      buffer: "hello??worldcovered",
       seq: 19,
     });
 
-    await vi.waitFor(() => expect(replays).toEqual(["authoritative snapshot"]));
+    await vi.waitFor(() =>
+      expect(replays).toEqual([{ snapshot: "hello??worldcovered", newlyObservedFrom: 5 }]),
+    );
     expect(data).toEqual(["hello"]);
     expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
       1,
@@ -476,7 +487,47 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { agentId: "ops", cols: 100, rows: 30 },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
     });
+  });
+
+  it("maps the Gateway's request-scoped terminal open deadline", async () => {
+    const client = makeFakeClient();
+    client.request = <T>(
+      method: string,
+      params?: unknown,
+      options?: { timeoutMs?: number | null },
+    ) => {
+      client.requests.push({ method, params, ...(options ? { options } : {}) });
+      return Promise.reject(new Error("terminal open timed out")) as Promise<T>;
+    };
+    const conn = new TerminalConnection(client);
+
+    await expect(
+      conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} }),
+    ).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
+    expect(client.requests[0]?.options).toEqual({ timeoutMs: TERMINAL_OPEN_WATCHDOG_MS });
+    expect(client.forceReconnects).toEqual([]);
+  });
+
+  it("reconnects when the browser watchdog cannot receive the Gateway deadline", async () => {
+    const client = makeFakeClient();
+    client.request = <T>(
+      method: string,
+      params?: unknown,
+      options?: { timeoutMs?: number | null },
+    ) => {
+      client.requests.push({ method, params, ...(options ? { options } : {}) });
+      return Promise.reject(
+        new Error(`gateway request timed out after ${options?.timeoutMs}ms: ${method}`),
+      ) as Promise<T>;
+    };
+    const conn = new TerminalConnection(client);
+
+    await expect(
+      conn.open({ cols: 80, rows: 24 }, { onData: () => {}, onExit: () => {} }),
+    ).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
+    expect(client.forceReconnects).toEqual(["terminal open watchdog timeout"]);
   });
 
   it("forwards a typed catalog reference and preserves the returned title", async () => {
@@ -499,6 +550,7 @@ describe("TerminalConnection", () => {
     expect(client.requests[0]).toEqual({
       method: "terminal.open",
       params: { cols: 100, rows: 30, catalog },
+      options: { timeoutMs: TERMINAL_OPEN_WATCHDOG_MS },
     });
     expect(result.title).toBe("codex resume 0d5c…");
   });

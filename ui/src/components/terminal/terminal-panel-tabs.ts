@@ -8,7 +8,7 @@ export type TerminalPanelTab = {
   shellName: string | null;
   agentId: string | null;
   cwd: string | null;
-  status: "live" | "exited";
+  status: "connecting" | "live" | "exited";
   exitReason?: string;
   exitCode?: number | null;
 };
@@ -28,6 +28,9 @@ function terminalTabHint(tab: TerminalPanelTab): string | null {
 }
 
 function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
+  if (tab.status === "connecting") {
+    return t("terminal.connecting");
+  }
   if (tab.status !== "exited") {
     return null;
   }
@@ -60,7 +63,7 @@ export function renderTerminalPanelTabs(params: {
         return html`
           <wa-tab
             id=${`terminal-tab-${tab.id}`}
-            class="tp-tab ${tab.status === "exited" ? "is-exited" : ""}"
+            class="tp-tab is-${tab.status}"
             panel=${tab.id}
             aria-controls="terminal-tab-panel"
             title=${terminalTabHint(tab) || nothing}

@@ -30,6 +30,7 @@ export const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "nodes", family: "openclaw" },
   { name: "pdf", family: "openclaw" },
   { name: "session_status", family: "openclaw" },
+  { name: "sessions", family: "openclaw" },
   { name: "sessions_history", family: "openclaw" },
   { name: "sessions_list", family: "openclaw" },
   { name: "sessions_search", family: "openclaw" },

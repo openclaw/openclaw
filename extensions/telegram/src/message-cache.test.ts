@@ -6,10 +6,10 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
 } from "./message-cache.js";
+import { resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest } from "./runtime.test-support.js";
 
 type TelegramMessageCachePersistentStore = NonNullable<
   NonNullable<Parameters<typeof createTelegramMessageCache>[0]>["persistentStore"]

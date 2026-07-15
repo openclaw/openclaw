@@ -2218,6 +2218,12 @@ importers:
       '@openclaw/workboard-contract':
         specifier: workspace:*
         version: link:../packages/workboard-contract
+      '@tanstack/lit-virtual':
+        specifier: 3.13.33
+        version: 3.13.33(lit@3.3.3)
+      '@tanstack/virtual-core':
+        specifier: 3.17.4
+        version: 3.17.4
       dompurify:
         specifier: 3.4.11
         version: 3.4.11
@@ -4586,6 +4592,14 @@ packages:
 
   '@swc/helpers@0.5.23':
     resolution: {integrity: sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==}
+
+  '@tanstack/lit-virtual@3.13.33':
+    resolution: {integrity: sha512-dZWtvNYZjRIIHmxB4V3DEmjsUkXu2qtLVZETloozRhHK+9SNxlln2tjkreTouVPO6zmwfeCZVfXBaEPBPSZi8g==}
+    peerDependencies:
+      lit: ^3.1.0
+
+  '@tanstack/virtual-core@3.17.4':
+    resolution: {integrity: sha512-nGm5KteqxasUdThLc2izl6dHUqLv0LQj7Nuyo5gYalTPf/U8a9ermvsl7reT+6ioBW1l8WfpP/mcU338nLXpqw==}
 
   '@tencent-connect/qqbot-connector@1.1.0':
     resolution: {integrity: sha512-3nQ2mdyzPRKpBHjd3QiKZDwNzw1F7fBN+rSq8Xms2gg+JWZR4SY2Zdf+doqTyXdyVjG4Y0QM7IA4U42zT9xxzw==}
@@ -10812,6 +10826,13 @@ snapshots:
   '@swc/helpers@0.5.23':
     dependencies:
       tslib: 2.8.1
+
+  '@tanstack/lit-virtual@3.13.33(lit@3.3.3)':
+    dependencies:
+      '@tanstack/virtual-core': 3.17.4
+      lit: 3.3.3
+
+  '@tanstack/virtual-core@3.17.4': {}
 
   '@tencent-connect/qqbot-connector@1.1.0':
     dependencies:

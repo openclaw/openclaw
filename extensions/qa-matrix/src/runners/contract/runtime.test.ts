@@ -1,10 +1,57 @@
 // Qa Matrix tests cover runtime plugin behavior.
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing as liveTesting } from "./runtime.js";
+import {
+  buildMatrixQaConfig,
+  buildMatrixQaConfigSnapshot,
+  summarizeMatrixQaConfigSnapshot,
+} from "../../substrate/config.js";
+import { resolveMatrixQaModels } from "./model-selection.js";
+import {
+  createMatrixQaRunDeadline,
+  patchMatrixQaGatewayConfig,
+  readMatrixQaGatewayDebugSummary,
+  resolveMatrixQaCanaryTimeoutMs,
+  resolveMatrixQaOutputDir,
+  waitForMatrixChannelReady,
+  withMatrixQaRunDeadline,
+  writeMatrixQaProgress,
+} from "./runtime-control.js";
+import {
+  getMatrixQaScenarioRestartReadyTimeoutMs,
+  resolveMatrixQaGatewayModels,
+  scheduleMatrixQaScenariosInCatalogOrder,
+  selectMatrixQaCanaryProviderMode,
+} from "./runtime-planning.js";
+import { buildMatrixQaSummary } from "./runtime-summary.js";
+import { MATRIX_QA_SCENARIOS, findMatrixQaScenarios } from "./scenarios.js";
+
+const liveTesting = {
+  MATRIX_QA_SCENARIOS,
+  buildMatrixQaConfig,
+  buildMatrixQaConfigSnapshot,
+  buildMatrixQaSummary,
+  createMatrixQaRunDeadline,
+  findMatrixQaScenarios,
+  getMatrixQaScenarioRestartReadyTimeoutMs,
+  patchMatrixQaGatewayConfig,
+  readMatrixQaGatewayDebugSummary,
+  resolveMatrixQaCanaryTimeoutMs,
+  resolveMatrixQaGatewayModels,
+  resolveMatrixQaModels,
+  resolveMatrixQaOutputDir,
+  scheduleMatrixQaScenariosInCatalogOrder,
+  selectMatrixQaCanaryProviderMode,
+  summarizeMatrixQaConfigSnapshot,
+  waitForMatrixChannelReady,
+  withMatrixQaRunDeadline,
+  writeMatrixQaProgress,
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -118,11 +165,15 @@ describe("matrix live qa runtime", () => {
 
   it("prints Matrix QA progress by default for non-interactive runs", () => {
     const previous = process.env.OPENCLAW_QA_MATRIX_PROGRESS;
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     delete process.env.OPENCLAW_QA_MATRIX_PROGRESS;
     try {
-      expect(liveTesting.shouldWriteMatrixQaProgress()).toBe(true);
+      liveTesting.writeMatrixQaProgress("suite start");
+      expect(write).toHaveBeenCalledWith("[matrix-qa] suite start\n");
+      write.mockClear();
       process.env.OPENCLAW_QA_MATRIX_PROGRESS = "0";
-      expect(liveTesting.shouldWriteMatrixQaProgress()).toBe(false);
+      liveTesting.writeMatrixQaProgress("suite hidden");
+      expect(write).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_QA_MATRIX_PROGRESS;
@@ -132,26 +183,38 @@ describe("matrix live qa runtime", () => {
     }
   });
 
-  it("summarizes relevant gateway stderr lines for Matrix QA failures", () => {
-    const summary = liveTesting.summarizeMatrixQaGatewayStderrLog(
-      [
-        "normal gateway progress",
-        "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
-        "[agent/embedded] embedded run failover decision: stage=prompt decision=surface_error reason=auth",
-        "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
-      ].join("\n"),
-    );
+  it("summarizes relevant gateway stderr lines for Matrix QA failures", async () => {
+    const debugDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-gateway-debug-"));
+    try {
+      await writeFile(
+        path.join(debugDir, "gateway.stderr.log"),
+        [
+          "normal gateway progress",
+          "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+          "[agent/embedded] embedded run failover decision: stage=prompt decision=surface_error reason=auth",
+          "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+        ].join("\n"),
+      );
+      const summary = await liveTesting.readMatrixQaGatewayDebugSummary(debugDir);
 
-    expect(summary).toContain("gateway stderr tail:");
-    expect(summary).toContain("Authorization: Bearer");
-    expect(summary).toContain("reason=auth");
-    expect(summary).toContain("unexpected status 401 Unauthorized");
-    expect(summary).not.toContain("normal gateway progress");
-    expect(summary).not.toContain("abcdefghijklmnopqrstuvwxyz");
+      expect(summary).toContain("gateway stderr tail:");
+      expect(summary).toContain("Authorization: Bearer");
+      expect(summary).toContain("reason=auth");
+      expect(summary).toContain("unexpected status 401 Unauthorized");
+      expect(summary).not.toContain("normal gateway progress");
+      expect(summary).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    } finally {
+      await rm(debugDir, { force: true, recursive: true });
+    }
   });
 
-  it("skips empty gateway stderr summaries", () => {
-    expect(liveTesting.summarizeMatrixQaGatewayStderrLog("\n\n")).toBeUndefined();
+  it("skips missing gateway stderr summaries", async () => {
+    const debugDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-gateway-debug-"));
+    try {
+      await expect(liveTesting.readMatrixQaGatewayDebugSummary(debugDir)).resolves.toBeUndefined();
+    } finally {
+      await rm(debugDir, { force: true, recursive: true });
+    }
   });
 
   it("normalizes the Matrix QA hard timeout env", () => {
@@ -195,18 +258,19 @@ describe("matrix live qa runtime", () => {
     expect(task).not.toHaveBeenCalled();
   });
 
-  it("passes the remaining Matrix QA run budget to the phase timeout", async () => {
+  it("starts Matrix QA work while the hard run budget remains", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
 
-    expect(
-      liveTesting.remainingMatrixQaRunMs(
+    await expect(
+      liveTesting.withMatrixQaRunDeadline(
         {
           deadlineMs: 1_250,
           timeoutMs: 30_000,
         },
         "Matrix canary",
+        async () => "started",
       ),
-    ).toBe(250);
+    ).resolves.toBe("started");
   });
 
   it("normalizes the Matrix QA canary timeout env", () => {
@@ -665,25 +729,6 @@ describe("matrix live qa runtime", () => {
     );
   });
 
-  it("treats only connected, healthy Matrix accounts as ready", () => {
-    expect(liveTesting.isMatrixAccountReady({ running: true, connected: true })).toBe(true);
-    expect(liveTesting.isMatrixAccountReady({ running: true, connected: false })).toBe(false);
-    expect(
-      liveTesting.isMatrixAccountReady({
-        running: true,
-        connected: true,
-        restartPending: true,
-      }),
-    ).toBe(false);
-    expect(
-      liveTesting.isMatrixAccountReady({
-        running: true,
-        connected: true,
-        healthState: "degraded",
-      }),
-    ).toBe(false);
-  });
-
   it("waits past not-ready Matrix status snapshots until the account is really ready", async () => {
     vi.useFakeTimers();
     const gateway = {
@@ -692,6 +737,11 @@ describe("matrix live qa runtime", () => {
         .mockResolvedValueOnce({
           channelAccounts: {
             matrix: [{ accountId: "sut", running: true, connected: false }],
+          },
+        })
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            matrix: [{ accountId: "sut", running: true, connected: true, restartPending: true }],
           },
         })
         .mockResolvedValueOnce({
@@ -705,9 +755,9 @@ describe("matrix live qa runtime", () => {
       timeoutMs: 1_000,
       pollMs: 100,
     });
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(200);
     await expect(waitPromise).resolves.toBeUndefined();
-    expect(gateway.call).toHaveBeenCalledTimes(2);
+    expect(gateway.call).toHaveBeenCalledTimes(3);
   });
 
   it("fails readiness when the Matrix account never reaches a healthy connected state", async () => {

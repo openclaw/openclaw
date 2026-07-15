@@ -152,13 +152,10 @@ import {
   endTelegramReplyFence,
   isTelegramReplyFenceSuperseded,
   releaseTelegramReplyFenceAbortController,
-  resetTelegramReplyFenceForTests,
   resolveTelegramReplyFenceKey,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
-
-export { resetTelegramReplyFenceForTests };
 
 // Telegram sendChatAction can fail transiently; keep the tolerance scoped to this transport.
 const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;

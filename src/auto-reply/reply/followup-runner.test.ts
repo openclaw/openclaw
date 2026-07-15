@@ -3124,6 +3124,28 @@ describe("createFollowupRunner runtime config", () => {
     expect(events).toEqual(["begin", "run", "end"]);
   });
 
+  it("notifies the active dispatcher after queued followup admission", async () => {
+    const events: string[] = [];
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      events.push("run");
+      return { payloads: [], meta: {} };
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+      opts: {
+        onQueuedFollowupAdmitted: () => {
+          events.push("admitted");
+        },
+      },
+    });
+
+    await runner(createQueuedRun());
+
+    expect(events).toEqual(["admitted", "run"]);
+  });
+
   it("resolves queued embedded followups before preflight helpers read config", async () => {
     const sourceConfig: OpenClawConfig = {
       skills: {

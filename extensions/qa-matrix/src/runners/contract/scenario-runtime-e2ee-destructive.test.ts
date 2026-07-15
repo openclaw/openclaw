@@ -6,7 +6,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { testing } from "./scenario-runtime-e2ee-destructive.js";
+import { findMatrixQaCliAccountRoot } from "./scenario-runtime-e2ee-storage.js";
 
 const storageMetadataRuntime = {
   normalizeMatrixStorageMetadata(value: unknown) {
@@ -50,7 +50,7 @@ describe("Matrix destructive E2EE storage discovery", () => {
     resetPluginStateStoreForTests();
 
     await expect(
-      testing.findMatrixQaCliAccountRoot({
+      findMatrixQaCliAccountRoot({
         deviceId: "DEVICE",
         runtime: { stateDir },
         storageMetadataRuntime,
