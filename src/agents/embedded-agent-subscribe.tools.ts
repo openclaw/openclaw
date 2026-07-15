@@ -1,6 +1,5 @@
-/**
- * Sanitizes, extracts, and classifies embedded-agent tool execution results.
- */
+/** Sanitizes, extracts, and classifies embedded-agent tool execution results. */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -285,7 +284,8 @@ export function sanitizeToolResult(result: unknown): unknown {
       const entry = item as Record<string, unknown>;
       if (readStringValue(entry.type) === "image") {
         const data = readStringValue(entry.data);
-        const bytes = data?.length ?? (typeof entry.bytes === "number" ? entry.bytes : undefined);
+        const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
+        const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
         const cleaned = { ...entry };
         delete cleaned.data;
         return Object.assign({}, cleaned, { bytes, omitted: true });
@@ -1157,3 +1157,4 @@ export function extractMessagingToolSendResult(
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

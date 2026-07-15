@@ -140,7 +140,7 @@ export type UpdateStepInfo = {
   total: number;
 };
 
-export type UpdateStepCompletion = UpdateStepInfo & {
+type UpdateStepCompletion = UpdateStepInfo & {
   durationMs: number;
   exitCode: number | null;
   stderrTail?: string | null;
@@ -173,7 +173,7 @@ type UpdateRunnerOptions = {
   progress?: UpdateStepProgress;
 };
 
-export type UpdateInstallSurface =
+type UpdateInstallSurface =
   | {
       kind: "git";
       mode: "git";
@@ -1872,3 +1872,4 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     durationMs: Date.now() - startedAt,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

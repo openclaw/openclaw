@@ -1,33 +1,15 @@
-// Public gateway protocol entrypoint: wire types, schemas, and validators.
-export {
-  buildClawHubTrustErrorDetails,
-  ClawHubTrustErrorCodes,
-  isClawHubTrustErrorCode,
-  readClawHubTrustErrorDetails,
-  type ClawHubTrustErrorCode,
-  type ClawHubTrustErrorDetails,
-} from "./clawhub-trust-error-details.js";
+export * from "./clawhub-trust-error-details.js";
+export * from "./terminal-validators.js";
+export { validateApprovalGetResult } from "./approval-result-validators.js";
+export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import { lazyCompile } from "./protocol-validator.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
-export type {
-  SessionCatalog,
-  SessionCatalogCapabilities,
-  SessionCatalogDescriptor,
-  SessionCatalogHost,
-  SessionCatalogSession,
-  SessionCatalogTranscriptItem,
-  SessionsCatalogArchiveParams,
-  SessionsCatalogArchiveResult,
-  SessionsCatalogContinueParams,
-  SessionsCatalogContinueResult,
-  SessionsCatalogListParams,
-  SessionsCatalogListResult,
-  SessionsCatalogReadParams,
-  SessionsCatalogReadResult,
-} from "./schema/sessions-catalog.js";
+export * from "./schema/skill-history.js";
+export * from "./migration-api.js";
+export type * from "./public-session-catalog.js";
 import {
   AgentEventSchema,
   AuditActivityAgentRunV1Schema,
@@ -285,7 +267,13 @@ import {
   TerminalSessionInfoSchema,
   TerminalTextParamsSchema,
   TerminalTextResultSchema,
+  TerminalUploadParamsSchema,
+  TerminalUploadResultSchema,
   ModelsListParamsSchema,
+  AuthProbeStatusSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  ModelsProbeTargetResultSchema,
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
   NodeEventResultSchema,
@@ -297,6 +285,7 @@ import {
   NodePresenceAliveReasonSchema,
   NodePresenceActivityPayloadSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeListParamsSchema,
@@ -457,16 +446,16 @@ import {
   WakeParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
-  CrestodianChatParamsSchema,
-  CrestodianChatResultSchema,
-  CrestodianSetupDetectParamsSchema,
-  CrestodianSetupDetectResultSchema,
-  CrestodianSetupVerifyParamsSchema,
-  CrestodianSetupVerifyResultSchema,
-  CrestodianSetupActivateParamsSchema,
-  CrestodianSetupActivateResultSchema,
-  CrestodianSetupAuthStartParamsSchema,
-  CrestodianSetupAuthStartResultSchema,
+  SystemAgentChatParamsSchema,
+  SystemAgentChatResultSchema,
+  SystemAgentSetupDetectParamsSchema,
+  SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyParamsSchema,
+  SystemAgentSetupVerifyResultSchema,
+  SystemAgentSetupActivateParamsSchema,
+  SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAuthStartParamsSchema,
+  SystemAgentSetupAuthStartResultSchema,
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -609,6 +598,7 @@ export const validateSystemInfoResult = lazyCompile(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSchema);
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
+export const validateNodeInvokeInputEvent = lazyCompile(NodeInvokeInputEventSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
 export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
@@ -690,14 +680,14 @@ export const validateConfigPatchParams = lazyCompile(ConfigPatchParamsSchema);
 export const validateConfigSchemaParams = lazyCompile(ConfigSchemaParamsSchema);
 export const validateConfigSchemaLookupParams = lazyCompile(ConfigSchemaLookupParamsSchema);
 export const validateConfigSchemaLookupResult = lazyCompile(ConfigSchemaLookupResultSchema);
-export const validateCrestodianChatParams = lazyCompile(CrestodianChatParamsSchema);
-export const validateCrestodianSetupDetectParams = lazyCompile(CrestodianSetupDetectParamsSchema);
-export const validateCrestodianSetupVerifyParams = lazyCompile(CrestodianSetupVerifyParamsSchema);
-export const validateCrestodianSetupActivateParams = lazyCompile(
-  CrestodianSetupActivateParamsSchema,
+export const validateSystemAgentChatParams = lazyCompile(SystemAgentChatParamsSchema);
+export const validateSystemAgentSetupDetectParams = lazyCompile(SystemAgentSetupDetectParamsSchema);
+export const validateSystemAgentSetupVerifyParams = lazyCompile(SystemAgentSetupVerifyParamsSchema);
+export const validateSystemAgentSetupActivateParams = lazyCompile(
+  SystemAgentSetupActivateParamsSchema,
 );
-export const validateCrestodianSetupAuthStartParams = lazyCompile(
-  CrestodianSetupAuthStartParamsSchema,
+export const validateSystemAgentSetupAuthStartParams = lazyCompile(
+  SystemAgentSetupAuthStartParamsSchema,
 );
 export const validateWizardStartParams = lazyCompile(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile(WizardNextParamsSchema);
@@ -801,9 +791,7 @@ export const validateCancelledApprovalSnapshot = lazyCompile(CancelledApprovalSn
 export const validateApprovalSnapshot = lazyCompile(ApprovalSnapshotSchema);
 export const validateTerminalApprovalSnapshot = lazyCompile(TerminalApprovalSnapshotSchema);
 export const validateApprovalGetParams = lazyCompile(ApprovalGetParamsSchema);
-export const validateApprovalGetResult = lazyCompile(ApprovalGetResultSchema);
 export const validateApprovalResolveParams = lazyCompile(ApprovalResolveParamsSchema);
-export const validateApprovalResolveResult = lazyCompile(ApprovalResolveResultSchema);
 export const validateExecApprovalsGetParams = lazyCompile(ExecApprovalsGetParamsSchema);
 export const validateExecApprovalsSetParams = lazyCompile(ExecApprovalsSetParamsSchema);
 export const validateExecApprovalGetParams = lazyCompile(ExecApprovalGetParamsSchema);
@@ -829,13 +817,7 @@ export const validateExecApprovalsNodeGetParams = lazyCompile(ExecApprovalsNodeG
 export const validateExecApprovalsNodeSetParams = lazyCompile(ExecApprovalsNodeSetParamsSchema);
 export const validateExecApprovalsNodeSnapshot = lazyCompile(ExecApprovalsNodeSnapshotSchema);
 export const validateLogsTailParams = lazyCompile(LogsTailParamsSchema);
-export const validateTerminalOpenParams = lazyCompile(TerminalOpenParamsSchema);
-export const validateTerminalInputParams = lazyCompile(TerminalInputParamsSchema);
-export const validateTerminalResizeParams = lazyCompile(TerminalResizeParamsSchema);
-export const validateTerminalCloseParams = lazyCompile(TerminalCloseParamsSchema);
-export const validateTerminalAttachParams = lazyCompile(TerminalAttachParamsSchema);
-export const validateTerminalTextParams = lazyCompile(TerminalTextParamsSchema);
-export const validateTerminalEvent = lazyCompile(TerminalEventSchema);
+export const validateModelsProbeParams = lazyCompile(ModelsProbeParamsSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
@@ -953,6 +935,7 @@ export {
   NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeInputEventSchema,
   NodeInvokeProgressParamsSchema,
   NodeEventResultSchema,
   NodePresenceAlivePayloadSchema,
@@ -1066,16 +1049,16 @@ export {
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
   UpdateStatusParamsSchema,
-  CrestodianChatParamsSchema,
-  CrestodianChatResultSchema,
-  CrestodianSetupDetectParamsSchema,
-  CrestodianSetupDetectResultSchema,
-  CrestodianSetupVerifyParamsSchema,
-  CrestodianSetupVerifyResultSchema,
-  CrestodianSetupActivateParamsSchema,
-  CrestodianSetupActivateResultSchema,
-  CrestodianSetupAuthStartParamsSchema,
-  CrestodianSetupAuthStartResultSchema,
+  SystemAgentChatParamsSchema,
+  SystemAgentChatResultSchema,
+  SystemAgentSetupDetectParamsSchema,
+  SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyParamsSchema,
+  SystemAgentSetupVerifyResultSchema,
+  SystemAgentSetupActivateParamsSchema,
+  SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAuthStartParamsSchema,
+  SystemAgentSetupAuthStartResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1163,6 +1146,10 @@ export {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
   ModelsListParamsSchema,
+  AuthProbeStatusSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  ModelsProbeTargetResultSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
   ToolsEffectiveParamsSchema,
@@ -1220,6 +1207,8 @@ export {
   TerminalListResultSchema,
   TerminalTextParamsSchema,
   TerminalTextResultSchema,
+  TerminalUploadParamsSchema,
+  TerminalUploadResultSchema,
   TerminalAckResultSchema,
   TerminalDataEventSchema,
   TerminalExitEventSchema,
@@ -1351,16 +1340,16 @@ export type {
   ConfigPatchParams,
   ConfigSchemaParams,
   ConfigSchemaResponse,
-  CrestodianChatParams,
-  CrestodianChatResult,
-  CrestodianSetupDetectParams,
-  CrestodianSetupDetectResult,
-  CrestodianSetupVerifyParams,
-  CrestodianSetupVerifyResult,
-  CrestodianSetupActivateParams,
-  CrestodianSetupActivateResult,
-  CrestodianSetupAuthStartParams,
-  CrestodianSetupAuthStartResult,
+  SystemAgentChatParams,
+  SystemAgentChatResult,
+  SystemAgentSetupDetectParams,
+  SystemAgentSetupDetectResult,
+  SystemAgentSetupVerifyParams,
+  SystemAgentSetupVerifyResult,
+  SystemAgentSetupActivateParams,
+  SystemAgentSetupActivateResult,
+  SystemAgentSetupAuthStartParams,
+  SystemAgentSetupAuthStartResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1468,6 +1457,10 @@ export type {
   PluginsSetEnabledResult,
   PluginsUninstallParams,
   PluginsUninstallResult,
+  AuthProbeStatus,
+  ModelsProbeParams,
+  ModelsProbeResult,
+  ModelsProbeTargetResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,
@@ -1529,6 +1522,7 @@ export type {
   NodeSkillDescriptor,
   NodeSkillsUpdateParams,
   NodeInvokeParams,
+  NodeInvokeInputEvent,
   NodeInvokeProgressParams,
   NodeInvokeResultParams,
   NodeEventParams,
@@ -1633,6 +1627,8 @@ export type {
   TerminalOpenParams,
   TerminalOpenResult,
   TerminalInputParams,
+  TerminalUploadParams,
+  TerminalUploadResult,
   TerminalResizeParams,
   TerminalCloseParams,
   TerminalAttachParams,
@@ -1705,3 +1701,4 @@ type GatewayAgentRuntime = {
     | "session"
     | "session-key";
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -15,6 +15,7 @@ import {
   WakeParamsSchema,
 } from "./agent.js";
 import {
+  AuthProbeStatusSchema,
   AgentSummarySchema,
   AgentsCreateParamsSchema,
   AgentsCreateResultSchema,
@@ -34,6 +35,9 @@ import {
   ModelChoiceSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  ModelsProbeTargetResultSchema,
   SkillsBinsParamsSchema,
   SkillsBinsResultSchema,
   SkillsDetailParamsSchema,
@@ -53,8 +57,6 @@ import {
   SkillsProposalRequestRevisionResultSchema,
   SkillsProposalReviseParamsSchema,
   SkillsProposalUpdateParamsSchema,
-  SkillsProposalsListParamsSchema,
-  SkillsProposalsListResultSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsSecurityVerdictsParamsSchema,
@@ -192,18 +194,6 @@ import {
   UpdateRunParamsSchema,
 } from "./config.js";
 import {
-  CrestodianChatParamsSchema,
-  CrestodianChatResultSchema,
-  CrestodianSetupActivateParamsSchema,
-  CrestodianSetupActivateResultSchema,
-  CrestodianSetupAuthStartParamsSchema,
-  CrestodianSetupAuthStartResultSchema,
-  CrestodianSetupDetectParamsSchema,
-  CrestodianSetupDetectResultSchema,
-  CrestodianSetupVerifyParamsSchema,
-  CrestodianSetupVerifyResultSchema,
-} from "./crestodian.js";
-import {
   CronAddParamsSchema,
   CronAddResultSchema,
   CronDeclarativeAddResultSchema,
@@ -282,6 +272,7 @@ import {
   GatewaySuspendStatusResultSchema,
   GatewaySuspendTaskBlockerSchema,
 } from "./gateway-suspend.js";
+import { LogMigrationProtocolSchemas } from "./log-migration-protocol-schemas.js";
 import {
   ChatAbortedEventSchema,
   ChatAbortParamsSchema,
@@ -297,8 +288,6 @@ import {
   ChatSendParamsSchema,
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
-  LogsTailParamsSchema,
-  LogsTailResultSchema,
 } from "./logs-chat.js";
 import {
   NodeDescribeParamsSchema,
@@ -309,10 +298,6 @@ import {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   NodePresenceAlivePayloadSchema,
-  NodeInvokeParamsSchema,
-  NodeInvokeProgressParamsSchema,
-  NodeInvokeResultParamsSchema,
-  NodeInvokeRequestEventSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodePairApproveParamsSchema,
@@ -325,6 +310,18 @@ import {
   NodeSkillsUpdateParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
+import {
+  SystemAgentChatParamsSchema,
+  SystemAgentChatResultSchema,
+  SystemAgentSetupActivateParamsSchema,
+  SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAuthStartParamsSchema,
+  SystemAgentSetupAuthStartResultSchema,
+  SystemAgentSetupDetectParamsSchema,
+  SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyParamsSchema,
+  SystemAgentSetupVerifyResultSchema,
+} from "./openclaw.js";
 import {
   PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParamsSchema,
@@ -354,6 +351,7 @@ import {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
 } from "./plugins.js";
+import { NodeInvokeProtocolSchemas } from "./protocol-schemas-node-invoke.js";
 import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
@@ -435,6 +433,7 @@ import {
   SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
 } from "./sessions.js";
+import { SkillWorkshopProtocolSchemas } from "./skill-protocol-schemas.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
 import { TalkSessionAcknowledgeMarkParamsSchema } from "./talk-marks.js";
@@ -460,23 +459,7 @@ import {
   TasksListResultSchema,
   TaskSummarySchema,
 } from "./tasks.js";
-import {
-  TerminalAckResultSchema,
-  TerminalAttachParamsSchema,
-  TerminalAttachResultSchema,
-  TerminalCloseParamsSchema,
-  TerminalDataEventSchema,
-  TerminalEventSchema,
-  TerminalExitEventSchema,
-  TerminalInputParamsSchema,
-  TerminalListResultSchema,
-  TerminalOpenParamsSchema,
-  TerminalOpenResultSchema,
-  TerminalResizeParamsSchema,
-  TerminalSessionInfoSchema,
-  TerminalTextParamsSchema,
-  TerminalTextResultSchema,
-} from "./terminal.js";
+import { TerminalProtocolSchemas } from "./terminal-protocol-schemas.js";
 import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -505,6 +488,7 @@ import {
 
 /** Public schema registry keyed by stable protocol schema name. */
 export const ProtocolSchemas = {
+  AuthProbeStatus: AuthProbeStatusSchema,
   // Handshake, transport frames, state snapshots, and shared error envelopes.
   ConnectParams: ConnectParamsSchema,
   WorkerAdmissionHandshake: WorkerAdmissionHandshakeSchema,
@@ -584,9 +568,7 @@ export const ProtocolSchemas = {
   NodeSkillsUpdateParams: NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
-  NodeInvokeParams: NodeInvokeParamsSchema,
-  NodeInvokeProgressParams: NodeInvokeProgressParamsSchema,
-  NodeInvokeResultParams: NodeInvokeResultParamsSchema,
+  ...NodeInvokeProtocolSchemas,
   NodeEventParams: NodeEventParamsSchema,
   NodeEventResult: NodeEventResultSchema,
   NodePresenceAlivePayload: NodePresenceAlivePayloadSchema,
@@ -595,7 +577,6 @@ export const ProtocolSchemas = {
   NodePendingDrainResult: NodePendingDrainResultSchema,
   NodePendingEnqueueParams: NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResult: NodePendingEnqueueResultSchema,
-  NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
 
   // Push and secret-resolution payloads used by mobile/control integrations.
   PushTestParams: PushTestParamsSchema,
@@ -713,16 +694,16 @@ export const ProtocolSchemas = {
   ConfigSchemaLookupParams: ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,
   ConfigSchemaLookupResult: ConfigSchemaLookupResultSchema,
-  CrestodianChatParams: CrestodianChatParamsSchema,
-  CrestodianChatResult: CrestodianChatResultSchema,
-  CrestodianSetupDetectParams: CrestodianSetupDetectParamsSchema,
-  CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
-  CrestodianSetupVerifyParams: CrestodianSetupVerifyParamsSchema,
-  CrestodianSetupVerifyResult: CrestodianSetupVerifyResultSchema,
-  CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
-  CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
-  CrestodianSetupAuthStartParams: CrestodianSetupAuthStartParamsSchema,
-  CrestodianSetupAuthStartResult: CrestodianSetupAuthStartResultSchema,
+  SystemAgentChatParams: SystemAgentChatParamsSchema,
+  SystemAgentChatResult: SystemAgentChatResultSchema,
+  SystemAgentSetupDetectParams: SystemAgentSetupDetectParamsSchema,
+  SystemAgentSetupDetectResult: SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyParams: SystemAgentSetupVerifyParamsSchema,
+  SystemAgentSetupVerifyResult: SystemAgentSetupVerifyResultSchema,
+  SystemAgentSetupActivateParams: SystemAgentSetupActivateParamsSchema,
+  SystemAgentSetupActivateResult: SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAuthStartParams: SystemAgentSetupAuthStartParamsSchema,
+  SystemAgentSetupAuthStartResult: SystemAgentSetupAuthStartResultSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,
@@ -804,6 +785,9 @@ export const ProtocolSchemas = {
   ModelChoice: ModelChoiceSchema,
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
+  ModelsProbeParams: ModelsProbeParamsSchema,
+  ModelsProbeTargetResult: ModelsProbeTargetResultSchema,
+  ModelsProbeResult: ModelsProbeResultSchema,
   CommandEntry: CommandEntrySchema,
   CommandsListParams: CommandsListParamsSchema,
   CommandsListResult: CommandsListResultSchema,
@@ -831,8 +815,7 @@ export const ProtocolSchemas = {
   SkillsCuratorActionResult: SkillsCuratorActionResultSchema,
   SkillsCuratorStatusParams: SkillsCuratorStatusParamsSchema,
   SkillsCuratorStatusResult: SkillsCuratorStatusResultSchema,
-  SkillsProposalsListParams: SkillsProposalsListParamsSchema,
-  SkillsProposalsListResult: SkillsProposalsListResultSchema,
+  ...SkillWorkshopProtocolSchemas,
   SkillsProposalInspectParams: SkillsProposalInspectParamsSchema,
   SkillsProposalInspectResult: SkillsProposalInspectResultSchema,
   SkillsProposalCreateParams: SkillsProposalCreateParamsSchema,
@@ -866,23 +849,8 @@ export const ProtocolSchemas = {
   CronRunParams: CronRunParamsSchema,
   CronRunsParams: CronRunsParamsSchema,
   CronRunLogEntry: CronRunLogEntrySchema,
-  LogsTailParams: LogsTailParamsSchema,
-  LogsTailResult: LogsTailResultSchema,
-  TerminalOpenParams: TerminalOpenParamsSchema,
-  TerminalOpenResult: TerminalOpenResultSchema,
-  TerminalInputParams: TerminalInputParamsSchema,
-  TerminalResizeParams: TerminalResizeParamsSchema,
-  TerminalCloseParams: TerminalCloseParamsSchema,
-  TerminalAttachParams: TerminalAttachParamsSchema,
-  TerminalAttachResult: TerminalAttachResultSchema,
-  TerminalSessionInfo: TerminalSessionInfoSchema,
-  TerminalListResult: TerminalListResultSchema,
-  TerminalTextParams: TerminalTextParamsSchema,
-  TerminalTextResult: TerminalTextResultSchema,
-  TerminalAckResult: TerminalAckResultSchema,
-  TerminalDataEvent: TerminalDataEventSchema,
-  TerminalExitEvent: TerminalExitEventSchema,
-  TerminalEvent: TerminalEventSchema,
+  ...LogMigrationProtocolSchemas,
+  ...TerminalProtocolSchemas,
   ApprovalKind: ApprovalKindSchema,
   ApprovalDecision: ApprovalDecisionSchema,
   ApprovalAllowDecision: ApprovalAllowDecisionSchema,
@@ -981,3 +949,4 @@ export {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../version.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -49,6 +49,11 @@ describe("live test provider drift", () => {
         "Service temporarily unavailable. The model is at capacity and currently cannot serve this request.",
       ),
     ).toBe(true);
+    expect(
+      isLiveProviderUnavailableDrift(
+        "Error Code unknown: Service temporarily unavailable. The model's availability is currently degraded.",
+      ),
+    ).toBe(true);
   });
 
   it("returns explicit skip labels only for enabled drift classes", () => {
@@ -66,5 +71,12 @@ describe("live test provider drift", () => {
         allowBilling: true,
       }),
     ).toBeUndefined();
+    expect(
+      shouldSkipLiveProviderDrift({
+        error:
+          "Error Code unknown: Service temporarily unavailable. The model's availability is currently degraded.",
+        allowProviderUnavailable: true,
+      }),
+    ).toEqual({ reason: "provider-unavailable", label: "provider unavailable" });
   });
 });

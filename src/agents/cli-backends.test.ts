@@ -1193,3 +1193,4 @@ describe("resolveCliBackendConfig alias precedence", () => {
     expect(resolved?.config.args).toEqual(["--canonical"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

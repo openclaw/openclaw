@@ -1092,16 +1092,22 @@ describe("cron tool", () => {
 
   it.each([
     ["delivery.channel", { channel: " ", to: "chat-1" }],
+    ["delivery.channel", { channel: 123, to: "chat-1" }],
     ["delivery.to", { mode: "announce", channel: "telegram", to: " \t" }],
+    ["delivery.to", { mode: "announce", channel: "telegram", to: {} }],
     [
       "delivery.failureDestination.to",
       { mode: "announce", failureDestination: { mode: "announce", to: " " } },
     ],
     [
+      "delivery.failureDestination.to",
+      { mode: "announce", failureDestination: { mode: "announce", to: false } },
+    ],
+    [
       "delivery.completionDestination.to",
       { mode: "announce", completionDestination: { mode: "webhook", to: "\n" } },
     ],
-  ])("rejects blank cron.add %s before gateway normalization", async (field, delivery) => {
+  ])("rejects invalid cron.add %s before gateway normalization", async (field, delivery) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -2075,10 +2081,13 @@ describe("cron tool", () => {
 
   it.each([
     ["delivery.channel", { channel: " " }],
+    ["delivery.channel", { channel: 123 }],
     ["delivery.to", { to: " " }],
+    ["delivery.to", { to: {} }],
     ["delivery.failureDestination.to", { failureDestination: { to: " " } }],
+    ["delivery.failureDestination.to", { failureDestination: { to: false } }],
     ["delivery.completionDestination.to", { completionDestination: { mode: "webhook", to: " " } }],
-  ])("rejects blank cron.update %s before gateway normalization", async (field, delivery) => {
+  ])("rejects invalid cron.update %s before gateway normalization", async (field, delivery) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -2943,3 +2952,4 @@ describe("cron tool", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

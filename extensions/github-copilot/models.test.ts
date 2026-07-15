@@ -1,4 +1,5 @@
 // Github Copilot tests cover models plugin behavior.
+import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +53,10 @@ function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
     throw new Error(`expected model ${ctx.modelId} to resolve`);
   }
   return result;
+}
+
+function copilotCredentialFixture(proxyHost: string): string {
+  return `test-token-placeholder;proxy-ep=${proxyHost};`;
 }
 
 describe("resolveCopilotForwardCompatModel", () => {
@@ -340,17 +345,18 @@ describe("github-copilot token", () => {
   const cachePath = "/tmp/openclaw-state/credentials/github-copilot.token.json";
 
   beforeEach(() => {
-    jsonStoreMocks.loadJsonFile.mockClear();
-    jsonStoreMocks.saveJsonFile.mockClear();
+    jsonStoreMocks.loadJsonFile.mockReset();
+    jsonStoreMocks.saveJsonFile.mockReset();
   });
 
-  it("derives baseUrl from token", () => {
-    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBe(
-      "https://api.example.com",
-    );
-    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=https://proxy.foo.bar;")).toBe(
-      "https://api.foo.bar",
-    );
+  it("derives baseUrl only from trusted Copilot token hosts", () => {
+    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBeNull();
+    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=https://proxy.foo.bar;")).toBeNull();
+    expect(
+      deriveCopilotApiBaseUrlFromToken(
+        copilotCredentialFixture("proxy.individual.githubcopilot.com"),
+      ),
+    ).toBe("https://api.individual.githubcopilot.com");
   });
 
   it("uses cache when token is still valid", async () => {
@@ -360,6 +366,7 @@ describe("github-copilot token", () => {
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
       integrationId: "vscode-chat",
+      sourceCredentialFingerprint: createHash("sha256").update("gh").digest("hex"),
       domain: "github.com",
     });
 
@@ -373,7 +380,7 @@ describe("github-copilot token", () => {
     });
 
     expect(res.token).toBe("cached;proxy-ep=proxy.example.com;");
-    expect(res.baseUrl).toBe("https://api.example.com");
+    expect(res.baseUrl).toBe("https://api.individual.githubcopilot.com");
     expect(res.source).toContain("cache:");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -403,7 +410,7 @@ describe("github-copilot token", () => {
     });
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
-    expect(res.baseUrl).toBe("https://api.contoso.test");
+    expect(res.baseUrl).toBe("https://api.individual.githubcopilot.com");
     const [, calledInit] = fetchImpl.mock.calls[0] ?? [];
     expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
       "identity",

@@ -1747,3 +1747,4 @@ export const testing = {
     typescriptRuntimeForTest = runtime;
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

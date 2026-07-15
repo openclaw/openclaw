@@ -11,19 +11,20 @@ import {
   resetShellSnapshotCacheForTests,
   resolveShellSnapshotDir,
 } from "./shell-snapshot.js";
-import { getPosixShellArgs, resolveShellFromPath } from "./shell-utils.js";
+import { getBashShellConfig, getShellConfig } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
+
+function getPosixShellArgs(shellPath: string): string[] {
+  return getShellConfig(shellPath).args;
+}
 
 function resolveBashForTest(): string | null {
   if (isWin) {
     return null;
   }
-  if (fs.existsSync("/bin/bash")) {
-    return "/bin/bash";
-  }
-  return resolveShellFromPath("bash") ?? null;
+  return getBashShellConfig().shell;
 }
 
 function resolveZshForTest(): string | null {
@@ -33,7 +34,16 @@ function resolveZshForTest(): string | null {
   if (fs.existsSync("/bin/zsh")) {
     return "/bin/zsh";
   }
-  return resolveShellFromPath("zsh") ?? null;
+  for (const entry of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(entry, "zsh");
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching the test host PATH.
+    }
+  }
+  return null;
 }
 
 function setSnapshotStateForTest(

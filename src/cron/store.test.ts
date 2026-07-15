@@ -1236,3 +1236,4 @@ describe("saveCronStore", () => {
     await expectPathMissing(`${storePath}.bak`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

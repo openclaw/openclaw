@@ -851,13 +851,9 @@ export {
   formatCost,
   formatDayLabel,
   formatFullDate,
-  buildUsageMosaicStats,
-  formatHourLabel,
   formatIsoDate,
   formatTokens,
-  getHourAndWeekdayForUtcQuarterBucket,
-  getZonedHour,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
-  setToHourEnd,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

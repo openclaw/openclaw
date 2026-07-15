@@ -1,11 +1,9 @@
 // Node HTTP proxy tests cover proxy agent creation for provider requests.
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
-import {
-  createHttpProxyAgentsForTarget,
-  resolveHttpProxyUrlForTarget,
-  UNSUPPORTED_PROXY_PROTOCOL_MESSAGE,
-} from "./node-http-proxy.js";
+import { createHttpProxyAgentsForTarget, resolveHttpProxyUrlForTarget } from "./node-http-proxy.js";
+
+const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE = "Unsupported proxy protocol.";
 
 const PROXY_ENV_KEYS = [
   "http_proxy",

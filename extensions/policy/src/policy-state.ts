@@ -259,15 +259,15 @@ export function policyDocumentHash(policy: unknown): string {
   return sha256(stableJson(policy));
 }
 
-export function policyWorkspaceHash(evidence: PolicyEvidence): string {
+function policyWorkspaceHash(evidence: PolicyEvidence): string {
   return sha256(stableJson(evidence));
 }
 
-export function policyFindingsHash(findings: readonly unknown[]): string {
+function policyFindingsHash(findings: readonly unknown[]): string {
   return sha256(stableJson(findings));
 }
 
-export function policyAttestationHash(input: {
+function policyAttestationHash(input: {
   readonly ok: boolean;
   readonly policyHash?: string;
   readonly workspaceHash: string;
@@ -3079,3 +3079,4 @@ function stableJson(value: unknown): string {
   }
   return JSON.stringify(value);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

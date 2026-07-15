@@ -767,3 +767,4 @@ export function normalizeCronJobPatch(
     ...options,
   }) as CronJobPatch | null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

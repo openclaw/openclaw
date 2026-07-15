@@ -353,6 +353,12 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
+  it("parses the native session discovery toggle", () => {
+    expect(readCodexPluginConfig({ sessionCatalog: { enabled: false } }).sessionCatalog).toEqual({
+      enabled: false,
+    });
+  });
+
   it("rejects unknown app-server fields", () => {
     expect(
       readCodexPluginConfig({
@@ -2875,3 +2881,4 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

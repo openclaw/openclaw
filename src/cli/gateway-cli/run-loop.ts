@@ -907,6 +907,7 @@ export async function runGatewayLoop(params: {
         resetCronActiveJobs,
         resetAllLanes,
         resetGatewayRestartStateForInProcessRestart,
+        resetGatewaySuspendCoordinatorForLifecycleRestart,
         rotateAgentEventLifecycleGeneration,
         waitForActiveCronJobs,
         waitForActiveCronTaskRuns,
@@ -924,6 +925,9 @@ export async function runGatewayLoop(params: {
       }
       retireActiveCronTaskRunTracking();
       resetCronActiveJobs();
+      // Resume the retired scheduler before resetAllLanes invalidates its
+      // suspension admission callback and discards the coordinator entry.
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
@@ -992,3 +996,4 @@ export async function runGatewayLoop(params: {
     cleanupSignals();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

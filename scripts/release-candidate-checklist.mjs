@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
@@ -272,6 +272,7 @@ export function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    env: options.env ? { ...process.env, ...options.env } : process.env,
     maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES,
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
@@ -391,6 +392,16 @@ export async function githubApi(path, options = {}) {
   const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES;
   const controller = new AbortController();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const request = (requestToken) =>
+    fetchImpl(`https://api.github.com/${path}`, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/vnd.github+json",
+        ...(requestToken ? { Authorization: `Bearer ${requestToken}` } : {}),
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
   let timeout;
   const timeoutPromise = new Promise((_, reject) => {
     timeout = setTimeout(() => {
@@ -400,21 +411,24 @@ export async function githubApi(path, options = {}) {
     timeout.unref?.();
   });
   try {
-    const response = await Promise.race([
-      (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
-        signal: controller.signal,
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${token}`,
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-      }),
-      timeoutPromise,
-    ]);
-    const text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+    let response = await Promise.race([request(token), timeoutPromise]);
+    let text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
       signal: controller.signal,
       timeoutPromise,
     });
+    const primaryRateLimitExhausted =
+      (response.status === 403 || response.status === 429) &&
+      (/API rate limit exceeded/iu.test(text) ||
+        response.headers.get("x-ratelimit-remaining") === "0");
+    if (primaryRateLimitExhausted) {
+      // Public release evidence remains readable without auth when one maintainer
+      // token is exhausted. Mutating gh commands keep their authenticated path.
+      response = await Promise.race([request(""), timeoutPromise]);
+      text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+        signal: controller.signal,
+        timeoutPromise,
+      });
+    }
     if (!response.ok) {
       throw new Error(`GitHub API ${path} failed with ${response.status}: ${text}`);
     }
@@ -585,6 +599,24 @@ function gitIsAncestor(ancestor, target) {
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
+}
+
+export function validateNpmPreflightRunSource({
+  workflowRun,
+  workflowRef,
+  isTrustedWorkflowAncestor = gitIsAncestor,
+}) {
+  const trustedRef = `refs/remotes/origin/${workflowRef}`;
+  if (!isTrustedWorkflowAncestor(workflowRun.headSha, trustedRef)) {
+    throw new Error(
+      `npm preflight workflow SHA ${workflowRun.headSha} is not reachable from trusted ${workflowRef}`,
+    );
+  }
+  return {
+    status: "passed",
+    headSha: workflowRun.headSha,
+    workflowRef,
+  };
 }
 
 function candidateContributionRecordPullRequests(
@@ -1163,10 +1195,15 @@ export function validateFullManifest(manifest, params) {
   }
 }
 
-export function candidateParallelsArgs(tarballPath, dependencyTarballPaths = []) {
+export function candidateParallelsArgs(
+  tarballPath,
+  dependencyTarballPaths = [],
+  toolingRoot = TOOLING_ROOT,
+) {
   return [
-    "test:parallels:npm-update",
-    "--",
+    "exec",
+    "tsx",
+    join(toolingRoot, "scripts/e2e/parallels/npm-update-smoke.ts"),
     "--target-tarball",
     tarballPath,
     ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
@@ -1179,8 +1216,12 @@ export function candidateParallelsShellCommand(
   timeoutBin,
   dependencyTarballPaths = [],
 ) {
+  // Login shells can replace the candidate's supported Node with ambient host Node.
+  // Keep the invoking Node first so pnpm and npm use the validated runtime.
+  const nodeBinDir = dirname(process.execPath);
   return [
     'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    `export PATH=${shellQuote(nodeBinDir)}:"$PATH";`,
     "exec",
     shellQuote(timeoutBin),
     "--foreground",
@@ -1194,11 +1235,20 @@ async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths
   if (options.skipParallels) {
     return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
+  // This function runs inside trusted tooling, not the frozen target checkout.
+  // Prepare its isolated dependencies here before importing the Parallels harness.
+  run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+    cwd: TOOLING_ROOT,
+  });
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
   }).trim();
   const command = candidateParallelsShellCommand(tarballPath, timeoutBin, dependencyTarballPaths);
-  run("bash", ["-lc", command]);
+  run("bash", ["-lc", command], {
+    env: {
+      OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(process.cwd(), ".artifacts", "parallels"),
+    },
+  });
   return {
     status: "passed",
     command,
@@ -1332,9 +1382,10 @@ async function main() {
     workflowName: "OpenClaw NPM Release",
     workflowRef: options.workflowRef,
   });
-  if (npmRun.headSha !== targetSha) {
-    throw new Error(`run SHA mismatch: tag=${targetSha} npm=${npmRun.headSha}`);
-  }
+  const npmPreflightSource = validateNpmPreflightRunSource({
+    workflowRun: npmRun,
+    workflowRef: options.workflowRef,
+  });
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const fullDir = join(options.outputDir, "full-release-validation");
@@ -1435,6 +1486,7 @@ async function main() {
     fullReleaseValidationUrl: fullRun.url,
     fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
+    npmPreflightSource,
     artifacts: {
       npmPreflight: npmArtifactName,
       fullReleaseValidation: fullArtifactName,

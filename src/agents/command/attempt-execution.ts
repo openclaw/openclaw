@@ -934,14 +934,14 @@ export function runAgentAttempt(params: {
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
-    // Hidden internal runs have no assistant-event consumer. Visible subagent
-    // lanes can still feed Control UI, session subscribers, and ACP parent relays.
+    // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
     suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     toolsAllow: params.opts.toolsAllow,
+    runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
@@ -1425,3 +1425,4 @@ export function emitAcpAssistantDelta(params: { runId: string; text: string; del
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

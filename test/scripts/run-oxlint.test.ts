@@ -69,7 +69,9 @@ describe("run-oxlint", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
-    expect(packageJson.scripts.lint).toBe("node scripts/run-oxlint-shards.mjs");
+    expect(packageJson.scripts.lint).toBe(
+      "pnpm lint:ui:i18n && node scripts/run-oxlint-shards.mjs",
+    );
     expect(packageJson.scripts["lint:core"]).toBe(
       "node scripts/run-oxlint-shards.mjs --only=core --split-core",
     );

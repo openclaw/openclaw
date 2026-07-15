@@ -5494,3 +5494,4 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

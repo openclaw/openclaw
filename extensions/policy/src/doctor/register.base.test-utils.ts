@@ -1,7 +1,11 @@
 // Imported by register.test.ts to keep its mocked suite in one Vitest module graph.
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
+import {
+  listHealthChecks,
+  type HealthCheck,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/health";
 import { clearHealthChecksForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -9,17 +13,12 @@ import {
   createPolicyAttestation,
   policyDocumentHash,
 } from "../policy-state.js";
-import {
-  evaluatePolicy,
-  registerPolicyDoctorChecks,
-  resetPolicyDoctorChecksForTest,
-} from "./register.js";
+import { evaluatePolicy, registerPolicyDoctorChecks } from "./register.js";
 import {
   workspaceDir,
   cfgWithPolicy,
   ctx,
   repairCtx,
-  registerChecks,
   runPolicyChecks,
   runDeniedChannelRepair,
   runPolicyRepairCheck,
@@ -245,16 +244,16 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
-  it("registers policy health checks once", () => {
-    const checks = registerChecks();
-    const duplicateChecks: HealthCheck[] = [];
-    registerPolicyDoctorChecks({
-      registerHealthCheck(check) {
-        duplicateChecks.push(check);
+  it("registers the complete policy health check set once per registry", () => {
+    const checks: HealthCheck[] = [];
+    const host = {
+      registerHealthCheck(check: HealthCheck) {
+        checks.push(check);
       },
-    });
-
-    expect(checks.map((check) => check.id)).toEqual([
+    };
+    registerPolicyDoctorChecks(host);
+    registerPolicyDoctorChecks(host);
+    const expectedIds = [
       "policy/policy-jsonc-missing",
       "policy/policy-jsonc-invalid",
       "policy/policy-hash-mismatch",
@@ -319,8 +318,16 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/tools-missing-sensitivity-token",
       "policy/tools-missing-owner",
       "policy/tools-unknown-sensitivity-token",
-    ]);
-    expect(duplicateChecks).toEqual([]);
+    ];
+    expect(checks.map((check) => check.id)).toEqual(expectedIds);
+
+    registerPolicyDoctorChecks();
+    registerPolicyDoctorChecks();
+    expect(listHealthChecks().map((check) => check.id)).toEqual(expectedIds);
+
+    clearHealthChecksForTest();
+    registerPolicyDoctorChecks();
+    expect(listHealthChecks().map((check) => check.id)).toEqual(expectedIds);
   });
 
   it("reports a missing policy file when the Policy plugin is enabled", async () => {
@@ -916,7 +923,6 @@ describe("registerPolicyDoctorChecks", () => {
         "utf-8",
       );
       clearHealthChecksForTest();
-      resetPolicyDoctorChecksForTest();
 
       const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
 
@@ -2023,3 +2029,4 @@ describe("registerPolicyDoctorChecks", () => {
     expect(cfg.tools?.deny).toEqual(["read"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

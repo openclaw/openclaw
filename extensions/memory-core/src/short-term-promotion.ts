@@ -1063,7 +1063,7 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
   ]);
 }
 
-export function isShortTermMemoryPath(filePath: string): boolean {
+function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
     return false;
@@ -2869,64 +2869,4 @@ export async function removeGroundedShortTermCandidates(params: {
 
   return { removed, storePath };
 }
-
-async function writeRawShortTermStoreForTest(
-  workspaceDir: string,
-  raw: unknown,
-  namespace: string,
-  metaKey: "recall" | "phase",
-): Promise<void> {
-  const record = asRecord(raw);
-  const entries = asRecord(record?.entries);
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace,
-      workspaceDir,
-      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-    }),
-    writeMemoryCoreWorkspaceEntry({
-      namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir,
-      key: metaKey,
-      value: {
-        updatedAt:
-          typeof record?.updatedAt === "string" && record.updatedAt.trim()
-            ? record.updatedAt
-            : new Date().toISOString(),
-      },
-    }),
-  ]);
-}
-
-export const testing = {
-  parseLockOwnerPid,
-  isProcessLikelyAlive,
-  readRecallStore: readStore,
-  readPhaseSignalStore,
-  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
-  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
-  writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
-  },
-  deleteShortTermLock: async (workspaceDir: string) => {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).delete(memoryCoreWorkspaceStateKey(workspaceDir));
-  },
-  deriveConceptTags,
-  calculateConsolidationComponent,
-  calculatePhaseSignalBoost,
-  compareShortTermRecallRetention,
-  buildClaimHash,
-  totalSignalCountForEntry,
-  isContaminatedDreamingSnippet,
-  lineRangeOverlapsDreamingFence,
-  SHORT_TERM_RECALL_MAX_ENTRIES,
-  SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

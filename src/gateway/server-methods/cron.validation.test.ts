@@ -11,6 +11,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import type { GatewayClient } from "./types.js";
 
 const getRuntimeConfig = vi.hoisted(() =>
@@ -150,6 +151,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
         const nextOffset = offset + pageJobs.length;
         return {
           jobs: pageJobs,
+          snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
           total,
           offset,
           limit,
@@ -701,6 +703,36 @@ describe("cron method validation", () => {
       undefined,
     );
     expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
+  });
+
+  it("keeps caller-scoped cron.list revisions independent of hidden jobs", async () => {
+    const visibleJob = createCronJob({ id: "cron-visible", agentId: "ops" });
+    const firstContext = createCronContext([
+      visibleJob,
+      createCronJob({ id: "cron-hidden-a", agentId: "worker" }),
+    ]);
+    const secondContext = createCronContext([
+      visibleJob,
+      createCronJob({ id: "cron-hidden-b", agentId: "worker" }),
+    ]);
+
+    const first = await invokeCron(
+      "cron.list",
+      { includeDisabled: true },
+      { context: firstContext, client: callerClient("ops") },
+    );
+    const second = await invokeCron(
+      "cron.list",
+      { includeDisabled: true },
+      { context: secondContext, client: callerClient("ops") },
+    );
+    const firstPayload = requireRecord(first.respond.mock.calls[0]?.[1], "first cron.list payload");
+    const secondPayload = requireRecord(
+      second.respond.mock.calls[0]?.[1],
+      "second cron.list payload",
+    );
+
+    expect(firstPayload.snapshotRevision).toBe(secondPayload.snapshotRevision);
   });
 
   it("rejects caller-scoped cron.list for a foreign explicit agentId", async () => {
@@ -1598,6 +1630,33 @@ describe("cron method validation", () => {
     });
   });
 
+  it.each([
+    ["delivery.channel", { mode: "announce", channel: 123, to: "telegram:123" }],
+    ["delivery.to", { mode: "announce", channel: "telegram", to: {} }],
+    [
+      "delivery.failureDestination.channel",
+      { mode: "announce", failureDestination: { channel: true, to: "telegram:123" } },
+    ],
+    [
+      "delivery.failureDestination.to",
+      { mode: "announce", failureDestination: { channel: "telegram", to: [] } },
+    ],
+    [
+      "delivery.completionDestination.to",
+      { mode: "announce", completionDestination: { mode: "webhook", to: 456 } },
+    ],
+  ])("rejects non-string cron.add %s before normalization", async (field, delivery) => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({ name: "non-string delivery target", delivery }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: `${field} must be a non-empty string`,
+    });
+  });
+
   it("rejects announce targets prefixed for a different explicit delivery channel", async () => {
     setRuntimeConfig(telegramSlackConfig());
 
@@ -1765,6 +1824,22 @@ describe("cron method validation", () => {
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "delivery.completionDestination.to must be a non-empty string",
+    });
+  });
+
+  it.each([
+    ["delivery.channel", { channel: false }],
+    ["delivery.to", { to: 123 }],
+    ["delivery.failureDestination.channel", { failureDestination: { channel: {} } }],
+    ["delivery.failureDestination.to", { failureDestination: { to: true } }],
+    ["delivery.completionDestination.to", { completionDestination: { mode: "webhook", to: [] } }],
+  ])("rejects non-string cron.update %s before normalization", async (field, delivery) => {
+    const { context, respond } = await invokeCronUpdateDelivery(delivery);
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: `${field} must be a non-empty string`,
     });
   });
 
@@ -2097,16 +2172,41 @@ describe("cron method validation", () => {
 
     const { respond } = await invokeCron(
       "cron.run",
-      { id: "cron-1", mode: "due" },
+      {
+        id: "cron-1",
+        mode: "due",
+        expectedProcessInstanceId: getGatewayProcessInstanceId(),
+      },
       { context, client: callerClient("ops") },
     );
 
     expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "due");
     expect(respond).toHaveBeenCalledWith(
       true,
-      { ok: true, enqueued: true, runId: "run-1" },
+      {
+        ok: true,
+        enqueued: true,
+        runId: "run-1",
+        processInstanceId: getGatewayProcessInstanceId(),
+      },
       undefined,
     );
+  });
+
+  it("rejects cron.run before enqueue when the Gateway process changed after preflight", async () => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+
+    const { respond } = await invokeCron(
+      "cron.run",
+      { id: "cron-1", expectedProcessInstanceId: "stale-process" },
+      { context, client: callerClient("ops") },
+    );
+
+    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Gateway process changed after preflight",
+    });
   });
 
   it("hides caller-scoped cron.run for a foreign agent", async () => {
@@ -2355,3 +2455,4 @@ describe("cron method validation", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

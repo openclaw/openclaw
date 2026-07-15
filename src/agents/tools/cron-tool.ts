@@ -356,7 +356,7 @@ function createCronPatchObjectSchema(): TSchema {
 }
 
 // Flattened schema: runtime validates per-action requirements.
-export function createCronToolSchema(): TSchema {
+function createCronToolSchema(): TSchema {
   return Type.Object(
     {
       action: stringEnum(CRON_ACTIONS),
@@ -1330,3 +1330,4 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
   };
   return setToolTerminalPresentation(tool, formatCronTerminalPresentation);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

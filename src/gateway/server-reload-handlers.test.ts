@@ -22,8 +22,9 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   requestGatewayRestartWithSignalAdmission,
+  resetGatewayRestartStateForInProcessRestart,
   setGatewaySigusr1RestartPolicy,
-  testing as restartTesting,
+  setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import {
   pinActivePluginChannelRegistry,
@@ -38,7 +39,6 @@ import {
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
-  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
@@ -69,6 +69,16 @@ import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
 type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
+
+const restartTesting = {
+  resetSigusr1State() {
+    resetGatewayRestartStateForInProcessRestart();
+    markGatewaySigusr1RestartHandled();
+    setGatewaySigusr1RestartPolicy({ allowExternal: false });
+    setPreRestartDeferralCheck(() => 0);
+    resetGatewayWorkAdmission();
+  },
+};
 
 function createGatewayReloadHandlers(
   params: Omit<ReloadHandlerParams, "cronReconciliation" | "requestRecoveryRestart"> & {
@@ -1930,6 +1940,40 @@ describe("gateway restart deferral preflight", () => {
     }
   });
 
+  it("reports restart debt until a replacement config retires it", () => {
+    const requestRecoveryRestart = vi
+      .fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>()
+      .mockReturnValue({ status: "failed" });
+    const handlers = createReloadHandlersForTest(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      requestRecoveryRestart,
+    );
+    const restartPlan = {
+      ...createHotTailPlan(),
+      changedPaths: ["gateway.port"],
+      restartGateway: true,
+      restartReasons: ["gateway.port"],
+      hotReasons: [],
+    } satisfies GatewayReloadPlan;
+
+    try {
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(false);
+      const restart = handlers.requestGatewayRestart(restartPlan, {
+        gateway: { port: 19_001 },
+      });
+      restart.settle("rejected");
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(true);
+
+      expect(handlers.acceptRestartConfig({})).toEqual({ retireRejectedRestart: true });
+      expect(handlers.hasOutstandingGatewayRestart()).toBe(false);
+    } finally {
+      handlers.stopRestartRetries();
+    }
+  });
+
   it("preserves deferred hot-recovery debt across unrelated accepted config changes", async () => {
     const requestRecoveryRestart = vi.fn<
       NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>
@@ -2055,6 +2099,7 @@ describe("gateway restart deferral preflight", () => {
       acceptRestartConfig,
       applyHotReload,
       beginGatewayRestartLifecycle,
+      hasOutstandingGatewayRestart,
       pauseGatewayRestartForConfigCandidate,
       requestGatewayRestart,
       stopRestartRetries,
@@ -2103,6 +2148,7 @@ describe("gateway restart deferral preflight", () => {
       pauseGatewayRestartForConfigCandidate();
       const accepted = acceptRestartConfig(configA);
       expect(accepted).toEqual({ retireRejectedRestart: true });
+      expect(hasOutstandingGatewayRestart()).toBe(false);
     } finally {
       hoisted.activeTaskBlockers.length = 0;
       stopRestartRetries();
@@ -2449,7 +2495,7 @@ describe("gateway restart deferral preflight", () => {
     resetGatewayWorkAdmission();
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
-    const handoff = tryBeginGatewayIndependentRootWorkAdmission();
+    const handoff = tryBeginGatewayRootWorkAdmission();
     const signalSpy = vi.fn();
     process.once("SIGUSR1", signalSpy);
     vi.useFakeTimers();
@@ -6390,3 +6436,4 @@ describe("deferred channel reload abort generation", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

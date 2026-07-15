@@ -375,31 +375,6 @@ export interface CronJobs {
   wake_mode: string;
 }
 
-export interface CronRunLogs {
-  created_at: number;
-  delivered: number | null;
-  delivery_error: string | null;
-  delivery_status: string | null;
-  diagnostics_summary: string | null;
-  duration_ms: number | null;
-  entry_json: string;
-  error: string | null;
-  job_id: string;
-  model: string | null;
-  next_run_at_ms: number | null;
-  provider: string | null;
-  run_at_ms: number | null;
-  run_id: string | null;
-  seq: number;
-  session_id: string | null;
-  session_key: string | null;
-  status: string | null;
-  store_key: string;
-  summary: string | null;
-  total_tokens: number | null;
-  ts: number;
-}
-
 export interface CurrentConversationBindings {
   account_id: string;
   binding_id: string;
@@ -877,6 +852,20 @@ export interface SessionStateHeads {
   updated_at: number;
 }
 
+export interface SessionUpstreamLinks {
+  agent_id: string;
+  catalog_id: string;
+  created_at: number;
+  host_id: string;
+  last_marker_json: string | null;
+  last_scanned_at: number | null;
+  session_key: string;
+  thread_id: string;
+  updated_at: number;
+  upstream_kind: string;
+  upstream_ref_json: string | null;
+}
+
 export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
@@ -1004,6 +993,7 @@ export interface TaskRuns {
   cleanup_after: number | null;
   created_at: number;
   delivery_status: string;
+  detail_json: string | null;
   ended_at: number | null;
   error: string | null;
   label: string | null;
@@ -1241,7 +1231,6 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
-  cron_run_logs: CronRunLogs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
@@ -1277,6 +1266,7 @@ export interface DB {
   session_groups: SessionGroups;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;
+  session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
