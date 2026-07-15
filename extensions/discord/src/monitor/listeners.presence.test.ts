@@ -365,7 +365,8 @@ describe("DiscordPresenceListener", () => {
       cfg: {} as OpenClawConfig,
       accountId: "molty",
       guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
+        // Disable the reconnect window; this test targets stale-lookup detachment.
+        "guild-1": { presenceEvents: { channelId: "channel-1", reconnectSuppressSeconds: 0 } },
       },
       cooldownStore: cooldownStore(),
       nowMs: () => 1_000,
@@ -529,6 +530,167 @@ describe("DiscordPresenceListener", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses the presence replay burst after a gateway reconnect", async () => {
+    let nowMs = 0;
+    const info = vi.fn();
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      logger: { info } as never,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": { presenceEvents: { channelId: "channel-1" } },
+      },
+      cooldownStore: cooldownStore(),
+      nowMs: () => nowMs,
+    });
+    const humanClient = client();
+
+    nowMs = 30_000;
+    listener.resetGatewaySession();
+    listener.seedGuildSnapshot(guildSnapshot([]));
+    nowMs += 1000;
+    await listener.handle(presence("online", "replayed-1"), humanClient);
+    await listener.handle(presence("online", "replayed-2"), humanClient);
+
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(
+      "Discord presence events suppressed",
+      expect.objectContaining({ reason: "reconnect-window" }),
+    );
+
+    // Post-window: replayed members stay marked online; a fresh transition emits.
+    nowMs += 5 * 60 * 1000;
+    await listener.handle(presence("online", "replayed-1"), humanClient);
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    await listener.handle(presence("offline", "replayed-1"), humanClient);
+    await listener.handle(presence("online", "replayed-1"), humanClient);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('user_id="replayed-1"'),
+      expect.anything(),
+    );
+  });
+
+  it("honors a configured reconnect suppression window, including disabling it", async () => {
+    let nowMs = 0;
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": {
+          presenceEvents: { channelId: "channel-1", reconnectSuppressSeconds: 0 },
+        },
+      },
+      cooldownStore: cooldownStore(),
+      nowMs: () => nowMs,
+    });
+    const humanClient = client();
+
+    nowMs = 30_000;
+    listener.resetGatewaySession();
+    listener.seedGuildSnapshot(guildSnapshot([]));
+    nowMs += 1000;
+    await listener.handle(presence("online", "came-online"), humanClient);
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("rate-limits presence event bursts and logs the suppression once", async () => {
+    let nowMs = 0;
+    const info = vi.fn();
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      logger: { info } as never,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": {
+          presenceEvents: { channelId: "channel-1", burstLimit: 2, burstWindowSeconds: 60 },
+        },
+      },
+      cooldownStore: cooldownStore(),
+      nowMs: () => nowMs,
+    });
+    const humanClient = client();
+
+    nowMs = 30_000;
+    listener.seedGuildSnapshot(guildSnapshot([]));
+    for (const userId of ["burst-1", "burst-2", "burst-3", "burst-4"]) {
+      nowMs += 100;
+      await listener.handle(presence("online", userId), humanClient);
+    }
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(2);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(
+      "Discord presence events suppressed",
+      expect.objectContaining({ reason: "burst" }),
+    );
+  });
+
+  it("applies a configured per-user cooldown to re-emission", async () => {
+    let nowMs = 0;
+    // TTL-aware store: the configured cooldown must expire entries, unlike the
+    // simplified helper above which never expires.
+    const values = new Map<string, { value: number; expiresAtMs: number }>();
+    const live = (key: string) => {
+      const entry = values.get(key);
+      return entry && entry.expiresAtMs > nowMs ? entry : undefined;
+    };
+    const ttlStore = {
+      register: (key: string, value: number, opts?: { ttlMs?: number }) =>
+        void values.set(key, { value, expiresAtMs: nowMs + (opts?.ttlMs ?? Infinity) }),
+      registerIfAbsent: (key: string, value: number, opts?: { ttlMs?: number }) => {
+        if (live(key)) {
+          return false;
+        }
+        values.set(key, { value, expiresAtMs: nowMs + (opts?.ttlMs ?? Infinity) });
+        return true;
+      },
+      lookup: (key: string) => live(key)?.value,
+      consume: (key: string) => {
+        const value = live(key)?.value;
+        values.delete(key);
+        return value;
+      },
+      delete: (key: string) => values.delete(key),
+      entries: () => [...values].map(([key, entry]) => ({ key, value: entry.value })),
+      clear: () => values.clear(),
+    } as unknown as PluginStateSyncKeyedStore<number>;
+    const listener = new DiscordPresenceListener({
+      cfg: {} as OpenClawConfig,
+      accountId: "molty",
+      guildEntries: {
+        "guild-1": {
+          presenceEvents: { channelId: "channel-1", cooldownSeconds: 60 },
+        },
+      },
+      cooldownStore: ttlStore,
+      nowMs: () => nowMs,
+    });
+    const humanClient = client();
+
+    nowMs = 30_000;
+    await listener.handle(presence("offline"), humanClient);
+    nowMs += 1000;
+    await listener.handle(presence("online"), humanClient);
+    nowMs += 1000;
+    await listener.handle(presence("offline"), humanClient);
+    nowMs += 1000;
+    await listener.handle(presence("online"), humanClient);
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+
+    nowMs += 60_000;
+    await listener.handle(presence("offline"), humanClient);
+    nowMs += 1000;
+    await listener.handle(presence("online"), humanClient);
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
   });
 
   it("drops offline baselines when the gateway session resets", async () => {

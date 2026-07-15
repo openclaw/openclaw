@@ -6,6 +6,14 @@ export const DISCORD_PRESENCE_GREETING_COOLDOWN_MS = 8 * 60 * 60 * 1000;
 
 type PresenceEventsConfig = NonNullable<DiscordGuildEntryResolved["presenceEvents"]>;
 
+export function resolveDiscordPresenceCooldownMs(
+  config: Pick<PresenceEventsConfig, "cooldownSeconds"> | undefined,
+): number {
+  return config?.cooldownSeconds !== undefined
+    ? config.cooldownSeconds * 1000
+    : DISCORD_PRESENCE_GREETING_COOLDOWN_MS;
+}
+
 export function isDiscordOnlineStatus(status: unknown): boolean {
   return status === "online" || status === "idle" || status === "dnd";
 }
@@ -40,7 +48,7 @@ export function resolveDiscordOnlinePresenceEvent(params: {
   }
   if (
     params.lastEmittedAtMs !== undefined &&
-    params.nowMs - params.lastEmittedAtMs < DISCORD_PRESENCE_GREETING_COOLDOWN_MS
+    params.nowMs - params.lastEmittedAtMs < resolveDiscordPresenceCooldownMs(config)
   ) {
     return null;
   }

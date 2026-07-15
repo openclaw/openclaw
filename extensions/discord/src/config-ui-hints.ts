@@ -316,6 +316,22 @@ export const discordChannelConfigUiHints = {
     label: "Discord Online Presence User IDs",
     help: "Optional immutable Discord user ID allowlist. Omit to include all human members in the guild.",
   },
+  "guilds.*.presenceEvents.cooldownSeconds": {
+    label: "Discord Online Presence Cooldown",
+    help: "Per-user greeting cooldown in seconds. The same member does not re-trigger an online event within this window. Default: 28800 (8 hours).",
+  },
+  "guilds.*.presenceEvents.reconnectSuppressSeconds": {
+    label: "Discord Online Presence Reconnect Suppression",
+    help: "Suppress online-presence events for this many seconds after a gateway (re)connect while Discord replays every member's presence. 0 disables. Default: 300.",
+  },
+  "guilds.*.presenceEvents.burstLimit": {
+    label: "Discord Online Presence Burst Limit",
+    help: "Maximum online-presence events emitted per burst window; the rest are suppressed and logged once. Default: 8.",
+  },
+  "guilds.*.presenceEvents.burstWindowSeconds": {
+    label: "Discord Online Presence Burst Window",
+    help: "Sliding window in seconds used for burst detection. Default: 60.",
+  },
   activityType: {
     label: "Discord Presence Activity Type",
     help: "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",

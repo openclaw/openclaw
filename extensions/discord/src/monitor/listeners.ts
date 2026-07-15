@@ -21,10 +21,14 @@ import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allo
 import { clearPresences, setPresence } from "./presence-cache.js";
 import { openDiscordPresenceCooldownStore } from "./presence-cooldown-store.js";
 import {
-  DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
+  DiscordPresenceEmissionGate,
+  resolveDiscordPresenceGateOptions,
+} from "./presence-emission-gate.js";
+import {
   isDiscordOfflineStatus,
   isDiscordOnlineStatus,
   resolveDiscordOnlinePresenceEvent,
+  resolveDiscordPresenceCooldownMs,
 } from "./presence-events.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
@@ -103,6 +107,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
   private readonly guildPresenceState = new Map<string, GuildPresenceState>();
   private gatewayGeneration = 0;
   private readonly cooldownStore: PluginStateSyncKeyedStore<number>;
+  private readonly emissionGate: DiscordPresenceEmissionGate;
 
   constructor(
     private readonly params: {
@@ -114,11 +119,13 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       nowMs?: () => number;
       cooldownStore?: PluginStateSyncKeyedStore<number>;
       presenceBaseline?: DiscordPresenceBaselineCache;
+      emissionGate?: DiscordPresenceEmissionGate;
     },
   ) {
     super();
     this.cooldownStore = params.cooldownStore ?? openDiscordPresenceCooldownStore();
     this.presenceBaseline = params.presenceBaseline ?? new DiscordPresenceBaselineCache();
+    this.emissionGate = params.emissionGate ?? new DiscordPresenceEmissionGate();
   }
 
   seedGuildSnapshot(data: GuildCreateEvent): void {
@@ -190,6 +197,9 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
 
   resetGatewaySession(): void {
     this.gatewayGeneration += 1;
+    // Discord replays every member's presence after a (re)connect. Hold emission for the
+    // configured window so the re-observation burst cannot wake the agent per member.
+    this.emissionGate.noteGatewaySessionReset(this.params.nowMs?.() ?? Date.now());
     this.presenceBaseline.clear();
     this.guildPresenceState.clear();
     // Generations make old REST results inert. Detach their chains so a hung lookup cannot block
@@ -264,6 +274,22 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       return;
     }
 
+    const gate = this.emissionGate.evaluate(nowMs, resolveDiscordPresenceGateOptions(config));
+    if (!gate.allowed) {
+      if (gate.shouldLog) {
+        const logger = this.params.logger ?? discordEventQueueLog;
+        logger.info("Discord presence events suppressed", {
+          reason: gate.reason,
+          accountId: this.params.accountId,
+          guildId: data.guild_id,
+        });
+      }
+      // Mark online so the member is not re-greeted at window end; a later observed
+      // offline-to-online transition still emits normally.
+      this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+      return;
+    }
+
     const fetchedUserIsBot =
       data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
     if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
@@ -284,7 +310,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       // Reserve only after fallible Discord lookups. Rejecting at capacity preserves every live
       // cooldown; skipping this wake is safer than allowing a duplicate greeting.
       const reserved = this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
-        ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
+        ttlMs: resolveDiscordPresenceCooldownMs(config),
       });
       if (!reserved) {
         // Another live listener won the durable claim while this one awaited Discord. Treat the

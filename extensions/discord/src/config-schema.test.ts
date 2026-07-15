@@ -395,6 +395,50 @@ describe("discord config schema", () => {
     );
   });
 
+  it("accepts online-presence throttling knobs", () => {
+    const cfg = expectValidDiscordConfig({
+      intents: { presence: true },
+      guilds: {
+        "123456789012345678": {
+          presenceEvents: {
+            channelId: "234567890123456789",
+            cooldownSeconds: 3600,
+            reconnectSuppressSeconds: 0,
+            burstLimit: 4,
+            burstWindowSeconds: 30,
+          },
+        },
+      },
+    });
+
+    expect(cfg.guilds?.["123456789012345678"]?.presenceEvents?.burstLimit).toBe(4);
+  });
+
+  it("rejects non-positive online-presence throttling values", () => {
+    const issues = expectInvalidDiscordConfig({
+      guilds: {
+        "123456789012345678": {
+          presenceEvents: {
+            channelId: "234567890123456789",
+            cooldownSeconds: 0,
+            reconnectSuppressSeconds: -1,
+            burstLimit: 0,
+            burstWindowSeconds: 0,
+          },
+        },
+      },
+    });
+
+    for (const field of [
+      "cooldownSeconds",
+      "reconnectSuppressSeconds",
+      "burstLimit",
+      "burstWindowSeconds",
+    ]) {
+      expect(issues.some((issue) => issue.path.join(".").endsWith(field))).toBe(true);
+    }
+  });
+
   it("rejects mutable names in online-presence event routing", () => {
     const issues = expectInvalidDiscordConfig({
       guilds: {

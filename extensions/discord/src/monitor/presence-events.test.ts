@@ -112,4 +112,22 @@ describe("resolveDiscordOnlinePresenceEvent", () => {
       }),
     ).toBeNull();
   });
+
+  it("honors a configured per-user cooldown", () => {
+    const base = {
+      data: presence("online"),
+      availabilityKind: "observed-offline" as const,
+      lastEmittedAtMs: 0,
+    };
+    const shortCooldown = { ...config, cooldownSeconds: 60 };
+
+    expect(
+      resolveDiscordOnlinePresenceEvent({ ...base, config: shortCooldown, nowMs: 59_000 }),
+    ).toBeNull();
+    expect(
+      resolveDiscordOnlinePresenceEvent({ ...base, config: shortCooldown, nowMs: 60_000 }),
+    ).toMatchObject({ userId: "user-1" });
+    // Without the knob the 8-hour default still applies.
+    expect(resolveDiscordOnlinePresenceEvent({ ...base, config, nowMs: 60_000 })).toBeNull();
+  });
 });
