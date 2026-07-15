@@ -256,7 +256,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       historyMessages: [
         {
           content: [{ type: "text", text: "Split toolbar proof." }],
@@ -292,13 +292,21 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           }
         ).__classicChatPane = pane;
       });
+      const startupRequestsBeforeSplit = (await gateway.getRequests("chat.startup")).length;
+      await gateway.deferNext("chat.startup");
       await splitEntry.click();
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.startup")).length)
+        .toBeGreaterThan(startupRequestsBeforeSplit);
 
       // Each pane owns an in-flow header (title + workspace/split/close
       // actions); no fixed toolbar layer mirrors the split geometry.
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
+      await panes.last().getByText("Split toolbar proof.").waitFor();
+      await expect.poll(() => panes.last().locator(".chat-loading-skeleton").count()).toBe(0);
+      await gateway.resolveDeferred("chat.startup");
       await expect
         .poll(() =>
           panes.first().evaluate(

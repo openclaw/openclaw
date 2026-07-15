@@ -141,7 +141,11 @@ import {
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { clearChatMessagesFromCache, type ChatMessageCache } from "./session-message-cache.ts";
+import {
+  clearChatMessagesFromCache,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 
 type ChatPageContext = ApplicationContext;
@@ -1525,7 +1529,17 @@ class ChatPane extends OpenClawLightDomElement {
     };
     this.state = pageState;
     if (this.sessionKey) {
-      this.setPaneSessionKey(this.sessionKey);
+      const initialSessionKey = this.setPaneSessionKey(this.sessionKey);
+      if (initialSessionKey && !parseCatalogSessionKey(initialSessionKey)) {
+        const snapshot = readChatSessionSnapshot(pageState.chatMessagesBySession, pageState, {
+          sessionKey: initialSessionKey,
+        });
+        if (snapshot) {
+          pageState.chatMessages = snapshot.messages;
+          pageState.chatHistoryPagination = snapshot.pagination;
+          pageState.currentSessionId = snapshot.sessionId;
+        }
+      }
     }
     chatState.attach(pageState);
     chatState.restoreComposer({ preserveCurrent: true });

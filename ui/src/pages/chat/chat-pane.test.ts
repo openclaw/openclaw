@@ -22,7 +22,7 @@ import type { ChatPageHost } from "./chat-state.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import type { ChatMessageCache } from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 
 type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
@@ -114,6 +114,34 @@ function createSessionContext(
   } as unknown as ApplicationContext;
 }
 
+function createInitializationContext(): ApplicationContext {
+  return {
+    basePath: "",
+    gateway: { snapshot: { hello: null } },
+    config: {
+      current: {
+        assistantIdentity: {
+          agentId: null,
+          name: "Assistant",
+          avatar: null,
+          avatarSource: null,
+          avatarStatus: null,
+          avatarReason: null,
+        },
+        serverVersion: null,
+        localMediaPreviewRoots: [],
+        embedSandboxMode: "strict",
+        allowExternalEmbedUrls: false,
+        chatMessageMaxWidth: null,
+        terminalEnabled: false,
+      },
+    },
+    agentSelection: { state: { selectedId: "main" } },
+    agents: { state: { agentsList: null } },
+    sessions: {},
+  } as unknown as ApplicationContext;
+}
+
 function createTestChatPane(params: { client: GatewayBrowserClient; sessions: SessionCapability }) {
   const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
   Object.defineProperty(pane, "isConnected", {
@@ -179,31 +207,7 @@ describe("chat pane initialization", () => {
     const sharedMessages = new Map();
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = sharedMessages;
-    pane.context = {
-      basePath: "",
-      gateway: { snapshot: { hello: null } },
-      config: {
-        current: {
-          assistantIdentity: {
-            agentId: null,
-            name: "Assistant",
-            avatar: null,
-            avatarSource: null,
-            avatarStatus: null,
-            avatarReason: null,
-          },
-          serverVersion: null,
-          localMediaPreviewRoots: [],
-          embedSandboxMode: "strict",
-          allowExternalEmbedUrls: false,
-          chatMessageMaxWidth: null,
-          terminalEnabled: false,
-        },
-      },
-      agentSelection: { state: { selectedId: "main" } },
-      agents: { state: { agentsList: null } },
-      sessions: {},
-    } as unknown as ApplicationContext;
+    pane.context = createInitializationContext();
     const stopAfterAttach = new Error("stop after attach");
     let attachedSessionKey: string | undefined;
     let attachedMessages: ChatMessageCache | undefined;
@@ -217,6 +221,45 @@ describe("chat pane initialization", () => {
       expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
       expect(attachedSessionKey).toBe(targetSessionKey);
       expect(attachedMessages).toBe(sharedMessages);
+    } finally {
+      pane.disconnectedCallback();
+    }
+  });
+
+  it("hydrates a new split pane from the shared session snapshot before startup", () => {
+    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    const targetSessionKey = "agent:main:pane-b";
+    const messages = [nativeHistoryMessage(1, "retained split history")];
+    const sharedMessages: ChatMessageCache = new Map();
+    pane.sessionKey = targetSessionKey;
+    pane.chatMessagesBySession = sharedMessages;
+    pane.context = createInitializationContext();
+    cacheChatSessionSnapshot(
+      sharedMessages,
+      { assistantAgentId: "main", agentsList: null, hello: null },
+      { sessionKey: targetSessionKey },
+      {
+        messages,
+        pagination: { hasMore: true, nextOffset: 1, totalMessages: 2 },
+        sessionId: "split-session",
+      },
+    );
+    const stopAfterAttach = new Error("stop after attach");
+    let attachedState: ChatPageHost | undefined;
+    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
+      attachedState = state;
+      throw stopAfterAttach;
+    });
+
+    try {
+      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(attachedState?.chatMessages).toEqual(messages);
+      expect(attachedState?.chatHistoryPagination).toEqual({
+        hasMore: true,
+        nextOffset: 1,
+        totalMessages: 2,
+      });
+      expect(attachedState?.currentSessionId).toBe("split-session");
     } finally {
       pane.disconnectedCallback();
     }

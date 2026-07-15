@@ -133,7 +133,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await mainSession.locator(".session-run-spinner").waitFor();
 
     await gateway.emitChatFinal({ runId, text: "Run complete." });
-    await currentPage.getByText("Run complete.", { exact: true }).waitFor();
+    await currentPage.locator(".chat-bubble").getByText("Run complete.", { exact: true }).waitFor();
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
     const staleActiveLabel = "Main stale active snapshot";
     await gateway.resolveDeferred("sessions.list", {
