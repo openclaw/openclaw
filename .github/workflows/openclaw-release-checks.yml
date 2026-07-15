@@ -56,6 +56,11 @@ on:
         required: false
         default: false
         type: boolean
+      allow_frozen_target_scenario_omissions:
+        description: Allow trusted compatibility filtering for a canonical frozen release target
+        required: false
+        default: false
+        type: boolean
       rerun_group:
         description: Release check group to run
         required: false
@@ -722,6 +727,7 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       # Live-provider suites depend on third-party model deployments; beta
       # treats only those as advisory while repo E2E stays blocking and
@@ -796,6 +802,7 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: false

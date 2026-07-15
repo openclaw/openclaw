@@ -193,7 +193,7 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boo
     if (predicate()) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   return predicate();
 }

@@ -4,12 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { enqueueCommitmentExtraction } from "../../dist/commitments/runtime.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
-  enqueueCommitmentExtraction,
   resetCommitmentExtractionRuntimeForTests,
-} from "../../dist/commitments/runtime.js";
+} from "../../dist/commitments/runtime.test-support.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,

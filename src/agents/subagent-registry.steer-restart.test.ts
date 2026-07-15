@@ -4,10 +4,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  setDetachedTaskLifecycleRuntime,
-} from "../tasks/detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
+import { setDetachedTaskLifecycleRuntime } from "../tasks/task-runtime.test-helpers.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 
 const noop = () => {};

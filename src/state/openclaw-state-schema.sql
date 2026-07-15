@@ -537,11 +537,13 @@ CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
 CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   attachment_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
+  agent_id TEXT,
   message_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT,
   retention_class TEXT,
   alt TEXT NOT NULL,
+  original_media_root TEXT NOT NULL,
   original_media_id TEXT NOT NULL,
   original_media_subdir TEXT NOT NULL,
   original_content_type TEXT NOT NULL,
@@ -549,7 +551,8 @@ CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   original_height INTEGER,
   original_size_bytes INTEGER,
   original_filename TEXT,
-  record_json TEXT NOT NULL
+  record_json TEXT NOT NULL,
+  cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
@@ -557,6 +560,13 @@ CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_message
   ON managed_outgoing_image_records(session_key, message_id, attachment_id)
+  WHERE message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_agent_session
+  ON managed_outgoing_image_records(session_key, agent_id, created_at DESC, attachment_id);
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_agent_message
+  ON managed_outgoing_image_records(session_key, agent_id, message_id, attachment_id)
   WHERE message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS channel_pairing_requests (

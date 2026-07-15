@@ -53,6 +53,26 @@ describe("codex plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
+  it("does not open plugin state while registering with the base runtime", () => {
+    const openSyncKeyedStore = vi.fn(() => {
+      throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
+    });
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {},
+          runtime: { state: { openSyncKeyedStore } } as never,
+        }),
+      ),
+    ).not.toThrow();
+    expect(openSyncKeyedStore).not.toHaveBeenCalled();
+  });
+
   it("registers the codex provider, agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();

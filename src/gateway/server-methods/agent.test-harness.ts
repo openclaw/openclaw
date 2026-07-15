@@ -12,8 +12,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
-import { resetDetachedTaskLifecycleRuntimeForTests } from "../../tasks/detached-task-runtime.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskRegistryForTests,
+} from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { agentHandlers } from "./agent.js";
 import { suspendHandlers } from "./suspend.js";

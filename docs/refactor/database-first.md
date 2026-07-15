@@ -1121,8 +1121,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   without rewriting replay JSON. The full JSON payload remains only as the
   replay/debug blob for message bodies and other cold replay data.
 - Managed outgoing image records now use typed shared
-  `managed_outgoing_image_records` rows with media bytes still stored in
-  `media_blobs`. The JSON record remains only as a replay/debug copy.
+  `managed_outgoing_image_records` rows. Runtime reads typed columns only; the
+  JSON column is a replay/debug copy. Original image bytes remain named
+  attachment artifacts in the managed media directory.
 - Discord model-picker preferences, command-deploy hashes, and thread bindings
   now use shared SQLite plugin state. Their legacy JSON import plans live in the
   Discord plugin setup/doctor migration surface, not in core migration code.
@@ -1472,7 +1473,7 @@ workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_a
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
 model_capability_cache(provider_id, model_id, name, input_text, input_image, reasoning, supports_tools, context_window, max_tokens, cost_input, cost_output, cost_cache_read, cost_cache_write, updated_at_ms)
 agent_model_catalogs(catalog_key, agent_dir, raw_json, updated_at)
-managed_outgoing_image_records(attachment_id, session_key, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json)
+managed_outgoing_image_records(attachment_id, session_key, agent_id, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json, cleanup_pending)
 gateway_restart_sentinel(sentinel_key, version, kind, status, ts, session_key, thread_id, delivery_channel, delivery_to, delivery_account_id, message, continuation_json, doctor_hint, stats_json, payload_json, updated_at_ms)
 channel_pairing_requests(channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json)
 channel_pairing_allow_entries(channel_key, account_id, entry, sort_order, updated_at)

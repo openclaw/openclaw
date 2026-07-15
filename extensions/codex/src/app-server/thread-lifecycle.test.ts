@@ -1471,6 +1471,153 @@ describe("Codex app-server model provider selection", () => {
   });
 });
 
+describe("Codex plugin binding recovery", () => {
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-plugin-recovery-"));
+    resetCodexTestBindingStore();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("does not rebuild a binding whose configured plugin is a settled negative", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-settled");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const build = vi.fn(async () => ({
+      enabled: true,
+      configPatch: {
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+        },
+      },
+      fingerprint: "plugin-config-settled",
+      inputFingerprint: "plugin-input-settled",
+      policyContext: { fingerprint: "plugin-policy-settled", apps: {}, pluginAppIds: {} },
+      diagnostics: [],
+    }));
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThread({
+      ...common,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-input-settled",
+        enabledPluginConfigKeys: ["calendar"],
+        recoverablePluginConfigKeys: ["calendar"],
+        build,
+      },
+    });
+    await startOrResumeThread({
+      ...common,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-input-settled",
+        enabledPluginConfigKeys: ["calendar"],
+        recoverablePluginConfigKeys: [],
+        build,
+      },
+    });
+
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("rebuilds once when a settled negative binding still enables the plugin", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-settled-transition");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const build = vi
+      .fn()
+      .mockResolvedValueOnce({
+        enabled: true,
+        configPatch: { apps: { calendar: { enabled: true } } },
+        fingerprint: "plugin-config-active",
+        inputFingerprint: "plugin-input-settled",
+        policyContext: {
+          fingerprint: "plugin-policy-active",
+          apps: {
+            calendar: {
+              configKey: "calendar",
+              marketplaceName: "openai-curated" as const,
+              pluginName: "calendar",
+              allowDestructiveActions: false,
+              mcpServerNames: [],
+            },
+          },
+          pluginAppIds: { calendar: ["calendar"] },
+        },
+        diagnostics: [],
+      })
+      .mockResolvedValue({
+        enabled: true,
+        configPatch: { apps: { _default: { enabled: false } } },
+        fingerprint: "plugin-config-settled",
+        inputFingerprint: "plugin-input-settled",
+        policyContext: { fingerprint: "plugin-policy-settled", apps: {}, pluginAppIds: {} },
+        diagnostics: [],
+      });
+    const common = {
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThread({
+      ...common,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-input-settled",
+        enabledPluginConfigKeys: ["calendar"],
+        recoverablePluginConfigKeys: ["calendar"],
+        build,
+      },
+    });
+    const settledProvider = {
+      enabled: true,
+      inputFingerprint: "plugin-input-settled",
+      enabledPluginConfigKeys: ["calendar"],
+      recoverablePluginConfigKeys: [],
+      build,
+    };
+    await startOrResumeThread({ ...common, pluginThreadConfig: settledProvider });
+    await startOrResumeThread({ ...common, pluginThreadConfig: settledProvider });
+
+    expect(build).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/start",
+      "thread/resume",
+    ]);
+  });
+});
+
 describe("Codex app-server adopted thread lifecycle", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-thread-adoption-"));
