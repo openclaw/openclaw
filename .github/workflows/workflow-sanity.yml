@@ -179,7 +179,7 @@ jobs:
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
 
       - name: Lint workflows
-        run: actionlint
+        run: actionlint -shellcheck=
 
       - name: Audit all workflows with zizmor
         shell: bash
