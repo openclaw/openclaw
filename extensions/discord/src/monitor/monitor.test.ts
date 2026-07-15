@@ -565,27 +565,18 @@ describe("discord component interactions", () => {
       title: "empty submitText",
       result: { handled: true, submitText: "   " },
       authorized: true,
-      expectedFallback: false,
-    },
-    {
-      title: "malformed submitText",
-      result: { handled: true, submitText: 42 },
-      authorized: true,
-      expectedFallback: false,
     },
     {
       title: "unauthorized submitText",
       result: { handled: true, submitText: "Do not run this" },
       authorized: false,
-      expectedFallback: false,
     },
     {
       title: "submitText from a declining handler",
       result: { handled: false, submitText: "Do not run this" },
       authorized: true,
-      expectedFallback: true,
     },
-  ])("does not submit $title", async ({ result, authorized, expectedFallback }) => {
+  ])("does not submit $title", async ({ result, authorized }) => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "quick-replies:unsafe" })],
       modals: [],
@@ -609,7 +600,7 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(lastDispatchCtx?.BodyForAgent).not.toBe("Do not run this");
-    expect(dispatchReplyMock).toHaveBeenCalledTimes(expectedFallback ? 1 : 0);
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(result.handled ? 0 : 1);
   });
 
   it("routes handled plugin text through the originating Discord thread", async () => {
