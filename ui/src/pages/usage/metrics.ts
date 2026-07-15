@@ -61,6 +61,17 @@ function forEachSessionHourSlice(
   const durationMs = Math.max(endMs - startMs, 1);
   const totalMinutes = durationMs / 60000;
 
+  if (startMs === endMs) {
+    const date = new Date(startMs);
+    visitor({
+      usage,
+      hour: getZonedHour(date, timeZone),
+      weekday: getZonedWeekday(date, timeZone),
+      share: 1,
+    });
+    return true;
+  }
+
   let cursor = startMs;
   while (cursor < endMs) {
     const date = new Date(cursor);
