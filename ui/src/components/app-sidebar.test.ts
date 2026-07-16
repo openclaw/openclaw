@@ -667,6 +667,67 @@ describe("AppSidebar agent chip", () => {
     );
   });
 
+  it("retries an incomplete child page set after the canonical list advances", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:parent"]);
+    const page = (sessions: SessionsListResult["sessions"], hasMore: boolean) => ({
+      ts: 10,
+      path: "",
+      count: sessions.length,
+      totalCount: 2,
+      hasMore,
+      nextOffset: hasMore ? 20 : null,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions,
+    });
+    const firstChild = {
+      key: "agent:worker:first",
+      spawnedBy: "agent:main:parent",
+      kind: "direct" as const,
+      updatedAt: 1,
+    };
+    const secondChild = {
+      key: "agent:worker:second",
+      spawnedBy: "agent:main:parent",
+      kind: "direct" as const,
+      updatedAt: 2,
+    };
+    harness.list
+      .mockResolvedValueOnce(page([firstChild], true))
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(page([firstChild, secondChild], false));
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const publishParent = (ts: number) =>
+      harness.publishList({
+        result: {
+          ts,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:main:parent",
+              kind: "direct",
+              updatedAt: ts,
+              childSessions: [firstChild.key, secondChild.key],
+            },
+          ],
+        },
+      });
+    publishParent(10);
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
+
+    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledTimes(2));
+    expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
+
+    publishParent(11);
+    await vi.waitFor(() => expect(harness.list).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
+    );
+  });
+
   it("ignores a rejected child request after the session capability changes", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const stale = deferred<SessionsListResult | null>();

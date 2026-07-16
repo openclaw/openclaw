@@ -26,7 +26,7 @@ export async function fetchChildSessionRows(params: {
       return null;
     }
     if (!result) {
-      break;
+      throw new Error("child session list returned no result");
     }
     const runtimeSampledAt = Date.now();
     for (const row of result.sessions) {

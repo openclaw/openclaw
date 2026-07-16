@@ -614,8 +614,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
       if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {
         return;
       }
-      // Stop the expanded-row update loop. Collapsing an empty result clears it
-      // so the next explicit expansion retries a transient failure.
+      // Stop the expanded-row update loop. A canonical list revision or an
+      // explicit collapse/reopen clears the failure and retries the whole page set.
       this.childSessionRowsByParent = {
         ...this.childSessionRowsByParent,
         [parentKey]: this.childSessionRowsByParent[parentKey] ?? [],
