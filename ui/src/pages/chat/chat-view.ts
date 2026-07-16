@@ -10,7 +10,6 @@ import type {
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type {
   ChatAttachment,
@@ -24,7 +23,6 @@ import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import { handleChatAttachmentDrop } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
-  renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import {
@@ -34,9 +32,7 @@ import {
 } from "./components/chat-composer.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
-  renderSessionDiffToggle,
   renderSessionWorkspaceRail,
-  renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
 import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
@@ -192,12 +188,6 @@ export type ChatProps = {
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
   backgroundTasks?: BackgroundTasksProps;
-  /** True when a split pane header hosts the workspace toggle; suppresses the
-   * single-pane floating opener so only one affordance renders. */
-  paneHeaderActive?: boolean;
-  /** Split-view opener shown in the floating toggle cluster. Only set for the
-   * single wide pane — split mode owns its controls in pane headers. */
-  onOpenSplitView?: () => void;
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
   canAcceptTaskSuggestions?: boolean;
@@ -512,41 +502,6 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         <div class="chat-workbench__main">
-          <!-- Floating openers share the top-right corner with the detail
-               panel's header controls; hide them while the sidebar is open. -->
-          ${!props.paneHeaderActive &&
-          !sidebarOpen &&
-          (props.onOpenSplitView ||
-            props.sessionWorkspace?.collapsed ||
-            props.backgroundTasks?.collapsed)
-            ? html`
-                <div class="chat-floating-toggles">
-                  ${props.onOpenSplitView
-                    ? html`
-                        <openclaw-tooltip .content=${t("chat.splitView.open")}>
-                          <button
-                            class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
-                            type="button"
-                            aria-label=${t("chat.splitView.open")}
-                            @click=${props.onOpenSplitView}
-                          >
-                            ${icons.columns2}
-                          </button>
-                        </openclaw-tooltip>
-                      `
-                    : nothing}
-                  ${props.sessionWorkspace?.collapsed
-                    ? renderSessionDiffToggle(props.sessionWorkspace)
-                    : nothing}
-                  ${props.backgroundTasks?.collapsed
-                    ? renderBackgroundTasksToggle(props.backgroundTasks)
-                    : nothing}
-                  ${props.sessionWorkspace?.collapsed
-                    ? renderSessionWorkspaceToggle(props.sessionWorkspace)
-                    : nothing}
-                </div>
-              `
-            : nothing}
           <div
             class="chat-split-container ${sidebarOpen
               ? "chat-split-container--open"

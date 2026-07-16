@@ -480,6 +480,9 @@ export type GatewaySessionRow = {
   worktree?: { id: string; branch: string; repoRoot: string };
   /** Session-scoped exec node binding (exec host=node routing). */
   execNode?: string;
+  spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
+  execCwd?: string;
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;

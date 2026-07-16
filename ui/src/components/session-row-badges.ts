@@ -1,15 +1,12 @@
 import { html, nothing } from "lit";
+import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
-function isCloudWorkerPlacementState(
-  state: SessionPlacementState | undefined,
-): state is Exclude<SessionPlacementState, "local" | "reclaimed"> {
-  return state !== undefined && state !== "local" && state !== "reclaimed";
-}
+export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/index.js";
 
 export function isStoppableCloudWorkerPlacement(
   placement: GatewaySessionRow["placement"],

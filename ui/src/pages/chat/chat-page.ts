@@ -511,7 +511,6 @@ export class ChatPage extends OpenClawLightDomElement {
           .sessionKey=${pane.sessionKey}
           .active=${active}
           .draft=${active ? this.routeDraftForActivePane(pane.sessionKey) : undefined}
-          .showPaneHeader=${splitMode}
           .paneTitle=${title}
           .narrow=${this.narrow}
           .onOpenSplitView=${splitMode || this.narrow ? undefined : this.openSplitView}
