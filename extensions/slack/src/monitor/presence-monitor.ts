@@ -198,12 +198,12 @@ export function createSlackPresenceMonitor(params: {
   const emitTransition = (userId: string, now: number) => {
     const target = Array.from(targets.values())
       .filter((candidate) => candidate.participants.has(userId) && isTargetEligible(candidate))
-      .sort((a, b) => (b.participants.get(userId) ?? 0) - (a.participants.get(userId) ?? 0))[0];
+      .toSorted((a, b) => (b.participants.get(userId) ?? 0) - (a.participants.get(userId) ?? 0))[0];
     if (!target) {
       return;
     }
     const cooldownKey = `${params.accountId}:${userId}`;
-    let reserved = false;
+    let reserved: boolean;
     try {
       reserved = params.cooldownStore.registerIfAbsent(cooldownKey, now, {
         ttlMs: SLACK_PRESENCE_GREETING_COOLDOWN_MS,
@@ -252,7 +252,7 @@ export function createSlackPresenceMonitor(params: {
           .filter(isTargetEligible)
           .flatMap((target) => Array.from(target.participants.keys())),
       ),
-    ).sort();
+    ).toSorted();
     if (candidates.length === 0) {
       return;
     }
