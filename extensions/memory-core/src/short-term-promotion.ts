@@ -2438,10 +2438,35 @@ async function resolveMemoryWritePath(filePath: string): Promise<string> {
     }
     throw err;
   }
-  const targetPath = path.isAbsolute(linkTarget)
-    ? linkTarget
-    : `${parentPath}${parentPath.endsWith(path.sep) ? "" : path.sep}${linkTarget}`;
+  const isWindowsRootRelative = process.platform === "win32" && /^[\\/](?![\\/])/.test(linkTarget);
+  const targetPath = isWindowsRootRelative
+    ? `${path.parse(parentPath).root.replace(/[\\/]$/, "")}${linkTarget}`
+    : path.isAbsolute(linkTarget)
+      ? linkTarget
+      : `${parentPath}${parentPath.endsWith(path.sep) ? "" : path.sep}${linkTarget}`;
   return await resolveMemoryWritePath(targetPath);
+}
+
+function isAtomicReplacePermissionError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "EACCES" || code === "EPERM" || code === "EEXIST" || code === "EROFS";
+}
+
+async function writeExistingMemoryInPlace(filePath: string, content: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(filePath, "r+");
+  } catch {
+    return false;
+  }
+  try {
+    await handle.writeFile(content, { encoding: "utf-8" });
+    await handle.truncate(Buffer.byteLength(content));
+    await handle.sync();
+    return true;
+  } finally {
+    await handle.close();
+  }
 }
 
 function extractPromotionMarkers(memoryText: string): Set<string> {
@@ -2566,18 +2591,31 @@ export async function applyShortTermPromotions(
       compactedDates = compaction.droppedDates;
       const baseMemory = compaction.compacted;
       const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
+      const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
       const memoryDirMode = (await fs.stat(path.dirname(memoryWritePath))).mode & 0o7777;
-      await replaceFileAtomic({
-        filePath: memoryWritePath,
-        content: `${header}${withTrailingNewline(baseMemory)}${section}`,
-        dirMode: memoryDirMode,
-        mode: 0o600,
-        preserveExistingMode: true,
-        tempPrefix: `${path.basename(memoryPath)}.promotion`,
-        syncTempFile: true,
-        syncParentDir: true,
-        throwOnCleanupError: true,
-      });
+      try {
+        await replaceFileAtomic({
+          filePath: memoryWritePath,
+          content,
+          dirMode: memoryDirMode,
+          mode: 0o600,
+          preserveExistingMode: true,
+          tempPrefix: `${path.basename(memoryPath)}.promotion`,
+          syncTempFile: true,
+          syncParentDir: true,
+          throwOnCleanupError: true,
+        });
+      } catch (error) {
+        // Released promotion writes could update an existing writable MEMORY.md even when
+        // directory ACLs blocked rename. Retain that in-place contract only after a real
+        // atomic permission failure and a successful writable-file open.
+        if (
+          !isAtomicReplacePermissionError(error) ||
+          !(await writeExistingMemoryInPlace(memoryWritePath, content))
+        ) {
+          throw error;
+        }
+      }
     }
 
     for (const candidate of rehydratedSelected) {

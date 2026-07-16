@@ -3406,6 +3406,49 @@ describe("short-term promotion", () => {
             "Keep the shared memory target and directory permissions intact.",
           );
           expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o755);
+
+          const secondSnippet = "Keep writing through a shared read-only directory.";
+          await writeDailyMemoryNote(workspaceDir, "2026-04-30", [secondSnippet]);
+          await recordShortTermRecalls({
+            workspaceDir: workspaceAlias,
+            query: "read-only parent",
+            nowMs: Date.parse("2026-04-30T10:00:00.000Z"),
+            results: [
+              {
+                path: "memory/2026-04-30.md",
+                startLine: 1,
+                endLine: 1,
+                score: 0.96,
+                snippet: secondSnippet,
+                source: "memory",
+              },
+            ],
+          });
+          const secondRanked = await rankShortTermPromotionCandidates({
+            workspaceDir: workspaceAlias,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          });
+
+          const canonicalTargetPath = await fs.realpath(targetPath);
+          const openSpy = vi.spyOn(fs, "open");
+          await fs.chmod(targetPath, 0o600);
+          await fs.chmod(sharedDir, 0o555);
+          try {
+            await applyShortTermPromotions({
+              workspaceDir: workspaceAlias,
+              candidates: secondRanked,
+              minScore: 0,
+              minRecallCount: 0,
+              minUniqueQueries: 0,
+            });
+            expect(await fs.readFile(targetPath, "utf-8")).toContain(secondSnippet);
+            expect(openSpy).toHaveBeenCalledWith(canonicalTargetPath, "r+");
+            expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o555);
+          } finally {
+            await fs.chmod(sharedDir, 0o755);
+          }
         });
       },
     );
