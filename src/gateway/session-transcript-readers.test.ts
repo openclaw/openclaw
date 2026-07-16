@@ -6,6 +6,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
@@ -345,6 +346,10 @@ describe("session transcript reader facade", () => {
         },
       ],
       touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
     });
 
     const messages = await readSessionMessagesAsync(scope, {
