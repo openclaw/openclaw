@@ -85,9 +85,7 @@ async function credentialBackupCandidates(stateDir: string): Promise<CredentialB
   accountFiles.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 
   const singlePath = path.join(dataDir, "credential-backup.json");
-  return fileExists(singlePath)
-    ? [...accountFiles, { sourcePath: singlePath }]
-    : accountFiles;
+  return fileExists(singlePath) ? [...accountFiles, { sourcePath: singlePath }] : accountFiles;
 }
 
 async function readLegacyCredentialBackups(stateDir: string): Promise<LegacyCredentialBackup[]> {
