@@ -1599,6 +1599,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/fixtures/packed-plugin-sdk-type-smoke.ts", ["test/release-check.test.ts"]],
   ["scripts/repro/code-mode-namespace-live.ts", ["test/scripts/code-mode-namespace-live.test.ts"]],
+  ["scripts/repro/tool-surface-live-bench.ts", ["test/scripts/tool-surface-live-bench.test.ts"]],
   [
     "scripts/repro/code-mode-namespace-live-docker.sh",
     ["test/scripts/code-mode-namespace-live.test.ts", "test/scripts/docker-build-helper.test.ts"],
