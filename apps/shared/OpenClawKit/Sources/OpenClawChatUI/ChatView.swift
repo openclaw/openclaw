@@ -203,6 +203,8 @@ public struct OpenClawChatView: View {
         VStack(spacing: Layout.stackSpacing) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
+            self.planPill
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
         }
@@ -213,6 +215,9 @@ public struct OpenClawChatView: View {
         VStack(spacing: 0) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
+            self.planPill
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
+                .padding(.top, Layout.stackSpacing)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
@@ -222,6 +227,15 @@ public struct OpenClawChatView: View {
         .frame(maxWidth: .infinity)
         .frame(maxHeight: .infinity, alignment: .top)
         #endif
+    }
+
+    @ViewBuilder
+    private var planPill: some View {
+        if self.viewModel.hasBlockingRunActivity, !self.viewModel.planSteps.isEmpty {
+            ChatPlanPill(
+                steps: self.viewModel.planSteps,
+                explanation: self.viewModel.planExplanation)
+        }
     }
 
     private var composer: some View {

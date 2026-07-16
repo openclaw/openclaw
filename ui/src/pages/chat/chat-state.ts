@@ -152,6 +152,7 @@ import {
   resetToolStream,
   type CompactionStatus,
   type FallbackStatus,
+  type PlanStatus,
   type ToolStreamEntry,
 } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
@@ -231,6 +232,7 @@ export type ChatPageHost = ChatHost &
     toolStreamSyncTimer: number | null;
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
+    planStatus: PlanStatus | null;
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatMetadataRequestVersion: number;
@@ -1248,6 +1250,7 @@ export function createPageState(
     chatRunStatus: null,
     compactionStatus: null,
     fallbackStatus: null,
+    planStatus: null,
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
