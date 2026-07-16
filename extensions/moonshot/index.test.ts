@@ -163,4 +163,43 @@ describe("moonshot provider plugin", () => {
       }),
     ).toBe(false);
   });
+
+  it("exposes Kimi K3 as an always-max-thinking modern model", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedStream = createCapturedThinkingConfigStream();
+
+    const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+      provider: "moonshot",
+      modelId: "kimi-k3",
+      thinkingLevel: "off",
+      streamFn: capturedStream.streamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "moonshot",
+        id: "kimi-k3",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedStream.getCapturedPayload()).toEqual({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      reasoning_effort: "max",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "moonshot",
+        modelId: "kimi-k3",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [{ id: "max", label: "max" }],
+      defaultLevel: "max",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(provider.isModernModelRef?.({ provider: "moonshot", modelId: "kimi-k3" })).toBe(true);
+  });
 });

@@ -129,6 +129,10 @@ import {
   resolveLegacyUpdateCheckPath,
 } from "./state-migrations.update-check.js";
 import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
+import {
+  detectLegacyWorkspaceState,
+  migrateLegacyWorkspaceState,
+} from "./state-migrations.workspace-setup.js";
 
 function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigration): string {
   switch (migration.kind) {
@@ -396,6 +400,13 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const workspace = detectLegacyWorkspaceState({
+    cfg: params.cfg,
+    stateDir,
+    env,
+    homedir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const webPush = detectLegacyWebPush({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -565,6 +576,9 @@ export async function detectLegacyStateMigrations(params: {
   if (apns.hasLegacy) {
     preview.push("- APNs registrations: legacy JSON → shared SQLite state");
   }
+  if (workspace.hasLegacy) {
+    preview.push("- Workspace setup and attestations: legacy files → shared SQLite state");
+  }
   if (webPush.hasLegacy) {
     preview.push("- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state");
   }
@@ -663,6 +677,7 @@ export async function detectLegacyStateMigrations(params: {
     commitments,
     managedOutgoingImages,
     apns,
+    workspace,
     webPush,
     nodeHost,
     subagentRegistry,
@@ -861,6 +876,11 @@ export async function runLegacyStateMigrations(params: {
     env,
     stateDir: detected.stateDir,
   });
+  const workspace = await migrateLegacyWorkspaceState({
+    detected: detected.workspace,
+    env,
+    stateDir: detected.stateDir,
+  });
   const webPush = await migrateLegacyWebPush({
     detected: detected.webPush,
     env,
@@ -913,6 +933,7 @@ export async function runLegacyStateMigrations(params: {
     commitments,
     managedOutgoingImages,
     apns,
+    workspace,
     webPush,
     nodeHost,
     subagentRegistry,
@@ -935,6 +956,7 @@ export async function runLegacyStateMigrations(params: {
       ...commitments.changes,
       ...managedOutgoingImages.changes,
       ...apns.changes,
+      ...workspace.changes,
       ...webPush.changes,
       ...nodeHost.changes,
       ...subagentRegistry.changes,
@@ -964,6 +986,7 @@ export async function runLegacyStateMigrations(params: {
       ...commitments.warnings,
       ...managedOutgoingImages.warnings,
       ...apns.warnings,
+      ...workspace.warnings,
       ...webPush.warnings,
       ...nodeHost.warnings,
       ...subagentRegistry.warnings,
@@ -1220,6 +1243,7 @@ export async function autoMigrateLegacyState(params: {
     !detected.configHealth.hasLegacy &&
     !detected.pluginBindingApprovals.hasLegacy &&
     !detected.currentConversationBindings.hasLegacy &&
+    !detected.workspace.hasLegacy &&
     !detected.channelPairing.hasLegacy
   ) {
     const changes = [
