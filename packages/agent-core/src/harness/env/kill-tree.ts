@@ -96,68 +96,50 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-/**
- * Check whether a PID is its own process group leader.
- * Uses `ps -p <pid> -o pgid=` to read the process group ID and compares it
- * to the PID. Falls back to `false` on any error, which safely skips group
- * kill in environments where `ps` is unavailable.
- *
- * Linux fallback: if ps is unavailable (ENOENT), attempts to read
- * /proc/<pid>/stat field 5 (pgid) as a secondary check.
- */
-function isProcessGroupLeader(pid: number): boolean {
+function parseProcessGroupId(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
+    return undefined;
+  }
+  const pgid = Number(value.trim());
+  return Number.isSafeInteger(pgid) && pgid > 0 ? pgid : undefined;
+}
+
+function readProcessGroupIdFromPs(pid: number): number | undefined {
   try {
     const res = spawnSync("ps", ["-p", String(pid), "-o", "pgid="], {
       encoding: "utf8",
       timeout: 500,
     });
-    if (!res.error && res.status === 0) {
-      const pgid = Number.parseInt(res.stdout.trim(), 10);
-      if (Number.isFinite(pgid) && pgid === pid) {
-        return true;
-      }
+    if (res.error || res.status !== 0) {
+      return undefined;
     }
+    return parseProcessGroupId(res.stdout);
   } catch {
-    // ps failed, fall through to secondary check
+    return undefined;
   }
-
-  // Secondary: /proc/<pid>/stat (Linux only). No-op on macOS/Windows.
-  if (process.platform === "linux") {
-    return isProcessGroupLeaderFromProc(pid);
-  }
-  return false;
 }
 
-/**
- * Linux-only fallback: read /proc/<pid>/stat field 5 (pgid) to check
- * whether the process is its own process group leader.
- */
-function isProcessGroupLeaderFromProc(pid: number): boolean {
+function readProcessGroupIdFromProc(pid: number): number | undefined {
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, { encoding: "utf8" });
-    // /proc/<pid>/stat format: pid (comm) state ppid pgrp ...
-    // Field 5 (1-indexed) is pgrp (process group ID)
-    const fields = stat.split(" ");
-    if (fields.length >= 5) {
-      // The 5th field is the process group ID (pgrp)
-      // Format is "pid (comm) state ppid pgrp session tty_nr ..."
-      // We need to find the actual 5th field considering parentheses in comm
-      // Find the last ')' to reliably locate field 5
-      const lastParenIdx = stat.lastIndexOf(")");
-      if (lastParenIdx > 0) {
-        const afterComm = stat.slice(lastParenIdx + 1).trimStart();
-        const parts = afterComm.split(/\s+/);
-        if (parts.length >= 3) {
-          // parts[0] = state, parts[1] = ppid, parts[2] = pgrp
-          const pgid = Number.parseInt(parts[2] ?? "", 10);
-          return Number.isFinite(pgid) && pgid === pid;
-        }
-      }
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const commEnd = stat.lastIndexOf(")");
+    if (commEnd < 0) {
+      return undefined;
     }
-    return false;
+    // After comm: state, ppid, pgrp. The command name may contain spaces or ')'.
+    const fields = stat.slice(commEnd + 1).trim().split(/\s+/);
+    return parseProcessGroupId(fields[2]);
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/** Fail closed to direct-PID signaling when group ownership cannot be proved. */
+function isProcessGroupLeader(pid: number): boolean {
+  // Linux exposes the fact in procfs; avoid a synchronous child process on the common path.
+  const procPgid = process.platform === "linux" ? readProcessGroupIdFromProc(pid) : undefined;
+  const pgid = procPgid ?? readProcessGroupIdFromPs(pid);
+  return pgid === pid;
 }
 
 function signalProcessTreeUnix(

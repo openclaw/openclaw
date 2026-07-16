@@ -3,9 +3,14 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
-const { spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+const { readFileSyncMock, spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+  readFileSyncMock: vi.fn(),
   spawnMock: vi.fn(),
   spawnSyncMock: vi.fn(),
+}));
+
+vi.mock("node:fs", () => ({
+  readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -34,11 +39,6 @@ function expectTaskkillCall(index: number, args: string[]) {
   ]);
 }
 
-/**
- * Mock isProcessGroupLeader to return true for specific PIDs.
- * This simulates that `ps -p <pid> -o pgid=` returns the same pid,
- * indicating the process is its own group leader.
- */
 function mockIsProcessGroupLeader(...pids: number[]) {
   spawnSyncMock.mockImplementation((command: string, args: string[]) => {
     if (command === "ps" && args[0] === "-p" && args[2] === "-o" && args[3] === "pgid=") {
@@ -59,6 +59,10 @@ describe("killProcessTree", () => {
   });
 
   beforeEach(() => {
+    readFileSyncMock.mockReset();
+    readFileSyncMock.mockImplementation(() => {
+      throw new Error("proc unavailable");
+    });
     spawnMock.mockClear();
     spawnSyncMock.mockClear();
     killSpy = vi.spyOn(process, "kill");
@@ -209,7 +213,7 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix uses group kill by default (detached:true preserved as the existing behavior)", async () => {
+  it("on Unix uses group kill when the omitted option resolves to a group leader", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
       if (pid === -6666 && signal === 0) {
         throw new Error("ESRCH");
@@ -229,18 +233,21 @@ describe("killProcessTree", () => {
     });
   });
 
-  it("on Unix falls back to single-pid kill when ps throws", async () => {
+  it.each([
+    ["throws", () => {
+      throw new Error("ps ENOENT");
+    }],
+    ["exits non-zero", () => ({ status: 1, stdout: "" })],
+    ["returns non-numeric output", () => ({ status: 0, stdout: "not-a-pgid" })],
+    ["returns empty output", () => ({ status: 0, stdout: "" })],
+  ])("on Unix falls back to single-pid kill when ps %s", async (_label, psResult) => {
     killSpy.mockImplementation(() => true);
 
-    await withMockedPlatform("linux", async () => {
-      // Mock ps to throw an error
-      spawnSyncMock.mockImplementation(() => {
-        throw new Error("ps ENOENT");
-      });
+    await withMockedPlatform("darwin", async () => {
+      spawnSyncMock.mockImplementation(psResult);
       killProcessTree(8888, { graceMs: 10 });
       await vi.advanceTimersByTimeAsync(10);
 
-      // Should use positive PID (single-pid kill), not negative PID (group kill)
       expect(killSpy).toHaveBeenCalledWith(8888, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-8888, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-8888, "SIGKILL");
@@ -251,12 +258,10 @@ describe("killProcessTree", () => {
     killSpy.mockImplementation(() => true);
 
     await withMockedPlatform("linux", async () => {
-      // Mock ps to return a different PGID (process is not the group leader)
       spawnSyncMock.mockImplementation((command: string, args: string[]) => {
         if (command === "ps" && args[0] === "-p" && args[2] === "-o" && args[3] === "pgid=") {
           const pid = Number.parseInt(args[1] ?? "", 10);
           if (pid === 9999) {
-            // Return a different PGID to indicate this PID is NOT the group leader
             return { status: 0, stdout: "12345\n" };
           }
         }
@@ -265,10 +270,21 @@ describe("killProcessTree", () => {
       killProcessTree(9999, { graceMs: 10 });
       await vi.advanceTimersByTimeAsync(10);
 
-      // Should use positive PID (single-pid kill), not negative PID (group kill)
       expect(killSpy).toHaveBeenCalledWith(9999, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-9999, "SIGKILL");
+    });
+  });
+
+  it("on Linux reads process-group ownership from procfs without spawning ps", async () => {
+    killSpy.mockImplementation(() => true);
+    readFileSyncMock.mockReturnValue("7777 (shell worker) S 1 7777 7777 0");
+
+    await withMockedPlatform("linux", async () => {
+      signalProcessTree(7777, "SIGTERM");
+
+      expect(killSpy).toHaveBeenCalledWith(-7777, "SIGTERM");
+      expect(spawnSyncMock).not.toHaveBeenCalled();
     });
   });
 
