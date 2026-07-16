@@ -567,14 +567,23 @@ jobs:
             runNodeFull &&
             changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
-          const nodeTestShards = runNodeFull
-            ? (changedNodeTestShards
-                ? changedNodeTestShards
-                : createNodeTestPlan({
-                    includeReleaseOnlyPluginShards: false,
-                    compact: compactPullRequest,
-                  })
-              ).map((shard) => ({
+          const rawNodeTestShards = runNodeFull
+            ? changedNodeTestShards
+              ? changedNodeTestShards
+              : createNodeTestPlan({
+                  includeReleaseOnlyPluginShards: false,
+                  compact: compactPullRequest,
+                })
+            : [];
+          const assignVitestFsCacheWriter =
+            typeof nodeTestPlan.assignVitestFsCacheWriter === "function"
+              ? nodeTestPlan.assignVitestFsCacheWriter
+              : (shards) =>
+                  shards.map((shard, index) => ({
+                    ...shard,
+                    saveVitestFsCache: index === 0,
+                  }));
+          const nodeTestShards = assignVitestFsCacheWriter(rawNodeTestShards).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -587,12 +596,12 @@ jobs:
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
+                save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
                   shard.shardName === "core-tooling" ||
                   shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
-              }))
-            : [];
+              }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
           // Targeted jobs cannot discover repository-scanning boundary tests
@@ -951,6 +960,8 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          node-compile-cache: "true"
+          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
       - name: Restore build-all step cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -1716,11 +1727,14 @@ jobs:
           # Fork PRs must keep actions/cache: sticky snapshots are writable,
           # repository-global state and must never be produced by fork code.
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
+          node-compile-cache: "true"
           # One matrix job commits the shared warm seed. Other jobs restore it
           # read-only, avoiding concurrent sticky-disk or archive writers.
-          save-vitest-fs-cache: ${{ strategy.job-index == 0 && 'true' || 'false' }}
+          save-vitest-fs-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
+          save-node-compile-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true

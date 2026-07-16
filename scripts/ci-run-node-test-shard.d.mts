@@ -45,6 +45,8 @@ export function runShardPlans(
   options?: {
     concurrency?: number;
     env?: Record<string, string | undefined>;
+    fsModuleCacheMaxBytes?: number;
+    nodeCompileCacheMaxBytes?: number;
     runChild?: (
       args: string[],
       childEnv: Record<string, string | undefined>,
