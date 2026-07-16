@@ -116,13 +116,22 @@ type RunTuiOptions = TuiOptions & {
   title?: string;
 };
 
+// Binary-resolution subprocesses may hang on a busy or misconfigured host.
+// Node waits for synchronous children to exit after a timeout signal;
+// SIGKILL keeps a stalled child from ignoring the deadline.
+const BIN_RESOLVE_TIMEOUT_MS = 10_000;
+
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
   try {
     const lookupCmd =
       process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
     // `where` on Windows can return multiple lines; take the first match.
-    const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
+    const raw = execFileSync(lookupCmd, ["codex"], {
+      encoding: "utf8",
+      timeout: BIN_RESOLVE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    }).trim();
     return raw.split(/\r?\n/)[0] || null;
   } catch {
     return null;
