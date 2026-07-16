@@ -45,6 +45,17 @@ describe("check-deadcode-exports", () => {
   });
 
   it("makes tests in every workspace roots of the full-tree export audit", () => {
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+    );
+    expect(knipConfig.workspaces["."].entry).toEqual(
+      expect.arrayContaining([
+        "config/knip.config.ts!",
+        "config/knip.all-exports.config.ts!",
+        "config/knip.scripts-exports.config.ts!",
+      ]),
+    );
+    expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
     const rootWorkspace = allExportsKnipConfig.workspaces["."];
     const extensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
     const uiWorkspace = allExportsKnipConfig.workspaces.ui;
