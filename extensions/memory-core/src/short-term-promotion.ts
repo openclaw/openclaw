@@ -2412,6 +2412,38 @@ function withTrailingNewline(content: string): string {
   return content.endsWith("\n") ? content : `${content}\n`;
 }
 
+async function resolveMemoryWritePath(filePath: string): Promise<string> {
+  try {
+    return await fs.realpath(filePath);
+  } catch (err) {
+    const hasTrailingSeparator =
+      filePath.endsWith(path.sep) ||
+      (process.platform === "win32" && filePath.endsWith(path.posix.sep));
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT" || hasTrailingSeparator) {
+      throw err;
+    }
+  }
+
+  // Canonicalize each parent before applying a relative link target. Lexical
+  // normalization would change `..` semantics when an earlier component is a symlink.
+  const parentPath = await fs.realpath(path.dirname(filePath));
+  const canonicalPath = path.join(parentPath, path.basename(filePath));
+  let linkTarget: string;
+  try {
+    linkTarget = await fs.readlink(canonicalPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "EINVAL") {
+      return canonicalPath;
+    }
+    throw err;
+  }
+  const targetPath = path.isAbsolute(linkTarget)
+    ? linkTarget
+    : `${parentPath}${parentPath.endsWith(path.sep) ? "" : path.sep}${linkTarget}`;
+  return await resolveMemoryWritePath(targetPath);
+}
+
 function extractPromotionMarkers(memoryText: string): Set<string> {
   const markers = new Set<string>();
   // Marker keys include source paths, so spaces are valid. Capture until the
@@ -2498,7 +2530,10 @@ export async function applyShortTermPromotions(
       };
     }
 
-    const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
+    // Promotions historically follow user-managed MEMORY.md symlinks. Replace the
+    // final target atomically without severing the chain, matching the prior writeFile path.
+    const memoryWritePath = await resolveMemoryWritePath(memoryPath);
+    const existingMemory = await fs.readFile(memoryWritePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         return "";
       }
@@ -2531,11 +2566,11 @@ export async function applyShortTermPromotions(
       compactedDates = compaction.droppedDates;
       const baseMemory = compaction.compacted;
       const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-      const workspaceMode = (await fs.stat(workspaceDir)).mode & 0o7777;
+      const memoryDirMode = (await fs.stat(path.dirname(memoryWritePath))).mode & 0o7777;
       await replaceFileAtomic({
-        filePath: memoryPath,
+        filePath: memoryWritePath,
         content: `${header}${withTrailingNewline(baseMemory)}${section}`,
-        dirMode: workspaceMode,
+        dirMode: memoryDirMode,
         mode: 0o600,
         preserveExistingMode: true,
         tempPrefix: `${path.basename(memoryPath)}.promotion`,
