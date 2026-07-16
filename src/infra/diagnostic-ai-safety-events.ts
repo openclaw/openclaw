@@ -2,7 +2,6 @@
 // These events flow through a dedicated channel independent of DiagnosticEventPayload.
 
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { registerListener } from "../shared/listeners.js";
 import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
 
 type DiagnosticAISafetyBaseFields = {
@@ -144,7 +143,9 @@ function dispatchAISafetyEvent(input: DiagnosticAISafetyEventInput, trusted: boo
 
 /** Subscribe to all AI safety diagnostic events. Returns an unsubscribe handle. */
 export function onAISafetyDiagnosticEvent(listener: AISafetyListener): () => void {
-  return registerListener(getStore().listeners, listener);
+  const listeners = getStore().listeners;
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 /** Emit an AI safety event via the trusted core path. */
