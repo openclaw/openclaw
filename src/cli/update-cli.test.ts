@@ -1086,6 +1086,23 @@ describe("update-cli", () => {
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
+  it("delegates mutating updates when an external supervisor owns gateway lifecycle", async () => {
+    await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
+      await updateCommand({ yes: true });
+    });
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runtimeCapture.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Use the external supervisor's update workflow so it can stop the gateway",
+      ),
+    );
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+  });
+
   it("logs friendly hint with manual refresh command when completion cache write times out", async () => {
     const root = createCaseDir("openclaw-completion-timeout-msg");
     pathExists.mockResolvedValue(true);
