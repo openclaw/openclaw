@@ -25,6 +25,9 @@ vi.mock("../../media/read-capability.js", () => ({
 
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
+const DEFAULT_MEDIA_BYTES = 5 * 1024 * 1024;
+const DEFAULT_DOCUMENT_BYTES = 100 * 1024 * 1024;
+
 type NormalizedReply = {
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -109,7 +112,7 @@ describe("createReplyMediaPathNormalizer", () => {
     const options = expectOutboundAttachmentCall(
       0,
       path.join("/tmp/agent-workspace", "out", "photo.png"),
-      5 * 1024 * 1024,
+      DEFAULT_MEDIA_BYTES,
     );
     const mediaAccess = requireRecord(options.mediaAccess, "media access");
     expect(mediaAccess.workspaceDir).toBe("/tmp/agent-workspace");
@@ -170,12 +173,12 @@ describe("createReplyMediaPathNormalizer", () => {
     expectOutboundAttachmentCall(
       0,
       path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
-      5 * 1024 * 1024,
+      DEFAULT_MEDIA_BYTES,
     );
     expectOutboundAttachmentCall(
       1,
       path.join("/tmp/sandboxes/session-1", "screens", "final.png"),
-      5 * 1024 * 1024,
+      DEFAULT_MEDIA_BYTES,
     );
   });
 
@@ -200,7 +203,7 @@ describe("createReplyMediaPathNormalizer", () => {
     expectOutboundAttachmentCall(
       0,
       path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
-      5 * 1024 * 1024,
+      DEFAULT_MEDIA_BYTES,
     );
     expect(result.text).toBe("⚠️ Media failed.");
   });
@@ -277,7 +280,23 @@ describe("createReplyMediaPathNormalizer", () => {
     expectMedia(result, "/tmp/outbound-media/screenshot.png", [
       "/tmp/outbound-media/screenshot.png",
     ]);
-    expectOutboundAttachmentCall(0, absolutePath, 5 * 1024 * 1024);
+    expectOutboundAttachmentCall(0, absolutePath, DEFAULT_MEDIA_BYTES);
+  });
+
+  it("uses the Telegram document cap for unconfigured Telegram reply attachments", async () => {
+    const absolutePath = "/Users/peter/.openclaw/workspace/exports/deck.pptx";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+      messageProvider: "telegram",
+    });
+
+    await normalize({
+      mediaUrls: [absolutePath],
+    });
+
+    expectOutboundAttachmentCall(0, absolutePath, DEFAULT_DOCUMENT_BYTES);
   });
 
   it("stages absolute workspace media paths so the PR scenario now works", async () => {
@@ -294,6 +313,22 @@ describe("createReplyMediaPathNormalizer", () => {
 
     expectMedia(result, "/tmp/outbound-media/chart.png", ["/tmp/outbound-media/chart.png"]);
     expectOutboundAttachmentCall(0, absolutePath, 8 * 1024 * 1024);
+  });
+
+  it("keeps unconfigured non-Telegram reply attachments on the media-store cap", async () => {
+    const absolutePath = "/Users/peter/.openclaw/workspace/exports/deck.pptx";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+      messageProvider: "whatsapp",
+    });
+
+    await normalize({
+      mediaUrls: [absolutePath],
+    });
+
+    expectOutboundAttachmentCall(0, absolutePath, DEFAULT_MEDIA_BYTES);
   });
 
   it("prefers channel account media limits when staging reply attachments", async () => {

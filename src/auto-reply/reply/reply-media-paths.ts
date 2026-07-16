@@ -1,5 +1,6 @@
 // Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
+import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -49,8 +50,11 @@ function resolveReplyMediaMaxBytes(params: {
 }): number {
   const limitMb =
     resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
-  return typeof limitMb === "number" && Number.isFinite(limitMb) && limitMb > 0
-    ? Math.floor(limitMb * 1024 * 1024)
+  if (typeof limitMb === "number" && Number.isFinite(limitMb) && limitMb > 0) {
+    return Math.floor(limitMb * 1024 * 1024);
+  }
+  return params.channel?.trim().toLowerCase() === "telegram"
+    ? maxBytesForKind("document")
     : MEDIA_MAX_BYTES;
 }
 
