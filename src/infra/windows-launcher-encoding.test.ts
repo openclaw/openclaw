@@ -9,9 +9,8 @@ import {
 const resolveWindowsSystemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 vi.mock("./windows-encoding.js", async () => {
-  const actual = await vi.importActual<typeof import("./windows-encoding.js")>(
-    "./windows-encoding.js",
-  );
+  const actual =
+    await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
   return {
     ...actual,
     resolveWindowsSystemEncoding: () => resolveWindowsSystemEncodingMock(),
