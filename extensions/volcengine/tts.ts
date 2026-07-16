@@ -160,10 +160,17 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
   });
 
   try {
+    // fetchWithSsrFGuard resolves after headers; keep the request deadline on the
+    // TTS body so a stalled Seed stream cannot hang speech synthesis.
     const responseText = new TextDecoder().decode(
       await readResponseWithLimit(response, VOLCENGINE_TTS_RESPONSE_MAX_BYTES, {
+        chunkTimeoutMs: timeoutMs,
         onOverflow: ({ maxBytes }) =>
           new Error(`BytePlus Seed Speech TTS response exceeds ${maxBytes} bytes`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(
+            `BytePlus Seed Speech TTS response stalled: no data received for ${chunkTimeoutMs}ms`,
+          ),
       }),
     );
     const frames = parseSeedTtsFrames(responseText);
@@ -248,10 +255,15 @@ async function legacyVolcengineTTS(
   });
 
   try {
+    // fetchWithSsrFGuard resolves after headers; keep the request deadline on the
+    // TTS body so a stalled legacy stream cannot hang speech synthesis.
     const responseText = new TextDecoder().decode(
       await readResponseWithLimit(response, VOLCENGINE_TTS_RESPONSE_MAX_BYTES, {
+        chunkTimeoutMs: timeoutMs,
         onOverflow: ({ maxBytes }) =>
           new Error(`Volcengine TTS response exceeds ${maxBytes} bytes`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Volcengine TTS response stalled: no data received for ${chunkTimeoutMs}ms`),
       }),
     );
     const body = parseLegacyTtsResponse(responseText);

@@ -216,6 +216,40 @@ describe("Volcengine speech provider", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("times out when a Seed Speech TTS response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn();
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"code":'));
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        release,
+      });
+
+      const pending = provider.synthesize({
+        text: "hello",
+        cfg: {},
+        providerConfig: makeProviderConfig(),
+        target: "voice-note",
+        timeoutMs: 50,
+      });
+      const settled = expect(pending).rejects.toThrow(
+        "BytePlus Seed Speech TTS response stalled: no data received for 50ms",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await settled;
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drops malformed speed ratios before synthesis", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
