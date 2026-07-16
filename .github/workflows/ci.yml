@@ -1835,15 +1835,17 @@ jobs:
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
       # artifacts the boundary lane snapshots (~72s cold); restore them from
-      # the shared sticky. Read-only consumer: only the boundary lane seeds,
-      # so concurrent mounts of the committed snapshot stay consistent.
+      # the shared sticky. Strictly read-only (commit: false): if this lane
+      # could commit a freshly formatted disk, a cold-key race with the
+      # boundary lane would permanently seed an empty, marker-less snapshot
+      # that if-missing then refuses to repair.
       - name: Mount extension boundary sticky disk
         if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
         with:
           key: ${{ github.repository }}-ext-boundary-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
           path: /var/tmp/openclaw-ext-boundary
-          commit: if-missing
+          commit: "false"
 
       - name: Restore extension boundary artifacts from sticky disk
         if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
