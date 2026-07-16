@@ -455,6 +455,74 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
   });
 
+  it("uses the last repeated --port when auditing gateway service port drift", async () => {
+    const matching = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 19001,
+      command: {
+        programArguments: [
+          "/usr/bin/node",
+          "entry.js",
+          "gateway",
+          "--port",
+          "18789",
+          "--port",
+          "19001",
+        ],
+        environment: {},
+      },
+    });
+    expect(hasIssue(matching, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+
+    const mismatch = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=18789", "--port=19002"],
+        environment: {},
+      },
+    });
+    const issue = mismatch.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue).toStrictEqual({
+      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
+      message: "Gateway service port does not match current gateway config.",
+      detail: "19002 -> 18888",
+      level: "recommended",
+    });
+  });
+
+  it("reports invalid state for the last --port occurrence when auditing", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: [
+          "/usr/bin/node",
+          "entry.js",
+          "gateway",
+          "--port",
+          "18789",
+          "--port=65536",
+        ],
+        environment: {},
+      },
+    });
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue).toStrictEqual({
+      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
+      message: "Gateway service port does not match current gateway config.",
+      detail: "65536 -> 18888",
+      level: "recommended",
+    });
+  });
+
   it("flags gateway token mismatch when service token is stale", async () => {
     const audit = await createGatewayAudit({
       expectedGatewayToken: "new-token",

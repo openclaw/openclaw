@@ -16,25 +16,31 @@ export function parseTcpPort(raw: unknown): number | null {
   return parsed;
 }
 
-/** Extract the effective `--port` value from command arguments. */
+/** Extract the effective `--port` value from command arguments.
+ * Commander-style CLIs treat the last occurrence as the effective option value.
+ * Invalid earlier or later values are ignored so status/repair probes stay best-effort.
+ */
 export function parseTcpPortFromArgs(programArguments: string[] | undefined): number | null {
   if (!programArguments?.length) {
     return null;
   }
+  // Last valid wins: wrappers and stale service argv can repeat `--port`.
+  let effectivePort: number | null = null;
   for (let index = 0; index < programArguments.length; index += 1) {
     const argument = programArguments[index];
     if (argument === "--port") {
       const parsed = parseTcpPort(programArguments[index + 1]);
       if (parsed !== null) {
-        return parsed;
+        effectivePort = parsed;
       }
+      continue;
     }
     if (argument?.startsWith("--port=")) {
       const parsed = parseTcpPort(argument.slice("--port=".length));
       if (parsed !== null) {
-        return parsed;
+        effectivePort = parsed;
       }
     }
   }
-  return null;
+  return effectivePort;
 }

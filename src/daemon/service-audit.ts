@@ -297,15 +297,19 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
+  // Effective last occurrence (Commander-style). Keep explicit invalid state for
+  // the last flag so audits still surface bad values rather than silent first-match.
+  let last: GatewayServiceCommandPort = { kind: "missing" };
   for (const [index, arg] of programArguments.entries()) {
     if (arg === "--port") {
-      return parseGatewayPortArg(programArguments[index + 1]);
+      last = parseGatewayPortArg(programArguments[index + 1]);
+      continue;
     }
     if (arg.startsWith("--port=")) {
-      return parseGatewayPortArg(arg.slice("--port=".length));
+      last = parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return { kind: "missing" };
+  return last;
 }
 
 function auditGatewayServicePort(params: {
