@@ -19,6 +19,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -255,7 +256,7 @@ async function readRecentTranscriptTailLinesAsync(
   const handle = await fs.promises.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(readLen);
-    const { bytesRead } = await handle.read(buffer, 0, readLen, readStart);
+    const bytesRead = await readFileWindowFully(handle, buffer, readStart);
     if (bytesRead <= 0) {
       return [];
     }
@@ -1188,7 +1189,7 @@ async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
   const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
   const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
   const buffer = Buffer.alloc(readLen);
-  const { bytesRead } = await params.handle.read(buffer, 0, readLen, readStart);
+  const bytesRead = await readFileWindowFully(params.handle, buffer, readStart);
   if (bytesRead <= 0) {
     return null;
   }

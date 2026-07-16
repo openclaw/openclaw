@@ -2036,4 +2036,88 @@ describe("oversized transcript line guards", () => {
     expect(asyncResult.lastMessagePreview).toBe("Bot says hello");
   });
 });
+
+describe("short read resilience", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-short-read-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  function installShortReadProxy(maxPerCall = 16) {
+    const realOpen = fs.promises.open.bind(fs.promises);
+    return vi.spyOn(fs.promises, "open").mockImplementation(async (...args: unknown[]) => {
+      const handle = await realOpen(...(args as Parameters<typeof realOpen>));
+      const realRead = handle.read.bind(handle);
+      return new Proxy(handle, {
+        get(target, prop, receiver) {
+          if (prop !== "read") return Reflect.get(target, prop, receiver);
+          return (buf: Buffer, offset: number, length: number, position: number | null) =>
+            realRead(buf, offset, Math.min(length, maxPerCall), position);
+        },
+      });
+    });
+  }
+
+  test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () => {
+    const sessionId = "test-short-read-recent";
+    const lines = [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 30 }, (_, i) => ({
+        message: {
+          role: i % 2 ? "assistant" : "user",
+          content: `message ${i}: ${"data ".repeat(40)}`,
+        },
+      })),
+    ];
+    writeTranscript(tmpDir, sessionId, lines);
+
+    installShortReadProxy(16);
+    try {
+      const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 20,
+        maxBytes: 8192,
+      });
+      expect(result.length).toBeGreaterThanOrEqual(5);
+      for (const msg of result) {
+        const content = (msg as Record<string, unknown>).content as string;
+        expect(content).toBeTruthy();
+      }
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("readRecentSessionMessagesAsync honors maxBytes under short reads", async () => {
+    const sessionId = "test-short-read-byte-cap";
+    const lines = [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 20 }, (_, i) => ({
+        message: {
+          role: i % 2 ? "assistant" : "user",
+          content: `line ${String(i).padStart(2, "0")}: ${"payload ".repeat(30)}`,
+        },
+      })),
+    ];
+    writeTranscript(tmpDir, sessionId, lines);
+
+    const normal = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 20,
+      maxBytes: 4096,
+    });
+
+    installShortReadProxy(64);
+    try {
+      const short = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 20,
+        maxBytes: 4096,
+      });
+      expect(Math.abs(short.length - normal.length)).toBeLessThanOrEqual(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
