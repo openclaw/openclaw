@@ -213,6 +213,8 @@ describe("OpenClaw Codex sandbox exec-server", () => {
   });
 
   it.each([
+    ["a native absolute path", "/workspace"],
+    ["a relative path", "workspace"],
     ["a non-file scheme", "https://example.test/workspace"],
     ["a remote file authority", "file://remote.example.test/workspace"],
     ["a query", "file:///workspace?revision=1"],
@@ -287,7 +289,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
       rpc(socket, "process/start", {
         processId: "proc-arg0",
         argv: ["/bin/sh", "-lc", "true"],
-        cwd: "/workspace",
+        cwd: "file:///workspace",
         env: {},
         tty: false,
         pipeStdin: false,
@@ -318,7 +320,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     await rpc(socket, "process/start", {
       processId: "proc-stdin",
       argv: ["/bin/sh", "-lc", "cat"],
-      cwd: "/workspace",
+      cwd: "file:///workspace",
       env: {},
       tty: false,
       pipeStdin: true,
@@ -356,7 +358,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     await rpc(socket, "process/start", {
       processId: "proc-tty",
       argv: ["/bin/sh", "-lc", "cat"],
-      cwd: "/workspace",
+      cwd: "file:///workspace",
       env: {},
       tty: true,
       pipeStdin: false,
@@ -403,7 +405,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     await rpc(socket, "process/start", {
       processId: "proc-secret-env",
       argv: ["/bin/sh", "-lc", "true"],
-      cwd: "/workspace",
+      cwd: "file:///workspace",
       env: {},
       envPolicy: {
         inherit: "all",
@@ -449,7 +451,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     await rpc(socket, "process/start", {
       processId: "proc-cursor",
       argv: [process.execPath, "-e", "ignored"],
-      cwd: "/workspace",
+      cwd: "file:///workspace",
       env: {},
       tty: false,
       pipeStdin: false,
