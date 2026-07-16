@@ -181,7 +181,7 @@ describe("refreshQueuedFollowupSession", () => {
       nextThinking: { agentRuntime: "codex" },
     });
 
-    expect(queue.items[0]?.run.thinkLevel).toBe("low");
+    expect(queue.items[0]?.run.thinkLevel).toBe("medium");
   });
 });
 
