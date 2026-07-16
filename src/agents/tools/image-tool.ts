@@ -180,7 +180,7 @@ function isCanonicalCandidateShadowedByExecutionAlias(
   );
 }
 
-export const testing = {
+const testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
@@ -240,7 +240,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
  *   - same provider (best effort)
  *   - fall back to OpenAI/Anthropic when available
  */
-export function resolveImageModelConfigForTool(params: {
+function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
   workspaceDir?: string;
@@ -364,6 +364,13 @@ export function resolveImageModelConfigForTool(params: {
     isProviderConfigured: (provider) =>
       verifiedSubstituteProvider && provider === verifiedSubstituteProvider ? true : undefined,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
+    ...testing,
+    resolveImageModelConfigForTool,
+  };
 }
 
 function resolveImageModelConfigForOverride(params: {
@@ -1093,3 +1100,4 @@ export function createImageTool(options?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

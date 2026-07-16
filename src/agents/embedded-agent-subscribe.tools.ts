@@ -643,7 +643,7 @@ function isExternalToolResult(result: unknown): boolean {
   return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
 }
 
-export function isToolResultMediaTrusted(
+function isToolResultMediaTrusted(
   toolName?: string,
   result?: unknown,
   trustedLocalMediaToolNames?: ReadonlySet<string>,
@@ -656,6 +656,12 @@ export function isToolResultMediaTrusted(
     return true;
   }
   return isCoreToolResultMediaTrustedName(toolName);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.embeddedSubscribeToolsTestApi")
+  ] = { isToolResultMediaTrusted };
 }
 
 function isTrustedOwnedTtsLocalMedia(
@@ -1157,3 +1163,4 @@ export function extractMessagingToolSendResult(
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

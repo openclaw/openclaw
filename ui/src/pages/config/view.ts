@@ -4,9 +4,11 @@ import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
+  normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   normalizeCatalogOpenTarget,
   TEXT_SCALE_STOPS,
+  type ChatFollowUpMode,
   type ChatSendShortcut,
   type CatalogOpenTarget,
   type TextScaleStop,
@@ -166,6 +168,8 @@ export type ConfigProps = {
   setTextScale: (value: number) => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
+  chatFollowUpMode: ChatFollowUpMode;
+  setChatFollowUpMode: (value: ChatFollowUpMode) => void;
   catalogOpenTarget: CatalogOpenTarget;
   setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
   microphone?: SettingsMicrophoneState;
@@ -1097,6 +1101,16 @@ function renderChatPreferencesSection(props: ConfigProps) {
           onChange: (value) => props.setChatSendShortcut(normalizeChatSendShortcut(value)),
         })}
         ${renderSettingsSelectRow({
+          title: t("chat.followUpMode"),
+          value: props.chatFollowUpMode,
+          setting: "follow-up-mode",
+          options: [
+            { value: "steer", label: t("chat.followUpModeSteer") },
+            { value: "queue", label: t("chat.followUpModeQueue") },
+          ],
+          onChange: (value) => props.setChatFollowUpMode(normalizeChatFollowUpMode(value)),
+        })}
+        ${renderSettingsSelectRow({
           title: t("chat.catalogOpenTarget"),
           value: props.catalogOpenTarget,
           setting: "catalog-open-target",
@@ -2020,3 +2034,4 @@ export function renderConfig(props: ConfigProps) {
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

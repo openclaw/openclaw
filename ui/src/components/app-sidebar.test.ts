@@ -1,7 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalog,
@@ -10,14 +8,14 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -35,22 +33,6 @@ type SessionState = SessionCapability["state"];
 // models.authStatus) on connect, which would interleave with the nth-call
 // assertions on the shared mocked client below. It has its own test file.
 vi.mock("./sidebar-attention.ts", () => ({}));
-
-const PROVIDER_ELEMENT_NAME = "test-app-sidebar-context-provider";
-
-class AppSidebarContextProvider extends LitElement {
-  private readonly contextProvider = new ContextProvider(this, {
-    context: applicationContext,
-  });
-
-  setContext(context: ApplicationContext<RouteId>) {
-    this.contextProvider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
-  customElements.define(PROVIDER_ELEMENT_NAME, AppSidebarContextProvider);
-}
 
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
@@ -184,6 +166,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
       preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
     }),
   );
+  const refresh = vi.fn(() => Promise.resolve());
   const sessions = {
     get state() {
       return state;
@@ -204,7 +187,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     patch,
     delete: deleteSession,
     deleteMany,
-    refresh: () => Promise.resolve(),
+    refresh,
   } as unknown as SessionCapability;
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -221,6 +204,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     patch,
     deleteSession,
     deleteMany,
+    refresh,
     publish,
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;
@@ -275,13 +259,12 @@ async function mountSidebar(
   variant: SidebarLifecycleState["variant"] = "panel",
   agentsList: AgentsListResult | null = null,
 ) {
-  const provider = document.createElement(PROVIDER_ELEMENT_NAME) as AppSidebarContextProvider;
+  const context = createContext(gateway, sessions, agentsList);
+  const provider = createApplicationContextProvider(context);
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
   sidebar.variant = variant;
-  const context = createContext(gateway, sessions, agentsList);
-  provider.setContext(context);
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
@@ -862,6 +845,72 @@ describe("AppSidebar session catalog pagination", () => {
     button?.click();
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
+  });
+
+  it.each([
+    { id: "claude", label: "Claude Code" },
+    { id: "codex", label: "Codex" },
+  ])("groups $label catalog rows by their owning host", async ({ id, label }) => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.sessionCatalogs = [
+      {
+        id,
+        label,
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Gateway Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "local-thread",
+                name: "Local plan",
+                status: "stored",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+              },
+            ],
+          },
+          {
+            hostId: "node:build",
+            label: "Build Node",
+            kind: "node",
+            connected: true,
+            nodeId: "build",
+            sessions: [
+              {
+                threadId: "remote-thread",
+                name: "Remote review",
+                status: "stored",
+                archived: false,
+                canContinue: false,
+                canArchive: false,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    await sidebar.updateComplete;
+
+    const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
+    const hostGroups = section?.querySelectorAll<HTMLElement>("[data-session-catalog-host]");
+    expect(Array.from(hostGroups ?? []).map((host) => host.dataset.sessionCatalogHost)).toEqual([
+      "gateway:local",
+      "node:build",
+    ]);
+    const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
+    const remote = section?.querySelector('[data-session-catalog-host="node:build"]');
+    expect(local?.textContent).toContain("Gateway Mac");
+    expect(local?.textContent).toContain("Local plan");
+    expect(local?.textContent).not.toContain("Remote review");
+    expect(remote?.textContent).toContain("Build Node");
+    expect(remote?.textContent).toContain("Remote review");
+    expect(remote?.textContent).not.toContain("Local plan");
   });
 
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
@@ -2057,6 +2106,50 @@ describe("AppSidebar session mutation feedback", () => {
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
   }
 
+  it("reconciles and stops an idle active cloud worker through its session", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      hello: { features: { methods: ["sessions.reclaim"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
+    const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
+    if (!row) {
+      throw new Error("expected cloud session row");
+    }
+    row.placement = {
+      state: "active",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: "environment-1",
+      activeOwnerEpoch: 1,
+      workerBundleHash: "0".repeat(64),
+      workspaceBaseManifestRef: "base-ref",
+      remoteWorkspaceDir: "/workspace",
+    };
+    harness.publishList({ result: state.result, agentId: state.agentId });
+    await sidebar.updateComplete;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const menu = await openSessionMenu(sidebar, row.key);
+    menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "a"?');
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:a", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
+    );
+    await vi.waitFor(() =>
+      expect(harness.refresh).toHaveBeenCalledWith({ agentId: "main", force: true }),
+    );
+  });
+
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
     const { harness, sidebar } = await mountMutationHarness();
     harness.patch.mockRejectedValueOnce(new Error("rename rejected by Gateway"));
@@ -2622,7 +2715,7 @@ describe("AppSidebar catalog session rows", () => {
     return { sidebar, request };
   }
 
-  it("shows a host subtitle only for paired-node rows", async () => {
+  it("renders local and paired-node rows under persistent host headings", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -2667,12 +2760,19 @@ describe("AppSidebar catalog session rows", () => {
         ["agent:main:main"],
       );
 
-      const subtitles = [
-        ...sidebar.querySelectorAll(
-          '[data-session-section="catalog:codex"] .sidebar-recent-session__subtitle',
-        ),
-      ].map((node) => node.textContent?.trim());
-      expect(subtitles).toEqual(["Dev Box"]);
+      const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
+      const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
+      expect(local?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
+        "Local Codex",
+      );
+      expect(local?.textContent).toContain("Local session");
+      expect(local?.textContent).not.toContain("Node session");
+      expect(node?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
+        "Dev Box",
+      );
+      expect(node?.textContent).toContain("Node session");
+      expect(node?.textContent).not.toContain("Local session");
     } finally {
       vi.useRealTimers();
     }
@@ -2959,3 +3059,4 @@ describe("AppSidebar group mutation collapsed state", () => {
     confirmSpy.mockRestore();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

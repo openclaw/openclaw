@@ -28,7 +28,7 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
-  setRuntimeConfigSnapshot,
+  setAppliedRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
@@ -48,7 +48,6 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import {
   type GatewayRestartEmitter,
@@ -653,11 +652,11 @@ export async function startGatewayServer(
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
+    channelAutostartSuppression: opts.channelAutostartSuppression,
     ...(startupConfigLoad.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
       : {}),
   });
-
   let startupInternalWriteHash: string | null = null;
   let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
@@ -841,7 +840,7 @@ export async function startGatewayServer(
     startupInternalWriteHash = startupSnapshot.hash ?? null;
     startupLastGoodSnapshot = startupSnapshot;
   }
-  setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  setAppliedRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
   initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
       startupLastGoodSnapshot.sourceConfig,
@@ -949,8 +948,9 @@ export async function startGatewayServer(
         })
       : undefined;
   // Without configured profiles, existing placements still reconcile but new dispatches stay off.
+  const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles
-    ? workerPlacementRuntime?.dispatchService
+    ? workerPlacementControlAvailable
     : undefined;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -970,7 +970,9 @@ export async function startGatewayServer(
   };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
-      (method) => workerPlacementDispatchAvailable || method !== "sessions.dispatch",
+      (method) =>
+        (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || method !== "sessions.reclaim"),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
@@ -1065,7 +1067,7 @@ export async function startGatewayServer(
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const channelWizardRunner = opts.channelWizardRunner ?? runDefaultChannelSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
-  const crestodianSessions: GatewayRequestContext["crestodianSessions"] = new Map();
+  const systemAgentSessions: GatewayRequestContext["systemAgentSessions"] = new Map();
 
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
@@ -1540,20 +1542,17 @@ export async function startGatewayServer(
       await import("./operator-approval-session-events.js");
     // Managers publish through this runtime, while replay routes durable
     // expiry back through the owning manager to release its parked waiter once.
-    const approvalManagersForReplay: {
-      exec?: ExecApprovalManager;
-      plugin?: ExecApprovalManager<PluginApprovalRequestPayload>;
-    } = {};
+    const approvalManagersForReplay = new Map<
+      string,
+      Pick<ExecApprovalManager, "reconcileDurableTerminal">
+    >();
     const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({
       clients,
       sessionMessageSubscribers,
       broadcastToConnIds,
       controlUiBasePath,
       reconcileTerminal: (record) => {
-        const manager =
-          record.kind === "exec"
-            ? approvalManagersForReplay.exec
-            : approvalManagersForReplay.plugin;
+        const manager = approvalManagersForReplay.get(record.kind);
         return manager?.reconcileDurableTerminal(record) ?? false;
       },
     });
@@ -1562,6 +1561,7 @@ export async function startGatewayServer(
       execApprovalManager,
       forwardPluginApprovalRequest,
       pluginApprovalManager,
+      systemAgentApprovalManager,
       extraHandlers,
       coreGatewayHandlers,
     } = await startupTrace.measure("gateway.handlers", async () => {
@@ -1583,8 +1583,9 @@ export async function startGatewayServer(
         coreGatewayHandlers: coreGatewayHandlersLocal,
       };
     });
-    approvalManagersForReplay.exec = execApprovalManager;
-    approvalManagersForReplay.plugin = pluginApprovalManager;
+    approvalManagersForReplay.set("exec", execApprovalManager);
+    approvalManagersForReplay.set("plugin", pluginApprovalManager);
+    approvalManagersForReplay.set("system-agent", systemAgentApprovalManager);
     revokeWorkerDispatchSessionAuthority = ({ sessionId, sessionKeys }) => {
       const keys = new Set(sessionKeys);
       for (const sessionKey of keys) {
@@ -1623,7 +1624,8 @@ export async function startGatewayServer(
           (workerEnvironmentService ||
             (descriptor.name !== "environments.create" &&
               descriptor.name !== "environments.destroy")) &&
-          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch"),
+          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
+          (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
       );
       return createGatewayMethodRegistry([
         ...coreDescriptors,
@@ -1840,6 +1842,7 @@ export async function startGatewayServer(
           execApprovalManager,
           forwardPluginApprovalRequest,
           pluginApprovalManager,
+          systemAgentApprovalManager,
           listSessionPendingApprovals: approvalSessionEvents.replay,
           loadGatewayModelCatalog,
           loadGatewayModelCatalogSnapshot,
@@ -1874,8 +1877,8 @@ export async function startGatewayServer(
           ...(workerPlacementRuntime
             ? { workerSessionPlacementService: workerPlacementRuntime.placements }
             : {}),
-          ...(workerPlacementDispatchAvailable
-            ? { workerPlacementDispatchService: workerPlacementDispatchAvailable }
+          ...(workerPlacementControlAvailable
+            ? { workerPlacementDispatchService: workerPlacementControlAvailable }
             : {}),
           terminalSessions,
           agentRunSeq,
@@ -1903,7 +1906,7 @@ export async function startGatewayServer(
           registerToolEventRecipient: toolEventRecipients.add,
           dedupe,
           wizardSessions,
-          crestodianSessions,
+          systemAgentSessions,
           findRunningWizard,
           purgeWizardSession,
           getRuntimeSnapshot,
@@ -2336,3 +2339,4 @@ export async function startGatewayServer(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

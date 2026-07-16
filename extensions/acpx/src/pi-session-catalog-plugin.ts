@@ -1,7 +1,7 @@
 import process from "node:process";
 import {
   decodeNodePtyResumeParams,
-  resolveExecutableFromPathEnv,
+  resolveNodeHostExecutable,
   runNodePtyCommand,
 } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -36,7 +36,6 @@ const LOCAL_HOST_ID = "gateway";
 const MAX_PAGE_LIMIT = 100;
 const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
-const MAX_SEARCH_LENGTH = 500;
 const NODE_TIMEOUT_MS = 20_000;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const TRANSCRIPT_ITEM_TYPES = new Set([
@@ -156,21 +155,31 @@ function createPiSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
       duplex: true,
       isAvailable: ({ config, env }) =>
         storeAvailable({ config, env }) &&
-        Boolean(resolveExecutableFromPathEnv("pi", env.PATH ?? "")),
+        Boolean(
+          resolveNodeHostExecutable("pi", {
+            env,
+            pathEnv: env.PATH ?? env.Path ?? "",
+            strategy: "direct",
+          }),
+        ),
       handle: async (paramsJSON, io) => {
         if (!io) {
           throw new Error("Pi terminal command requires duplex transport");
         }
         const params = decodeNodePtyResumeParams(paramsJSON, validatePiThreadId);
         const record = await requireLocalPiSession(params.threadId);
-        const file = resolveExecutableFromPathEnv("pi", process.env.PATH ?? "");
-        if (!file) {
+        const resolution = resolveNodeHostExecutable("pi", {
+          env: process.env,
+          pathEnv: process.env.PATH ?? process.env.Path ?? "",
+          strategy: "direct",
+        });
+        if (!resolution) {
           throw new Error("Pi CLI is unavailable");
         }
         return JSON.stringify(
           await runNodePtyCommand(
             {
-              file,
+              file: resolution.executable,
               args: ["--session", params.threadId],
               cwd: record.cwd,
               cols: params.cols,
@@ -240,9 +249,7 @@ async function listPiNodeHost(
       command: PI_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search?.trim()
-          ? { searchTerm: query.search.trim().slice(0, MAX_SEARCH_LENGTH) }
-          : {}),
+        ...(query.search ? { searchTerm: query.search } : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
@@ -310,7 +317,6 @@ async function listPiHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const searchTerm = query.search?.trim().slice(0, MAX_SEARCH_LENGTH) || undefined;
   const hosts: SessionCatalogHost[] = [];
   if ((!requested || requested.has(LOCAL_HOST_ID)) && piSessionStoreAvailable(process.env)) {
     try {
@@ -321,12 +327,16 @@ async function listPiHosts(
         connected: true,
         ...(await listLocalPiSessionPage({
           limit: query.limitPerHost,
-          ...(searchTerm ? { searchTerm } : {}),
+          ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         }).then((page) =>
           setTerminalCapability(
             page,
-            resolveExecutableFromPathEnv("pi", process.env.PATH ?? "") !== undefined,
+            resolveNodeHostExecutable("pi", {
+              env: process.env,
+              pathEnv: process.env.PATH ?? "",
+              strategy: "fallback",
+            }) !== undefined,
           ),
         )),
       });
@@ -396,14 +406,19 @@ async function openPiTerminal(params: {
   const title = `pi --session ${params.threadId.slice(0, 12)}…`;
   if (params.hostId === LOCAL_HOST_ID) {
     const record = await requireLocalPiSession(params.threadId);
-    const executable = resolveExecutableFromPathEnv("pi", process.env.PATH ?? "");
-    if (!executable) {
+    const resolution = resolveNodeHostExecutable("pi", {
+      env: process.env,
+      pathEnv: process.env.PATH ?? "",
+      strategy: "fallback",
+    });
+    if (!resolution) {
       throw new Error("Pi CLI is unavailable");
     }
     return {
       kind: "local",
-      argv: [executable, "--session", params.threadId],
+      argv: [resolution.executable, "--session", params.threadId],
       ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
       title,
     };
   }

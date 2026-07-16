@@ -598,7 +598,6 @@ function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
   return {
     state,
     task,
-    session,
     busy,
     activeTask,
     live,
@@ -1829,7 +1828,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     <article
       class="workboard-card priority-${card.priority} ${busy
         ? "workboard-card--busy"
-        : ""} ${archived ? "workboard-card--archived" : ""} ${healthHighlighted
+        : ""} ${archived ? "workboard-card--archived" : ""}
+      ${state.draggedCardId === card.id ? "workboard-card--dragging" : ""} ${healthHighlighted
         ? `workboard-card--health-highlight workboard-card--health-highlight-${state.activeHealthHighlight}`
         : ""} workboard-card--openable"
       role="button"
@@ -2282,3 +2282,4 @@ export function renderWorkboard(props: WorkboardProps) {
     </section>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1428,3 +1428,4 @@ export async function runCli(argv: string[] = process.argv) {
     flushExitAfterOneShotOutput();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
