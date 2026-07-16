@@ -3,7 +3,7 @@
 // can observe turn startup without a control-UI subscription.
 import {
   areDiagnosticsEnabledForProcess,
-  emitTrustedDiagnosticEvent,
+  emitDiagnosticEvent,
 } from "../../../infra/diagnostic-events.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
@@ -36,7 +36,7 @@ export function withExecutionPhaseDiagnostics<T extends ExecutionPhaseParams>(
   };
   const onExecutionPhase: ExecutionPhaseCallback = (info) => {
     if (areDiagnosticsEnabledForProcess()) {
-      emitTrustedDiagnosticEvent({
+      emitDiagnosticEvent({
         type: "run.execution_phase",
         runId: params.runId,
         sessionId: currentSessionId,

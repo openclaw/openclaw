@@ -1,6 +1,6 @@
 // Diagnostic stability helpers compare diagnostic outputs across runs.
 import {
-  onInternalDiagnosticEvent,
+  onDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
@@ -733,8 +733,8 @@ export function startDiagnosticStabilityRecorder(): void {
   if (state.unsubscribe) {
     return;
   }
-  state.unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
-    if (event.type === "log.record" || (metadata.trusted && event.type !== "run.execution_phase")) {
+  state.unsubscribe = onDiagnosticEvent((event) => {
+    if (event.type === "log.record") {
       return;
     }
     appendRecord(sanitizeDiagnosticEvent(event));

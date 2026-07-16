@@ -2,8 +2,8 @@
 // execution milestones.
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
-  emitTrustedDiagnosticEvent,
-  onInternalDiagnosticEvent,
+  emitDiagnosticEvent,
+  onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
@@ -16,7 +16,7 @@ function collectEvents(types: string[]): {
   stop: () => void;
 } {
   const events: DiagnosticEventPayload[] = [];
-  const stop = onInternalDiagnosticEvent((event) => {
+  const stop = onDiagnosticEvent((event) => {
     if (types.includes(event.type)) {
       events.push(event);
     }
@@ -35,7 +35,7 @@ describe("withExecutionPhaseDiagnostics", () => {
     resetDiagnosticEventsForTest();
   });
 
-  test("emits run.execution_phase and forwards to the wrapped callback", async () => {
+  test("publishes run.execution_phase and forwards to the wrapped callback", async () => {
     const { events, stop } = collectEvents(["run.execution_phase"]);
     const seen: unknown[] = [];
     const params = withExecutionPhaseDiagnostics({
@@ -93,7 +93,7 @@ describe("withExecutionPhaseDiagnostics", () => {
       sessionKey: "sk-3",
     });
 
-    emitTrustedDiagnosticEvent({
+    emitDiagnosticEvent({
       type: "model.call.started",
       provider: "anthropic",
       model: "claude",

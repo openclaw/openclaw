@@ -470,7 +470,9 @@ content classes you opted into.
 ## Diagnostic event catalog
 
 The events below back the metrics and spans above. Plugins can also
-subscribe to them directly without OTLP export.
+subscribe to them directly without OTLP export. Event kinds are additive;
+TypeScript consumers should keep a default branch instead of assuming the
+`DiagnosticEventPayload` union is permanently exhaustive.
 
 **Model usage**
 
@@ -490,7 +492,7 @@ subscribe to them directly without OTLP export.
 - `queue.lane.enqueue` / `queue.lane.dequeue`
 - `session.state` / `session.long_running` / `session.stalled` / `session.stuck`
 - `run.attempt` / `run.progress`
-- `run.execution_phase` (session-correlated embedded-runner startup milestones)
+- `run.execution_phase` (public, session-correlated embedded-runner startup milestones)
 - `diagnostic.heartbeat` (aggregate counters: webhooks/queue/session)
 
 **Harness lifecycle**
