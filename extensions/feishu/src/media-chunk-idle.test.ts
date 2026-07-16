@@ -60,7 +60,9 @@ describe("saveMediaStreamWithIdleTimeout", () => {
         chunkTimeoutMs: 50,
       });
       expect(stalled.destroyed).toBe(true);
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
       expect(serverSawClose).toBe(true);
     } finally {
       server.closeAllConnections?.();
