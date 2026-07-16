@@ -4,16 +4,17 @@ import { resolveDynamicToolCallTimeoutMs } from "./dynamic-tool-execution.js";
 
 describe("computer tool duration parsing", () => {
   it.each([
-    // Malformed string forms fall to zero-duration baseline
+    // Hex strings rejected (same as computer-tool readFiniteNumberParam)
     ["wait", "0x10", 120_000],
-    ["hold_key", "1e2", 150_000],
+    // Scientific / fractional strings honored (aligned with parseStrictFiniteNumber)
+    ["hold_key", "1e2", 250_000],
+    ["wait", "100.5", 220_500],
+    ["wait", "0.5", 120_500],
     // Decimal strings are honored
     ["wait", "100", 220_000],
     // Fractional numeric values preserve sub-second precision
     ["wait", 0.5, 120_500],
-    // Fractional string forms are rejected
-    ["wait", "0.5", 120_000],
-    // Negative values → 0 via Math.max / parseStrictNonNegativeInteger
+    // Negative values → 0 via Math.max
     ["wait", -5, 120_000],
     ["wait", "-5", 120_000],
     // Zero duration → unchanged baseline

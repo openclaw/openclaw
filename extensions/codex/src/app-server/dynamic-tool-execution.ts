@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   addTimerTimeoutGraceMs,
+  parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -503,13 +504,15 @@ function readComputerToolTimeoutMs(value: JsonValue | undefined): number {
   // Node discovery can make two calls when it falls back from node.list to the
   // legacy pairing list. Screenshot/wait then capture once; input also acts.
   const gatewayCallCount = action === "screenshot" || action === "wait" ? 3 : 4;
-  // Reject hex/exponent/fraction string durations. Fractional numeric
-  // durations (e.g. 0.5 → 500 ms) are preserved via the Number.isFinite path.
+  // Match computer-tool's readFiniteNumberParam grammar (parseStrictFiniteNumber):
+  // accept decimal/scientific strings and finite numbers, reject hex ("0x10").
+  // Using a stricter integer parser here would underbudget wait/hold_key when the
+  // downstream tool still honors fractional/scientific duration strings.
   const durationSeconds =
     typeof args?.duration === "number" && Number.isFinite(args.duration)
       ? Math.max(0, args.duration)
       : typeof args?.duration === "string"
-        ? (parseStrictNonNegativeInteger(args.duration) ?? 0)
+        ? Math.max(0, parseStrictFiniteNumber(args.duration) ?? 0)
         : 0;
   const durationMs = action === "wait" || action === "hold_key" ? durationSeconds * 1000 : 0;
   // `timeoutMs` is a per-Gateway-call transport budget, not the whole dynamic
