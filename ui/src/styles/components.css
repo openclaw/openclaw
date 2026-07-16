@@ -3487,7 +3487,8 @@ td.data-table-key-col {
 .md-preview-dialog__panel {
   position: relative;
   width: 100%;
-  min-height: min(76vh, 820px);
+  height: min(92vh, calc(100vh - 32px));
+  min-height: 0;
   max-height: calc(100vh - 32px);
   margin: 0;
   display: flex;
@@ -3627,6 +3628,7 @@ td.data-table-key-col {
 
 .md-preview-dialog__body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
@@ -3697,6 +3699,7 @@ td.data-table-key-col {
   --cm-code-bg: color-mix(in srgb, var(--bg-elevated) 72%, black 28%);
   --cm-inline-code-bg: color-mix(in srgb, var(--secondary) 58%, transparent);
   position: relative;
+  min-height: 0;
   width: min(100%, 82ch);
   margin: 0 auto;
   padding: clamp(26px, 4vw, 56px);
@@ -3846,6 +3849,7 @@ td.data-table-key-col {
 
 .md-preview-dialog__panel.fullscreen {
   width: 100%;
+  height: calc(100vh - 20px);
   max-height: calc(100vh - 20px);
   margin: 0;
 }
@@ -3889,7 +3893,8 @@ td.data-table-key-col {
 @media (max-width: 720px) {
   .md-preview-dialog__panel {
     width: 100%;
-    min-height: calc(100vh - 12px);
+    height: calc(100vh - 12px);
+    min-height: 0;
     max-height: calc(100vh - 12px);
     margin: 0;
     border-radius: var(--radius-xl);
