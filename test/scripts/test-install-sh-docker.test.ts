@@ -835,6 +835,27 @@ printf 'status=%s\\n' "$status"
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
+  it("downloads the OpenShell installer completely before execution", () => {
+    const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8"));
+    const steps = workflow.jobs.validate_special_e2e.steps as Array<{
+      name?: string;
+      run?: string;
+    }>;
+    const installStep = expectDefined(
+      steps.find((step) => step.name === "Install OpenShell CLI"),
+      "OpenShell install step",
+    );
+    const run = expectDefined(installStep.run, "OpenShell install command");
+
+    expect(run).toContain('installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"');
+    expect(run).toContain("curl -LsSf --connect-timeout 10 --max-time 120 \\");
+    expect(run).toContain('-o "$installer_path"');
+    expect(run).toContain('sh "$installer_path"');
+    expect(run).toContain("trap 'rm -f \"$installer_path\"' EXIT");
+    expect(run.indexOf('-o "$installer_path"')).toBeLessThan(run.indexOf('sh "$installer_path"'));
+    expect(run).not.toContain("install.sh | sh");
+  });
+
   it("prints package size audits for release smoke tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 

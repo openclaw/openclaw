@@ -54,6 +54,14 @@ describe("CI changed Node test plan", () => {
       false,
     );
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.ts"])).toBe(true);
+    // Build-input classification: only sources and the build pipeline can
+    // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
+    expect(hasBuildArtifactAffectingChange(["scripts/build-all.mjs"])).toBe(true);
+    expect(hasBuildArtifactAffectingChange(["tsconfig.json"])).toBe(true);
+    expect(hasBuildArtifactAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
+    expect(hasBuildArtifactAffectingChange([".github/workflows/ci.yml"])).toBe(false);
+    expect(hasBuildArtifactAffectingChange(["qa/scenarios/index.yaml"])).toBe(false);
+    expect(hasBuildArtifactAffectingChange(["ui/src/app.ts"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["extensions/qa-lab/src/ci-smoke-plan.ts"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(true);
     // Inside the packaged CLI's import graph -> the smoke scenarios can see it.

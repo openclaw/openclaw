@@ -12,6 +12,7 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  type AgentPlanStep,
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
@@ -1779,13 +1780,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let currentDraftReplyToId = draftReplyToId;
       let previewToolProgressSuppressed = false;
       let previewToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
+      let latestPlan: AgentPlanStep[] | undefined;
+      let latestPlanExplanation: string | undefined;
       const progressConfigEntry = params.accountConfig ?? cfg.channels?.matrix;
       const progressSeed = `${_route.accountId}:${roomId}`;
       // Set after the first final payload consumes or discards the draft event
       // so subsequent finals go through normal delivery.
 
       const renderProgressDraft = () => {
-        if (!draftStream || !progressDraftStreaming) {
+        if (!draftStream) {
           return;
         }
         const previewText = formatChannelProgressDraftText({
@@ -1794,6 +1797,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           seed: progressSeed,
           formatLine: formatMatrixToolProgressMarkdownCode,
           bullet: "-",
+          narration: latestPlanExplanation,
+          plan: latestPlan,
         });
         if (!previewText) {
           return;
@@ -1837,6 +1842,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               seed: progressSeed,
               formatLine: formatMatrixToolProgressMarkdownCode,
               bullet: "-",
+              narration: latestPlanExplanation,
+              plan: latestPlan,
             }),
           );
           return;
@@ -1857,17 +1864,41 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       };
 
+      const pushPlanProgress = async (steps?: AgentPlanStep[], explanation?: string) => {
+        latestPlan = steps?.length ? steps.map((entry) => ({ ...entry })) : undefined;
+        latestPlanExplanation = explanation?.replace(/\s+/g, " ").trim() || undefined;
+        if (!draftStream || previewToolProgressSuppressed) {
+          return;
+        }
+        if (!progressDraftStreaming) {
+          renderProgressDraft();
+          return;
+        }
+        const alreadyStarted = progressDraftGate.hasStarted;
+        await progressDraftGate.startNow();
+        if (alreadyStarted && progressDraftGate.hasStarted) {
+          // An empty-render clear keeps the prior draft visible on purpose:
+          // deleting mid-turn drops the edit anchor, and zero-step snapshots
+          // only arrive from label:false configs with retracting producers.
+          renderProgressDraft();
+        }
+      };
+
       const suppressPreviewToolProgressForAnswerText = (text: string | undefined) => {
         if (!text?.trim()) {
           return;
         }
         previewToolProgressSuppressed = true;
         previewToolProgressLines = [];
+        latestPlan = undefined;
+        latestPlanExplanation = undefined;
       };
 
       const resetPreviewToolProgress = () => {
         previewToolProgressSuppressed = false;
         previewToolProgressLines = [];
+        latestPlan = undefined;
+        latestPlanExplanation = undefined;
       };
 
       const buildPreviewToolProgressReplyOptions = (): Partial<GetReplyOptions> => {
@@ -1921,15 +1952,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             if (payload.phase !== "update") {
               return;
             }
-            await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
-                event: "plan",
-                phase: payload.phase,
-                title: payload.title,
-                explanation: payload.explanation,
-                steps: payload.steps,
-              }),
-            );
+            await pushPlanProgress(payload.planSteps, payload.explanation);
           },
           onApprovalEvent: async (payload) => {
             if (payload.phase !== "requested") {

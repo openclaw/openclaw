@@ -44,7 +44,12 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
-import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  resolveConnectChallengeTimeoutMs,
+  resolvePreauthHandshakeTimeoutMs,
+  resolveSafeTimeoutDelayMs,
+} from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
 
 export type DeviceIdentity = {
@@ -407,7 +412,7 @@ export class GatewayClient {
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
         ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
-        : 30_000;
+        : DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
     this.protocol = new GatewayProtocolClient<AssembledConnect>({
       createSocket: (handlers) => this.createSocket(handlers),
       createRequestId: randomUUID,
@@ -530,8 +535,15 @@ export class GatewayClient {
     }
     // Allow node screen snapshots and other large responses.
     this.deps.beforeConnect();
+    // Challenge timeout arms only after `open`. Bound the opening handshake so a
+    // peer that accepts TCP without upgrading cannot hang createSocket forever.
+    const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
+      env: this.opts.env,
+      configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+    });
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      handshakeTimeout: handshakeTimeoutMs,
       ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {

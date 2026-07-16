@@ -76,7 +76,7 @@ async function waitAndQueueActiveRunMessage(
 
 describe("runCodexAppServerAttempt steering", () => {
   it("forwards queued text and images to the active app-server turn", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
 
     const run = runCodexAppServerAttempt(params, {
@@ -84,14 +84,58 @@ describe("runCodexAppServerAttempt steering", () => {
     });
     await waitForMethod("turn/start");
 
-    await waitAndQueueActiveRunMessage(params.sessionId, "more context", {
+    let handle:
+      | {
+          queueMessage: (
+            text: string,
+            options?: Parameters<typeof queueActiveRunMessageForTest>[2],
+          ) => Promise<void>;
+        }
+      | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle).toBeDefined();
+    }, fastWait);
+    const delivered = handle!.queueMessage("more context", {
       debounceMs: 0,
       images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+    });
+    let deliverySettled = false;
+    void delivered.finally(() => {
+      deliverySettled = true;
     });
     await vi.waitFor(
       () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
       fastWait,
     );
+    const steer = requests.find((entry) => entry.method === "turn/steer");
+    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+      ?.clientUserMessageId;
+    expect(clientUserMessageId).toBe("openclaw:turn-1:steer:1");
+    if (!clientUserMessageId) {
+      throw new Error("turn/steer clientUserMessageId missing");
+    }
+    expect(deliverySettled).toBe(false);
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "unrelated-user-message", type: "userMessage", clientId: "other-client-id" },
+      },
+    });
+    expect(deliverySettled).toBe(false);
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
+      },
+    });
+    await delivered;
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -110,7 +154,6 @@ describe("runCodexAppServerAttempt steering", () => {
     expect(threadStartParams?.sandbox).toBe("danger-full-access");
     expect(threadStartParams?.approvalsReviewer).toBe("user");
     expect(threadStartParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-    const steer = requests.find((entry) => entry.method === "turn/steer");
     expect(steer?.params).toEqual({
       threadId: "thread-1",
       expectedTurnId: "turn-1",
@@ -118,6 +161,7 @@ describe("runCodexAppServerAttempt steering", () => {
         { type: "text", text: "more context", text_elements: [] },
         { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
       ],
+      clientUserMessageId: "openclaw:turn-1:steer:1",
     });
   });
 
@@ -144,6 +188,7 @@ describe("runCodexAppServerAttempt steering", () => {
               threadId: "thread-1",
               expectedTurnId: "turn-1",
               input: [{ type: "text", text: "subagent complete", text_elements: [] }],
+              clientUserMessageId: "openclaw:turn-1:steer:1",
             },
           },
         ]),
@@ -183,6 +228,7 @@ describe("runCodexAppServerAttempt steering", () => {
               threadId: "thread-1",
               expectedTurnId: "turn-1",
               input: [{ type: "text", text: "session-file registered", text_elements: [] }],
+              clientUserMessageId: "openclaw:turn-1:steer:1",
             },
           },
         ]),
@@ -225,6 +271,7 @@ describe("runCodexAppServerAttempt steering", () => {
             { type: "text", text: "first", text_elements: [] },
             { type: "text", text: "second", text_elements: [] },
           ],
+          clientUserMessageId: "openclaw:turn-1:steer:1",
         },
       },
     ]);
@@ -249,6 +296,7 @@ describe("runCodexAppServerAttempt steering", () => {
           threadId: "thread-1",
           expectedTurnId: "turn-1",
           input: [{ type: "text", text: "late steer", text_elements: [] }],
+          clientUserMessageId: "openclaw:turn-1:steer:1",
         },
       },
     ]);
@@ -285,6 +333,7 @@ describe("runCodexAppServerAttempt steering", () => {
             { type: "text", text: "first", text_elements: [] },
             { type: "text", text: "second", text_elements: [] },
           ],
+          clientUserMessageId: "openclaw:turn-1:steer:1",
         },
       },
     ]);
