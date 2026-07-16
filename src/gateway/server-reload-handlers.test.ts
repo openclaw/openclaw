@@ -365,6 +365,7 @@ function createReloadHandlersForTest(
   });
   const cronReconciliation = createTestCronReconciliation();
   const logCron = { error: vi.fn() };
+  const logChannels = { info: vi.fn(), error: vi.fn() };
   const handlers = createGatewayReloadHandlers({
     deps: {} as never,
     broadcast: vi.fn(),
@@ -383,7 +384,7 @@ function createReloadHandlersForTest(
         }),
       ),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    logChannels: { info: vi.fn(), error: vi.fn() },
+    logChannels,
     logCron,
     logReload,
     cronReconciliation,
@@ -401,6 +402,7 @@ function createReloadHandlersForTest(
     cron,
     cronReconciliation,
     heartbeatRunner,
+    logChannels,
     logCron,
     setState,
     stopExitWatchers,
@@ -3133,6 +3135,7 @@ describe("gateway channel hot reload handlers", () => {
   async function withDiscordAccountResolver(
     listAccountIds: () => string[],
     run: () => Promise<void>,
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => unknown = () => ({}),
   ) {
     const registry = createTestRegistry([
       {
@@ -3140,7 +3143,7 @@ describe("gateway channel hot reload handlers", () => {
         plugin: {
           ...createChannelTestPluginBase({
             id: "discord",
-            config: { listAccountIds },
+            config: { listAccountIds, resolveAccount },
           }),
         },
         source: "test",
@@ -3241,6 +3244,39 @@ describe("gateway channel hot reload handlers", () => {
     });
 
     expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
+  });
+
+  it("promotes unresolvable accounts to a wholesale restart before stopping any account", async () => {
+    const events: string[] = [];
+    const channels = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId}`);
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId}`);
+      }),
+    };
+    const { applyHotReload, logChannels } = createReloadHandlersForTest(undefined, channels);
+
+    await withChannelReloadsEnabled(async () => {
+      await withDiscordAccountResolver(
+        () => ["default", "alpha", "beta"],
+        async () => {
+          await applyHotReload(createAccountReloadPlan(["alpha", "beta"]), {});
+        },
+        (_cfg, accountId) => {
+          if (accountId === "beta") {
+            throw new Error("account resolution failed");
+          }
+          return {};
+        },
+      );
+    });
+
+    expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
+    expect(logChannels.info).toHaveBeenCalledWith(
+      "promoting discord account reload to whole-channel restart after account resolution failed: account resolution failed",
+    );
   });
 
   it("requests recovery when account enumeration fails after config commit", async () => {

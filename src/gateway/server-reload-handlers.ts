@@ -960,16 +960,26 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ) {
           continue;
         }
+        const plugin = getChannelPlugin(channel);
         let listedAccountIds: Set<string>;
         try {
-          listedAccountIds = new Set(
-            getChannelPlugin(channel)?.config.listAccountIds(nextConfig) ?? [],
-          );
+          listedAccountIds = new Set(plugin?.config.listAccountIds(nextConfig) ?? []);
         } catch (err) {
           scheduleRecoveryRestart(`channel account enumeration (${channel})`, err);
           continue;
         }
         if ([...accountIds].some((accountId) => !listedAccountIds.has(accountId))) {
+          channelsToRestart.add(channel);
+          continue;
+        }
+        try {
+          for (const accountId of accountIds) {
+            plugin?.config.resolveAccount(nextConfig, accountId);
+          }
+        } catch (err) {
+          params.logChannels.info(
+            `promoting ${channel} account reload to whole-channel restart after account resolution failed: ${formatErrorMessage(err)}`,
+          );
           channelsToRestart.add(channel);
           continue;
         }
