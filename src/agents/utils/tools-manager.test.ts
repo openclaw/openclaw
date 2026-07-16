@@ -243,6 +243,11 @@ describe("ensureTool exit-status handling", () => {
       stdout: Buffer.alloc(0),
     });
     await expect(ensureTool("fd", true)).resolves.toBe("fd");
+    expect(spawnSyncMock).toHaveBeenCalledWith("fd", ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });

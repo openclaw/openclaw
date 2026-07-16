@@ -26,6 +26,7 @@ ktlint-gradle = "14.2.0"
 kotlin = "2.4.0"
 material = "1.14.0"
 okhttp = "5.4.0"
+play-services-wearable = "20.0.1"
 barcode-scanning = "17.3.0"
 robolectric = "4.16.1"
 room = "2.8.4"
@@ -76,6 +77,7 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 material = { module = "com.google.android.material:material", version.ref = "material" }
 mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+play-services-wearable = { module = "com.google.android.gms:play-services-wearable", version.ref = "play-services-wearable" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 [plugins]

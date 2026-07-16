@@ -1059,12 +1059,15 @@ export function extractNativeI18nCandidates(
       }
       const bodyOffset = (collection.index ?? 0) + collection[0].indexOf(body);
       for (const item of body.matchAll(ANDROID_RESOURCE_ITEMS)) {
-        if (item[1]) {
+        const value = item[1]?.trim();
+        // Resource references inherit translatability from their target. Harvesting the
+        // reference name itself creates a fake user-facing string such as @string/foo.
+        if (value && !value.startsWith("@")) {
           addCandidate(
             entries,
             surface,
             repoPath,
-            item[1],
+            value,
             "resource-item",
             lineNumber(source, bodyOffset + (item.index ?? 0)),
           );

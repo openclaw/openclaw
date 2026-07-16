@@ -406,6 +406,135 @@ describe("OpenClawTerminalPanel", () => {
     );
   });
 
+  it("restores a vanished persisted session as exited without replaying stale output", async () => {
+    sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["gone-1"]));
+    const controller = createTerminalController();
+    createGhosttyTerminalMock.mockResolvedValue(controller);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.list") {
+          return { sessions: [] } as T;
+        }
+        if (method === "terminal.open") {
+          return terminalOpenResult("replacement-1") as T;
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+
+    panel.toggle();
+
+    await vi.waitFor(() => {
+      expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
+    });
+    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(1);
+    expect(requests.some((entry) => entry.method === "terminal.attach")).toBe(false);
+    expect(requests.some((entry) => entry.method === "terminal.open")).toBe(false);
+    expect(controller.terminal.reset).not.toHaveBeenCalled();
+    expect(controller.write).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
+  });
+
+  it("keeps a persisted session exited when it disappears during attach", async () => {
+    sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["gone-1"]));
+    const controller = createTerminalController();
+    createGhosttyTerminalMock.mockResolvedValue(controller);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let listCalls = 0;
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.list") {
+          listCalls += 1;
+          return {
+            sessions:
+              listCalls === 1
+                ? [{ ...terminalOpenResult("gone-1"), attached: false, createdAtMs: 1 }]
+                : [],
+          } as T;
+        }
+        if (method === "terminal.attach") {
+          throw new Error('unknown terminal session "gone-1"');
+        }
+        if (method === "terminal.open") {
+          return terminalOpenResult("replacement-1") as T;
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+
+    panel.toggle();
+
+    await vi.waitFor(() => {
+      expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
+    });
+    expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
+    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(2);
+    expect(requests.some((entry) => entry.method === "terminal.open")).toBe(false);
+    expect(controller.terminal.reset).not.toHaveBeenCalled();
+    expect(controller.write).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe("[]");
+  });
+
+  it("does not mark a live persisted session exited after a transient attach failure", async () => {
+    sessionStorage.setItem("openclaw.terminal.sessions.v1", JSON.stringify(["live-1"]));
+    const controllers = [createTerminalController(), createTerminalController()] as const;
+    createGhosttyTerminalMock
+      .mockResolvedValueOnce(controllers[0])
+      .mockResolvedValueOnce(controllers[1]);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        if (method === "terminal.list") {
+          return {
+            sessions: [{ ...terminalOpenResult("live-1"), attached: false, createdAtMs: 1 }],
+          } as T;
+        }
+        if (method === "terminal.attach") {
+          throw new Error("gateway temporarily unavailable");
+        }
+        if (method === "terminal.open") {
+          return terminalOpenResult("replacement-1") as T;
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+
+    panel.toggle();
+
+    await vi.waitFor(() => {
+      expect(requests.filter((entry) => entry.method === "terminal.open")).toHaveLength(1);
+    });
+    expect(requests.filter((entry) => entry.method === "terminal.list")).toHaveLength(2);
+    expect(requests.filter((entry) => entry.method === "terminal.attach")).toHaveLength(1);
+    expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).not.toBe("exited");
+    expect(controllers[0].write).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
+      JSON.stringify(["replacement-1"]),
+    );
+  });
+
   it("discovers and attaches detached sessions from a fresh browser profile", async () => {
     const controllers = [
       createTerminalController(),
@@ -778,7 +907,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(controllers[1].write).not.toHaveBeenCalled();
   });
 
-  it("rebinds to a replacement client while availability stays true", async () => {
+  it("marks the old session exited when a replacement client no longer lists it", async () => {
     const controllers = [createTerminalController(), createTerminalController()] as const;
     createGhosttyTerminalMock
       .mockResolvedValueOnce(controllers[0])
@@ -819,12 +948,14 @@ describe("OpenClawTerminalPanel", () => {
     await panel.updateComplete;
 
     await vi.waitFor(() => {
-      expect(newRequests).toContain("terminal.open");
+      expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited");
     });
     expect(oldRequests.filter((method) => method === "terminal.open")).toHaveLength(1);
+    expect(newRequests).toEqual(["terminal.list"]);
     expect(oldUnsubscribe).toHaveBeenCalledOnce();
     expect(controllers[0].dispose).toHaveBeenCalledOnce();
     expect(createGhosttyTerminalMock).toHaveBeenCalledTimes(2);
+    expect(controllers[1].write).not.toHaveBeenCalled();
   });
 
   it("discards an async boot that finishes after disconnect and reconnect", async () => {

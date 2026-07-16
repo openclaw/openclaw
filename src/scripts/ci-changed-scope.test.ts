@@ -851,6 +851,7 @@ describe("detectChangedScope", () => {
 
     for (const scriptPath of [
       "scripts/control-ui-i18n.ts",
+      "scripts/control-ui-i18n-resolve-conflicts.ts",
       "scripts/control-ui-i18n-verify.ts",
       "scripts/lib/control-ui-i18n-raw-copy.ts",
     ]) {
