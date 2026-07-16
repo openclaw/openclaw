@@ -180,7 +180,10 @@ describe("ttsHandlers", () => {
     const observedTurns: string[] = [];
     setImmediate(() => observedTurns.push("sibling"));
 
-    await ttsHandlers["tts.status"]({
+    await expectDefined(
+      ttsHandlers["tts.status"],
+      'ttsHandlers["tts.status"] test invariant',
+    )({
       params: {},
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
