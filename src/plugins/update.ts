@@ -1287,17 +1287,6 @@ function createPluginUpdateIntegrityDriftHandler(params: {
   };
 }
 
-function removeDisabledPluginIdFromList(
-  list: string[] | undefined,
-  pluginId: string,
-): string[] | undefined {
-  if (!Array.isArray(list) || !list.includes(pluginId)) {
-    return list;
-  }
-  const next = list.filter((id) => id !== pluginId);
-  return next.length > 0 ? next : undefined;
-}
-
 function resetDisabledPluginSlots(
   slots: NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined,
   pluginId: string,
@@ -1321,15 +1310,15 @@ function resetDisabledPluginSlots(
   return next;
 }
 
-function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): OpenClawConfig {
+function disablePluginAfterUpdateFailure(config: OpenClawConfig, pluginId: string): OpenClawConfig {
   const pluginsConfig = config.plugins ?? {};
   const existingEntry = pluginsConfig.entries?.[pluginId];
   return {
     ...config,
     plugins: {
       ...pluginsConfig,
-      allow: removeDisabledPluginIdFromList(pluginsConfig.allow, pluginId),
-      deny: removeDisabledPluginIdFromList(pluginsConfig.deny, pluginId),
+      // Update failure changes activation, not operator-authored trust policy.
+      // Removing the final allow entry would widen discovery to other plugins.
       slots: resetDisabledPluginSlots(pluginsConfig.slots, pluginId),
       entries: {
         ...pluginsConfig.entries,
@@ -1459,7 +1448,7 @@ export async function updateNpmInstalledPlugins(params: {
         `Disabled "${pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
         message;
       logger.warn?.(disabledMessage);
-      next = disablePluginConfigEntry(next, pluginId);
+      next = disablePluginAfterUpdateFailure(next, pluginId);
       changed = true;
       outcomes.push({
         pluginId,
