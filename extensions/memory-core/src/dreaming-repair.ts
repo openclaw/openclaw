@@ -7,9 +7,7 @@ import {
   listSessionCorpusFiles,
   isSuspiciousSessionCorpusLine,
   findHeartbeatContaminatedCorpusLines,
-  buildSessionScopeCandidates,
   hasSelfIngestedSessionCorpusLines,
-  clearScopedLegacySessionIngestionJson,
   buildArchiveTimestamp,
   moveToArchive,
   clearSessionIngestionState,
@@ -192,6 +190,7 @@ export async function repairDreamingArtifacts(params: {
   let archivedSessionCorpus = false;
   let archivedSessionIngestion = false;
   let removedHeartbeatDerivedLines = 0;
+  let clearedSessionCheckpointKeys: number | undefined;
 
   const ensureArchiveDir = () => {
     archiveDir ??= path.join(
@@ -222,57 +221,35 @@ export async function repairDreamingArtifacts(params: {
     },
   );
   if (heartbeatContaminated.length > 0) {
-    const linesByFile = new Map<string, Set<number>>();
-    const stateKeys = new Set<string>();
-    const scopeKeys = new Set<string>();
-    for (const entry of heartbeatContaminated) {
-      if (!linesByFile.has(entry.filePath)) {
-        linesByFile.set(entry.filePath, new Set());
-      }
-      linesByFile.get(entry.filePath)?.add(entry.index);
-      stateKeys.add(`${entry.source.agentId}:${entry.source.sessionPath}`);
-      for (const scope of buildSessionScopeCandidates(
-        entry.source.agentId,
-        entry.source.sessionPath,
-      )) {
-        scopeKeys.add(scope);
-      }
+    removedHeartbeatDerivedLines = heartbeatContaminated.length;
+
+    const sessionCorpusDestination = await archivePathIfPresent(
+      path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR),
+    );
+    if (sessionCorpusDestination) {
+      archivedSessionCorpus = true;
+      archivedPaths.push(sessionCorpusDestination);
     }
 
-    for (const [filePath, lineIndexes] of linesByFile.entries()) {
-      const original = await fs.readFile(filePath, "utf-8");
-      const lines = original.split(/\r?\n/);
-      const filtered = lines.filter((_, index) => !lineIndexes.has(index));
-      removedHeartbeatDerivedLines += lineIndexes.size;
-      const archived = await archivePathIfPresent(filePath);
-      if (archived) {
-        archivedSessionCorpus = true;
-        archivedPaths.push(archived);
-      }
-      const serialized = filtered.filter(
-        (line, index) => index < filtered.length - 1 || line.length > 0,
-      );
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, `${serialized.join("\n")}\n`, "utf-8");
-    }
-
-    const legacy = await clearScopedLegacySessionIngestionJson({
-      workspaceDir,
-      stateKeys,
-      scopeKeys,
-      archiveDir: ensureArchiveDir(),
-    }).catch((err: unknown) => {
-      warnings.push(
-        `Failed updating legacy dreaming session-ingestion JSON state: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-      return { removed: 0, archivedPath: undefined };
-    });
-    if (legacy.archivedPath) {
+    const sessionIngestionDestination = await archivePathIfPresent(
+      path.join(workspaceDir, SESSION_INGESTION_RELATIVE_PATH),
+    );
+    if (sessionIngestionDestination) {
       archivedSessionIngestion = true;
-      archivedPaths.push(legacy.archivedPath);
+      archivedPaths.push(sessionIngestionDestination);
     }
+
+    await clearSessionIngestionState(workspaceDir)
+      .then(() => {
+        clearedSessionCheckpointKeys = 2;
+      })
+      .catch((err: unknown) => {
+        warnings.push(
+          `Failed clearing dreaming session-ingestion SQLite state: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
   }
 
   const shouldArchiveDerivedArtifacts = await hasSelfIngestedSessionCorpusLines(workspaceDir).catch(
@@ -307,6 +284,7 @@ export async function repairDreamingArtifacts(params: {
       archivedPaths,
       warnings,
       ...(removedHeartbeatDerivedLines > 0 ? { removedHeartbeatDerivedLines } : {}),
+      ...(clearedSessionCheckpointKeys !== undefined ? { clearedSessionCheckpointKeys } : {}),
     };
   }
 
@@ -329,6 +307,7 @@ export async function repairDreamingArtifacts(params: {
   if (sessionCorpusDestination || sessionIngestionDestination) {
     try {
       await clearSessionIngestionState(workspaceDir);
+      clearedSessionCheckpointKeys = 2;
     } catch (err) {
       warnings.push(
         `Failed clearing dreaming session-ingestion SQLite state: ${
@@ -362,6 +341,7 @@ export async function repairDreamingArtifacts(params: {
     archivedSessionIngestion,
     archivedPaths,
     ...(removedHeartbeatDerivedLines > 0 ? { removedHeartbeatDerivedLines } : {}),
+    ...(clearedSessionCheckpointKeys !== undefined ? { clearedSessionCheckpointKeys } : {}),
     warnings,
   };
 }

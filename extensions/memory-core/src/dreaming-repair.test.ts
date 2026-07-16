@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { appendSqliteTranscriptMessage } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { auditDreamingArtifacts, repairDreamingArtifacts } from "./dreaming-repair.js";
@@ -210,7 +211,7 @@ describe("dreaming artifact repair", () => {
     expect(repair.archivedSessionIngestion).toBe(true);
     expect(repair.archivedDreamsDiary).toBe(false);
     expect(repair.removedHeartbeatDerivedLines).toBeUndefined();
-    expect(repair.clearedSessionCheckpointKeys).toBeUndefined();
+    expect(repair.clearedSessionCheckpointKeys).toBe(2);
     const archiveDir = requireArchiveDir(repair.archiveDir);
     expect(archiveDir).toBe(
       path.join(workspaceDir, ".openclaw-repair", "dreaming", "2026-04-11T21-30-00-000Z"),
@@ -360,7 +361,7 @@ describe("dreaming artifact repair", () => {
     expect(audit.sessionIngestionExists).toBe(false);
   });
 
-  it("targeted repair removes only heartbeat-derived corpus lines and clears scoped checkpoints", async () => {
+  it("targeted repair archives session corpus, clears SQLite checkpoints, and is idempotent", async () => {
     const workspaceDir = await createWorkspace();
     const sessionPath = path.join(
       workspaceDir,
@@ -393,18 +394,10 @@ describe("dreaming artifact repair", () => {
       "utf-8",
     );
 
-    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams", "session-corpus"), {
-      recursive: true,
-    });
-    const corpusPath = path.join(
-      workspaceDir,
-      "memory",
-      ".dreams",
-      "session-corpus",
-      "2026-04-11.txt",
-    );
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
     await fs.writeFile(
-      corpusPath,
+      path.join(sessionCorpusDir, "2026-04-11.txt"),
       [
         "[main/sessions/main/heartbeat-session.jsonl#L2] Heartbeat received. Main is active.",
         "[main/sessions/main/heartbeat-session.jsonl#L3] normal content",
@@ -412,13 +405,16 @@ describe("dreaming artifact repair", () => {
       "utf-8",
     );
 
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, "# Dream Diary\n", "utf-8");
+
     await Promise.all([
       writeMemoryCoreWorkspaceEntries({
         namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
         workspaceDir,
         entries: [
           {
-            key: "main:sessions/heartbeat-session.jsonl",
+            key: "main:sessions/main/heartbeat-session.jsonl",
             value: {
               lastSize: 120,
               lastMtimeMs: 1_000,
@@ -427,7 +423,7 @@ describe("dreaming artifact repair", () => {
             },
           },
           {
-            key: "main:sessions/other.jsonl",
+            key: "main:sessions/main/other.jsonl",
             value: {
               lastSize: 200,
               lastMtimeMs: 2_000,
@@ -453,30 +449,145 @@ describe("dreaming artifact repair", () => {
       }),
     ]);
 
-    const repair = await repairDreamingArtifacts({ workspaceDir });
+    const repair = await repairDreamingArtifacts({
+      workspaceDir,
+      now: new Date("2026-04-11T21:30:00.000Z"),
+    });
 
     expect(repair.changed).toBe(true);
     expect(repair.removedHeartbeatDerivedLines).toBe(1);
-    expect(repair.clearedSessionCheckpointKeys).toBeUndefined();
-    const rewritten = await fs.readFile(corpusPath, "utf-8");
-    expect(rewritten).toContain("normal content");
-    expect(rewritten).not.toContain("Heartbeat received. Main is active.");
+    expect(repair.clearedSessionCheckpointKeys).toBe(2);
+    expect(repair.archivedSessionCorpus).toBe(true);
+    expect(repair.archivedSessionIngestion).toBe(false);
+    expect(repair.archivedDreamsDiary).toBe(false);
+    await expectPathMissing(sessionCorpusDir);
+    await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toContain("# Dream Diary");
+    const archiveDir = requireArchiveDir(repair.archiveDir);
+    const archivedEntries = await fs.readdir(archiveDir);
+    expect(archivedEntries.filter((entry) => entry.startsWith("session-corpus."))).not.toEqual([]);
 
-    const filesEntries = await readMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir,
-    });
-    expect(
-      filesEntries.some((entry) => entry.key === "main:sessions/heartbeat-session.jsonl"),
-    ).toBe(true);
-    expect(filesEntries.some((entry) => entry.key === "main:sessions/other.jsonl")).toBe(true);
+    await expect(
+      readMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+        workspaceDir,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      readMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+        workspaceDir,
+      }),
+    ).resolves.toEqual([]);
 
-    const seenEntries = await readMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+    const secondRepair = await repairDreamingArtifacts({ workspaceDir });
+    expect(secondRepair.changed).toBe(false);
+    expect(secondRepair.removedHeartbeatDerivedLines).toBeUndefined();
+    expect(secondRepair.clearedSessionCheckpointKeys).toBeUndefined();
+  });
+
+  it("re-ingestion after repair produces clean corpus under forward filter", async () => {
+    const workspaceDir = await createWorkspace();
+    const sessionPath = path.join(
       workspaceDir,
-    });
-    expect(seenEntries.some((entry) => entry.key === "main:heartbeat-session:0")).toBe(true);
-    expect(seenEntries.some((entry) => entry.key === "main:other:0")).toBe(true);
+      "..",
+      "agents",
+      "main",
+      "sessions",
+      "heartbeat-session.jsonl",
+    );
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await fs.writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "[OpenClaw heartbeat poll]",
+            provenance: { kind: "heartbeat" },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Heartbeat received. Main is active." }],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "user", content: "Tell me something useful" },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: { role: "assistant", content: [{ type: "text", text: "normal content" }] },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionCorpusDir, "2026-04-11.txt"),
+      [
+        "[main/sessions/main/heartbeat-session.jsonl#L2] Heartbeat received. Main is active.",
+        "[main/sessions/main/heartbeat-session.jsonl#L4] normal content",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await Promise.all([
+      writeMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
+        workspaceDir,
+        entries: [
+          {
+            key: "main:sessions/main/heartbeat-session.jsonl",
+            value: {
+              lastSize: 120,
+              lastMtimeMs: 1_000,
+              lastContentHash: "hash",
+              cursorLine: 42,
+            },
+          },
+        ],
+      }),
+      writeMemoryCoreWorkspaceEntries({
+        namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
+        workspaceDir,
+        entries: [
+          {
+            key: "main:heartbeat-session:0",
+            value: { scope: "main:heartbeat-session", index: 0, hashes: ["heartbeat"] },
+          },
+        ],
+      }),
+    ]);
+
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+    expect(repair.archivedSessionCorpus).toBe(true);
+
+    const rebuiltEntry = await buildSessionEntry(sessionPath);
+    expect(rebuiltEntry).not.toBeNull();
+    expect(rebuiltEntry?.content).toContain("Assistant: normal content");
+    expect(rebuiltEntry?.content).not.toContain("Heartbeat received. Main is active.");
+    expect(rebuiltEntry?.content).not.toContain("[OpenClaw heartbeat poll]");
+
+    const rebuiltCorpusPath = path.join(sessionCorpusDir, "2026-04-12.txt");
+    await fs.mkdir(sessionCorpusDir, { recursive: true });
+    await fs.writeFile(
+      rebuiltCorpusPath,
+      rebuiltEntry!.content
+        .split("\n")
+        .map((line, index) => `[${rebuiltEntry!.path}#L${rebuiltEntry!.lineMap[index]}] ${line}`)
+        .join("\n"),
+      "utf-8",
+    );
+    const rebuiltCorpus = await fs.readFile(rebuiltCorpusPath, "utf-8");
+    expect(rebuiltCorpus).toContain("normal content");
+    expect(rebuiltCorpus).not.toContain("Heartbeat received. Main is active.");
+    expect(rebuiltCorpus).not.toContain("[OpenClaw heartbeat poll]");
   });
 
   it("detects heartbeat-derived corpus lines from SQLite-backed sessions", async () => {
@@ -548,8 +659,8 @@ describe("dreaming artifact repair", () => {
 
     expect(repair.changed).toBe(true);
     expect(repair.removedHeartbeatDerivedLines).toBe(1);
-    const rewritten = await fs.readFile(corpusPath, "utf-8");
-    expect(rewritten).not.toContain("Heartbeat received. Main is active.");
+    expect(repair.archivedSessionCorpus).toBe(true);
+    await expectPathMissing(corpusPath);
   });
 
   it("does not remove fallback sentence by text without heartbeat provenance linkage", async () => {

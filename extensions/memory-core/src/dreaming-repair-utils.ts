@@ -320,9 +320,10 @@ export async function findHeartbeatContaminatedCorpusLines(
       if (!transcriptLines) {
         const transcriptContent = await fs.readFile(transcriptPath, "utf-8").catch(() => "");
         transcriptLines = transcriptContent.length > 0 ? transcriptContent.split(/\r?\n/) : [];
-        // Filesystem read failed or returned empty. For non-.jsonl paths
-        // (SQLite logical paths), try the canonical SQLite reader.
-        if (transcriptLines.length === 0 && !hasJsonlExtension) {
+        // Filesystem read failed or returned empty. Try the canonical SQLite
+        // reader as a fallback; it accepts canonical .jsonl paths and strips
+        // the extension to derive the SQLite session id.
+        if (transcriptLines.length === 0) {
           const sqliteLines = await loadTranscriptLinesFromSqlite(
             source.agentId,
             source.sessionPath,
@@ -349,22 +350,6 @@ export async function findHeartbeatContaminatedCorpusLines(
   return contaminated;
 }
 
-export function buildSessionScopeCandidates(agentId: string, sessionPath: string): string[] {
-  const base = path.basename(sessionPath);
-  const stem = base
-    .replace(/\.trajectory\.jsonl$/i, "")
-    .replace(/\.jsonl$/i, "")
-    .trim();
-  const scopes = new Set<string>();
-  if (base) {
-    scopes.add(`${agentId}:${base}`);
-  }
-  if (stem) {
-    scopes.add(`${agentId}:${stem}`);
-  }
-  return [...scopes];
-}
-
 export async function hasSelfIngestedSessionCorpusLines(workspaceDir: string): Promise<boolean> {
   const sessionCorpusDir = path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR);
   const corpusFiles = await listSessionCorpusFiles(sessionCorpusDir).catch((err: unknown) => {
@@ -384,62 +369,6 @@ export async function hasSelfIngestedSessionCorpusLines(workspaceDir: string): P
     }
   }
   return false;
-}
-
-export async function clearScopedLegacySessionIngestionJson(params: {
-  workspaceDir: string;
-  stateKeys: Set<string>;
-  scopeKeys: Set<string>;
-  archiveDir: string;
-}): Promise<{ removed: number; archivedPath?: string }> {
-  const legacyPath = path.join(params.workspaceDir, SESSION_INGESTION_RELATIVE_PATH);
-  const content = await fs.readFile(legacyPath, "utf-8").catch(() => null);
-  if (!content) {
-    return { removed: 0 };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    return { removed: 0 };
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return { removed: 0 };
-  }
-
-  const record = parsed as {
-    files?: Record<string, unknown>;
-    seenMessages?: Record<string, unknown>;
-  };
-  const files = record.files && typeof record.files === "object" ? record.files : {};
-  const seen =
-    record.seenMessages && typeof record.seenMessages === "object" ? record.seenMessages : {};
-
-  let removed = 0;
-  for (const key of params.stateKeys) {
-    if (key in files) {
-      delete files[key];
-      removed += 1;
-    }
-  }
-  for (const key of params.scopeKeys) {
-    if (key in seen) {
-      delete seen[key];
-      removed += 1;
-    }
-  }
-  if (removed === 0) {
-    return { removed: 0 };
-  }
-
-  const archivedPath = await moveToArchive({
-    targetPath: legacyPath,
-    archiveDir: params.archiveDir,
-  });
-  await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-  await fs.writeFile(legacyPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
-  return { removed, ...(archivedPath ? { archivedPath } : {}) };
 }
 
 export function buildArchiveTimestamp(now: Date): string {
