@@ -4,7 +4,10 @@ import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -1784,7 +1787,7 @@ export function loadPluginManifest(
   if (!isRecord(raw)) {
     return cacheResult({ ok: false, error: "plugin manifest must be an object", manifestPath });
   }
-  const id = normalizeOptionalString(raw.id) ?? "";
+  const id = normalizeOptionalLowercaseString(raw.id) ?? "";
   if (!id) {
     return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
