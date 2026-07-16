@@ -249,7 +249,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired AudioConfig type -1.
       // +4: bounded plugin blob store options, entry, entry info, and store types.
       // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
-      8001,
+      8005,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
