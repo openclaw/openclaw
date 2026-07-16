@@ -114,9 +114,9 @@ download_file() {
         detect_downloader
     fi
     if [[ "$DOWNLOADER" == "curl" ]]; then
-        # Match wget's stall protection without capping slow, progressing archives.
+        # Match wget's stall protection without rejecting slow, progressing archives.
         curl -fsSL --proto '=https' --tlsv1.2 \
-            --connect-timeout 10 --speed-limit 1024 --speed-time 30 \
+            --connect-timeout 10 --speed-limit 1 --speed-time 30 \
             --retry 3 --retry-delay 1 --retry-connrefused \
             -o "$output" "$url"
         return
