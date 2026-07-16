@@ -1,8 +1,5 @@
 // Line plugin module implements group history behavior.
-import {
-  buildInboundHistoryFromEntries,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 
 type LineGroupHistoryReservation = {
   inboundHistory?: HistoryEntry[];
@@ -34,8 +31,10 @@ export function reserveLineGroupHistory(
   for (const entry of consumedEntries) {
     reservedEntries.add(entry);
   }
-  const inboundHistory = buildInboundHistoryFromEntries({
-    entries: consumedEntries,
+  const inboundHistory = createChannelHistoryWindow({
+    historyMap: new Map([[historyKey, consumedEntries]]),
+  }).buildInboundHistory({
+    historyKey,
     limit,
   });
   let settled = false;
