@@ -42,7 +42,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Kimi Code K3 reasoning controls:** honor `/think off` for `kimi/k3` and `kimi/k3[1m]` while keeping adaptive thinking with max effort as the default enabled mode.
 - **External supervisor restart health:** accept device-identity policy closes only when the replacement gateway lock and listener PID agree, preventing OCM-managed restarts from timing out after a successful handoff. Thanks @shakkernerd.
 - **ACPX cleanup process inspection:** bound host process-table reads so stalled `ps` calls cannot hang gateway startup or session cleanup while retaining fail-closed ownership checks. Thanks @Alix-007.
 - **Cron lifecycle conflict retries:** preserve execution-phase retry decisions across scheduled, manual, and startup-recovered runs so post-execution claim conflicts cannot replay completed messages or tools. Fixes #108428. Thanks @yetval.
