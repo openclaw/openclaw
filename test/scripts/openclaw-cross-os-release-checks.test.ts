@@ -187,8 +187,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(windowsScript).not.toContain("Invoke-WebRequest");
     expect(posixScript).toContain(
-      "curl -fsSL --connect-timeout 10 --max-time 120 'https://openclaw.ai/install.sh'",
+      'installer_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer-XXXXXX")"',
     );
+    expect(posixScript).toContain("trap 'rm -f \"$installer_path\"' EXIT");
+    expect(posixScript).toContain(
+      "curl -fsSL --connect-timeout 10 --max-time 120 -o \"$installer_path\" 'https://openclaw.ai/install.sh'",
+    );
+    expect(posixScript).toContain("bash -- \"$installer_path\" --version '2026.7.1' --no-onboard");
+    expect(posixScript).not.toContain("| bash");
     expect(posixScript).toContain("set -euo pipefail");
   });
 

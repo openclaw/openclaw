@@ -155,10 +155,13 @@ try {
 `;
   }
 
-  // Do not retry a streamed installer: a partial first response could be concatenated with the retry.
+  // Execute only a complete installer: a timed-out response may still contain an executable prefix.
   return [
     "set -euo pipefail",
-    `curl -fsSL --connect-timeout ${connectTimeoutSeconds} --max-time ${requestTimeoutSeconds} '${shellEscapeForSh(params.installerUrl)}' | bash -s -- --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
+    'installer_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer-XXXXXX")"',
+    "trap 'rm -f \"$installer_path\"' EXIT",
+    `curl -fsSL --connect-timeout ${connectTimeoutSeconds} --max-time ${requestTimeoutSeconds} -o "$installer_path" '${shellEscapeForSh(params.installerUrl)}'`,
+    `bash -- "$installer_path" --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
   ].join("\n");
 }
 
