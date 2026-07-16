@@ -247,8 +247,13 @@ async function postJson(
     signal: buildOAuthRequestSignal({ signal: options.signal, timeoutMs }),
   });
 
+  // Fetch resolves after headers; keep the request deadline on the body so a
+  // stalled OAuth token stream cannot hang login or refresh.
   const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
+    chunkTimeoutMs: timeoutMs,
     onOverflow: ({ size }) => new Error(`Anthropic OAuth response too large: ${size} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Anthropic OAuth response stalled for ${chunkTimeoutMs}ms`),
   });
   const responseBody = new TextDecoder().decode(buffer);
 

@@ -123,6 +123,35 @@ describe("Anthropic OAuth token responses", () => {
     expect(pullCount).toBeLessThanOrEqual(2);
     expect(cancel).toHaveBeenCalledOnce();
   });
+
+  it("times out when an Anthropic token refresh response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode('{"access_token":'));
+                },
+              }),
+              { status: 200 },
+            ),
+        ),
+      );
+
+      const pending = refreshThroughAnthropicProvider("old-refresh-token");
+      const settled = expect(pending).rejects.toThrow(
+        "Anthropic OAuth response stalled for 30000ms",
+      );
+      await vi.advanceTimersByTimeAsync(30_060);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("Anthropic OAuth callback host", () => {
