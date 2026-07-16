@@ -280,6 +280,7 @@ export function renderChat(props: ChatProps) {
       showToolCalls: props.showToolCalls,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
+      planStatus: props.planStatus,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
       assistantName: props.assistantName,
