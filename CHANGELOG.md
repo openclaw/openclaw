@@ -42,8 +42,6 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Cron lifecycle conflict retries:** preserve execution-phase retry decisions across scheduled, manual, and startup-recovered runs so post-execution claim conflicts cannot replay completed messages or tools. Fixes #108428. Thanks @yetval.
-- **Gateway channel-skip isolation:** keep channel health recovery disabled when `OPENCLAW_SKIP_CHANNELS` or `OPENCLAW_SKIP_PROVIDERS` suppresses startup so test and maintenance gateways cannot resurrect configured transports after the startup grace period. (#108786)
-- **Gateway terminal PTY environment:** upgrade inherited non-interactive `TERM` values for real PTYs so Codex and other interactive CLIs can start from local and paired-node web terminals. (#108824)
 - **Discord gateway metadata deadline:** carry the existing lookup deadline through DNS and proxy preflight, request headers, and response bodies so stalled gateway startup aborts cleanly. (#104580) Thanks @hugenshen.
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
