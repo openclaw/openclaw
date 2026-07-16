@@ -740,6 +740,36 @@ describe("mattermostPlugin", () => {
       ).rejects.toThrow("Mattermost reactions are disabled in config");
     });
 
+    it("rejects a disabled account before provider access", async () => {
+      const cfg = createMattermostTestConfig(`disabled-reaction-${++reactionActionSequence}`);
+      const mattermostConfig = cfg.channels?.mattermost;
+      if (!mattermostConfig) {
+        throw new Error("expected Mattermost config fixture");
+      }
+      mattermostConfig.accounts = { default: { enabled: false } };
+      const fetchImpl = vi.fn<typeof fetch>();
+
+      await expect(
+        withMockedGlobalFetch(fetchImpl, async () =>
+          mattermostPlugin.actions?.handleAction?.(
+            createMattermostActionContext({
+              action: "react",
+              params: {
+                target: "channel:CHAN1",
+                to: "channel:CHAN1",
+                messageId: "POST1",
+                emoji: "thumbsup",
+              },
+              cfg,
+              accountId: "default",
+              conversationReadOrigin: "direct-operator",
+            }),
+          ),
+        ),
+      ).rejects.toThrow('Mattermost account "default" is disabled');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
     it("handles react by calling Mattermost reactions API", async () => {
       const result = await runReactAction({ messageId: "POST1", emoji: "thumbsup" }, "add");
 
