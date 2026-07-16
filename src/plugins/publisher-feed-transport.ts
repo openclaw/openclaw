@@ -4,6 +4,7 @@ import type { TrustedFeedSigningKey } from "./official-external-plugin-catalog-e
 import {
   PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE,
   PUBLISHER_FEED_QUERY_PAYLOAD_TYPE,
+  PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE,
   verifyPublisherFeedProjection,
   type PublisherFeedChange,
   type PublisherFeedChangePage,
@@ -11,6 +12,7 @@ import {
   type PublisherFeedQuery,
   type PublisherFeedQueryPage,
   type PublisherFeedResetRequired,
+  type PublisherFeedSnapshot,
 } from "./publisher-feed-projections.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -38,6 +40,14 @@ export type PublisherFeedQueryResult = {
   expiresAt: string;
   query: PublisherFeedQuery;
   entries: readonly PublisherFeedEntry[];
+  verification: PublisherFeedVerificationEvidence;
+};
+
+export type PublisherFeedVerificationEvidence = {
+  signedBy: string;
+  signedByKeyIds: readonly string[];
+  signatureCount: number;
+  threshold: number;
 };
 
 export type PublisherFeedChangesResult =
@@ -49,21 +59,37 @@ export type PublisherFeedChangesResult =
       generatedAt: string;
       expiresAt: string;
       changes: readonly PublisherFeedChange[];
+      verification: PublisherFeedVerificationEvidence;
     }
-  | { status: "reset-required"; reset: PublisherFeedResetRequired };
+  | {
+      status: "reset-required";
+      reset: PublisherFeedResetRequired;
+      verification: PublisherFeedVerificationEvidence;
+    };
 
 export type PublisherFeedState = {
   feedId: string;
   sequence: number;
+  generatedAt: string;
   publisherId: string;
   handle: string | null;
   displayName: string;
   entries: readonly PublisherFeedEntry[];
 };
 
+export type PublisherFeedSnapshotResult = {
+  state: PublisherFeedState;
+  expiresAt: string;
+  verification: PublisherFeedVerificationEvidence;
+};
+
 export type PublisherFeedApplyResult =
   | { status: "applied"; state: PublisherFeedState }
-  | { status: "reset-required"; reset: PublisherFeedResetRequired };
+  | {
+      status: "reset-required";
+      reset: PublisherFeedResetRequired;
+      verification: PublisherFeedVerificationEvidence;
+    };
 
 const PUBLISHER_FEED_PAGE_MAX_BYTES = 1024 * 1024;
 const PUBLISHER_FEED_DEFAULT_TIMEOUT_MS = 5_000;
@@ -171,7 +197,7 @@ function sameQuery(left: PublisherFeedQuery, right: PublisherFeedQuery): boolean
   );
 }
 
-function projectionPath(publisherId: string, operation: "query" | "changes"): string {
+function projectionPath(publisherId: string, operation: "snapshot" | "query" | "changes"): string {
   return `/api/v1/publishers/${encodeURIComponent(publisherId)}/feed/${operation}`;
 }
 
@@ -226,7 +252,7 @@ function assertContentLength(response: Response): void {
 
 async function readProjectionEnvelope(params: {
   url: URL;
-  operation: "query" | "changes";
+  operation: "snapshot" | "query" | "changes";
   verification: PublisherFeedVerification;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
@@ -269,12 +295,23 @@ async function readProjectionEnvelope(params: {
     }
     const verified = verifyPublisherFeedProjection(envelope, {
       payloadType:
-        params.operation === "query"
-          ? PUBLISHER_FEED_QUERY_PAYLOAD_TYPE
-          : PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE,
+        params.operation === "snapshot"
+          ? PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE
+          : params.operation === "query"
+            ? PUBLISHER_FEED_QUERY_PAYLOAD_TYPE
+            : PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE,
       ...params.verification,
     });
-    return { status: guarded.response.status, payload: verified.payload };
+    return {
+      status: guarded.response.status,
+      payload: verified.payload,
+      verification: {
+        signedBy: verified.signedBy,
+        signedByKeyIds: verified.signedByKeyIds,
+        signatureCount: verified.signatureCount,
+        threshold: verified.threshold,
+      },
+    };
   } finally {
     if (!guarded.response.bodyUsed) {
       await guarded.response.body?.cancel().catch(() => undefined);
@@ -306,6 +343,42 @@ function entryIdentity(entry: Pick<PublisherFeedEntry, "kind" | "id">): string {
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export async function fetchPublisherFeedSnapshot(
+  params: PublisherFeedTransportOptions,
+): Promise<PublisherFeedSnapshotResult> {
+  const baseUrl = normalizeBaseUrl(params.baseUrl);
+  const publisherId = normalizePublisherId(params.publisherId);
+  const response = await readProjectionEnvelope({
+    url: new URL(projectionPath(publisherId, "snapshot"), baseUrl),
+    operation: "snapshot",
+    verification: params.verification,
+    fetchImpl: params.fetchImpl,
+    timeoutMs: params.timeoutMs,
+    chunkTimeoutMs: params.chunkTimeoutMs,
+  });
+  const snapshot = response.payload as PublisherFeedSnapshot;
+  if (
+    snapshot.publisherId !== publisherId ||
+    snapshot.feedId !== `clawhub.publisher.${publisherId}`
+  ) {
+    throw new Error("publisher feed snapshot identity check failed");
+  }
+  assertNotExpired(snapshot.expiresAt, params.now ?? (() => new Date()));
+  return {
+    state: {
+      feedId: snapshot.feedId,
+      sequence: snapshot.sequence,
+      generatedAt: snapshot.generatedAt,
+      publisherId: snapshot.publisherId,
+      handle: snapshot.handle,
+      displayName: snapshot.displayName,
+      entries: snapshot.entries,
+    },
+    expiresAt: snapshot.expiresAt,
+    verification: response.verification,
+  };
 }
 
 function compareEntries(left: PublisherFeedEntry, right: PublisherFeedEntry): number {
@@ -382,6 +455,8 @@ export function applyPublisherFeedChanges(
     state: {
       feedId: current.feedId,
       sequence: result.toSequence,
+      generatedAt:
+        result.toSequence === current.sequence ? current.generatedAt : result.generatedAt,
       publisherId,
       handle,
       displayName,
@@ -453,6 +528,7 @@ export async function fetchPublisherFeedQuery(
         expiresAt: page.expiresAt,
         query: page.query,
         entries,
+        verification: response.verification,
       };
     }
     if (seenCursors.has(cursor)) {
@@ -496,7 +572,7 @@ export async function fetchPublisherFeedChanges(
     if (response.status === 409) {
       const reset = response.payload as PublisherFeedResetRequired;
       const expectedSnapshotUrl = new URL(
-        `/api/v1/publishers/${encodeURIComponent(publisherId)}/feed`,
+        `/api/v1/publishers/${encodeURIComponent(publisherId)}/feed/snapshot`,
         baseUrl,
       );
       if (
@@ -509,7 +585,7 @@ export async function fetchPublisherFeedChanges(
         throw new Error("publisher feed reset instruction is invalid");
       }
       assertNotExpired(reset.expiresAt, now);
-      return { status: "reset-required", reset };
+      return { status: "reset-required", reset, verification: response.verification };
     }
     if ((response.payload as PublisherFeedResetRequired).resetRequired) {
       throw new Error("publisher feed reset instruction used an invalid HTTP status");
@@ -549,6 +625,7 @@ export async function fetchPublisherFeedChanges(
         generatedAt: page.generatedAt,
         expiresAt: page.expiresAt,
         changes,
+        verification: response.verification,
       };
     }
     if (seenCursors.has(cursor)) {

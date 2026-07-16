@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE,
   PUBLISHER_FEED_QUERY_PAYLOAD_TYPE,
+  PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE,
   verifyPublisherFeedProjection,
 } from "./publisher-feed-projections.js";
 
@@ -37,7 +38,7 @@ function verification(key: SigningKey) {
     trustedKeys: [
       {
         keyId: key.keyId,
-        publicKey: key.publicKey.export({ type: "spki", format: "pem" }).toString(),
+        publicKey: key.publicKey.export({ type: "spki", format: "pem" }),
       },
     ],
   };
@@ -61,6 +62,33 @@ const projectionBase = {
 };
 
 describe("publisher feed signed projections", () => {
+  it("verifies a complete signed publisher snapshot with distinct authority", () => {
+    const key = signingKey();
+    const payload = {
+      ...projectionBase,
+      publisherId: "publishers:alice",
+      handle: "alice",
+      displayName: "Alice",
+      sequence: 7,
+      entries: [entry],
+    };
+    expect(
+      verifyPublisherFeedProjection(
+        signedEnvelope(key, PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE, payload),
+        { payloadType: PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE, ...verification(key) },
+      ),
+    ).toMatchObject({ payload, signedBy: key.keyId });
+    expect(() =>
+      verifyPublisherFeedProjection(
+        signedEnvelope(key, PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE, {
+          ...payload,
+          entries: [entry, entry],
+        }),
+        { payloadType: PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE, ...verification(key) },
+      ),
+    ).toThrow("projection payload is invalid");
+  });
+
   it("verifies a strict signed query page without treating it as an install catalog", () => {
     const key = signingKey();
     const payload = {
@@ -112,7 +140,7 @@ describe("publisher feed signed projections", () => {
       fromSequence: 1,
       currentSequence: 8,
       resetRequired: true,
-      snapshotUrl: "https://clawhub.ai/api/v1/publishers/publishers%3Aalice/feed",
+      snapshotUrl: "https://clawhub.ai/api/v1/publishers/publishers%3Aalice/feed/snapshot",
     };
 
     expect(

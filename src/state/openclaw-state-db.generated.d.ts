@@ -848,6 +848,23 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface PublisherFeedStates {
+  display_name: string;
+  entries_json: string;
+  feed_id: string;
+  generated_at: string;
+  handle: string | null;
+  publisher_id: string;
+  sequence: number;
+  signature_count: number;
+  signed_by: string;
+  signed_by_key_ids_json: string;
+  source_origin: string;
+  threshold: number;
+  updated_at_ms: number;
+  verified_at: string;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -1394,6 +1411,7 @@ export interface DB {
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  publisher_feed_states: PublisherFeedStates;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   session_groups: SessionGroups;
