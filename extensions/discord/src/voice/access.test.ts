@@ -259,7 +259,7 @@ describe("authorizeDiscordVoiceIngress", () => {
       channelId: "c1",
       channelSlug: "",
       memberRoleIds: [],
-      commandAllowFrom: ["discord:u-account"],
+      admissionAllowFrom: ["discord:u-account"],
       sender: {
         id: "u-account",
         name: "owner",

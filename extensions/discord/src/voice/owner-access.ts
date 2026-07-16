@@ -1,18 +1,14 @@
 // Discord plugin module implements voice owner resolution.
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDiscordAccountAllowFrom } from "../accounts.js";
-import {
-  normalizeDiscordAllowList,
-  resolveDiscordCommandOwnerAllowFrom,
-} from "../monitor/allow-list.js";
+import { resolveDiscordCommandOwnerAllowFrom } from "../monitor/allow-list.js";
 
-export function resolveDiscordVoiceOwnerAccess(params: {
+export function resolveDiscordVoiceAccess(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
 }): {
-  commandAllowFrom: string[];
-  commandAllowAll: boolean;
+  admissionAllowFrom: string[];
   ownerAllowFrom: string[];
   ownerAllowAll: boolean;
 } {
@@ -20,20 +16,18 @@ export function resolveDiscordVoiceOwnerAccess(params: {
   if (commandOwnerAllowFrom) {
     const allowAll = commandOwnerAllowFrom.includes("*");
     return {
-      commandAllowFrom: commandOwnerAllowFrom,
-      commandAllowAll: allowAll,
+      admissionAllowFrom: commandOwnerAllowFrom,
       ownerAllowFrom: commandOwnerAllowFrom,
       ownerAllowAll: allowAll,
     };
   }
-  const commandAllowFrom =
+  const admissionAllowFrom =
     resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
     params.discordConfig.allowFrom ??
     params.discordConfig.dm?.allowFrom ??
     [];
   return {
-    commandAllowFrom,
-    commandAllowAll: normalizeDiscordAllowList(commandAllowFrom, [])?.allowAll === true,
+    admissionAllowFrom,
     ownerAllowFrom: [],
     ownerAllowAll: false,
   };

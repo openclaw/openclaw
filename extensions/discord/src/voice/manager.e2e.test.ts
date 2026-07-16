@@ -1,6 +1,7 @@
 // Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type {
   RealtimeVoiceAgentControlResult,
   RealtimeVoiceForcedConsultCoordinator,
@@ -511,6 +512,20 @@ describe("DiscordVoiceManager", () => {
       lastMockCall(agentCommandMock as unknown as MockCallSource, "agent command")[0],
       "agent command args",
     );
+
+  const lastAgentCommandToolNames = () => {
+    const args = lastAgentCommandArgs();
+    if (typeof args.senderIsOwner !== "boolean") {
+      throw new Error("expected agent command owner identity");
+    }
+    return createOpenClawCodingTools({
+      config: {},
+      senderIsOwner: args.senderIsOwner,
+      messageProvider: "discord",
+      workspaceDir: "/tmp/openclaw-discord-voice-tools",
+      agentDir: "/tmp/openclaw-discord-voice-agent",
+    }).map((tool) => tool.name);
+  };
 
   const agentCommandArgsAt = (index: number) =>
     requireRecord(
@@ -6276,7 +6291,7 @@ describe("DiscordVoiceManager", () => {
     }
   });
 
-  it("keeps account allowlisted voice speakers non-owner", async () => {
+  it("withholds owner-only tools from account allowlisted voice speakers", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
       nickname: "Owner Nick",
@@ -6294,6 +6309,11 @@ describe("DiscordVoiceManager", () => {
       expect.objectContaining({ senderIsOwner: false }),
       expect.anything(),
     );
+    const toolNames = lastAgentCommandToolNames();
+    expect(toolNames).toContain("exec");
+    expect(toolNames).not.toContain("gateway");
+    expect(toolNames).not.toContain("nodes");
+    expect(toolNames).not.toContain("openclaw");
   });
 
   it("admits account wildcard voice speakers without granting owner authority", async () => {
@@ -6344,7 +6364,7 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
-  it("uses commands.ownerAllowFrom for voice speakers when Discord DMs are disabled", async () => {
+  it("keeps owner-only tools for commands.ownerAllowFrom voice speakers", async () => {
     const ownerId = "100000000000000001";
     const client = createClient();
     client.fetchMember.mockResolvedValue({
@@ -6365,6 +6385,9 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({ senderIsOwner: true }),
       expect.anything(),
+    );
+    expect(lastAgentCommandToolNames()).toEqual(
+      expect.arrayContaining(["gateway", "nodes", "openclaw"]),
     );
   });
 
@@ -6512,7 +6535,7 @@ describe("DiscordVoiceManager", () => {
       durationSeconds: 1.2,
       cfg: {},
       discordConfig,
-      commandAllowFrom: ["discord:u-owner"],
+      admissionAllowFrom: ["discord:u-owner"],
       runtime: createRuntime(),
       fetchGuildName: async () => "Guild One",
       speakerContext,
