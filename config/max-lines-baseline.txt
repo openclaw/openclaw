@@ -391,7 +391,6 @@ src/agents/acp-spawn.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
-src/agents/agent-command.ts
 src/agents/agent-hooks/compaction-safeguard.test.ts
 src/agents/agent-hooks/compaction-safeguard.ts
 src/agents/agent-scope.test.ts
@@ -1131,7 +1130,6 @@ ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
 ui/src/components/app-sidebar.test.ts
-ui/src/components/app-sidebar.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
 ui/src/components/lobster-pet.ts

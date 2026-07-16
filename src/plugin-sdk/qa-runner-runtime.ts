@@ -22,6 +22,7 @@ type QaRunnerTransportPolicy = {
 };
 
 type QaRunnerAdapterOptions = {
+  explicitScenarioSelection?: boolean;
   repoRoot?: string;
   scenarioIds?: readonly string[];
   sutAccountId?: string;
@@ -56,12 +57,14 @@ type QaRunnerTransportFlowPreparationInput = {
         tempRoot: string;
       }) => Promise<void>,
     ) => Promise<void>;
+    stop?: (options?: { preserveToDir?: string }) => Promise<void>;
   };
   waitForConfigRestartSettle: (options?: {
     restartDelayMs?: number;
     timeoutMs?: number;
   }) => Promise<void>;
   outputDir: string;
+  primaryModel?: string;
   timeoutMs: number;
 };
 
@@ -132,7 +135,6 @@ type QaRunnerTransportAdapterDefinition = {
 
 type QaRunnerTransportFactory = {
   id: string;
-  scenarioIds?: readonly string[];
   matches: (context: { channelId: string; driver: string }) => boolean;
   create: (context: {
     adapterOptions?: QaRunnerAdapterOptions;

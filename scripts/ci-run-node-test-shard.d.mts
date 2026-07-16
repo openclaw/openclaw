@@ -26,6 +26,11 @@ export function buildChildEnv(
   index: number,
 ): Record<string, string | undefined>;
 
+export function resolveShardChildCommand(
+  args: string[],
+  nodeExecPath?: string,
+): { command: string; args: string[] };
+
 export function runShardPlans(
   plans: ShardPlan[],
   options?: {

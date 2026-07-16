@@ -22,7 +22,15 @@ type PendingFinalDeliveryIdentity = {
 };
 
 function buildPendingFinalDeliveryCleanupPatch(entry: SessionEntry): Partial<SessionEntry> {
-  const clearsHookRecoveryProof = entry.restartRecoveryBeforeAgentReplyState === "handled-reply";
+  // An active receipt/claim may outlive outer reply settlement. Only claimless pending finals
+  // borrow hook provenance until their exact transport intent settles.
+  const clearsRestartRecoveryProof =
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === undefined;
+  const completesHookHandledTurn =
+    clearsRestartRecoveryProof &&
+    (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
+  const endedAt = completesHookHandledTurn ? Date.now() : undefined;
   return {
     pendingFinalDelivery: undefined,
     pendingFinalDeliveryText: undefined,
@@ -32,11 +40,22 @@ function buildPendingFinalDeliveryCleanupPatch(entry: SessionEntry): Partial<Ses
     pendingFinalDeliveryLastError: undefined,
     pendingFinalDeliveryContext: undefined,
     pendingFinalDeliveryIntentId: undefined,
-    ...(clearsHookRecoveryProof
+    ...(clearsRestartRecoveryProof
       ? {
           restartRecoveryBeforeAgentReplyState: undefined,
           restartRecoverySourceIngress: undefined,
           restartRecoveryForceSafeTools: undefined,
+        }
+      : {}),
+    ...(endedAt !== undefined
+      ? {
+          abortedLastRun: false,
+          endedAt,
+          runtimeMs:
+            typeof entry.startedAt === "number"
+              ? Math.max(0, endedAt - entry.startedAt)
+              : undefined,
+          status: "done" as const,
         }
       : {}),
   };

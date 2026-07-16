@@ -646,6 +646,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_port INTEGER,
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
+  gateway_context_path TEXT,
   updated_at_ms INTEGER NOT NULL
 );
 

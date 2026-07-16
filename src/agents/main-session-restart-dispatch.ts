@@ -60,6 +60,7 @@ export function resolveRestartRecoveryResumeBlockReason(params: {
   const beforeAgentReplyState = params.entry.restartRecoveryBeforeAgentReplyState;
   const requiresHookSafetyProof =
     beforeAgentReplyState === "admitted" ||
+    beforeAgentReplyState === "continue" ||
     beforeAgentReplyState === "handled-reply" ||
     params.entry.restartRecoverySourceIngress === "channel" ||
     params.entry.restartRecoverySourceIngress === "control-ui";
@@ -79,12 +80,10 @@ export function resolveRestartRecoveryResumeBlockReason(params: {
   } catch {
     return "pre-hook recovery runtime plugins could not be loaded";
   }
-  const unsafeHook = findRestartRecoveryUnsafeReplyHook({
-    // Both states prove before_agent_reply completed. Every other reply hook
-    // remains unsafe to bypass or repeat during Gateway agent dispatch.
-    allowBeforeAgentReply:
-      beforeAgentReplyState === "continue" || beforeAgentReplyState === "handled-reply",
-  });
+  // A stored hook result proves that invocation completed, but not that the
+  // same plugin code and config are still loaded after restart. Fail closed
+  // until hook activation owns a stable cross-process implementation digest.
+  const unsafeHook = findRestartRecoveryUnsafeReplyHook();
   return unsafeHook ? `pre-hook recovery cannot bypass the active ${unsafeHook} hook` : undefined;
 }
 

@@ -109,6 +109,10 @@ export type LegacyStateDetection = {
     vapidKeysPath: string;
     hasLegacy: boolean;
   };
+  nodeHost: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   execApprovals: {

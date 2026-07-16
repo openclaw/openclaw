@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { findRestartRecoveryUnsafeReplyHook } from "./restart-recovery-hook-safety.js";
+import {
+  findRestartRecoveryUnsafeChatAdmissionHook,
+  findRestartRecoveryUnsafeReplyHook,
+} from "./restart-recovery-hook-safety.js";
 
 const hookMocks = vi.hoisted(() => ({
   hasGlobalHooks: vi.fn<(hookName: string) => boolean>(),
@@ -23,13 +26,19 @@ describe("findRestartRecoveryUnsafeReplyHook", () => {
     expect(findRestartRecoveryUnsafeReplyHook()).toBe("before_agent_reply");
   });
 
-  it("exempts checkpointed before_agent_reply but not another active hook", () => {
+  it("does not exempt a checkpointed hook without a cross-process implementation digest", () => {
     hookMocks.hasGlobalHooks.mockImplementation(
       (hookName) => hookName === "before_agent_reply" || hookName === "before_message_write",
     );
 
-    expect(findRestartRecoveryUnsafeReplyHook({ allowBeforeAgentReply: true })).toBe(
-      "before_message_write",
+    expect(findRestartRecoveryUnsafeReplyHook()).toBe("before_agent_reply");
+  });
+
+  it("allows deferred before_agent_reply at initial durable chat admission", () => {
+    hookMocks.hasGlobalHooks.mockImplementation(
+      (hookName) => hookName === "before_agent_reply" || hookName === "before_message_write",
     );
+
+    expect(findRestartRecoveryUnsafeChatAdmissionHook()).toBe("before_message_write");
   });
 });

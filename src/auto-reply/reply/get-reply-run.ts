@@ -128,7 +128,11 @@ import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
-import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
+import {
+  buildChannelSourceTurnId,
+  readChannelSourceTurnId,
+  setChannelSourceTurnId,
+} from "./source-turn-id.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -1440,12 +1444,14 @@ export async function runPreparedReply(
   const sourceMessageId =
     normalizeOptionalString(sessionCtx.MessageSidFull) ??
     normalizeOptionalString(sessionCtx.MessageSid);
-  const sourceTurnId = buildChannelSourceTurnId({
-    provider: messageProvider,
-    accountId: replyRoute.accountId,
-    conversationId: replyRoute.to,
-    messageId: sourceMessageId,
-  });
+  const sourceTurnId =
+    readChannelSourceTurnId(sessionCtx) ??
+    buildChannelSourceTurnId({
+      provider: messageProvider,
+      accountId: replyRoute.accountId,
+      conversationId: replyRoute.to,
+      messageId: sourceMessageId,
+    });
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);

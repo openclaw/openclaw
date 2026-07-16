@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../bus-state.js";
 import { createQaChannelTransport } from "../qa-channel-transport.js";
 import { createQaTransportAdapter } from "../qa-transport-registry.js";
+import { listQaScenariosForExecutionProfile } from "../scenario-catalog.js";
 
 const { createSlack, createTelegram, createWhatsApp } = vi.hoisted(() => ({
   createSlack: vi.fn(),
@@ -36,8 +37,10 @@ const factories = [
 ] as const;
 
 describe("live transport adapter factories", () => {
-  it("assigns shared thread scenarios to Slack", () => {
-    expect(slackQaAdapterFactory.scenarioIds).toEqual([
+  it("selects Slack generic defaults from the YAML adapter profile", () => {
+    expect(
+      listQaScenariosForExecutionProfile("slack:adapter").map((scenario) => scenario.id),
+    ).toEqual([
       "channel-chat-baseline",
       "channel-canary",
       "channel-mention-gating",
@@ -47,8 +50,10 @@ describe("live transport adapter factories", () => {
     ]);
   });
 
-  it("keeps WhatsApp routing flows available without making them DM-safe CLI defaults", () => {
-    expect(whatsappQaAdapterFactory.scenarioIds).toEqual([
+  it("selects WhatsApp DM-safe defaults from the YAML adapter profile", () => {
+    expect(
+      listQaScenariosForExecutionProfile("whatsapp:adapter").map((scenario) => scenario.id),
+    ).toEqual([
       "dm-chat-baseline",
       "channel-canary",
       "channel-dm-group-routing",

@@ -10,6 +10,7 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   reconcilePendingFinalDeliveryAfterSettlement,
 } from "./dispatch-from-config.pending-final.js";
+import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-claim.js";
 
 describe("pending final delivery restart proof", () => {
   let tmpDir: string;
@@ -25,41 +26,81 @@ describe("pending final delivery restart proof", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function writeHookPendingFinal(): Promise<void> {
+  async function writePendingFinal(
+    beforeAgentReplyState: "continue" | "handled-reply",
+  ): Promise<void> {
     await replaceSessionEntry({ storePath, sessionKey }, {
       sessionId: "session",
+      status: "running",
+      startedAt: 10,
       updatedAt: Date.now(),
       pendingFinalDelivery: true,
       pendingFinalDeliveryText: "hook reply",
       pendingFinalDeliveryCreatedAt: 1,
       pendingFinalDeliveryIntentId: "intent-1",
-      restartRecoveryBeforeAgentReplyState: "handled-reply",
-      restartRecoveryForceSafeTools: true,
+      restartRecoveryBeforeAgentReplyState: beforeAgentReplyState,
+      restartRecoveryForceSafeTools: beforeAgentReplyState === "handled-reply" ? true : undefined,
       restartRecoverySourceIngress: "channel",
     } satisfies SessionEntry);
   }
 
-  it("clears hook provenance only after the exact pending intent succeeds", async () => {
-    await writeHookPendingFinal();
+  it.each(["continue", "handled-reply"] as const)(
+    "clears %s provenance only after the exact pending intent succeeds",
+    async (beforeAgentReplyState) => {
+      await writePendingFinal(beforeAgentReplyState);
+      const identity = capturePendingFinalDeliveryIdentity({
+        intentId: "intent-1",
+        sessionKey,
+        storePath,
+      });
+
+      await clearPendingFinalDeliveryAfterSuccess({ identity, sessionKey, storePath });
+
+      const entry = loadSessionEntry({ sessionKey, storePath });
+      expect(entry?.pendingFinalDelivery).toBeUndefined();
+      expect(entry?.pendingFinalDeliveryText).toBeUndefined();
+      expect(entry?.pendingFinalDeliveryIntentId).toBeUndefined();
+      expect(entry?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
+      expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
+      expect(entry?.restartRecoverySourceIngress).toBeUndefined();
+      expect(entry?.status).toBe(beforeAgentReplyState === "handled-reply" ? "done" : "running");
+      if (beforeAgentReplyState === "handled-reply") {
+        expect(entry?.endedAt).toBeTypeOf("number");
+        expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
+      }
+    },
+  );
+
+  it("finalizes a media-only hook turn after its exact transport intent succeeds", async () => {
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "session",
+        status: "running",
+        startedAt: 10,
+        updatedAt: Date.now(),
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryIntentId: "intent-media",
+        restartRecoveryBeforeAgentReplyState: "handled-unrecoverable",
+        restartRecoverySourceIngress: "channel",
+      },
+    );
     const identity = capturePendingFinalDeliveryIdentity({
-      intentId: "intent-1",
+      intentId: "intent-media",
       sessionKey,
       storePath,
     });
 
     await clearPendingFinalDeliveryAfterSuccess({ identity, sessionKey, storePath });
 
-    const entry = loadSessionEntry({ sessionKey, storePath });
-    expect(entry?.pendingFinalDelivery).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryText).toBeUndefined();
-    expect(entry?.pendingFinalDeliveryIntentId).toBeUndefined();
-    expect(entry?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
-    expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
-    expect(entry?.restartRecoverySourceIngress).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+    });
   });
 
-  it("keeps hook provenance when transport fails before delivery", async () => {
-    await writeHookPendingFinal();
+  it("keeps normal-turn provenance when transport fails before delivery", async () => {
+    await writePendingFinal("continue");
     const identity = capturePendingFinalDeliveryIdentity({
       intentId: "intent-1",
       sessionKey,
@@ -79,9 +120,42 @@ describe("pending final delivery restart proof", () => {
       pendingFinalDelivery: true,
       pendingFinalDeliveryText: "hook reply",
       pendingFinalDeliveryIntentId: "intent-1",
-      restartRecoveryBeforeAgentReplyState: "handled-reply",
-      restartRecoveryForceSafeTools: true,
+      restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoverySourceIngress: "channel",
     });
+  });
+
+  it("does not retire a source while its terminal provider outcome is unknown", async () => {
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "session",
+        status: "done",
+        updatedAt: Date.now(),
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
+        restartRecoveryDeliveryToolCallId: "message-call-1",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "source-1",
+      },
+    );
+
+    await expect(
+      retireTerminalRestartRecoverySourceClaim({
+        sessionId: "session",
+        sessionKey,
+        sourceTurnId: "source-1",
+        storePath,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryToolCallId: "message-call-1",
+      restartRecoveryDeliveryRunId: "recovery-1",
+      restartRecoveryDeliverySourceRunId: "source-1",
+    });
+    expect(
+      loadSessionEntry({ sessionKey, storePath })?.restartRecoveryTerminalRunIds,
+    ).toBeUndefined();
   });
 });

@@ -55,8 +55,10 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   specialized admission paths.
   If a `before_agent_reply` hook is installed, admission also records its phase.
   Recovery never replays a hook interrupted mid-call. Once an unhandled hook
-  finishes, its checkpoint lets recovery skip that hook and continue to the
-  model. Handled text and silent results are checkpointed separately.
+  finishes, its checkpoint records that result, but recovery still fails closed
+  while that hook remains active: a checkpoint cannot prove that the same
+  plugin code and configuration loaded after the restart. Handled text and
+  silent results are checkpointed separately for deterministic settlement.
 - **At shutdown:** during the restart drain, every session with an active run
   is stamped with a recovery marker in the session store before the run is
   aborted.

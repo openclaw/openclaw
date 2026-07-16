@@ -34,10 +34,7 @@ import {
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
-import {
-  hasRestartRecoverySourceClaim,
-  hasRestartRecoveryTerminalRun,
-} from "../../config/sessions/restart-recovery-state.js";
+import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
@@ -152,6 +149,7 @@ import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js"
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import {
   createReplyRestartRecoveryClaimController,
+  isDuplicateRestartRecoverySource,
   retireTerminalRestartRecoverySourceClaim,
 } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -1279,8 +1277,7 @@ export async function runReplyAgent(params: {
       : activeSessionEntry;
   if (
     restartRecoverySourceTurnId &&
-    (hasRestartRecoveryTerminalRun(restartRecoveryEntry, restartRecoverySourceTurnId) ||
-      hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId))
+    isDuplicateRestartRecoverySource(restartRecoveryEntry, restartRecoverySourceTurnId)
   ) {
     // Durable source ownership identifies provider redelivery even if the run
     // became terminal before its claim cleanup committed.
@@ -1828,7 +1825,7 @@ export async function runReplyAgent(params: {
       let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
         state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
       };
-      if (sessionKey && storePath && hookFinalDeliveryText) {
+      if (sessionKey && storePath && normalizedHookReplies.length > 0) {
         const sourceReplyPolicy = resolveSourceReplyPolicy({
           cfg,
           sessionCtx,
@@ -1844,9 +1841,9 @@ export async function runReplyAgent(params: {
             pendingFinalDeliveryRetryText: hookFinalDeliveryText,
           });
           hookCheckpoint = {
-            state: "handled-reply",
+            state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
             pendingFinalDelivery: {
-              text: hookFinalDeliveryText,
+              text: hookFinalDeliveryText ?? "",
               intentId: pendingFinalDeliveryIntentId,
               context: resolveReplyRunDeliveryContext({
                 cfg,

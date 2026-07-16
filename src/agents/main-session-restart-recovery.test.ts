@@ -50,8 +50,7 @@ const transcriptMocks = vi.hoisted(() => ({
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
   ensureRuntimePluginsLoaded: vi.fn(),
-  findRestartRecoveryUnsafeReplyHook:
-    vi.fn<(options?: { allowBeforeAgentReply?: boolean }) => string | undefined>(),
+  findRestartRecoveryUnsafeReplyHook: vi.fn<() => string | undefined>(),
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -1106,9 +1105,6 @@ describe("main-session-restart-recovery", () => {
   it("resumes marked sessions with a durable pending final delivery payload (Phase 2)", async () => {
     const sessionsDir = await makeSessionsDir();
     const pendingPayload = "The final answer is 42.";
-    runtimePluginMocks.findRestartRecoveryUnsafeReplyHook.mockImplementation((options) =>
-      options?.allowBeforeAgentReply ? undefined : "before_agent_reply",
-    );
     await writeStore(sessionsDir, {
       "agent:main:main": {
         sessionId: "main-session",
@@ -1144,9 +1140,7 @@ describe("main-session-restart-recovery", () => {
     const result = await recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir });
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledWith({
-      allowBeforeAgentReply: true,
-    });
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
     expect(callGateway).toHaveBeenCalledOnce();
     expect(firstGatewayParams()).toMatchObject({
       deliver: true,
@@ -1207,9 +1201,7 @@ describe("main-session-restart-recovery", () => {
       },
     );
 
-    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledWith({
-      allowBeforeAgentReply: true,
-    });
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
     expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
       method: "message.action",
     });
@@ -2153,18 +2145,16 @@ describe("main-session-restart-recovery", () => {
       },
     );
 
-    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledWith({
-      allowBeforeAgentReply: true,
-    });
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
     expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({ method: "agent" });
     expect(firstGatewayParams()).toMatchObject({ deliver: true });
   });
 
-  it("fails a checkpointed channel recovery when another unsafe reply hook is active", async () => {
+  it("fails a checkpointed channel recovery when before_agent_reply is active after restart", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:discord:direct:123";
-    runtimePluginMocks.findRestartRecoveryUnsafeReplyHook.mockReturnValue("before_message_write");
+    runtimePluginMocks.findRestartRecoveryUnsafeReplyHook.mockReturnValue("before_agent_reply");
     await writeStore(sessionsDir, {
       [sessionKey]: {
         sessionId: "main-session",
@@ -2193,9 +2183,45 @@ describe("main-session-restart-recovery", () => {
       },
     );
 
-    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledWith({
-      allowBeforeAgentReply: true,
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
+    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
+      method: "message.action",
     });
+    expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
+  });
+
+  it("fails a checkpointed transcript-only recovery when another unsafe reply hook is active", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    runtimePluginMocks.findRestartRecoveryUnsafeReplyHook.mockReturnValue("before_message_write");
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryBeforeAgentReplyState: "continue",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the transcript-only thing" },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir })).resolves.toEqual(
+      {
+        recovered: 0,
+        failed: 1,
+        skipped: 0,
+      },
+    );
+
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
     expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
       method: "message.action",
     });
@@ -2234,9 +2260,7 @@ describe("main-session-restart-recovery", () => {
       },
     );
 
-    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledWith({
-      allowBeforeAgentReply: false,
-    });
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
     expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
       method: "message.action",
     });
@@ -2360,9 +2384,7 @@ describe("main-session-restart-recovery", () => {
       },
     );
 
-    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledWith({
-      allowBeforeAgentReply: true,
-    });
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
     expect(callGateway).not.toHaveBeenCalled();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });

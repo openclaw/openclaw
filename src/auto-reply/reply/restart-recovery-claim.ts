@@ -33,6 +33,19 @@ type ReplyRestartRecoveryClaimController = {
   isArmed: () => boolean;
 };
 
+/** Provider redelivery guard shared by ingress and the agent admission boundary. */
+export function isDuplicateRestartRecoverySource(
+  entry: SessionEntry | null | undefined,
+  sourceTurnId: unknown,
+): boolean {
+  const normalizedSourceTurnId = normalizeOptionalString(sourceTurnId);
+  return Boolean(
+    normalizedSourceTurnId &&
+    (hasRestartRecoveryTerminalRun(entry ?? undefined, normalizedSourceTurnId) ||
+      hasRestartRecoverySourceClaim(entry ?? undefined, normalizedSourceTurnId)),
+  );
+}
+
 export async function retireTerminalRestartRecoverySourceClaim(params: {
   sessionId: string;
   sessionKey: string;
@@ -46,6 +59,7 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
       if (
         current.sessionId !== params.sessionId ||
         current.status === "running" ||
+        current.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
         !hasRestartRecoverySourceClaim(current, params.sourceTurnId)
       ) {
         return null;
@@ -273,7 +287,12 @@ export function createReplyRestartRecoveryClaimController(params: {
       return "admitted";
     }
     const updatedAt = Date.now();
-    if (activeClaimRunId && (entry.abortedLastRun === true || entry.status === "running")) {
+    if (
+      activeClaimRunId &&
+      (entry.abortedLastRun === true ||
+        entry.status === "running" ||
+        entry.restartRecoveryDeliveryReceiptState === "terminal-pending")
+    ) {
       throw new Error("restart recovery claim changed before agent adoption");
     }
     const retiredClaim = activeClaimRunId
@@ -376,10 +395,42 @@ export function createReplyRestartRecoveryClaimController(params: {
         ) {
           return null;
         }
-        const preservesHookPendingFinal =
-          current.restartRecoveryBeforeAgentReplyState === "handled-reply" &&
-          (current.pendingFinalDelivery === true ||
-            normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined);
+        // Unknown provider outcome is terminal for this live run. Retire its source without
+        // replay so later distinct turns can proceed; a crash before this point still leaves
+        // the active receipt for startup recovery's user-facing fail-closed notice.
+        if (current.restartRecoveryDeliveryReceiptState === "terminal-pending") {
+          const endedAt = Date.now();
+          return {
+            ...buildRestartRecoveryClaimCleanupPatch({
+              entry: current,
+              recordTerminalSource: true,
+              terminalSourceRunId: recoverySourceRunId,
+            }),
+            abortedLastRun: true,
+            endedAt,
+            pendingFinalDelivery: undefined,
+            pendingFinalDeliveryText: undefined,
+            pendingFinalDeliveryCreatedAt: undefined,
+            pendingFinalDeliveryLastAttemptAt: undefined,
+            pendingFinalDeliveryAttemptCount: undefined,
+            pendingFinalDeliveryLastError: undefined,
+            pendingFinalDeliveryContext: undefined,
+            pendingFinalDeliveryIntentId: undefined,
+            runtimeMs:
+              typeof current.startedAt === "number"
+                ? Math.max(0, endedAt - current.startedAt)
+                : undefined,
+            status: "failed" as const,
+            updatedAt: endedAt,
+          };
+        }
+        const preservesPendingFinal =
+          current.pendingFinalDelivery === true ||
+          normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined;
+        const completesHandledSilent =
+          current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
+          !preservesPendingFinal;
+        const endedAt = completesHandledSilent ? Date.now() : undefined;
         return {
           ...buildRestartRecoveryClaimCleanupPatch({
             entry: current,
@@ -388,14 +439,25 @@ export function createReplyRestartRecoveryClaimController(params: {
           }),
           // Transport settlement owns this final checkpoint. Keep enough provenance for a
           // restart to enforce hook safety until that exact pending intent is resolved.
-          ...(preservesHookPendingFinal
+          ...(preservesPendingFinal
             ? {
-                restartRecoveryBeforeAgentReplyState: "handled-reply" as const,
+                restartRecoveryBeforeAgentReplyState: current.restartRecoveryBeforeAgentReplyState,
                 restartRecoverySourceIngress: current.restartRecoverySourceIngress,
-                restartRecoveryForceSafeTools: true as const,
+                restartRecoveryForceSafeTools: current.restartRecoveryForceSafeTools,
               }
             : {}),
-          updatedAt: Date.now(),
+          ...(endedAt !== undefined
+            ? {
+                abortedLastRun: false,
+                endedAt,
+                runtimeMs:
+                  typeof current.startedAt === "number"
+                    ? Math.max(0, endedAt - current.startedAt)
+                    : undefined,
+                status: "done" as const,
+              }
+            : {}),
+          updatedAt: endedAt ?? Date.now(),
         };
       },
     );
