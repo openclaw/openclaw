@@ -12,6 +12,7 @@ import {
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
@@ -733,6 +734,90 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
           child.once("close", resolve);
         });
       }
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+      });
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("times out stalled upstream response bodies without stopping the fixture registry", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-timeout-");
+    const portFile = path.join(root, "port");
+    const preloadPath = path.join(root, "shorten-abort-timeout.mjs");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    let upstreamHits = 0;
+    writeFileSync(
+      preloadPath,
+      [
+        "const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);",
+        "AbortSignal.timeout = () => nativeTimeout(50);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const upstream = createServer((_request, response) => {
+      upstreamHits += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"partial":');
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("expected upstream registry address");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(preloadPath).href,
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const stderr = createBoundedChildOutput();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr.append(chunk);
+    });
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const stalled = await requestFixtureRegistry(port, "/stalled-package");
+
+      expect(stalled.statusCode, stderr.text()).toBe(502);
+      expect(stalled.body).toContain("upstream registry request failed");
+      expect(upstreamHits).toBe(1);
+
+      const local = await requestFixtureRegistry(port, "/@openclaw%2Fdemo-plugin-npm");
+
+      expect(local.statusCode, stderr.text()).toBe(200);
+      expect(child.exitCode, stderr.text()).toBeNull();
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      upstream.closeAllConnections();
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
       });
