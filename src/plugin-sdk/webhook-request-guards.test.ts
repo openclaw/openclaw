@@ -302,6 +302,25 @@ describe("beginWebhookRequestPipelineOrReject", () => {
 });
 
 describe("runDetachedWebhookWork", () => {
+  it("defers the callback until the request handler can acknowledge", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const order: string[] = [];
+    let detached: Promise<void> | null = null;
+
+    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
+      detached = runDetachedWebhookWork(async () => {
+        order.push("work");
+      });
+      order.push("ack");
+      expect(order).toEqual(["ack"]);
+      return true;
+    });
+
+    await detached;
+    expect(order).toEqual(["ack", "work"]);
+  });
+
   it("keeps post-ack processing admitted after the request admission is released", async () => {
     const { runWithGatewayHttpWorkAdmission } =
       await import("../gateway/server/http-work-admission.js");

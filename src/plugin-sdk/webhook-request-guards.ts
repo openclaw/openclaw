@@ -289,7 +289,12 @@ export function beginWebhookRequestPipelineOrReject(params: {
  * keeps the detached processing accepted and lets a restart drain wait for it.
  */
 export function runDetachedWebhookWork<T>(run: () => Promise<T>): Promise<T> {
-  return runWithGatewayIndependentRootWorkContinuation(run);
+  return runWithGatewayIndependentRootWorkContinuation(async () => {
+    // Reserve the root now, but let the request handler write its acknowledgement
+    // before any synchronous prefix in the detached callback can run.
+    await Promise.resolve();
+    return await run();
+  });
 }
 
 /** Read a webhook request body with bounded size/time limits and translate failures into responses. */

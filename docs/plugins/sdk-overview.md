@@ -223,11 +223,12 @@ void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
 ```
 
 Call `runDetachedWebhookWork(...)` synchronously while the HTTP request is still
-admitted. The callback starts immediately on an independent root, and the
-returned promise adopts its result; callers still own rejection handling. This
-keeps post-ack queue work accepted and makes restart or suspension drains wait
-for it. Handlers that await all processing before returning do not need this
-helper.
+admitted. The helper reserves an independent root immediately, then starts the
+callback in the next microtask so the request handler can write its
+acknowledgement first. The returned promise adopts the callback result; callers
+still own rejection handling. This keeps post-ack queue work accepted and makes
+restart or suspension drains wait for it. Handlers that await all processing
+before returning do not need this helper.
 
 #### Requester-scoped MCP connections
 
