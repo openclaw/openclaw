@@ -60,6 +60,18 @@ terminal output, focused tests, CI results, live observations, redacted logs,
 and artifact links are all useful. Include before/after evidence for visual
 changes when it clarifies the result.
 
+For behavior-changing PRs, put durable real-behavior evidence here in the
+opening body, or state a concrete proof limitation and verification plan. Do
+not rely only on tests, CI, or later review comments. For docs-, test-, and
+behavior-neutral changes, say why behavior proof is not applicable and list
+the relevant validation.
+
+Opening a PR or draft, pushing, editing its body/title/base, and marking it
+ready for review automatically request ClawSweeper review. After one of those
+updates, wait for its automatic result or run; do not add a bare
+`@clawsweeper review` or `@clawsweeper re-review` for the same update. CI/check
+completion alone does not request a review.
+
 Reviewers will inspect the code, tests, and CI. Use this section to make the
 validation easy to understand, not to restate the diff.
 -->
