@@ -66,7 +66,6 @@ import {
   resolveTtsRuntimeConfig,
   resolveTtsSettingsSnapshot,
   type ResolvedTtsConfig,
-  type ResolvedTtsModelOverrides,
 } from "./tts-settings.js";
 
 export type {
