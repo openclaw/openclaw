@@ -52,12 +52,12 @@
     "subtitles.modelSetup",
     "tabs.modelSetup"
   ],
-  "generatedAt": "2026-07-16T10:07:17.096Z",
+  "generatedAt": "2026-07-16T10:30:18.353Z",
   "locale": "tr",
   "model": "gpt-5.6-sol",
   "provider": "openai",
-  "sourceHash": "82bbb69b480caa5ea807f9143cb0eecfd33e993fb0ba2a0d0212a48de0be5b95",
-  "totalKeys": 3415,
-  "translatedKeys": 3364,
+  "sourceHash": "10b83d878a3c7ea00454f120f6c71bb62d2c55f8c9e667e1476a33764465ef66",
+  "totalKeys": 3418,
+  "translatedKeys": 3367,
   "workflow": 1
 }
