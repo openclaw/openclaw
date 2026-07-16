@@ -1,0 +1,8 @@
+Google Play services Wearable
+Artifact:
+- com.google.android.gms:play-services-wearable:20.0.1
+
+This artifact is distributed under the Android Software Development Kit
+License Agreement:
+
+https://developer.android.com/studio/terms.html

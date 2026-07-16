@@ -497,7 +497,7 @@ jobs:
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
             ? readFileSync(".github/workflows/ci.yml", "utf8")
             : "";
-          const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
+          const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v3");
           const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
@@ -658,13 +658,22 @@ jobs:
             android_matrix: createMatrix(
               runAndroid
                 ? [
-                    // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
+                    // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
+                    ...(!useCompatibleAndroidCi
+                      ? [
+                          { check_name: "android-test-wear-shared", task: "test-wear-shared" },
+                          { check_name: "android-test-wear", task: "test-wear" },
+                        ]
+                      : []),
                     {
                       check_name: "android-build-play",
                       task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
                     },
+                    ...(!useCompatibleAndroidCi
+                      ? [{ check_name: "android-build-wear", task: "build-wear" }]
+                      : []),
                     ...(!useCompatibleAndroidCi
                       ? [{ check_name: "android-ktlint", task: "ktlint" }]
                       : []),
@@ -2809,6 +2818,12 @@ jobs:
             test-third-party)
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
+            test-wear-shared)
+              ./gradlew --no-daemon --build-cache :wear-shared:test
+              ;;
+            test-wear)
+              ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
+              ;;
             build-play)
               ./gradlew --no-daemon --build-cache \
                 :app:assemblePlayDebug \
@@ -2817,6 +2832,11 @@ jobs:
                 :app:lintThirdPartyDebug \
                 :benchmark:assembleDebug
               ;;
+            build-wear)
+              ./gradlew --no-daemon --build-cache \
+                :wear:assembleDebug \
+                :wear:lintDebug
+              ;;
             build-play-compat)
               # Frozen targets keep their target-owned Android build contract. New lint rules
               # must not retroactively reject a previously validated release branch.
@@ -2824,7 +2844,11 @@ jobs:
               ;;
             ktlint)
               # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
-              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
+              ./gradlew --no-daemon --build-cache \
+                :app:ktlintCheck \
+                :benchmark:ktlintCheck \
+                :wear:ktlintCheck \
+                :wear-shared:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

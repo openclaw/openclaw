@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenClaw</string>
+    <string name="checking_phone">Checking phone</string>
+    <string name="reading_status">Reading OpenClaw status</string>
+    <string name="phone_ready">Phone ready</string>
+    <string name="gateway_connected">Gateway connected</string>
+    <string name="gateway_offline">Gateway offline</string>
+    <string name="open_phone_app">Open OpenClaw on phone</string>
+    <string name="phone_not_ready_detail">The watch never starts or authenticates the Gateway itself.</string>
+    <string name="phone_unavailable">Phone not reachable</string>
+    <string name="phone_unavailable_detail">Keep the paired phone nearby and install the matching OpenClaw app.</string>
+    <string name="update_required">Update required</string>
+    <string name="update_required_detail">Update OpenClaw on both phone and watch.</string>
+    <string name="refresh">Refresh</string>
+</resources>
