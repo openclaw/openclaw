@@ -61,6 +61,7 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = {
@@ -688,18 +689,16 @@ export function createCodexDynamicToolBridge(params: {
           !resultIsError &&
           (rawResult.terminate === true || result.terminate === true);
         const hasExplicitFinalControl = typeof executedArgs.final === "boolean";
-        // Omitted final on a confirmed source reply must degrade to legacy
-        // terminate-on-delivery (completed marker), never progress; otherwise
-        // stranded-reply recovery re-delivers a duplicate of that reply.
-        const sourceReplyFinal =
+        const confirmedSourceReply =
           params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
           toolName === "message" &&
-          (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply)
-            ? hasExplicitFinalControl
-              ? executedArgs.final === true
-              : true
-            : undefined;
-        collectToolTelemetry({
+          (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply);
+        const sourceReplyFinal = confirmedSourceReply
+          ? hasExplicitFinalControl
+            ? executedArgs.final === true
+            : undefined
+          : undefined;
+        const sourceReplyRecord = collectToolTelemetry({
           toolName,
           args: executedArgs,
           result,
@@ -709,20 +708,26 @@ export function createCodexDynamicToolBridge(params: {
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
         });
+        if (confirmedSourceReply && sourceReplyRecord) {
+          recordCodexSourceReplyDeliveryIntent(telemetry, {
+            record: sourceReplyRecord,
+            final: sourceReplyFinal,
+          });
+        }
         if (deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply) {
           telemetry.didDeliverSourceReplyViaMessageTool = true;
         }
+        const defersInferredSourceReplyTermination =
+          confirmedSourceReply && executedArgs.final !== true;
         withDynamicToolTermination(
           response,
           ((rawResult.terminate === true || result.terminate === true) &&
-            !(
-              params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-              toolName === "message" &&
-              executedArgs.final === false
-            )) ||
+            !defersInferredSourceReplyTermination) ||
+            // Yield is an explicit owner-level turn handoff, not termination
+            // inferred from source-reply delivery, so finality does not mask it.
             isToolResultYield(rawResult) ||
             isToolResultYield(result) ||
-            ((deliveredSourceReply || receiptConfirmedSourceReply) && executedArgs.final !== false),
+            (confirmedSourceReply && executedArgs.final === true),
         );
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
@@ -1146,9 +1151,9 @@ function collectToolTelemetry(params: {
   isError: boolean;
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
-}): void {
+}): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
   if (params.isError) {
-    return;
+    return undefined;
   }
   if (!params.isError && params.toolName === "cron" && isCronAddAction(params.args)) {
     params.telemetry.successfulCronAdds = (params.telemetry.successfulCronAdds ?? 0) + 1;
@@ -1180,11 +1185,11 @@ function collectToolTelemetry(params: {
     }
   }
   if (!isMessagingTool(params.toolName)) {
-    return;
+    return undefined;
   }
   const isMessagingSendAction = isMessagingToolSendAction(params.toolName, params.args);
   if (!isMessagingSendAction && !params.messagingTarget) {
-    return;
+    return undefined;
   }
   if (
     !isMessagingSendAction &&
@@ -1196,18 +1201,19 @@ function collectToolTelemetry(params: {
       isError: params.isError,
     })
   ) {
-    return;
+    return undefined;
   }
   params.telemetry.didSendViaMessagingTool = true;
   const sourceReplyPayload = extractInternalSourceReplyPayload(params.result?.details);
   if (sourceReplyPayload) {
-    params.telemetry.messagingToolSourceReplyPayloads.push({
+    const record = {
       ...sourceReplyPayload,
       ...(params.sourceReplyFinal !== undefined
         ? { sourceReplyFinal: params.sourceReplyFinal }
         : {}),
-    });
-    return;
+    };
+    params.telemetry.messagingToolSourceReplyPayloads.push(record);
+    return record;
   }
   const text = readFirstString(params.args, ["text", "message", "body", "content"]);
   if (text) {
@@ -1215,7 +1221,7 @@ function collectToolTelemetry(params: {
   }
   const mediaUrls = collectMediaUrls(params.args);
   params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
-  params.telemetry.messagingToolSentTargets.push({
+  const record = {
     ...(params.messagingTarget ?? {
       tool: params.toolName,
       provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
@@ -1226,7 +1232,9 @@ function collectToolTelemetry(params: {
     ...(text ? { text } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
     ...(params.sourceReplyFinal !== undefined ? { sourceReplyFinal: params.sourceReplyFinal } : {}),
-  });
+  };
+  params.telemetry.messagingToolSentTargets.push(record);
+  return record;
 }
 function extractInternalSourceReplyPayload(
   details: unknown,

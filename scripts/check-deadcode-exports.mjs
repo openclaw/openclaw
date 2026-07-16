@@ -11,7 +11,7 @@ const KNIP_ARGS = [
   "--reporter",
   "compact",
   "--include",
-  "exports,types,enumMembers",
+  "exports,nsExports,types,nsTypes,enumMembers,namespaceMembers",
   "--no-config-hints",
 ];
 
@@ -22,9 +22,10 @@ export function parseKnipCompactUnusedExportsResult(output) {
   let sawExportSection = false;
 
   for (const line of output.split(/\r?\n/u)) {
-    const sectionMatch = /^Unused (exports|exported types|exported enum members) \(\d+\)$/u.exec(
-      line,
-    );
+    const sectionMatch =
+      /^(Unused exports|Exports in used namespace|Unused exported types|Exported types in used namespace|Unused exported enum members|Unused exported namespace members) \(\d+\)$/u.exec(
+        line,
+      );
     if (sectionMatch) {
       inExportSection = true;
       sawExportSection = true;

@@ -993,7 +993,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<voi
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 

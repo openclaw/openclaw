@@ -421,7 +421,7 @@ describe("npm registry provenance verification", () => {
     ).rejects.toThrow("failed Sigstore verification");
   });
 
-  it("retries incomplete registry metadata while npm publish propagates", async () => {
+  it("retries incomplete or briefly stale provenance while npm publish propagates", async () => {
     let attempts = 0;
     const delays: number[] = [];
 
@@ -429,7 +429,12 @@ describe("npm registry provenance verification", () => {
       retryNpmRegistryProvenanceRead(
         async () => {
           attempts += 1;
-          if (attempts < 3) {
+          if (attempts === 1) {
+            throw new Error(
+              "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
+            );
+          }
+          if (attempts === 2) {
             throw new Error(
               "npm registry provenance metadata is incomplete for openclaw@2026.3.23.",
             );

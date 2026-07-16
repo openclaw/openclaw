@@ -1576,6 +1576,39 @@ describe("doctor legacy state migrations", () => {
     );
   });
 
+  it("deletes rebuildable legacy files after the SQLite target opens", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "command-deploy-cache.json");
+    fs.writeFileSync(sourcePath, "{malformed cache", "utf8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test rebuildable cache",
+        sourcePath,
+        targetPath: "plugin state:test.rebuildable-cache",
+        pluginId: "discord",
+        namespace: "test.rebuildable-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        cleanupSource: "remove",
+        cleanupWhenEmpty: true,
+        readEntries: () => [],
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(result.changes).toContain(
+      `Removed Test rebuildable cache legacy source (${sourcePath})`,
+    );
+  });
+
   it("replaces existing plugin-state entries when a channel import plan asks for it", async () => {
     const root = await makeTempRoot();
     const sourcePath = path.join(root, "legacy-cache.json");

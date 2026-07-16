@@ -948,8 +948,9 @@ export async function startGatewayServer(
         })
       : undefined;
   // Without configured profiles, existing placements still reconcile but new dispatches stay off.
+  const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles
-    ? workerPlacementRuntime?.dispatchService
+    ? workerPlacementControlAvailable
     : undefined;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -969,7 +970,9 @@ export async function startGatewayServer(
   };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
-      (method) => workerPlacementDispatchAvailable || method !== "sessions.dispatch",
+      (method) =>
+        (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || method !== "sessions.reclaim"),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
@@ -1621,7 +1624,8 @@ export async function startGatewayServer(
           (workerEnvironmentService ||
             (descriptor.name !== "environments.create" &&
               descriptor.name !== "environments.destroy")) &&
-          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch"),
+          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
+          (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
       );
       return createGatewayMethodRegistry([
         ...coreDescriptors,
@@ -1873,8 +1877,8 @@ export async function startGatewayServer(
           ...(workerPlacementRuntime
             ? { workerSessionPlacementService: workerPlacementRuntime.placements }
             : {}),
-          ...(workerPlacementDispatchAvailable
-            ? { workerPlacementDispatchService: workerPlacementDispatchAvailable }
+          ...(workerPlacementControlAvailable
+            ? { workerPlacementDispatchService: workerPlacementControlAvailable }
             : {}),
           terminalSessions,
           agentRunSeq,

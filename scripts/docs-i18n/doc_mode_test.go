@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -780,6 +781,63 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 	}
 	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
 		t.Fatalf("inline-code round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
+func TestMaskMarkdownDocSyntaxProtectsProductLinksInsideRawHTML(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		`<div className="maturity-category-docs">`,
+		"",
+		"Use `channel links`: [Discord](/channels/discord), [Render](https://render.com/docs), [Groups](/channels/groups).",
+		"[Render](/guides/pre-render) the page first.",
+		"",
+		`</div>`,
+		"",
+	}, "\n")
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	if strings.Contains(masked, "[Discord](/channels/discord)") {
+		t.Fatalf("expected protected link %q to be masked:\n%s", "Discord", masked)
+	}
+	if strings.Contains(masked, "[Render](https://render.com/docs)") {
+		t.Fatalf("expected contextual product link %q to be masked:\n%s", "Render", masked)
+	}
+	if !strings.Contains(masked, "[Groups]") {
+		t.Fatalf("expected ordinary link label to remain translatable:\n%s", masked)
+	}
+	if !strings.Contains(masked, "[Render](/guides/pre-render)") {
+		t.Fatalf("expected contextual ordinary-word label to remain translatable:\n%s", masked)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
+func TestMaskMarkdownDocSyntaxKeepsProtectedLinkAssociationOpaque(t *testing.T) {
+	t.Parallel()
+
+	source := "Read [Slack](/channels/slack) and nearby Slack setup notes.\n"
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	if strings.Contains(masked, "[Slack]") || strings.Contains(masked, "/channels/slack") {
+		t.Fatalf("expected protected link label and destination to share one opaque placeholder:\n%s", masked)
+	}
+	if !strings.Contains(masked, "nearby Slack setup notes") {
+		t.Fatalf("expected ordinary surrounding product prose to remain visible:\n%s", masked)
+	}
+	if len(placeholders) != 1 || mapping[placeholders[0]] != "[Slack](/channels/slack)" {
+		t.Fatalf("unexpected protected-link placeholder mapping: placeholders=%v mapping=%v", placeholders, mapping)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }
 
@@ -2384,8 +2442,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 29") {
-		t.Fatalf("expected prompt version 29 in output metadata:\n%s", text)
+	if !strings.Contains(text, fmt.Sprintf("prompt_version: %d", promptVersion)) {
+		t.Fatalf("expected prompt version %d in output metadata:\n%s", promptVersion, text)
 	}
 }
 
@@ -2479,6 +2537,23 @@ func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	}
 	if err := validateDocChunkTranslation("Available 24/7.\n", "24/7 उपलब्ध।\n"); err != nil {
 		t.Fatalf("expected translated prose around exact slash ratio to pass: %v", err)
+	}
+}
+
+func TestExtractNumericValuesKeepsClockCoreBeforeMeridiemSuffix(t *testing.T) {
+	t.Parallel()
+
+	if got := strings.Join(extractNumericValues("At 5am, meet again by 6:14am."), ","); got != "6:14" {
+		t.Fatalf("unexpected clock values: %q", got)
+	}
+	if err := validateDocChunkTranslation(
+		"At 5am, meet again by 6:14am.\n",
+		"सुबह 5 बजे मिलें और 6:14 बजे तक फिर मिलें।\n",
+	); err != nil {
+		t.Fatalf("expected detached translated clock suffix to preserve the numeric core: %v", err)
+	}
+	if got := extractNumericValues("Versions v6:14am and 6:14amx stay unprotected."); len(got) != 0 {
+		t.Fatalf("unexpected embedded clock values: %v", got)
 	}
 }
 
