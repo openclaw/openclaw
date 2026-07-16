@@ -743,6 +743,10 @@ export function createSubagentRegistryLifecycleController(params: {
         entry.delivery?.payload?.fallbackFrozenResultText ?? entry.completion?.fallbackResultText,
       wakeOnDescendantSettle:
         entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
+      pendingRequesterConsumedDescendantRunIds:
+        entry.delivery?.payload?.pendingRequesterConsumedDescendantRunIds,
+      pendingRequesterConsumedRunStartedAt:
+        entry.delivery?.payload?.pendingRequesterConsumedRunStartedAt,
     };
   };
 
@@ -1680,6 +1684,9 @@ export function createSubagentRegistryLifecycleController(params: {
       spawnMode: pendingPayload.spawnMode,
       expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
       wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+      pendingRequesterConsumedDescendantRunIds:
+        pendingPayload.pendingRequesterConsumedDescendantRunIds,
+      pendingRequesterConsumedRunStartedAt: pendingPayload.pendingRequesterConsumedRunStartedAt,
       onBeforeDeleteChildSession:
         cleanup === "delete"
           ? () => {

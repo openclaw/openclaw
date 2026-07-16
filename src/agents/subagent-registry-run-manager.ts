@@ -3,6 +3,7 @@
  *
  * Waits for child runs, records terminal outcomes, creates task-runtime entries, and archives completed sessions.
  */
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -47,6 +48,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type {
+  PendingFinalDeliveryPayload,
   SubagentProgressOrigin,
   SubagentRunRecord,
   SwarmQueuedLaunch,
@@ -640,6 +642,8 @@ export function createSubagentRunManager(params: {
     preserveFrozenResultFallback?: boolean;
     transcriptTarget?: AgentRunSessionTarget;
     task?: string;
+    pendingRequesterConsumedDescendantRunIds?: string[];
+    pendingRequesterConsumedRunStartedAt?: number;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -739,6 +743,45 @@ export function createSubagentRunManager(params: {
       runTimeoutSeconds,
     });
     clearDeliveryState(next);
+    const pendingRequesterConsumedDescendantRunIds = normalizeUniqueStringEntries(
+      replaceParams.pendingRequesterConsumedDescendantRunIds,
+    );
+    if (pendingRequesterConsumedDescendantRunIds.length > 0) {
+      const payload: PendingFinalDeliveryPayload = {
+        requesterSessionKey: next.requesterSessionKey,
+        requesterDisplayKey: next.requesterDisplayKey,
+        childSessionKey: next.childSessionKey,
+        childRunId: next.runId,
+        task: next.task,
+        ...(next.requesterOrigin ? { requesterOrigin: next.requesterOrigin } : {}),
+        ...(next.label ? { label: next.label } : {}),
+        ...(typeof next.startedAt === "number" ? { startedAt: next.startedAt } : {}),
+        ...(typeof next.endedAt === "number" ? { endedAt: next.endedAt } : {}),
+        ...(next.outcome ? { outcome: next.outcome } : {}),
+        ...(typeof next.expectsCompletionMessage === "boolean"
+          ? { expectsCompletionMessage: next.expectsCompletionMessage }
+          : {}),
+        ...(next.spawnMode ? { spawnMode: next.spawnMode } : {}),
+        ...(next.completion?.resultText !== undefined
+          ? { frozenResultText: next.completion.resultText }
+          : {}),
+        ...(next.completion?.fallbackResultText !== undefined
+          ? { fallbackFrozenResultText: next.completion.fallbackResultText }
+          : {}),
+        ...(next.wakeOnDescendantSettle === true ? { wakeOnDescendantSettle: true } : {}),
+        pendingRequesterConsumedDescendantRunIds,
+        ...(typeof replaceParams.pendingRequesterConsumedRunStartedAt === "number"
+          ? {
+              pendingRequesterConsumedRunStartedAt:
+                replaceParams.pendingRequesterConsumedRunStartedAt,
+            }
+          : {}),
+      };
+      next.delivery = {
+        ...(next.delivery ?? { status: "pending" }),
+        payload,
+      };
+    }
 
     if (previousRunId !== nextRunId) {
       params.runs.delete(previousRunId);

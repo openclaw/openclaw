@@ -22,6 +22,7 @@ const {
   ensureOutboundSessionEntryMock,
   loadCronSessionEntryLatestMock,
   maybeApplyTtsToPayloadMock,
+  markDescendantCompletionConsumedByRequesterMock,
   retireSessionMcpRuntimeMock,
   resolveOutboundSessionRouteMock,
 } = vi.hoisted(() => ({
@@ -35,6 +36,7 @@ const {
   ensureOutboundSessionEntryMock: vi.fn().mockResolvedValue(undefined),
   loadCronSessionEntryLatestMock: vi.fn(),
   maybeApplyTtsToPayloadMock: vi.fn(async (params: { payload: unknown }) => params.payload),
+  markDescendantCompletionConsumedByRequesterMock: vi.fn().mockReturnValue(0),
   retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
   resolveOutboundSessionRouteMock: vi.fn().mockResolvedValue(null),
 }));
@@ -84,6 +86,7 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
 
 vi.mock("./delivery-subagent-registry.runtime.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
+  markDescendantCompletionConsumedByRequester: markDescendantCompletionConsumedByRequesterMock,
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
@@ -316,6 +319,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.clearAllMocks();
     resetCompletedDirectCronDeliveriesForTests();
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(deliverOutboundPayloads)
+      .mockReset()
+      .mockResolvedValue([{ ok: true } as never]);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
@@ -345,6 +351,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     // countActiveDescendantRuns returns >0 → enters wait block; still >0 after wait → early return
     vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
 
     const params = makeBaseParams({ synthesizedText: "on it" });
@@ -1095,7 +1102,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   it("bestEffort delivery still suppresses stale interim text while descendants run", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
-    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
 
     const params = makeBaseParams({
@@ -1116,7 +1122,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       .mockReturnValueOnce(2) // initial check → hadDescendants=true, enters wait block
       .mockReturnValueOnce(0); // second check after wait → activeSubagentRuns=0
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
-    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     // synthesizedText matches initialSynthesizedText & isLikelyInterimCronMessage → stale interim
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
 
@@ -1128,14 +1133,93 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     // No direct delivery should have been sent (stale interim suppressed)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(markDescendantCompletionConsumedByRequesterMock).not.toHaveBeenCalled();
+  });
+
+  it("credits descendant fallback when active descendants drain before direct delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValueOnce(2).mockReturnValueOnce(0);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue({
+      text: "Child finished after drain.",
+      consumedRunIds: ["run-drained-child"],
+    });
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+
+    const params = makeBaseParams({ synthesizedText: "on it" });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Child finished after drain." }],
+    });
+    expect(markDescendantCompletionConsumedByRequesterMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: params.runSessionKey,
+        runStartedAt: params.runStartedAt,
+        runIds: ["run-drained-child"],
+      }),
+    );
+  });
+
+  it("credits descendant fallback even when final direct delivery fails", async () => {
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("gateway not connected"));
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue({
+      text: "Child result consumed before the final channel send.",
+      consumedRunIds: ["run-consumed-before-send"],
+    });
+
+    const params = makeBaseParams({ synthesizedText: "on it", runStartedAt: 50_000 });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(false);
+    expectResultFields(state.result, {
+      status: "error",
+      error: "Error: gateway not connected",
+    });
+    expect(markDescendantCompletionConsumedByRequesterMock).toHaveBeenCalledTimes(1);
+    expect(markDescendantCompletionConsumedByRequesterMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: params.runSessionKey,
+        runStartedAt: params.runStartedAt,
+        runIds: ["run-consumed-before-send"],
+      }),
+    );
+  });
+
+  it("delivers descendant fallback when requester-consumed credit accounting fails", async () => {
+    markDescendantCompletionConsumedByRequesterMock.mockImplementationOnce(() => {
+      throw new Error("registry restore failed");
+    });
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue({
+      text: "Child result should still deliver.",
+      consumedRunIds: ["run-accounting-fails"],
+    });
+
+    const params = makeBaseParams({ synthesizedText: "on it", runStartedAt: 60_000 });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Child result should still deliver." }],
+    });
+    expect(markDescendantCompletionConsumedByRequesterMock).toHaveBeenCalledTimes(1);
+    expect(state.result).toBeUndefined();
   });
 
   it("consolidates descendant output into the final direct delivery", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
-    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
-      "Detailed child result, everything finished successfully.",
-    );
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue({
+      text: "Detailed child result, everything finished successfully.",
+      consumedRunIds: ["run-child"],
+    });
 
     const params = makeBaseParams({ synthesizedText: "on it" });
     const state = await dispatchCronDelivery(params);
@@ -1143,6 +1227,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(markDescendantCompletionConsumedByRequesterMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: params.runSessionKey,
+        runStartedAt: params.runStartedAt,
+        runIds: ["run-child"],
+      }),
+    );
     expectDeliveryCall(0, {
       channel: "telegram",
       to: "123456",
@@ -1159,7 +1250,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
     vi.mocked(readDescendantSubagentFallbackReply).mockImplementation(async (params) =>
       params.sessionKey === runSessionKey
-        ? "Run-scoped child result, everything finished successfully."
+        ? {
+            text: "Run-scoped child result, everything finished successfully.",
+            consumedRunIds: ["run-run-scoped-child"],
+          }
         : undefined,
     );
 
@@ -1178,6 +1272,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionKey: runSessionKey,
       runStartedAt,
     });
+    expect(markDescendantCompletionConsumedByRequesterMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: runSessionKey,
+        runStartedAt,
+        runIds: ["run-run-scoped-child"],
+      }),
+    );
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expectDeliveryCall(0, {

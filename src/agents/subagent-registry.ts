@@ -2226,6 +2226,8 @@ export function replaceSubagentRunAfterSteer(params: {
   preserveFrozenResultFallback?: boolean;
   transcriptTarget?: AgentRunSessionTarget;
   task?: string;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
 }) {
   return subagentRunManager.replaceSubagentRunAfterSteer(params);
 }

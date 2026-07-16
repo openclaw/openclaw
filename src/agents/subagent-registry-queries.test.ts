@@ -295,6 +295,32 @@ describe("subagent registry query regressions", () => {
     expect(countPendingDescendantRunsFromRuns(runs, parentSessionKey)).toBe(0);
   });
 
+  it("treats requester-consumed delivered descendants as settled before cleanup bookkeeping", () => {
+    const now = Date.now();
+    const parentSessionKey = "agent:main:subagent:parent-requester-consumed";
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-consumed-child",
+        childSessionKey: `${parentSessionKey}:subagent:child`,
+        requesterSessionKey: parentSessionKey,
+        createdAt: now - 50_000,
+        startedAt: now - 50_000,
+        endedAt: now - 1_000,
+        expectsCompletionMessage: true,
+        cleanupCompletedAt: undefined,
+        delivery: {
+          status: "delivered",
+          deliveredAt: now - 500,
+          requesterConsumedAt: now - 500,
+        },
+      }),
+    ]);
+
+    expect(countPendingDescendantRunsFromRuns(runs, parentSessionKey)).toBe(0);
+    expect(hasDescendantRunAwaitingSettleFromRuns(runs, parentSessionKey)).toBe(false);
+    expect(countActiveRunsForSessionFromRuns(runs, parentSessionKey)).toBe(0);
+  });
+
   it("regression nested parallel counting, traversal includes child and grandchildren pending states", () => {
     // Nested fan-out once under-counted grandchildren and announced too early.
     const parentSessionKey = "agent:main:subagent:parent-nested";

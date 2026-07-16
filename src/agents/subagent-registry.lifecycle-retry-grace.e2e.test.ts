@@ -104,6 +104,7 @@ vi.mock("../config/sessions.js", () => ({
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+  loadSessionEntryReadOnly: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -170,6 +171,7 @@ describe("subagent registry lifecycle error grace", () => {
       getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
       isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
       listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
+      markDescendantCompletionConsumedByRequester: vi.fn(() => 0),
       replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
       resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
       shouldIgnorePostCompletionAnnounceForSession:

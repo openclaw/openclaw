@@ -211,6 +211,26 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.cleanupHandled).toBe(false);
   });
 
+  it("preserves requester-consumed delivery credit across normalization", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        cleanupHandled: true,
+        delivery: {
+          status: "delivered",
+          deliveredAt: 500,
+          requesterConsumedAt: 500,
+        },
+      }),
+    );
+
+    expect(entry.delivery).toMatchObject({
+      status: "delivered",
+      deliveredAt: 500,
+      requesterConsumedAt: 500,
+    });
+    expect(entry.cleanupHandled).toBe(false);
+  });
+
   it("keeps discarded terminal delivery dormant across restart", () => {
     const entry = normalizeSubagentRunState(
       baseRun({

@@ -21,6 +21,8 @@ type ReplaceSubagentRunAfterSteerParams = {
    * over untouched.
    */
   task?: string;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
 };
 
 type ReplaceSubagentRunAfterSteerFn = (params: ReplaceSubagentRunAfterSteerParams) => boolean;

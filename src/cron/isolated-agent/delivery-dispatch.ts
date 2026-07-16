@@ -1,6 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -68,10 +69,50 @@ function normalizeDeliveryTarget(channel: string, to: string): string {
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
+/** Returns whether cron delivery should tolerate per-payload send failures. */
+export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
+  return job.delivery?.bestEffort === true;
+}
+
+/** Successful delivery-target resolution consumed by announce/direct delivery dispatch. */
+type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
+
 type NormalizedSilentReplyText = {
   text: string | undefined;
   strippedTrailingSilentToken: boolean;
 };
+
+async function creditCronRequesterConsumedDescendants(params: {
+  requesterSessionKey: string;
+  runStartedAt: number;
+  runIds: readonly string[];
+  loadRuntime: () => Promise<{
+    markDescendantCompletionConsumedByRequester(credit: {
+      requesterSessionKey: string;
+      runStartedAt: number;
+      runIds: readonly string[];
+    }): unknown;
+  }>;
+  logWarn: (message: string) => Promise<void>;
+  jobId: string;
+}): Promise<void> {
+  const runIds = normalizeUniqueStringEntries(params.runIds);
+  if (runIds.length === 0) {
+    return;
+  }
+  try {
+    const subagentRegistryRuntime = await params.loadRuntime();
+    subagentRegistryRuntime.markDescendantCompletionConsumedByRequester({
+      requesterSessionKey: params.requesterSessionKey,
+      runStartedAt: params.runStartedAt,
+      runIds,
+    });
+  } catch (err) {
+    await params.logWarn(
+      `[cron:${params.jobId}] failed to credit requester-consumed descendant completions (bestEffort): ${formatErrorMessage(err)}`,
+    );
+  }
+}
 
 function normalizeSilentReplyText(text: string | undefined): NormalizedSilentReplyText {
   if (!text) {
@@ -100,14 +141,6 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
   }
   return { text: next, strippedTrailingSilentToken };
 }
-
-/** Returns whether cron delivery should tolerate per-payload send failures. */
-export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
-  return job.delivery?.bestEffort === true;
-}
-
-/** Successful delivery-target resolution consumed by announce/direct delivery dispatch. */
-type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 type DispatchCronDeliveryParams = {
   cfg: OpenClawConfig;
@@ -1109,6 +1142,16 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   };
+  const creditRequesterConsumedDescendants = async (runIds: readonly string[]): Promise<void> => {
+    await creditCronRequesterConsumedDescendants({
+      requesterSessionKey: params.runSessionKey,
+      runStartedAt: params.runStartedAt,
+      runIds,
+      loadRuntime: loadDeliverySubagentRegistryRuntime,
+      logWarn: logCronDeliveryWarn,
+      jobId: params.job.id,
+    });
+  };
 
   const deliverViaDirect = async (
     delivery: SuccessfulDeliveryTarget,
@@ -1532,10 +1575,14 @@ export async function dispatchCronDelivery(
         subagentFollowupSessionKey,
       );
       if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+        const fallbackReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
           sessionKey: subagentFollowupSessionKey,
           runStartedAt: params.runStartedAt,
         });
+        if (fallbackReply) {
+          finalReply = fallbackReply.text;
+          await creditRequesterConsumedDescendants(fallbackReply.consumedRunIds);
+        }
       }
       if (finalReply && activeSubagentRuns === 0) {
         outputText = finalReply;
@@ -1546,10 +1593,11 @@ export async function dispatchCronDelivery(
     } else if (completedDescendantReply) {
       // Descendants already finished before we got here. Use their output
       // directly instead of the cron agent's interim text.
-      outputText = completedDescendantReply;
-      summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
-      synthesizedText = completedDescendantReply;
-      deliveryPayloads = [{ text: completedDescendantReply }];
+      outputText = completedDescendantReply.text;
+      summary = pickSummaryFromOutput(completedDescendantReply.text) ?? summary;
+      synthesizedText = completedDescendantReply.text;
+      deliveryPayloads = [{ text: completedDescendantReply.text }];
+      await creditRequesterConsumedDescendants(completedDescendantReply.consumedRunIds);
     }
     if (!params.deliveryBestEffort && activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial

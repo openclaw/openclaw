@@ -201,6 +201,7 @@ vi.mock("./subagent-announce.registry.runtime.js", () => ({
   countPendingDescendantRuns: () => pendingDescendantRuns,
   countPendingDescendantRunsExcludingRun: () => 0,
   listSubagentRunsForRequester: () => [],
+  markDescendantCompletionConsumedByRequester: () => 0,
   isSubagentSessionRunActive: () => subagentSessionRunActive,
   shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
   replaceSubagentRunAfterSteer: () => true,

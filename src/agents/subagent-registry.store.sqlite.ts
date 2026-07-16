@@ -320,7 +320,9 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     fallback_frozen_result_captured_at: completion?.fallbackCapturedAt ?? null,
     ended_hook_emitted_at: normalized.endedHookEmittedAt ?? null,
     pending_final_delivery: boolToSqlite(
-      delivery?.status === "pending" || Boolean(delivery?.payload),
+      delivery?.status === "pending" ||
+        delivery?.status === "in_progress" ||
+        delivery?.status === "suspended",
     ),
     pending_final_delivery_created_at: delivery?.createdAt ?? null,
     pending_final_delivery_last_attempt_at: delivery?.lastAttemptAt ?? null,
