@@ -26,6 +26,7 @@ type NodeGatewayDenylistDispatchBinding = {
 
 export type NodeGatewayDispatchAuthority =
   | "current-policy"
+  | "elevated-full"
   | "human-approval"
   | "auto-review"
   | "ask-fallback";
@@ -43,7 +44,9 @@ export async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
   fallbackPolicy?: NodeGatewayPolicyCheckpoint;
   denylistBinding?: NodeGatewayDenylistDispatchBinding;
 }): Promise<void> {
-  assertCurrentNodeGatewayDenylistAllowsDispatch(params.denylistBinding);
+  if (params.authority !== "elevated-full") {
+    assertCurrentNodeGatewayDenylistAllowsDispatch(params.denylistBinding);
+  }
   const current = await execHostShared.resolveExecHostApprovalContext({
     agentId: params.request.agentId,
     security: params.request.security,
@@ -52,6 +55,12 @@ export async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
   });
   if (current.hostSecurity === "deny") {
     throw new Error("exec denied: host=node security=deny");
+  }
+  if (params.authority === "elevated-full") {
+    if (current.hostSecurity !== "full" || current.hostAsk !== "off") {
+      throw new Error("exec denied: host=node elevated full policy changed before dispatch");
+    }
+    return;
   }
   if (params.authority === "human-approval") {
     return;

@@ -31,6 +31,12 @@ export type ExecuteNodeHostCommandParams = {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  /**
+   * Authorized elevated-full break-glass path. The caller may bypass ordinary
+   * exec approvals only while both the requested and host policies remain
+   * full/off; the node still validates its prepared policy snapshot.
+   */
+  bypassApprovals?: boolean;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
   signal?: AbortSignal;

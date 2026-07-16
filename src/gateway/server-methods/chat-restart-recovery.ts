@@ -25,6 +25,7 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-ke
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export { hasRestartRecoveryTerminalRun };
@@ -151,6 +152,7 @@ export async function resolveDurableChatClaim(params: {
   persistedSessionKey: string;
   reloadEntry: () => SessionEntry | undefined;
   storePath: string;
+  recoveryRuntime?: GatewayRecoveryRuntime;
   warn: (message: string) => void;
 }): Promise<DurableChatClaimResolution> {
   let entry = params.entry;
@@ -163,6 +165,12 @@ export async function resolveDurableChatClaim(params: {
     if (recoverySessionError) {
       return { kind: "rejected", message: recoverySessionError };
     }
+    if (!params.recoveryRuntime) {
+      return {
+        kind: "pending",
+        message: "accepted chat turn recovery is waiting for the Gateway runtime; retry",
+      };
+    }
     try {
       const { retryRestartAbortedMainSessionRecovery } =
         await import("../../agents/main-session-restart-recovery.js");
@@ -174,6 +182,7 @@ export async function resolveDurableChatClaim(params: {
         expectedSessionId: entry.sessionId,
         sessionKey: params.persistedSessionKey,
         storePath: params.storePath,
+        gatewayRuntime: params.recoveryRuntime,
       });
     } catch (error) {
       params.warn(String(error));

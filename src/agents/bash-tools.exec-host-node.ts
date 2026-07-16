@@ -196,11 +196,19 @@ export async function executeNodeHostCommand(
     durableApprovalSatisfied,
     denylisted: requiresDenylistApproval,
   });
+  const elevatedFullBypass =
+    params.bypassApprovals === true &&
+    hostSecurity === "full" &&
+    hostAsk === "off" &&
+    nodeApprovalPolicyKnown &&
+    nodeSecurity === "full" &&
+    nodeAsk === "off";
   const requiresAsk =
-    requiresDenylistApproval ||
-    policyRequiresAsk ||
-    inlineEvalHit !== null ||
-    requiresSecurityAuditSuppressionApproval;
+    !elevatedFullBypass &&
+    (requiresDenylistApproval ||
+      policyRequiresAsk ||
+      inlineEvalHit !== null ||
+      requiresSecurityAuditSuppressionApproval);
   if (requiresDenylistApproval && denylistWarning) {
     params.warnings.push(denylistWarning);
   }
@@ -312,11 +320,15 @@ export async function executeNodeHostCommand(
     }
   };
 
-  let inlineApprovedByAsk = false;
-  let inlineApprovalDecision: "allow-once" | "allow-always" | null = null;
+  let inlineApprovedByAsk = elevatedFullBypass;
+  let inlineApprovalDecision: "allow-once" | "allow-always" | null = elevatedFullBypass
+    ? "allow-once"
+    : null;
   let inlineApprovalSource: "ask-fallback" | undefined;
-  let inlineApprovalId: string | undefined;
-  let inlineDispatchAuthority: NodeGatewayDispatchAuthority = "current-policy";
+  let inlineApprovalId: string | undefined = elevatedFullBypass ? randomUUID() : undefined;
+  let inlineDispatchAuthority: NodeGatewayDispatchAuthority = elevatedFullBypass
+    ? "elevated-full"
+    : "current-policy";
   let inlineFallbackPolicy: NodeGatewayPolicyCheckpoint | undefined;
   if (requiresAsk) {
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
@@ -652,7 +664,7 @@ export async function executeNodeHostCommand(
     request: params,
     authority: inlineDispatchAuthority,
     fallbackPolicy: inlineFallbackPolicy,
-    denylistBinding: gatewayDenylistBinding,
+    denylistBinding: elevatedFullBypass ? undefined : gatewayDenylistBinding,
     currentPolicyAllows: (current) =>
       !requiresExecApproval({
         ask: current.hostAsk,

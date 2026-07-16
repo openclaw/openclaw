@@ -151,6 +151,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+describe("update_plan progress events", () => {
+  it("emits the typed full plan snapshot after a successful result", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const emitted: CapturedAgentEvent[] = [];
+    const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
+    try {
+      await handleToolExecutionEnd(ctx, {
+        type: "tool_execution_end",
+        toolName: "update_plan",
+        toolCallId: "plan-1",
+        isError: false,
+        result: {
+          content: [],
+          details: {
+            status: "updated",
+            explanation: "Implementation underway",
+            plan: [
+              { step: "Inspect", status: "completed" },
+              { step: "Patch", status: "in_progress" },
+            ],
+          },
+        },
+      });
+      await Promise.resolve();
+
+      const expected = {
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "openclaw",
+          explanation: "Implementation underway",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        },
+      };
+      expect(onAgentEvent).toHaveBeenCalledWith(expected);
+      expect(emitted).toContainEqual(expect.objectContaining(expected));
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error(`expected ${label} to be an object`);

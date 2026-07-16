@@ -2922,6 +2922,7 @@ describe("matrix monitor handler draft streaming", () => {
       phase: string;
       explanation?: string;
       steps?: string[];
+      planSteps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }) => Promise<void>;
     onApprovalEvent?: (payload: { phase: string; command?: string }) => Promise<void>;
     onCommandOutput?: (payload: {
@@ -3078,6 +3079,46 @@ describe("matrix monitor handler draft streaming", () => {
     expectFinalizedPreviewEdit("$draft1", "Done");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("replaces Matrix plan snapshots and keeps the explanation", async () => {
+    const { dispatch } = createStreamingHarness({
+      streaming: "progress",
+      previewToolProgressEnabled: true,
+      accountConfig: {
+        streaming: { mode: "progress", progress: { label: false } },
+      } as never,
+    });
+    const { opts, finish } = await dispatch();
+
+    await opts.onPlanUpdate?.({
+      phase: "update",
+      explanation: "Initial plan",
+      planSteps: [{ step: "Inspect", status: "in_progress" }],
+    });
+    await vi.waitFor(() => {
+      expect(singleTextMessageBody()).toBe("`Initial plan`\n\n`▸ Inspect`");
+    });
+
+    await opts.onPlanUpdate?.({
+      phase: "update",
+      explanation: "Revised plan",
+      planSteps: [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "in_progress" },
+      ],
+    });
+    await vi.waitFor(
+      () => {
+        expect(editMessageMatrixMock).toHaveBeenCalled();
+      },
+      { timeout: 3_000 },
+    );
+    expect(lastCallArg(editMessageMatrixMock, 2, "Matrix plan edit body")).toBe(
+      "`Revised plan`\n\n`✅ Inspect`\n`▸ Patch`",
+    );
+
     await finish();
   });
 

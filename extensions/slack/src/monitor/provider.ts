@@ -63,6 +63,8 @@ import {
 } from "./enterprise-install.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
+import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
+import { createSlackPresenceMonitor, hasSlackPresenceEventsEnabled } from "./presence-monitor.js";
 import {
   createSlackBoltApp,
   formatSlackChannelResolved,
@@ -484,7 +486,30 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     : undefined;
 
-  const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+  const presenceEventsEnabled = hasSlackPresenceEventsEnabled({
+    account: slackCfg.presenceEvents,
+    channels: slackCfg.channels,
+  });
+  const presenceMonitor =
+    installationIdentity.kind !== "enterprise" && presenceEventsEnabled
+      ? createSlackPresenceMonitor({
+          accountId: account.accountId,
+          accountConfig: slackCfg.presenceEvents,
+          client: app.client.users,
+          cooldownStore: openSlackPresenceCooldownStore(),
+          log: runtime.log,
+          error: runtime.error,
+        })
+      : undefined;
+  if (installationIdentity.kind === "enterprise" && presenceEventsEnabled) {
+    runtime.log?.(warn("slack presence events are unavailable for Enterprise Grid org installs"));
+  }
+  const handleSlackMessage = createSlackMessageHandler({
+    ctx,
+    account,
+    trackEvent,
+    onPrepared: presenceMonitor?.observe,
+  });
   if (
     installationIdentity.kind !== "enterprise" &&
     isSlackAnyNativeApprovalClientEnabled({
@@ -519,6 +544,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     appHomeSlashCommandName,
     trackEvent,
   });
+  presenceMonitor?.start();
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -776,6 +802,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    await presenceMonitor?.stop();
     if (slackMode === "relay") {
       setSlackDefaultSendIdentity(account.accountId, undefined);
     }

@@ -293,6 +293,14 @@ function createLegacyStateMigrationDetectionResult(params?: {
       vapidKeysPath: "/tmp/state/push/vapid-keys.json",
       hasLegacy: false,
     },
+    nodeHost: {
+      sourcePath: "/tmp/state/node.json",
+      hasLegacy: false,
+    },
+    subagentRegistry: {
+      sourcePath: "/tmp/state/subagents/runs.json",
+      hasLegacy: false,
+    },
     rescuePending: {
       sourcePaths: ["/tmp/state/crestodian/rescue-pending", "/tmp/state/openclaw/rescue-pending"],
       hasLegacy: false,

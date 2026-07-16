@@ -1889,6 +1889,7 @@ export function createExecTool(
             agentId,
             security,
             ask,
+            bypassApprovals,
             autoReview,
             autoReviewer,
             signal,

@@ -105,7 +105,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "secret-provider-integration": 4,
   "setup-adapter-runtime": 1,
   "skills-runtime": 5,
-  "channel-streaming": 49,
+  "channel-streaming": 55,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
   "approval-reply-runtime": 3,
@@ -157,8 +157,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-lifecycle": 23,
   // Registry sweep: 77 packages, zero fetch failures; channel-ingress and dead aliases
   // had zero consumers.
-  "channel-message": 224,
-  "channel-message-runtime": 221,
+  "channel-message": 230,
+  "channel-message-runtime": 227,
   "channel-pairing-paths": 1,
   // Deprecated pairing/conversation exports from the SQLite pairing migration
   // landed on main (#105802) without entrypoint pins; not touched by this PR.
@@ -221,8 +221,13 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // +9: app-guided provider setup context/candidate/hook types and their public mirrors.
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
-      10612,
+      // Harvest: retired qa-live-transport-scenarios subpath -6.
+      // +12: typed plan step/status and checklist formatter across channel barrels.
+      // +8: plan-step ingress union and normalizer across channel barrels.
+      // +4: dual-field plan payload builder for the steps deprecation window.
+      10639,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -230,7 +235,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
-      5344,
+      // Harvest: retired qa-live-transport-scenarios subpath -3.
+      // +4: shared plan checklist formatter across channel barrels.
+      // +4: plan-step normalizer across channel barrels.
+      // +4: dual-field plan payload builder for the steps deprecation window.
+      5353,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -238,7 +247,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: group scope encoder/key builder mirrored by deprecated compat.
       // Harvest: channel-ingress -8; dead channel-message dispatch aliases -23.
       // +77: five zero-consumer subpaths enter their removal window.
-      3339,
+      // +9: typed plan exports and formatter through deprecated channel barrels.
+      // +6: plan-step ingress union and normalizer through deprecated channel barrels.
+      // +3: dual-field plan payload builder through deprecated channel barrels.
+      3357,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

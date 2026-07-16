@@ -293,7 +293,7 @@ async function runGatewaySuspensionPostRestartClient({ statePath, token, url }) 
   emitPhase("post-restart", startedAt);
 }
 
-export function responseError(method, response) {
+function responseError(method, response) {
   const message = response.error?.message ?? "unknown";
   return new Error(`${method} failed: ${message}`);
 }

@@ -3476,6 +3476,56 @@ describe("executeNodeHostCommand", () => {
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
   });
 
+  it("uses authorized elevated full as a one-shot node denylist bypass", async () => {
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      bypassApprovals: true,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      execConfigDenylist: [{ pattern: "bun **", reason: "stop" }],
+    });
+
+    expect(result.details?.status).toBe("completed");
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
+    const runParams = requireRunParams(requireGatewayCommand("system.run"));
+    expect(runParams.approved).toBe(true);
+    expect(runParams.approvalDecision).toBe("allow-once");
+    expect(runParams.systemRunPlan).toEqual(preparedPlan);
+  });
+
+  it("does not bypass a denylist when the node host policy is stricter", async () => {
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: preparedPlan,
+      execPolicy: { security: "full", ask: "always" },
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      bypassApprovals: true,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+      execConfigDenylist: [{ pattern: "bun **", reason: "stop" }],
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores approvals-file denylist fields at full/off", async () => {
     resolveExecApprovalsFromFileMock.mockReturnValue({
       allowlist: [],

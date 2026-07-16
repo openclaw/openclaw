@@ -13,7 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
 const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
@@ -3933,11 +3937,13 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     const openWebUiRunner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
 
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120"',
     );
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local"',
     );
+    expect(scenarios).toContain('"test-install-sh-e2e-docker.sh"');
+    expect(scenarios).not.toContain("pnpm test:install:e2e");
     expect(scenarios).toContain(
       '"OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui"',
     );
@@ -4037,6 +4043,58 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain("FAIL: gateway install failed before update");
     expect(runner).not.toContain('gateway-install.err" || true');
     expect(runner).not.toContain("WARNING: Gateway status probe failed");
+  });
+
+  it("keeps a stalled multi-node health request inside the probe deadline", () => {
+    const runner = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
+    const startMarker = "if PORT=18789 node <<NODE\n";
+    const endMarker = "\nNODE\n  then";
+    const start = runner.indexOf(startMarker);
+    const end = runner.indexOf(endMarker, start + startMarker.length);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const probe = runner.slice(start + startMarker.length, end);
+    const workDir = tempDirs.make("openclaw-multi-node-health-timeout-");
+    const preloadPath = join(workDir, "stalling-fetch.mjs");
+
+    writeFileSync(
+      preloadPath,
+      [
+        "// Advance the deadline when the request aborts without waiting 30 wall-clock seconds.",
+        "const realSetTimeout = globalThis.setTimeout;",
+        "let now = 0;",
+        "Date.now = () => now;",
+        "Object.defineProperty(AbortSignal, 'timeout', { value(delayMs) {",
+        "  const controller = new AbortController();",
+        "  realSetTimeout(() => {",
+        "    now += delayMs;",
+        "    controller.abort(new DOMException('health deadline elapsed', 'TimeoutError'));",
+        "  }, 0);",
+        "  return controller.signal;",
+        "} });",
+        "globalThis.fetch = async (_url, init = {}) => await new Promise((_resolve, reject) => {",
+        "  init.signal.addEventListener('abort', () => {",
+        "    process.stderr.write('hung fetch aborted\\n');",
+        "    reject(init.signal.reason);",
+        "  }, { once: true });",
+        "});",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(preloadPath).href, "--input-type=module", "--eval", probe],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PORT: "18789" },
+        timeout: 5_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr.match(/hung fetch aborted/gu)).toHaveLength(1);
+    expect(result.stderr).toContain("health deadline elapsed");
   });
 
   it("caps package acceptance legacy compatibility at 2026.4.25", () => {
@@ -4326,6 +4384,23 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(helper).not.toContain('require("node:readline")');
     expect(helper).not.toContain("fs.readFileSync");
     expect(helper).not.toContain('.split("\\n")');
+  });
+
+  it("exports SQLite-backed installer E2E sessions before scanning tools", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+    const start = runner.indexOf("assert_session_used_tools() {");
+    const end = runner.indexOf("\nsession_jsonl_path()", start);
+    const helper = runner.slice(start, end);
+
+    expect(helper).toContain('jsonl="$(session_jsonl_path "$profile" "$session_id")"');
+    expect(helper).toContain('if [[ ! -f "$jsonl" ]]');
+    expect(helper).toContain('openclaw --profile "$profile" sessions export-trajectory');
+    expect(helper).toContain('--session-key "agent:main:explicit:${session_id}"');
+    expect(helper).toContain('--workspace "$export_workspace"');
+    expect(helper).toContain(
+      'jsonl="$export_workspace/.openclaw/trajectory-exports/scan/events.jsonl"',
+    );
+    expect(helper).toContain('rm -rf "$export_workspace"');
   });
 
   it("keeps OpenAI web search smoke on one gateway agent connection", () => {

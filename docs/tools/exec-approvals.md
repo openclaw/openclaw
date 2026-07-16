@@ -233,8 +233,9 @@ Set globally under `tools.exec.commandHighlighting` or per agent under
   Deny-over-allow STOP list. Any command matching a denylist `pattern`
   **always** requires an explicit human approval decision, even at
   `security=full` with `ask=off`, and even when an allowlist entry or a
-  durable `allow-always` grant would otherwise auto-run it. `reason` is
-  optional operator context shown with the prompt.
+  durable `allow-always` grant would otherwise auto-run it. The sole exception
+  is the explicitly authorized elevated-full break-glass path described below.
+  `reason` is optional operator context shown with the prompt.
 </ParamField>
 
 Use it to force a human in the loop on a small set of dangerous commands
@@ -260,10 +261,16 @@ validated by `openclaw config validate`.
   closed (approval required), not open.
 
 **Precedence:** a denylist hit wins ahead of `ask=off`, `security=full`,
-allowlist matches, and durable allow-always trust, on **both** the gateway
-exec host and the node host (`system.run`, node denial reason
-`denylist-hit`). An explicit allow-once approval still clears a single hit;
-`security=deny` still denies overall.
+`tools.exec.mode: "full"`, per-session `/exec full`, allowlist matches, and
+durable allow-always trust, on **both** the gateway exec host and the node host
+(`system.run`, node denial reason `denylist-hit`). An explicit allow-once
+approval still clears a single hit; `security=deny` still denies overall.
+
+`/elevated full` remains the intentional break-glass bypass: it skips STOP
+prompts only when the sender is authorized for elevated access and both the
+requested policy and the relevant host approvals policy resolve to
+`security: "full"` with `ask: "off"`. A stricter host policy still wins. On a
+node, the prepared host-policy snapshot is revalidated before dispatch.
 
 ## YOLO mode (no-approval)
 
