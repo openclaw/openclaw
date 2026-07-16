@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements channel react action behavior.
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import {
   isWhatsAppGroupJid,
@@ -54,31 +55,29 @@ function readUploadFileCaptionText(args: Record<string, unknown>): string {
   );
 }
 
-function readBooleanParam(args: Record<string, unknown>, key: string): boolean | undefined {
-  const value = args[key];
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "true") {
-    return true;
-  }
-  if (normalized === "false") {
-    return false;
-  }
-  return undefined;
-}
-
 function hasUploadFileBufferPayload(args: Record<string, unknown>): boolean {
   return readStringParam(args, "buffer", { trim: false }) !== undefined;
 }
 
+function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string | undefined {
+  const explicit =
+    readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
+  if (explicit) {
+    return explicit;
+  }
+  if (
+    params.toolContext?.currentChannelProvider !== WHATSAPP_CHANNEL ||
+    !params.toolContext.currentChannelId
+  ) {
+    return undefined;
+  }
+  return normalizeWhatsAppTarget(params.toolContext.currentChannelId) ?? undefined;
+}
+
 function extractBase64Payload(encoded: string): string {
   const match = /^data:[^;]+;base64,(.*)$/i.exec(encoded.trim());
-  return match ? match[1] : encoded;
+  const payload = match?.[1];
+  return payload !== undefined ? payload : encoded;
 }
 
 function estimateBase64DecodedBytes(encoded: string): number {
@@ -134,7 +133,8 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
       "WhatsApp upload-file requires media, mediaUrl, filePath, path, fileUrl, or buffer.",
     );
   }
-  const to = readStringParam(params.params, "to", { required: true });
+  const to =
+    readWhatsAppActionChatJid(params) ?? readStringParam(params.params, "to", { required: true });
   const resolved = resolveAuthorizedWhatsAppOutboundTarget({
     cfg: params.cfg,
     chatJid: to,
@@ -188,8 +188,7 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
     throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
   }
   const isWhatsAppSource = params.toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
-  const explicitTarget =
-    readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
+  const explicitTarget = readWhatsAppActionChatJid(params);
   const normalizedTarget = explicitTarget ? normalizeWhatsAppTarget(explicitTarget) : null;
   const normalizedCurrent =
     isWhatsAppSource && params.toolContext?.currentChannelId
@@ -232,7 +231,7 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
     {
       action: "react",
       chatJid:
-        readStringParam(params.params, "chatJid") ??
+        readWhatsAppActionChatJid(params) ??
         readStringParam(params.params, "to", { required: true }),
       messageId,
       emoji,

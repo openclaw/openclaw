@@ -1,4 +1,5 @@
 // Ollama tests cover stream plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -98,13 +99,13 @@ describe("buildAssistantMessage", () => {
     expect(msg.stopReason).toBe("length");
   });
 
-  it("keeps tool use authoritative over a length stop", () => {
+  it("keeps a length stop authoritative over complete-looking tool calls", () => {
     const response = makeOllamaResponse({
       done_reason: "length",
       tool_calls: [{ function: { name: "read", arguments: { path: "README.md" } } }],
     });
     const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.stopReason).toBe("toolUse");
+    expect(msg.stopReason).toBe("length");
   });
 });
 
@@ -209,8 +210,10 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const thinkingDeltas = events.filter((e) => e.type === "thinking_delta");
     expect(thinkingDeltas).toHaveLength(2);
-    expect(thinkingDeltas[0].delta).toBe("Step 1");
-    expect(thinkingDeltas[1].delta).toBe(" and step 2");
+    expect(expectDefined(thinkingDeltas[0], "first Ollama thinking delta").delta).toBe("Step 1");
+    expect(expectDefined(thinkingDeltas[1], "second Ollama thinking delta").delta).toBe(
+      " and step 2",
+    );
 
     const thinkingStart = events.find((e) => e.type === "thinking_start");
     expect(thinkingStart?.contentIndex).toBe(0);
@@ -282,6 +285,32 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(done.message?.stopReason).toBe("length");
   });
 
+  it("preserves a native length stop when the partial response contains tool calls", async () => {
+    const events = await streamOllamaEvents(
+      [
+        makeOllamaResponse({
+          done_reason: "length",
+          tool_calls: [{ function: { name: "read", arguments: { path: "README.md" } } }],
+        }),
+      ],
+      {},
+      {
+        messages: [{ role: "user", content: "test" }],
+        tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
+      } as never,
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      reason?: string;
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+    };
+    expect(done.reason).toBe("length");
+    expect(done.message?.stopReason).toBe("length");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({ type: "toolCall", name: "read" }),
+    ]);
+  });
+
   it("uses generic stream timeout for Ollama request timeout", async () => {
     await streamOllamaEvents([makeOllamaResponse({ content: "ok" })], { timeoutMs: 2500 });
 
@@ -348,6 +377,7 @@ describe("createOllamaStreamFn thinking events", () => {
       "start",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const done = events.find((event) => event.type === "done") as {
@@ -396,6 +426,7 @@ describe("createOllamaStreamFn thinking events", () => {
       "start",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const done = events.find((event) => event.type === "done") as {

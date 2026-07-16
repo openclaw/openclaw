@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledAlwaysAllowedRuntimeFacadeErrors,
   collectInstalledBundledExtensionManifestErrors,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
@@ -131,7 +132,7 @@ describe("npm registry provenance verification", () => {
 
     await expect(
       fetchRegistryJson("https://registry.example/openclaw", {
-        fetchImpl,
+        fetchImpl: fetchImpl as typeof fetch,
         timeoutMs: 1234,
       }),
     ).resolves.toEqual({ ok: true });
@@ -227,6 +228,107 @@ describe("npm registry provenance verification", () => {
         "https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@refs/heads/release/2026.3.23",
     });
 
+    verificationPolicy = undefined;
+    const protectedWorkflowSha = "a".repeat(40);
+    const protectedWorkflowRef = `refs/tags/release-publish/${protectedWorkflowSha.slice(0, 12)}-123`;
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(
+                  JSON.stringify({
+                    ...provenancePayload,
+                    predicate: {
+                      ...provenancePayload.predicate,
+                      buildDefinition: {
+                        ...provenancePayload.predicate.buildDefinition,
+                        externalParameters: {
+                          workflow: {
+                            ...provenancePayload.predicate.buildDefinition.externalParameters
+                              .workflow,
+                            ref: protectedWorkflowRef,
+                          },
+                        },
+                        resolvedDependencies: [
+                          {
+                            uri: `git+https://github.com/openclaw/openclaw@${protectedWorkflowRef}`,
+                            digest: { gitCommit: protectedWorkflowSha },
+                          },
+                        ],
+                      },
+                    },
+                  }),
+                  "utf8",
+                ).toString("base64"),
+              },
+            },
+          },
+        ],
+        expectedWorkflowRef: protectedWorkflowRef,
+        expectedWorkflowSha: protectedWorkflowSha,
+        verifyBundle: async (_bundle, policy) => {
+          verificationPolicy = policy;
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(verificationPolicy).toEqual({
+      certificateIssuer: "https://token.actions.githubusercontent.com",
+      certificateIdentityURI: `https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${protectedWorkflowRef}`,
+    });
+
+    await expect(
+      verifyNpmProvenanceAttestation({
+        packageName,
+        version,
+        integrity,
+        attestations: [
+          {
+            predicateType: "https://slsa.dev/provenance/v1",
+            bundle: {
+              dsseEnvelope: {
+                payload: Buffer.from(
+                  JSON.stringify({
+                    ...provenancePayload,
+                    predicate: {
+                      ...provenancePayload.predicate,
+                      buildDefinition: {
+                        ...provenancePayload.predicate.buildDefinition,
+                        externalParameters: {
+                          workflow: {
+                            ...provenancePayload.predicate.buildDefinition.externalParameters
+                              .workflow,
+                            ref: protectedWorkflowRef,
+                          },
+                        },
+                        resolvedDependencies: [
+                          {
+                            uri: `git+https://github.com/openclaw/openclaw@${protectedWorkflowRef}`,
+                            digest: { gitCommit: protectedWorkflowSha },
+                          },
+                        ],
+                      },
+                    },
+                  }),
+                  "utf8",
+                ).toString("base64"),
+              },
+            },
+          },
+        ],
+        expectedWorkflowRef: protectedWorkflowRef,
+        expectedWorkflowSha: "b".repeat(40),
+        verifyBundle: async () => undefined,
+      }),
+    ).rejects.toThrow(
+      "npm provenance SHA-pinned release-publish ref does not match the approved workflow ref and SHA",
+    );
+
     await expect(
       verifyNpmProvenanceAttestation({
         packageName,
@@ -319,7 +421,7 @@ describe("npm registry provenance verification", () => {
     ).rejects.toThrow("failed Sigstore verification");
   });
 
-  it("retries incomplete registry metadata while npm publish propagates", async () => {
+  it("retries incomplete or briefly stale provenance while npm publish propagates", async () => {
     let attempts = 0;
     const delays: number[] = [];
 
@@ -327,7 +429,12 @@ describe("npm registry provenance verification", () => {
       retryNpmRegistryProvenanceRead(
         async () => {
           attempts += 1;
-          if (attempts < 3) {
+          if (attempts === 1) {
+            throw new Error(
+              "npm provenance attestation does not bind 2026.3.23 to the trusted OpenClaw GitHub release workflow.",
+            );
+          }
+          if (attempts === 2) {
             throw new Error(
               "npm registry provenance metadata is incomplete for openclaw@2026.3.23.",
             );
@@ -444,6 +551,43 @@ describe("collectInstalledPackageErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
+  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-facade-runtime-"));
+    try {
+      run(packageRoot);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string): void {
+    const filePath = join(packageRoot, relativePath);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, "export {};\n", "utf8");
+  }
+
+  it("reports the activation runtime and every missing allowlisted sidecar", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
+        "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
+        "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
+        "installed package allows bundled runtime facade media-understanding-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/media-understanding-core/runtime-api.js.",
+      ]);
+    });
+  });
+
+  it("accepts a package with the activation runtime and allowlisted sidecars", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(packageRoot, "dist/facade-activation-check.runtime.js");
+      writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/runtime-api.js");
+      writeInstalledFile(packageRoot, "dist/extensions/media-understanding-core/runtime-api.js");
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
+    });
   });
 });
 

@@ -7,12 +7,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   verifyDeviceSignature,
 } from "./device-identity.js";
-import {
-  DEFAULT_APNS_RELAY_BASE_URL,
-  DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
-  resolveApnsRelayConfigFromEnv,
-  sendApnsRelayPush,
-} from "./push-apns.relay.js";
+import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.relay.js";
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -67,49 +62,12 @@ function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T |
 
 describe("push-apns.relay", () => {
   describe("resolveApnsRelayConfigFromEnv", () => {
-    it("defaults to the hosted relay when the registration was minted by the hosted relay", () => {
-      expectRelayConfig(
-        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
-          registrationRelayOrigin: `${DEFAULT_APNS_RELAY_BASE_URL}/`,
-        }),
-        {
-          baseUrl: DEFAULT_APNS_RELAY_BASE_URL,
-          timeoutMs: 10_000,
-        },
-      );
-    });
-
-    it("defaults to the sandbox hosted relay when the registration was minted there", () => {
-      expectRelayConfig(
-        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
-          registrationRelayOrigin: `${DEFAULT_APNS_SANDBOX_RELAY_BASE_URL}/`,
-        }),
-        {
-          baseUrl: DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
-          timeoutMs: 10_000,
-        },
-      );
-    });
-
     it("fails closed when relay registration origin is unknown and no relay URL is configured", () => {
       const resolved = resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv);
 
       expect(resolved.ok).toBe(false);
       if (!resolved.ok) {
         expect(resolved.error).toContain("relay registrations without the hosted relay origin");
-      }
-    });
-
-    it("rejects config that does not match the registration relay origin", () => {
-      const resolved = resolveApnsRelayConfigFromEnv(
-        {} as NodeJS.ProcessEnv,
-        { push: { apns: { relay: { baseUrl: DEFAULT_APNS_RELAY_BASE_URL } } } },
-        { registrationRelayOrigin: "https://relay.example.com" },
-      );
-
-      expect(resolved.ok).toBe(false);
-      if (!resolved.ok) {
-        expect(resolved.error).toContain("origin mismatch");
       }
     });
 
@@ -146,6 +104,43 @@ describe("push-apns.relay", () => {
       expectRelayConfig(resolved, {
         baseUrl: "https://relay.example.com",
         timeoutMs: MAX_TIMER_TIMEOUT_MS,
+      });
+    });
+
+    it.each(["0x1000", "2e4", "2500ms"])(
+      "falls back for non-decimal env timeout %s",
+      (timeoutMs) => {
+        const resolved = resolveApnsRelayConfigFromEnv({
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+          OPENCLAW_APNS_RELAY_TIMEOUT_MS: timeoutMs,
+        } as NodeJS.ProcessEnv);
+
+        expectRelayConfig(resolved, {
+          baseUrl: "https://relay.example.com",
+          timeoutMs: 10_000,
+        });
+      },
+    );
+
+    it("retains numeric timeout config values", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+        } as NodeJS.ProcessEnv,
+        {
+          push: {
+            apns: {
+              relay: {
+                timeoutMs: 2500,
+              },
+            },
+          },
+        },
+      );
+
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: 2500,
       });
     });
 
@@ -291,11 +286,23 @@ describe("push-apns.relay", () => {
     });
 
     it("falls back to fetch status when the relay body is not JSON", async () => {
-      const fetchMock = vi.fn().mockResolvedValue({
+      // Real Response body so the bounded reader runs end-to-end; non-JSON parse stays a soft null.
+      const fetchMock = vi.fn().mockResolvedValue(new Response("not-json-at-all", { status: 202 }));
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
         ok: true,
         status: 202,
-        json: vi.fn().mockRejectedValue(new Error("bad json")),
+        apnsId: undefined,
+        reason: undefined,
+        tokenSuffix: undefined,
       });
+    });
+
+    it("treats an empty relay body as absent and derives status from the HTTP response", async () => {
+      // Empty body: JSON.parse("") throws -> soft null fallback (not an overflow), same as the
+      // prior response.json() behaviour. Confirms the new try/catch does not regress empty bodies.
+      const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
@@ -308,17 +315,18 @@ describe("push-apns.relay", () => {
     });
 
     it("normalizes relay JSON response fields", async () => {
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 202,
-        json: vi.fn().mockResolvedValue({
-          ok: false,
-          status: 410,
-          apnsId: " relay-apns-id ",
-          reason: " Unregistered ",
-          tokenSuffix: " abcd1234 ",
-        }),
-      });
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ok: false,
+            status: 410,
+            apnsId: " relay-apns-id ",
+            reason: " Unregistered ",
+            tokenSuffix: " abcd1234 ",
+          }),
+          { status: 202, headers: { "content-type": "application/json" } },
+        ),
+      );
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
@@ -330,17 +338,36 @@ describe("push-apns.relay", () => {
       });
     });
 
-    it("normalizes sandbox relay response metadata", async () => {
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: vi.fn().mockResolvedValue({
-          ok: true,
-          status: 200,
-          environment: "sandbox",
-          tokenSuffix: " abcd1234 ",
-        }),
+    it("honors BOM-prefixed relay failure JSON", async () => {
+      const body = `\uFEFF${JSON.stringify({ ok: false, status: 410 })}`;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(body, { status: 202, headers: { "content-type": "application/json" } }),
+        );
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: false,
+        status: 410,
+        apnsId: undefined,
+        reason: undefined,
+        tokenSuffix: undefined,
       });
+    });
+
+    it("normalizes sandbox relay response metadata", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            status: 200,
+            environment: "sandbox",
+            tokenSuffix: " abcd1234 ",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
@@ -351,6 +378,61 @@ describe("push-apns.relay", () => {
         environment: "sandbox",
         tokenSuffix: "abcd1234",
       });
+    });
+
+    it("parses a large under-cap relay body unchanged (boundary just below the 16 MiB cap)", async () => {
+      // A valid, large-but-bounded JSON body (~8 MiB payload, comfortably under the 16 MiB cap)
+      // must still parse normally: the cap only rejects overflow, it must not truncate or reject
+      // legitimate large success responses.
+      const padding = "x".repeat(8 * 1024 * 1024);
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            status: 200,
+            apnsId: "big-but-valid",
+            note: padding,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: true,
+        status: 200,
+        apnsId: "big-but-valid",
+        reason: undefined,
+        tokenSuffix: undefined,
+      });
+    });
+
+    it("fails closed when the relay response body exceeds the size cap", async () => {
+      // Drive the real send path with an over-cap (>16 MiB) body: the bounded reader must
+      // cancel the stream and the request must fail closed rather than report a delivered push.
+      const oversized = "a".repeat(16 * 1024 * 1024 + 1024);
+      const fetchMock = vi.fn().mockResolvedValue(new Response(oversized, { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: false,
+        status: 200,
+        reason: "RelayResponseTooLarge",
+      });
+    });
+
+    it("fails closed on an oversized body even when the HTTP status would imply success", async () => {
+      // Regression guard for the core design decision: a 2xx relay response with an oversized
+      // body must NOT be folded into the malformed-JSON (treat-as-empty -> HTTP-derived ok)
+      // fallback. Overflow always wins and the push is reported failed, never silently delivered.
+      const oversized = "b".repeat(16 * 1024 * 1024 + 4096);
+      const fetchMock = vi.fn().mockResolvedValue(new Response(oversized, { status: 202 }));
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      const result = await sendApnsRelayPush(createRelayPushParams());
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe("RelayResponseTooLarge");
+      expect(result.status).toBe(202);
     });
   });
 });

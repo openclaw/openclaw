@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
-export type CliSpawnInvocation = {
+type CliSpawnInvocation = {
   command: string;
   argv: string[];
   shell?: boolean;
@@ -156,6 +156,22 @@ function validateQmdProbeCwd(cwd: string): QmdBinaryAvailability | null {
   }
 }
 
+/**
+ * Normalize an aborted signal into the error used to reject a killed command.
+ * Prefers the caller-supplied abort reason (so a deadline message survives) and
+ * falls back to a stable per-command abort error.
+ */
+function abortReason(signal: AbortSignal | undefined, commandSummary: string): Error {
+  const reason = signal?.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "string" && reason.length > 0) {
+    return new Error(reason);
+  }
+  return new Error(`${commandSummary} aborted`);
+}
+
 export async function runCliCommand(params: {
   commandSummary: string;
   spawnInvocation: CliSpawnInvocation;
@@ -164,8 +180,20 @@ export async function runCliCommand(params: {
   timeoutMs?: number;
   maxOutputChars: number;
   discardStdout?: boolean;
+  /**
+   * Caller-owned cancellation. When the signal aborts, the spawned child is
+   * killed immediately and the call rejects, so a caller that already stopped
+   * waiting (for example after its own deadline) does not leave an orphaned
+   * process running for the full command timeout.
+   */
+  signal?: AbortSignal;
 }): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
+    const { signal } = params;
+    if (signal?.aborted) {
+      reject(abortReason(signal, params.commandSummary));
+      return;
+    }
     const child = spawn(params.spawnInvocation.command, params.spawnInvocation.argv, {
       env: params.env,
       cwd: params.cwd,
@@ -177,59 +205,106 @@ export async function runCliCommand(params: {
     let stderr = "";
     let stdoutTruncated = false;
     let stderrTruncated = false;
+    let settled = false;
     const discardStdout = params.discardStdout === true;
+    // Let the streams carry partial UTF-8 sequences across pipe chunks before
+    // qmd JSON, paths, or diagnostics reach the character-based output cap.
+    if (!discardStdout) {
+      child.stdout.setEncoding("utf8");
+    }
+    child.stderr.setEncoding("utf8");
     const timeoutMs =
       params.timeoutMs === undefined ? undefined : resolveSafeTimeoutDelayMs(params.timeoutMs);
     const timer = timeoutMs
       ? setTimeout(() => {
           signalQmdProcessTree(child, "SIGKILL");
-          reject(new Error(`${params.commandSummary} timed out after ${timeoutMs}ms`));
+          settle(() =>
+            reject(new Error(`${params.commandSummary} timed out after ${timeoutMs}ms`)),
+          );
         }, timeoutMs)
       : null;
-    child.stdout.on("data", (data) => {
+    const onAbort = () => {
+      signalQmdProcessTree(child, "SIGKILL");
+      settle(() => reject(abortReason(signal, params.commandSummary)));
+    };
+    function settle(run: () => void): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      signal?.removeEventListener("abort", onAbort);
+      run();
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stdout.on("data", (data: string) => {
       if (discardStdout) {
         return;
       }
-      const next = appendOutputWithCap(stdout, data.toString("utf8"), params.maxOutputChars);
+      const next = appendOutputWithCap(stdout, data, params.maxOutputChars);
       stdout = next.text;
       stdoutTruncated = stdoutTruncated || next.truncated;
     });
-    child.stderr.on("data", (data) => {
-      const next = appendOutputWithCap(stderr, data.toString("utf8"), params.maxOutputChars);
+    child.stderr.on("data", (data: string) => {
+      const next = appendOutputWithCap(stderr, data, params.maxOutputChars);
       stderr = next.text;
       stderrTruncated = stderrTruncated || next.truncated;
     });
+
+    // Guard stdout/stderr against stream errors (e.g. EPIPE when the
+    // child exits before all pipe data is consumed). Without listeners,
+    // Node.js throws an uncaught exception that crashes the process.
+    for (const streamName of ["stdout", "stderr"] as const) {
+      child[streamName].on("error", (error: Error) => {
+        if (settled) {
+          return;
+        }
+        signalQmdProcessTree(child, "SIGKILL");
+        settle(() =>
+          reject(
+            new Error(`${params.commandSummary} ${streamName} error: ${error.message}`, {
+              cause: error,
+            }),
+          ),
+        );
+      });
+    }
+
     child.on("error", (err) => {
       if (timer) {
         clearTimeout(timer);
       }
-      reject(err);
+      settle(() => reject(err));
     });
-    child.on("close", (code, signal) => {
+    child.on("close", (code, closeSignal) => {
       if (timer) {
         clearTimeout(timer);
       }
-      if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
-        reject(
-          new Error(
-            `${params.commandSummary} produced too much output (limit ${params.maxOutputChars} chars)`,
-          ),
-        );
-        return;
-      }
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        reject(
-          new CliCommandError({
-            commandSummary: params.commandSummary,
-            code,
-            signal: signal ?? null,
-            stdout,
-            stderr,
-          }),
-        );
-      }
+      settle(() => {
+        if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
+          reject(
+            new Error(
+              `${params.commandSummary} produced too much output (limit ${params.maxOutputChars} chars)`,
+            ),
+          );
+          return;
+        }
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(
+            new CliCommandError({
+              commandSummary: params.commandSummary,
+              code,
+              signal: closeSignal ?? null,
+              stdout,
+              stderr,
+            }),
+          );
+        }
+      });
     });
   });
 }

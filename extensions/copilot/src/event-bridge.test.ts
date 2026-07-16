@@ -1,5 +1,6 @@
-// Copilot tests cover event bridge plugin behavior.
 import type { SessionEvent } from "@github/copilot-sdk";
+// Copilot tests cover event bridge plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 
@@ -17,6 +18,7 @@ const REGISTERED_EVENT_TYPES = [
   "tool.execution_complete",
   "session.plan_changed",
   "exit_plan_mode.requested",
+  "exit_plan_mode.completed",
   "subagent.started",
   "subagent.completed",
   "subagent.failed",
@@ -147,6 +149,47 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().assistantTexts).toEqual(["hello"]);
+  });
+
+  it("ignores child assistant and usage events but keeps child tool side effects", async () => {
+    const session = createFakeSession();
+    const onAssistantDelta = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onAssistantDelta,
+    });
+
+    session.emit("assistant.message_delta", {
+      ...makeEvent("assistant.message_delta", { deltaContent: "child", messageId: "child-msg" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit(
+      "assistant.message_delta",
+      makeEvent("assistant.message_delta", { deltaContent: "root", messageId: "root-msg" }),
+    );
+    session.emit("tool.execution_start", {
+      ...makeEvent("tool.execution_start", { toolCallId: "child-call", toolName: "write" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("tool.execution_complete", {
+      ...makeEvent("tool.execution_complete", {
+        result: { content: "child write" },
+        success: true,
+        toolCallId: "child-call",
+      }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("assistant.usage", {
+      ...makeEvent("assistant.usage", { inputTokens: 99, outputTokens: 99 }),
+      agentId: "child-1",
+    } as SessionEvent);
+
+    expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
+    expect(bridge.snapshot().startedCount).toBe(0);
+    expect(bridge.snapshot().toolMetas).toEqual([{ meta: "child write", toolName: "write" }]);
+    await bridge.awaitDeltaChain();
+    expect(onAssistantDelta).toHaveBeenCalledTimes(1);
   });
 
   it("interleaved messageIds produce two ordered assistantTexts entries", () => {
@@ -483,10 +526,18 @@ describe("attachEventBridge", () => {
         summary: "Plan ready",
       }),
     );
+    session.emit(
+      "exit_plan_mode.completed",
+      makeEvent("exit_plan_mode.completed", {
+        approved: true,
+        requestId: "request-1",
+        selectedAction: "approve",
+      }),
+    );
 
     await bridge.awaitAgentEventChain();
 
-    expect(onAgentEvent).toHaveBeenCalledTimes(2);
+    expect(onAgentEvent).toHaveBeenCalledTimes(3);
     expect(onAgentEvent).toHaveBeenNthCalledWith(1, {
       stream: "plan",
       data: {
@@ -503,10 +554,25 @@ describe("attachEventBridge", () => {
         title: "Plan updated",
         source: "copilot-sdk",
         explanation: "Plan ready",
-        steps: ["# Plan", "inspect", "patch"],
+        steps: [
+          { step: "# Plan", status: "pending" },
+          { step: "inspect", status: "pending" },
+          { step: "patch", status: "pending" },
+        ],
         actions: ["approve", "edit"],
         requestId: "request-1",
         recommendedAction: "approve",
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(3, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan decision",
+        source: "copilot-sdk",
+        requestId: "request-1",
+        approved: true,
+        selectedAction: "approve",
       },
     });
   });
@@ -625,7 +691,7 @@ describe("attachEventBridge", () => {
     });
   });
 
-  it("tool.execution_complete uses detailedContent or content on success and error.message on failure", () => {
+  it("tool.execution_complete updates one tool meta per call and marks failures", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {
       getSdkSessionId: () => "sdk-session-id",
@@ -658,10 +724,8 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().toolMetas).toEqual([
-      { toolName: "bash" },
       { meta: "details", toolName: "bash" },
-      { toolName: "read" },
-      { meta: "failed", toolName: "read" },
+      { meta: "failed", toolName: "read", isError: true },
     ]);
   });
 
@@ -713,6 +777,34 @@ describe("attachEventBridge", () => {
 
     expect(calls).toEqual(["start", "complete:false", "start", "complete:true"]);
     expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("invalidates shared tool context synchronously after every successful compaction", () => {
+    const session = createFakeSession();
+    const onContextCompacted = vi.fn();
+    attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onContextCompacted,
+    });
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    expect(onContextCompacted).not.toHaveBeenCalled();
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: true }),
+    );
+    expect(onContextCompacted).toHaveBeenCalledTimes(1);
+
+    session.emit("session.compaction_complete", {
+      ...makeEvent("session.compaction_complete", { success: true }),
+      agentId: "subagent-1",
+    });
+    expect(onContextCompacted).toHaveBeenCalledTimes(2);
   });
 
   it("waits for an active compaction and its completion callback", async () => {
@@ -1046,7 +1138,10 @@ describe("attachEventBridge", () => {
 
     const first = bridge.snapshot();
     (first.assistantTexts as string[]).push("mutated");
-    (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0].toolName = "mutated";
+    expectDefined(
+      (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0],
+      "Copilot tool metadata",
+    ).toolName = "mutated";
     (first.usage as { input?: number }).input = 999;
 
     const second = bridge.snapshot();
@@ -1061,3 +1156,4 @@ describe("attachEventBridge", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

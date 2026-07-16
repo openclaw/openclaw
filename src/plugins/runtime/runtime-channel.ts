@@ -63,12 +63,13 @@ import {
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import {
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../../config/sessions.js";
-import { readSessionUpdatedAt } from "../../config/sessions/session-accessor.js";
+  readSessionUpdatedAt,
+  recordInboundSessionMeta,
+  updateSessionLastRoute,
+} from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import {
   fetchRemoteMedia,
@@ -80,6 +81,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
+  removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
@@ -87,6 +89,16 @@ import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
+  const sessionRuntime = {
+    resolveStorePath,
+    readSessionUpdatedAt,
+    // Plugin runtime property names are a shipped contract; the implementations
+    // route through the session accessor boundary.
+    recordSessionMetaFromInbound: recordInboundSessionMeta,
+    recordInboundSession,
+    updateLastRoute: updateSessionLastRoute,
+    resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
+  };
   const channelRuntime = {
     text: {
       chunkByNewline,
@@ -122,6 +134,14 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildPairingReply,
       readAllowFromStore: ({ channel, accountId, env }) =>
         readChannelAllowFromStore(channel, env, accountId),
+      removeAllowFromStoreEntry: ({ channel, entry, accountId, env, pairingAdapter }) =>
+        removeChannelAllowFromStoreEntry({
+          channel,
+          entry,
+          accountId,
+          env,
+          pairingAdapter,
+        }),
       upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
         upsertChannelPairingRequest({
           channel,
@@ -143,13 +163,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       record: recordChannelActivity,
       get: getChannelActivity,
     },
-    session: {
-      resolveStorePath,
-      readSessionUpdatedAt,
-      recordSessionMetaFromInbound,
-      recordInboundSession,
-      updateLastRoute,
-    },
+    session: sessionRuntime,
     mentions: {
       buildMentionRegexes,
       matchesMentionPatterns,

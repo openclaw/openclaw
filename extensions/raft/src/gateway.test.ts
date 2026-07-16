@@ -30,33 +30,35 @@ function createContext(accountId = "default") {
     lastStopAt: null,
     lastError: null,
   };
-  const run = vi.fn(async (params: {
-    raw: unknown;
-    adapter: {
-      ingest: (raw: unknown) => {
-        id: string;
-        timestamp: number;
-        rawText: string;
-        textForAgent: string;
-        textForCommands: string;
-      };
-      resolveTurn: (input: {
-        id: string;
-        timestamp: number;
-        rawText: string;
-        textForAgent: string;
-        textForCommands: string;
-      }) => Promise<{
-        delivery: {
-          deliver: () => Promise<{ visibleReplySent: false }>;
+  const run = vi.fn(
+    async (params: {
+      raw: unknown;
+      adapter: {
+        ingest: (raw: unknown) => {
+          id: string;
+          timestamp: number;
+          rawText: string;
+          textForAgent: string;
+          textForCommands: string;
         };
-      }>;
-    };
-  }) => {
-    const input = params.adapter.ingest(params.raw);
-    const turn = await params.adapter.resolveTurn(input);
-    await turn.delivery.deliver();
-  });
+        resolveTurn: (input: {
+          id: string;
+          timestamp: number;
+          rawText: string;
+          textForAgent: string;
+          textForCommands: string;
+        }) => Promise<{
+          delivery: {
+            deliver: () => Promise<{ visibleReplySent: false }>;
+          };
+        }>;
+      };
+    }) => {
+      const input = params.adapter.ingest(params.raw);
+      const turn = await params.adapter.resolveTurn(input);
+      await turn.delivery.deliver();
+    },
+  );
   const ctx = {
     cfg: {},
     accountId,
@@ -195,6 +197,18 @@ describe("Raft wake gateway", () => {
       status: 200,
     });
     await expect(fetch(wakeEndpoint, { method: "POST" })).resolves.toMatchObject({ status: 401 });
+    await expect(
+      fetch(wakeEndpoint, {
+        method: "POST",
+        headers: { "x-raft-bridge-token": "x".repeat(bridgeToken.length) },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+    await expect(
+      fetch(wakeEndpoint, {
+        method: "POST",
+        headers: { "x-raft-bridge-token": "short" },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
     await expect(
       fetch(wakeEndpoint, {
         method: "POST",
@@ -485,5 +499,4 @@ describe("Raft wake gateway", () => {
       resetPluginStateStoreForTests();
     }
   });
-
 });

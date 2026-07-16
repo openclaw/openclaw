@@ -12,20 +12,20 @@ export type SignalRpcOptions = {
   maxResponseBytes?: number;
 };
 
-export type SignalRpcError = {
+type SignalRpcError = {
   code?: number;
   message?: string;
   data?: unknown;
 };
 
-export type SignalRpcResponse<T> = {
+type SignalRpcResponse<T> = {
   jsonrpc?: string;
   result?: T;
   error?: SignalRpcError;
   id?: string | number | null;
 };
 
-export type SignalSseEvent = {
+type SignalSseEvent = {
   event?: string;
   data?: string;
   id?: string;
@@ -377,6 +377,9 @@ export async function streamSignalEvents(params: {
       return;
     }
     const [rawField, ...rest] = line.split(":");
+    if (rawField === undefined) {
+      return;
+    }
     const field = rawField.trim();
     const rawValue = rest.join(":");
     const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;

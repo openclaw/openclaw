@@ -148,4 +148,40 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       promptTokens: undefined,
     });
   });
+
+  it("does not fall back to aggregate billing when final-call context is unavailable", async () => {
+    const cronSession = makeCronSession();
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    mockRunCronFallbackPassthrough();
+    deriveSessionTotalTokensMock.mockReturnValueOnce(undefined);
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          usage: {
+            input: 12,
+            output: 15_104,
+            cacheRead: 819_661,
+            cacheWrite: 93_130,
+            total: 927_907,
+          },
+          lastCallUsage: {
+            input: 12,
+            output: 15_104,
+            cacheRead: 819_661,
+            cacheWrite: 93_130,
+            contextUsage: { state: "unavailable" },
+            total: 927_907,
+          },
+        },
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.totalTokensFresh).toBe(false);
+    expect(deriveSessionTotalTokensMock).toHaveBeenCalledTimes(1);
+  });
 });

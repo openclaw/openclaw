@@ -4,13 +4,9 @@
  */
 import { afterEach, expect, test, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import {
-  addSession,
-  appendOutput,
-  markExited,
-  resetProcessRegistryForTests,
-} from "./bash-process-registry.js";
+import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
 
@@ -200,4 +196,31 @@ test("process poll resets retryInMs when output appears and clears on completion
   const pollFinished = await pollSession(processTool, "toolcall-finished", sessionId);
   expect(pollStatus(pollFinished)).toBe("completed");
   expect(retryMs(pollFinished)).toBeUndefined();
+});
+
+test("process poll exposes finished-session termination metadata", async () => {
+  const sessionId = "sess-signal";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  appendOutput(session, "stderr", "terminated\n");
+  markExited(session, null, "SIGKILL", "failed", "no-output-timeout", true);
+
+  const poll = await pollSession(processTool, "toolcall-signal", sessionId);
+  const details = poll.details as {
+    status?: string;
+    exitCode?: number | null;
+    exitSignal?: NodeJS.Signals | number | null;
+    exitReason?: string;
+    timedOut?: boolean;
+    noOutputTimedOut?: boolean;
+    aggregated?: string;
+  };
+
+  expect(details.status).toBe("failed");
+  expect(details.exitCode).toBeUndefined();
+  expect(details.exitSignal).toBe("SIGKILL");
+  expect(details.exitReason).toBe("no-output-timeout");
+  expect(details.timedOut).toBe(true);
+  expect(details.noOutputTimedOut).toBe(true);
+  expect(details.aggregated).toContain("terminated");
 });

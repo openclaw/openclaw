@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
@@ -33,6 +34,7 @@ import type {
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceReadOptions,
   GatewayServiceRestartResult,
   GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
@@ -51,15 +53,8 @@ import {
 } from "./systemd.js";
 export type {
   GatewayServiceCommandConfig,
-  GatewayServiceControlArgs,
-  GatewayServiceEnv,
-  GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
-  GatewayServiceManageArgs,
-  GatewayServiceRestartResult,
   GatewayServiceStartRepairIssue,
-  GatewayServiceStartResult,
-  GatewayServiceStageArgs,
   GatewayServiceState,
 } from "./service-types.js";
 
@@ -83,7 +78,10 @@ export type GatewayService = {
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
-  readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
+  readRuntime: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceRuntime>;
 };
 
 function mergeGatewayServiceEnv(
@@ -137,6 +135,7 @@ function isMissingProgramPath(value: string | undefined): boolean {
 
 function collectGatewayServiceStartRepairIssues(
   state: GatewayServiceState,
+  expectedPort?: number,
 ): GatewayServiceStartRepairIssue[] {
   const command = state.command;
   if (!state.loaded || !command) {
@@ -150,6 +149,15 @@ function collectGatewayServiceStartRepairIssues(
     issues.push({
       code: "version-mismatch",
       message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
+    });
+  }
+  const servicePort =
+    parseTcpPortFromArgs(command.programArguments) ??
+    parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
+  if (expectedPort !== undefined && servicePort !== null && servicePort !== expectedPort) {
+    issues.push({
+      code: "port-mismatch",
+      message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
     });
   }
   for (const candidate of command.programArguments.slice(0, 2)) {
@@ -170,6 +178,19 @@ function collectGatewayServiceStartRepairIssues(
   return issues;
 }
 
+/** Reads the installed service and reports definition drift that must be repaired before launch. */
+export async function inspectGatewayServiceStartRepair(
+  service: GatewayService,
+  args: GatewayServiceEnvArgs,
+  expectedPort?: number,
+): Promise<{ state: GatewayServiceState; issues: GatewayServiceStartRepairIssue[] }> {
+  const state = await readGatewayServiceState(service, args);
+  return {
+    state,
+    issues: collectGatewayServiceStartRepairIssues(state, expectedPort),
+  };
+}
+
 export function formatGatewayServiceStartRepairIssues(
   issues: GatewayServiceStartRepairIssue[],
 ): string {
@@ -183,9 +204,12 @@ export async function readGatewayServiceState(
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
   const command = await service.readCommand(baseEnv).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
+  // Propagate the status read deadline so a wedged service manager fails soft
+  // instead of hanging both probes. readCommand parses local files and needs no
+  // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
   const [loaded, runtime] = await Promise.all([
-    service.isLoaded({ env }).catch(() => false),
-    service.readRuntime(env).catch(() => undefined),
+    service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
+    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(() => undefined),
   ]);
   return {
     installed: command !== null,
@@ -200,8 +224,13 @@ export async function readGatewayServiceState(
 export async function startGatewayService(
   service: GatewayService,
   args: GatewayServiceControlArgs,
+  expectedPort?: number,
 ): Promise<GatewayServiceStartResult> {
-  const state = await readGatewayServiceState(service, { env: args.env });
+  const { state, issues: repairIssues } = await inspectGatewayServiceStartRepair(
+    service,
+    { env: args.env },
+    expectedPort,
+  );
   if (!state.loaded && !state.installed) {
     return {
       outcome: "missing-install",
@@ -209,7 +238,6 @@ export async function startGatewayService(
     };
   }
 
-  const repairIssues = collectGatewayServiceStartRepairIssues(state);
   if (repairIssues.length > 0) {
     return {
       outcome: "repair-required",

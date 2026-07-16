@@ -3,8 +3,8 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetOllamaModelShowInfoCacheForTest } from "./provider-models.js";
 import {
+  checkOllamaCloudAuth,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
@@ -125,7 +125,6 @@ describe("ollama setup", () => {
     vi.unstubAllEnvs();
     upsertAuthProfileWithLock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
-    resetOllamaModelShowInfoCacheForTest();
   });
 
   it("puts suggested local model first in local mode", async () => {
@@ -778,5 +777,49 @@ describe("ollama setup", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(result).toBe(nextConfig);
+  });
+});
+
+describe("checkOllamaCloudAuth", () => {
+  afterEach(() => {
+    fetchWithSsrFGuardMock.mockClear();
+  });
+
+  it("bounds oversized 401 body and cancels the stream", async () => {
+    const chunk = new Uint8Array(1024 * 1024); // 1 MiB chunk
+    let readCount = 0;
+    let canceled = false;
+    // 64 chunks × 1 MiB = 64 MiB — exceeds the 16 MiB cap
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (readCount >= 64) {
+          controller.close();
+          return;
+        }
+        readCount += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(oversizedBody, {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }),
+      finalUrl: "https://ollama.com/api/me",
+      release: async () => {},
+    });
+
+    await expect(checkOllamaCloudAuth("https://ollama.com")).resolves.toEqual({
+      signedIn: false,
+      signinUrl: undefined,
+    });
+
+    // Stream must be cancelled before all 64 MiB are consumed
+    expect(readCount).toBeLessThan(64);
+    expect(canceled).toBe(true);
   });
 });

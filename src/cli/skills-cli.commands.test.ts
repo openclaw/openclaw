@@ -449,6 +449,24 @@ describe("skills cli commands", () => {
     expect(help).not.toContain("openclaw skills install weather");
   });
 
+  it("documents owner-qualified ClawHub verify refs in command help", () => {
+    const skillsCommand = createProgram().commands.find((command) => command.name() === "skills");
+    const verifyCommand = skillsCommand?.commands.find((command) => command.name() === "verify");
+    const output: string[] = [];
+
+    verifyCommand?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
+    });
+    verifyCommand?.outputHelp();
+    const help = output.join("");
+
+    expect(help).toContain("<skill-ref>");
+    expect(help).toContain("@owner/slug");
+    expect(help).toContain("openclaw skills verify @owner/weather");
+    expect(help).not.toContain("openclaw skills verify weather");
+  });
+
   it("installs a skill from a git source into the active workspace", async () => {
     installSkillFromSourceMock.mockResolvedValue({
       ok: true,
@@ -641,6 +659,56 @@ describe("skills cli commands", () => {
     );
   });
 
+  it("passes --acknowledge-clawhub-risk through for ClawHub skill installs", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "calendar", "--acknowledge-clawhub-risk"]);
+
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        slug: "calendar",
+        acknowledgeClawHubRisk: true,
+      }),
+    );
+  });
+
+  it("prints acknowledgement guidance for unacknowledged ClawHub skill installs", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "clawhub_risk_acknowledgement_required",
+      error:
+        "Install cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
+      warning: "WARNING - ClawHub found security risks in this release",
+    });
+
+    await expect(runCommand(["skills", "install", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Install cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
+    );
+  });
+
+  it("prints blocked ClawHub skill install failures when no trust warning was emitted", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "clawhub_download_blocked",
+      error:
+        'ClawHub blocked artifact download for "calendar@1.2.3"; install was not started. ClawHub /api/v1/skills/calendar/versions/1.2.3/download failed (403): blocked.',
+    });
+
+    await expect(runCommand(["skills", "install", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'ClawHub blocked artifact download for "calendar@1.2.3"; install was not started. ClawHub /api/v1/skills/calendar/versions/1.2.3/download failed (403): blocked.',
+    );
+  });
+
   it("rejects using --global and --agent together for installs", async () => {
     await expect(
       runCommand(["skills", "install", "calendar", "--global", "--agent", "main"]),
@@ -728,6 +796,48 @@ describe("skills cli commands", () => {
         slug: undefined,
         forceInstall: true,
       }),
+    );
+  });
+
+  it("passes --acknowledge-clawhub-risk through for ClawHub skill updates", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace/skills/calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "--all", "--acknowledge-clawhub-risk"]);
+
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        acknowledgeClawHubRisk: true,
+      }),
+    );
+  });
+
+  it("prints acknowledgement guidance for unacknowledged ClawHub skill updates", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: false,
+        code: "clawhub_risk_acknowledgement_required",
+        error:
+          "Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
+        warning: "WARNING - ClawHub found security risks in this release",
+      },
+    ]);
+
+    await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Update cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
     );
   });
 
@@ -931,6 +1041,44 @@ describe("skills cli commands", () => {
       ownerHandle: "demo-owner",
       version: "1.2.3",
       tag: undefined,
+      baseUrl: "https://private.example.com/clawhub",
+    });
+  });
+
+  it("passes owner-qualified verify refs and selectors through the resolver", async () => {
+    resolveClawHubSkillVerificationTargetMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      baseUrl: "https://private.example.com/clawhub",
+      version: undefined,
+      tag: "latest",
+      resolution: {
+        source: "registry",
+        selector: "tag",
+        registry: "https://private.example.com/clawhub",
+        skillDir: undefined,
+        installedVersion: undefined,
+      },
+    });
+
+    await runCommand(["skills", "verify", "@demo-owner/weather", "--tag", "latest", "--card"]);
+
+    expect(resolveClawHubSkillVerificationTargetMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "@demo-owner/weather",
+      version: undefined,
+      tag: "latest",
+    });
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: undefined,
+      tag: "latest",
+      baseUrl: "https://private.example.com/clawhub",
+    });
+    expect(fetchClawHubSkillCardMock).toHaveBeenCalledWith({
+      url: "https://private.example.com/clawhub/api/v1/skills/agentreceipt/card?version=1.2.3",
       baseUrl: "https://private.example.com/clawhub",
     });
   });
@@ -1319,3 +1467,4 @@ describe("skills cli commands", () => {
     expect(runtimeStdout.at(-1)).toContain("openclaw skills search");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

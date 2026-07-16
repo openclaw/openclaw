@@ -1,6 +1,7 @@
 // Ollama tests cover embedding provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchConfiguredLocalOriginWithSsrFGuardMock: vi.fn(
@@ -412,8 +413,38 @@ describe("ollama embedding provider", () => {
     });
 
     await expect(provider.embedQuery("hello")).rejects.toThrow(
-      "Ollama embed response returned malformed JSON",
+      "Ollama embed response: malformed JSON response",
     );
+  });
+
+  it("bounds successful embed JSON bodies before parsing", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamed.response),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response: JSON response exceeds 16777216 bytes",
+    );
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 
   it("rejects non-number embedding values instead of zeroing them", async () => {
@@ -527,8 +558,15 @@ describe("ollama embedding provider", () => {
 
   it("uses custom Ollama provider config and strips that provider prefix", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
+    const release = vi.fn();
+    const acquireLocalService = vi.fn(async (_target: unknown) => ({ release }));
+    const service = {
+      command: "/usr/bin/ollama-spark",
+      args: ["serve"],
+      idleStopMs: 10,
+    };
 
-    const { provider } = await createOllamaEmbeddingProvider({
+    const options = {
       config: {
         models: {
           providers: {
@@ -538,6 +576,7 @@ describe("ollama embedding provider", () => {
               headers: {
                 "X-Custom-Ollama": "spark",
               },
+              localService: service,
               models: [],
             },
           },
@@ -546,7 +585,9 @@ describe("ollama embedding provider", () => {
       provider: "ollama-spark",
       model: "ollama-spark/qwen3-embedding:4b",
       fallback: "none",
-    });
+      acquireLocalService,
+    };
+    const { provider } = await createOllamaEmbeddingProvider(options);
 
     await provider.embedQuery("hello");
 
@@ -561,6 +602,46 @@ describe("ollama embedding provider", () => {
         Authorization: "Bearer spark-key",
       },
     });
+    expect(acquireLocalService).toHaveBeenCalledWith(
+      {
+        providerId: "ollama-spark",
+        baseUrl: "http://spark.local:11434/v1",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Custom-Ollama": "spark",
+          Authorization: "Bearer spark-key",
+        },
+      },
+      undefined,
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("does not lease a configured local service for a remote endpoint override", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+    const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            "ollama-spark": {
+              baseUrl: "http://spark.local:11434/v1",
+              localService: { command: process.execPath },
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama-spark",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://memory.local:11434" },
+      acquireLocalService,
+    });
+
+    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(acquireLocalService).not.toHaveBeenCalled();
   });
 
   it("does not attach pure env OLLAMA_API_KEY to a local host", async () => {
@@ -697,6 +778,29 @@ describe("ollama embedding provider", () => {
       provider: "ollama",
       model: "nomic-embed-text",
       outputDimensionality: 2,
+    });
+  });
+
+  it("preserves configured provider aliases in the memory adapter", async () => {
+    const result = await ollamaMemoryEmbeddingProviderAdapter.create({
+      config: {
+        models: {
+          providers: {
+            "ollama-spark": {
+              baseUrl: "http://spark.local:11434/v1",
+              models: [],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "ollama-spark",
+      model: "ollama-spark/nomic-embed-text",
+      fallback: "none",
+    });
+
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "ollama-spark",
+      model: "nomic-embed-text",
     });
   });
 

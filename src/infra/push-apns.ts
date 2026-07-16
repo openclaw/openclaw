@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, toErrorObject } from "./errors.js";
@@ -65,7 +66,7 @@ export type ApnsAuthConfig = {
 type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
 
 /** Normalized APNs push result returned to gateway push/nodes methods. */
-export type ApnsPushResult = {
+type ApnsPushResult = {
   ok: boolean;
   status: number;
   apnsId?: string;
@@ -81,6 +82,8 @@ type ApnsPushWakeResult = ApnsPushResult;
 
 const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
 const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
+const PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH = 256;
+const PLUGIN_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.plugin-approval";
 
 type ApnsPushType = "alert" | "background";
 
@@ -211,9 +214,9 @@ function parseReason(body: string): string | undefined {
     const parsed = JSON.parse(trimmed) as { reason?: unknown };
     return typeof parsed.reason === "string" && parsed.reason.trim().length > 0
       ? parsed.reason.trim()
-      : trimmed.slice(0, 200);
+      : truncateUtf16Safe(trimmed, 200);
   } catch {
-    return trimmed.slice(0, 200);
+    return truncateUtf16Safe(trimmed, 200);
   }
 }
 
@@ -588,10 +591,7 @@ export async function clearApnsRegistrationIfCurrent(params: {
 }
 
 /** Returns true for APNs responses that mean the direct device token is no longer usable. */
-export function shouldInvalidateApnsRegistration(result: {
-  status: number;
-  reason?: string;
-}): boolean {
+function shouldInvalidateApnsRegistration(result: { status: number; reason?: string }): boolean {
   if (result.status === 410) {
     return true;
   }
@@ -930,33 +930,54 @@ function resolveExecApprovalAlertBody(): string {
   return EXEC_APPROVAL_GENERIC_ALERT_BODY;
 }
 
-function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: string }): object {
+function createApprovalAlertPayload(params: {
+  kind: "exec" | "plugin";
+  approvalId: string;
+  gatewayDeviceId: string;
+  title: string;
+  body: string;
+  category: string;
+}): object {
   return {
     aps: {
       alert: {
-        title: "Exec approval required",
-        body: resolveExecApprovalAlertBody(),
+        title: params.title,
+        body: params.body,
       },
       sound: "default",
-      category: EXEC_APPROVAL_NOTIFICATION_CATEGORY,
+      category: params.category,
       "content-available": 1,
     },
     openclaw: {
-      kind: "exec.approval.requested",
+      kind: `${params.kind}.approval.requested`,
       approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
       ts: Date.now(),
     },
   };
 }
 
-function createExecApprovalResolvedPayload(params: { nodeId: string; approvalId: string }): object {
+function resolvePluginApprovalAlertBody(description: string): string {
+  const body = normalizeOptionalString(description) ?? "";
+  if (body.length <= PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH) {
+    return body;
+  }
+  return `${truncateUtf16Safe(body, PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+function createApprovalResolvedPayload(params: {
+  kind: "exec" | "plugin";
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
   return {
     aps: {
       "content-available": 1,
     },
     openclaw: {
-      kind: "exec.approval.resolved",
+      kind: `${params.kind}.approval.resolved`,
       approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
       ts: Date.now(),
     },
   };
@@ -1009,13 +1030,14 @@ type RelayApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
   requestSender?: never;
 };
 
-type ApnsExecApprovalAlertCommonParams = {
+type ApnsApprovalCommonParams = {
   nodeId: string;
   approvalId: string;
+  gatewayDeviceId: string;
   timeoutMs?: number;
 };
 
-type DirectApnsExecApprovalAlertParams = ApnsExecApprovalAlertCommonParams & {
+type DirectApnsApprovalParams = ApnsApprovalCommonParams & {
   registration: DirectApnsRegistration;
   auth: ApnsAuthConfig;
   requestSender?: ApnsRequestSender;
@@ -1023,7 +1045,7 @@ type DirectApnsExecApprovalAlertParams = ApnsExecApprovalAlertCommonParams & {
   relayRequestSender?: never;
 };
 
-type RelayApnsExecApprovalAlertParams = ApnsExecApprovalAlertCommonParams & {
+type RelayApnsApprovalParams = ApnsApprovalCommonParams & {
   registration: RelayApnsRegistration;
   relayConfig: ApnsRelayConfig;
   relayRequestSender?: ApnsRelayRequestSender;
@@ -1032,27 +1054,11 @@ type RelayApnsExecApprovalAlertParams = ApnsExecApprovalAlertCommonParams & {
   requestSender?: never;
 };
 
-type ApnsExecApprovalResolvedCommonParams = {
-  nodeId: string;
-  approvalId: string;
-  timeoutMs?: number;
-};
+type ApnsApprovalParams = DirectApnsApprovalParams | RelayApnsApprovalParams;
 
-type DirectApnsExecApprovalResolvedParams = ApnsExecApprovalResolvedCommonParams & {
-  registration: DirectApnsRegistration;
-  auth: ApnsAuthConfig;
-  requestSender?: ApnsRequestSender;
-  relayConfig?: never;
-  relayRequestSender?: never;
-};
-
-type RelayApnsExecApprovalResolvedParams = ApnsExecApprovalResolvedCommonParams & {
-  registration: RelayApnsRegistration;
-  relayConfig: ApnsRelayConfig;
-  relayRequestSender?: ApnsRelayRequestSender;
-  relayGatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
-  auth?: never;
-  requestSender?: never;
+type ApnsPluginApprovalAlertParams = ApnsApprovalParams & {
+  title?: string | null;
+  description: string;
 };
 
 /** Sends a visible APNs alert via direct APNs token or relay registration. */
@@ -1122,70 +1128,104 @@ export async function sendApnsBackgroundWake(
   });
 }
 
-/** Sends an exec-approval alert notification via direct APNs or relay. */
-export async function sendApnsExecApprovalAlert(
-  params: DirectApnsExecApprovalAlertParams | RelayApnsExecApprovalAlertParams,
-): Promise<ApnsPushAlertResult> {
-  const payload = createExecApprovalAlertPayload({
-    nodeId: params.nodeId,
-    approvalId: params.approvalId,
-  });
-
-  if (params.registration.transport === "relay") {
-    const relayParams = params as RelayApnsExecApprovalAlertParams;
+async function sendApnsApprovalPush(params: {
+  transport: ApnsApprovalParams;
+  payload: object;
+  pushType: ApnsPushType;
+  priority: "10" | "5";
+}): Promise<ApnsPushResult> {
+  const transport = params.transport;
+  if (transport.registration.transport === "relay") {
+    const relayParams = transport as RelayApnsApprovalParams;
     return await sendRelayApnsPush({
       relayConfig: relayParams.relayConfig,
       registration: relayParams.registration,
-      payload,
-      pushType: "alert",
-      priority: "10",
+      payload: params.payload,
+      pushType: params.pushType,
+      priority: params.priority,
       gatewayIdentity: relayParams.relayGatewayIdentity,
       requestSender: relayParams.relayRequestSender,
     });
   }
-  const directParams = params as DirectApnsExecApprovalAlertParams;
+  const directParams = transport as DirectApnsApprovalParams;
   return await sendDirectApnsPush({
     auth: directParams.auth,
     registration: directParams.registration,
-    payload,
+    payload: params.payload,
     timeoutMs: directParams.timeoutMs,
     requestSender: directParams.requestSender,
+    pushType: params.pushType,
+    priority: params.priority,
+  });
+}
+
+/** Sends an exec-approval alert notification via direct APNs or relay. */
+export async function sendApnsExecApprovalAlert(
+  params: ApnsApprovalParams,
+): Promise<ApnsPushAlertResult> {
+  return await sendApnsApprovalPush({
+    transport: params,
+    payload: createApprovalAlertPayload({
+      kind: "exec",
+      approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
+      title: "Exec approval required",
+      body: resolveExecApprovalAlertBody(),
+      category: EXEC_APPROVAL_NOTIFICATION_CATEGORY,
+    }),
     pushType: "alert",
     priority: "10",
   });
 }
 
-/** Sends a silent wake telling the app an exec approval changed state. */
-export async function sendApnsExecApprovalResolvedWake(
-  params: DirectApnsExecApprovalResolvedParams | RelayApnsExecApprovalResolvedParams,
-): Promise<ApnsPushWakeResult> {
-  const payload = createExecApprovalResolvedPayload({
-    nodeId: params.nodeId,
-    approvalId: params.approvalId,
+/** Sends a plugin-approval alert notification via direct APNs or relay. */
+export async function sendApnsPluginApprovalAlert(
+  params: ApnsPluginApprovalAlertParams,
+): Promise<ApnsPushAlertResult> {
+  return await sendApnsApprovalPush({
+    transport: params,
+    payload: createApprovalAlertPayload({
+      kind: "plugin",
+      approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
+      title: normalizeOptionalString(params.title) ?? "Approval required",
+      body: resolvePluginApprovalAlertBody(params.description),
+      category: PLUGIN_APPROVAL_NOTIFICATION_CATEGORY,
+    }),
+    pushType: "alert",
+    priority: "10",
   });
+}
 
-  if (params.registration.transport === "relay") {
-    const relayParams = params as RelayApnsExecApprovalResolvedParams;
-    return await sendRelayApnsPush({
-      relayConfig: relayParams.relayConfig,
-      registration: relayParams.registration,
-      payload,
-      pushType: "background",
-      priority: "5",
-      gatewayIdentity: relayParams.relayGatewayIdentity,
-      requestSender: relayParams.relayRequestSender,
-    });
-  }
-  const directParams = params as DirectApnsExecApprovalResolvedParams;
-  return await sendDirectApnsPush({
-    auth: directParams.auth,
-    registration: directParams.registration,
-    payload,
-    timeoutMs: directParams.timeoutMs,
-    requestSender: directParams.requestSender,
+async function sendApnsApprovalResolvedWake(params: {
+  transport: ApnsApprovalParams;
+  kind: "exec" | "plugin";
+}): Promise<ApnsPushWakeResult> {
+  return await sendApnsApprovalPush({
+    transport: params.transport,
+    payload: createApprovalResolvedPayload({
+      kind: params.kind,
+      approvalId: params.transport.approvalId,
+      gatewayDeviceId: params.transport.gatewayDeviceId,
+    }),
     pushType: "background",
     priority: "5",
   });
 }
 
+/** Sends a silent wake telling the app an exec approval changed state. */
+export async function sendApnsExecApprovalResolvedWake(
+  params: ApnsApprovalParams,
+): Promise<ApnsPushWakeResult> {
+  return await sendApnsApprovalResolvedWake({ transport: params, kind: "exec" });
+}
+
+/** Sends a silent wake telling the app a plugin approval changed state. */
+export async function sendApnsPluginApprovalResolvedWake(
+  params: ApnsApprovalParams,
+): Promise<ApnsPushWakeResult> {
+  return await sendApnsApprovalResolvedWake({ transport: params, kind: "plugin" });
+}
+
 export { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,7 +11,37 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
     resolvePinnedHostnameWithPolicyMock(...args),
 }));
 
-import { deleteWebhook, getWebhookInfo, sendChatAction, sendPhoto, type ZaloFetch } from "./api.js";
+import {
+  callZaloApi,
+  deleteWebhook,
+  getMe,
+  getWebhookInfo,
+  sendChatAction,
+  sendPhoto,
+  type ZaloFetch,
+} from "./api.js";
+
+const ZALO_JSON_CAP_BYTES = 16 * 1024 * 1024;
+
+function oversizedZaloJsonResponse(onCancel: () => void): Response {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(ZALO_JSON_CAP_BYTES + 1));
+      },
+      cancel() {
+        onCancel();
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+  Object.defineProperty(response, "json", {
+    value: async () => {
+      throw new Error("unbounded json reader was used");
+    },
+  });
+  return response;
+}
 
 function createOkFetcher() {
   return vi.fn<ZaloFetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
@@ -39,6 +69,7 @@ async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) =>
 
 describe("Zalo API request methods", () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
     resolvePinnedHostnameWithPolicyMock.mockReset();
     resolvePinnedHostnameWithPolicyMock.mockResolvedValue({
       hostname: "example.com",
@@ -46,6 +77,97 @@ describe("Zalo API request methods", () => {
       lookup: vi.fn(),
     });
   });
+
+  it("accepts the native Zalo getMe identity fields", async () => {
+    const fetcher: ZaloFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        result: {
+          account_name: "bot.example",
+          account_type: "BASIC",
+          can_join_groups: false,
+          id: "1459232241454765289",
+        },
+      }),
+    );
+
+    await expect(getMe("test-token", undefined, fetcher)).resolves.toMatchObject({
+      result: {
+        account_name: "bot.example",
+        account_type: "BASIC",
+        can_join_groups: false,
+      },
+    });
+  });
+
+  it("uses the production API root by default", async () => {
+    const fetcher = createOkFetcher();
+
+    await callZaloApi("getMe", "test-token", undefined, { fetch: fetcher });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://bot-api.zaloplatforms.com/bottest-token/getMe",
+      expect.any(Object),
+    );
+  });
+
+  it("uses ZALO_API_URL for provider-compatible alternate endpoints", async () => {
+    vi.stubEnv("ZALO_API_URL", " http://127.0.0.1:49152/zalo/ ");
+    const fetcher = createOkFetcher();
+
+    await callZaloApi("getMe", "test-token", undefined, { fetch: fetcher });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:49152/zalo/bottest-token/getMe",
+      expect.any(Object),
+    );
+  });
+
+  it("prefers an explicit API URL over ZALO_API_URL", async () => {
+    vi.stubEnv("ZALO_API_URL", "http://127.0.0.1:49152/env");
+    const fetcher = createOkFetcher();
+
+    await callZaloApi("getMe", "test-token", undefined, {
+      apiUrl: "http://127.0.0.1:49153/explicit/",
+      fetch: fetcher,
+    });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:49153/explicit/bottest-token/getMe",
+      expect.any(Object),
+    );
+  });
+
+  it("rejects an explicitly empty API URL instead of falling back to ZALO_API_URL", async () => {
+    vi.stubEnv("ZALO_API_URL", "http://127.0.0.1:49152/env");
+
+    await expect(
+      callZaloApi("getMe", "test-token", undefined, {
+        apiUrl: "   ",
+        fetch: createOkFetcher(),
+      }),
+    ).rejects.toThrow("ZALO_API_URL must not be empty.");
+  });
+
+  it("rejects invalid alternate API URLs", async () => {
+    vi.stubEnv("ZALO_API_URL", "file:///tmp/zalo");
+
+    await expect(
+      callZaloApi("getMe", "test-token", undefined, { fetch: createOkFetcher() }),
+    ).rejects.toThrow("ZALO_API_URL must use http:// or https://.");
+  });
+
+  it.each(["https://proxy.example/zalo?tenant=1", "https://proxy.example/zalo#provider"])(
+    "rejects an API root with URL suffix components: %s",
+    async (apiUrl) => {
+      await expect(
+        callZaloApi("getMe", "test-token", undefined, {
+          apiUrl,
+          fetch: createOkFetcher(),
+        }),
+      ).rejects.toThrow("ZALO_API_URL must not include a query string or fragment.");
+    },
+  );
 
   it("uses POST for getWebhookInfo", async () => {
     await expectPostJsonRequest(getWebhookInfo);
@@ -103,10 +225,7 @@ describe("Zalo API request methods", () => {
       .mockImplementation(() => undefined);
     try {
       const fetcher = vi.fn<ZaloFetch>(
-        async () =>
-          ({
-            json: async () => ({ ok: true, result: {} }),
-          }) as Response,
+        async () => new Response(JSON.stringify({ ok: true, result: {} })),
       );
 
       await sendChatAction(
@@ -198,5 +317,19 @@ describe("Zalo API request methods", () => {
 
     expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("bounds oversized getMe JSON responses and cancels the stream", async () => {
+    let cancelCount = 0;
+    const fetcher = vi.fn<ZaloFetch>(async () =>
+      oversizedZaloJsonResponse(() => {
+        cancelCount += 1;
+      }),
+    );
+
+    await expect(getMe("test-token", undefined, fetcher)).rejects.toThrow(
+      "zalo.getMe: JSON response exceeds 16777216 bytes",
+    );
+    expect(cancelCount).toBe(1);
   });
 });

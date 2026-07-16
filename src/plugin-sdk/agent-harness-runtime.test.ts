@@ -1,14 +1,21 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
+  getModelProviderRequestTransport,
+  type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
+import type {
+  ProviderModelRouteRuntimePolicy,
+  ProviderRouteOverridePresence,
+} from "./provider-model-types.js";
 
 const { loadResearchAutocapture } = vi.hoisted(() => ({
   loadResearchAutocapture: vi.fn(),
@@ -154,6 +161,26 @@ describe("agent harness runtime SDK facade", () => {
 
     expect(loadResearchAutocapture).not.toHaveBeenCalled();
   });
+
+  it("exposes attached model request transport metadata helpers", () => {
+    const model = attachModelProviderRequestTransport(
+      { id: "gpt-test", provider: "custom-openai" },
+      { auth: { mode: "header", headerName: "x-api-key", value: "secret" } },
+    );
+
+    expect(getModelProviderRequestTransport(model)).toEqual({
+      auth: { mode: "header", headerName: "x-api-key", value: "secret" },
+    });
+  });
+
+  it("locks the request-transport support contract", () => {
+    expectTypeOf<
+      NonNullable<AgentHarnessSupportContext["modelProvider"]>["requestTransportOverrides"]
+    >().toEqualTypeOf<ProviderRouteOverridePresence | undefined>();
+    expectTypeOf<
+      NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
+    >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
+  });
 });
 
 describe("agent harness user input helpers", () => {
@@ -227,5 +254,24 @@ describe("agent harness user input helpers", () => {
         { formatText: (text) => text.replaceAll("<", "&lt;") },
       ),
     ).toContain("a &lt; b");
+  });
+
+  it("preserves blank fallback lines so skipped answers stay aligned", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          { id: "q1", header: "Q1", question: "First?" },
+          { id: "q2", header: "Q2", question: "Second?" },
+          { id: "q3", header: "Q3", question: "Third?" },
+        ],
+        "\nyes\nno",
+      ),
+    ).toEqual({
+      answers: {
+        q1: { answers: [] },
+        q2: { answers: ["yes"] },
+        q3: { answers: ["no"] },
+      },
+    });
   });
 });

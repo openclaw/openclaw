@@ -8,14 +8,12 @@ import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-sou
 import { resolveWebFetchProxySourceConflict } from "../gateway/web-fetch-proxy-source-conflict.js";
 
 /** Returns true when tests should avoid the missing-config cold-start fast path. */
-export function shouldSkipStatusScanMissingConfigFastPath(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+function shouldSkipStatusScanMissingConfigFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.VITEST === "true" || env.VITEST_POOL_ID !== undefined || env.NODE_ENV === "test";
 }
 
 /** Returns whether status should treat this run as a no-config cold start. */
-export function resolveStatusScanColdStart(params?: {
+function resolveStatusScanColdStart(params?: {
   env?: NodeJS.ProcessEnv;
   allowMissingConfigFastPath?: boolean;
 }): boolean {

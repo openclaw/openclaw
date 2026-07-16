@@ -11,14 +11,11 @@ export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export {
+  canonicalizeSessionEntryAliases,
   deleteSessionEntryLifecycle,
+  patchSessionEntryWithKey,
   resetSessionEntryLifecycle,
-  type DeleteSessionEntryLifecycleParams,
-  type DeleteSessionEntryLifecycleResult,
-  type ResetSessionEntryLifecycleParams,
-  type ResetSessionEntryLifecycleResult,
-  type SessionLifecycleArchivedTranscript,
-  type SessionLifecycleStoreTarget,
+  resolveSessionEntryCandidateTarget,
 } from "./sessions/session-accessor.js";
 export * from "./sessions/session-key.js";
 export * from "./sessions/store.js";

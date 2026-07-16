@@ -1,7 +1,7 @@
 // Gateway Protocol tests cover agent behavior.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { AgentParamsSchema } from "./agent.js";
+import { AgentParamsSchema, MessageActionParamsSchema } from "./agent.js";
 
 /**
  * Regression coverage for agent-run schema payloads that carry internal
@@ -57,6 +57,28 @@ const musicCompletionEvent: AgentInternalEvent = {
 };
 
 describe("AgentParamsSchema", () => {
+  it("accepts the backend expected-session binding", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "resume",
+        sessionKey: "agent:main:main",
+        expectedExistingSessionId: "session-1",
+        idempotencyKey: "recovery-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects host-owned delivery media constraints from public requests", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "deliver generated media",
+        sessionKey: "agent:main:main",
+        internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        idempotencyKey: "delivery-1",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts generated music attachments on internal completion events", () => {
     const params = makeAgentParamsWithInternalEvent(musicCompletionEvent);
 
@@ -79,5 +101,41 @@ describe("AgentParamsSchema", () => {
     } as unknown as AgentInternalEvent);
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(false);
+  });
+});
+
+describe("MessageActionParamsSchema", () => {
+  const baseParams = {
+    channel: "matrix",
+    action: "read",
+    params: {},
+    idempotencyKey: "idem-1",
+  };
+
+  it("accepts only the operation-local direct-operator marker", () => {
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        conversationReadOrigin: "direct-operator",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        conversationReadOrigin: "delegated",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects caller-supplied current chat classification", () => {
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        toolContext: {
+          currentChannelId: "!room:example.org",
+          currentChatType: "direct",
+        },
+      }),
+    ).toBe(false);
   });
 });

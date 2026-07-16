@@ -142,6 +142,10 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
     join(rootDir, "scripts", "lib", "docker-build.sh"),
   );
   await copyFile(
+    join(repoRoot, "scripts", "lib", "build-metadata.sh"),
+    join(rootDir, "scripts", "lib", "build-metadata.sh"),
+  );
+  await copyFile(
     join(repoRoot, "scripts", "lib", "docker-e2e-logs.sh"),
     join(rootDir, "scripts", "lib", "docker-e2e-logs.sh"),
   );
@@ -174,6 +178,10 @@ const prestartContainerEnvFlags = [
   "-e OPENCLAW_CONFIG_DIR=/home/node/.openclaw",
   "-e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace",
 ].join(" ");
+
+const noFollowOwnershipRepair = (root: string) =>
+  `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h node:node {} +`;
+const prestartSafePath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 function createEnv(
   sandbox: DockerSetupSandbox,
@@ -355,8 +363,10 @@ describe("scripts/docker/setup.sh", () => {
 
   it("handles env defaults, home-volume mounts, and Docker build args", async () => {
     const activeSandbox = requireSandbox(sandbox);
+    const buildCommit = "0123456789abcdef0123456789abcdef01234567";
 
     const result = runDockerSetup(activeSandbox, {
+      GIT_COMMIT: buildCommit,
       OPENCLAW_DOCKER_APT_PACKAGES: "curl wget",
       OPENCLAW_EXTRA_MOUNTS: undefined,
       OPENCLAW_HOME_VOLUME: "openclaw-home",
@@ -364,6 +374,9 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.status).toBe(0);
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_IMAGE_APT_PACKAGES=curl wget");
+    expect(envFile).toContain("OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=8192");
+    expect(envFile).toContain("OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=");
+    expect(envFile).toContain("OPENCLAW_DOCKER_BUILD_SKIP_DTS=1");
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=openclaw-home"); // pragma: allowlist secret
     expect(envFile).toContain("OPENCLAW_DISABLE_BONJOUR=");
@@ -383,9 +396,22 @@ describe("scripts/docker/setup.sh", () => {
     const log = await readDockerLog(activeSandbox);
     expect(log).toContain("--build-arg OPENCLAW_IMAGE_APT_PACKAGES=curl wget");
     expect(log).toContain(
+      "--build-arg OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=8192",
+    );
+    expect(log).toContain("--build-arg OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=");
+    expect(log).toContain("--build-arg OPENCLAW_DOCKER_BUILD_SKIP_DTS=1");
+    expect(log).toMatch(
+      /--build-arg OPENCLAW_BUILD_TIMESTAMP=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/u,
+    );
+    expect(log).toContain(`--build-arg GIT_COMMIT=${buildCommit}`);
+    expect(log).toContain(
       `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-ui --suppress-gateway-token-output`,
     );
     expect(result.stdout).toContain("Gateway token: stored in Docker environment/config");
+    expect(result.stdout).toContain("Gateway running with host port mapping.");
+    expect(result.stdout).toContain("Access from tailnet devices via the host's tailnet IP.");
+    expect(result.stdout).toContain("Commands:");
+    expect(result.stdout).toContain("logs -f openclaw-gateway");
     expect(result.stdout).not.toContain("test-token");
     expect(result.stdout).not.toContain("#token=");
     expect(log).toContain(
@@ -825,11 +851,24 @@ describe("scripts/docker/setup.sh", () => {
     // Verify that a root-user chown step runs before setup.
     const log = await readDockerLog(activeSandbox);
     const chownIdx = log.indexOf("--user root");
+    const safePathIdx = log.indexOf(`${prestartSafePath}; export PATH`);
+    const stateRepairIdx = log.indexOf(noFollowOwnershipRepair("/home/node/.openclaw"));
     const onboardIdx = log.indexOf("onboard");
     expect(chownIdx).toBeGreaterThanOrEqual(0);
+    expect(safePathIdx).toBeGreaterThan(chownIdx);
+    expect(stateRepairIdx).toBeGreaterThan(safePathIdx);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
-    expect(log).toContain("chown node:node /home/node/.config");
+    expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw"));
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
+    expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw/workspace/.openclaw"));
+    expect(log).toContain("fi || true");
+    expect(log).not.toContain("-type d -o -type f");
+    expect(log).not.toContain("-exec chown");
+    expect(log).not.toContain(" chown node:node");
+    expect(log).not.toContain("chown -R node:node /home/node/.openclaw/workspace/.openclaw");
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {
@@ -850,7 +889,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(secretDir.startsWith(`${configDir}/`)).toBe(false);
 
     const log = await readDockerLog(activeSandbox);
-    expect(log).toContain("find /home/node/.config/openclaw -xdev");
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
@@ -1178,3 +1217,4 @@ describe("scripts/docker/setup.sh", () => {
     expect(argLine).toBe("ARG OPENCLAW_IMAGE_APT_PACKAGES");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,11 +3,34 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../config/sessions.js";
 
 /** User or automatic model/provider override selection for a session entry. */
-export type ModelOverrideSelection = {
+type ModelOverrideSelection = {
   provider: string;
   model: string;
   isDefault?: boolean;
 };
+
+export const MODEL_SELECTION_LOCKED_MESSAGE = "Model selection is locked for this session.";
+export const MODEL_SELECTION_LOCKED_RESET_MESSAGE =
+  "This session cannot be reset while model selection is locked.";
+
+/** Raised when a caller attempts to mutate a locked session model selection. */
+export class ModelSelectionLockedError extends Error {
+  constructor(message = MODEL_SELECTION_LOCKED_MESSAGE) {
+    super(message);
+    this.name = "ModelSelectionLockedError";
+  }
+}
+
+export function isModelSelectionLocked(entry: SessionEntry | undefined): boolean {
+  return entry?.modelSelectionLocked === true;
+}
+
+/** Enforces the durable model-selection lock before any session model fields change. */
+function assertModelSelectionUnlocked(entry: SessionEntry): void {
+  if (isModelSelectionLocked(entry)) {
+    throw new ModelSelectionLockedError();
+  }
+}
 
 function clearFallbackOrigin(entry: SessionEntry): boolean {
   let updated = false;
@@ -33,6 +56,7 @@ export function applyModelOverrideToSessionEntry(params: {
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
+  assertModelSelectionUnlocked(entry);
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
   let updated = false;
@@ -93,6 +117,14 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // When switching back to the default model without override fields to delete
+  // (e.g. model comes from steering/fallback runtime fields), the isDefault
+  // branch at line 42 won't set selectionUpdated. Mark it here so that
+  // liveModelSwitchPending can still be set below when runtime is misaligned.
+  if (selection.isDefault && runtimePresent && !runtimeAligned) {
+    selectionUpdated = true;
+  }
+
   // contextTokens are derived from the active session model. When the selected
   // model changes (or runtime model is already stale), the cached window can
   // pin the session to an older/smaller limit until another run refreshes it.
@@ -146,6 +178,9 @@ export function applyModelOverrideToSessionEntry(params: {
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
     if ((selectionUpdated || profileUpdated) && params.markLiveSwitchPending) {
+      // Pending without modelOverride is the deliberate encoding for "switch
+      // back to the agent default": the default branch above also clears the
+      // runtime model fields so live-switch resolution lands on the default.
       entry.liveModelSwitchPending = true;
     }
     delete entry.fallbackNoticeSelectedModel;

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import {
@@ -14,6 +15,7 @@ import {
   readProcessTreeCpuMs,
   requestProbeStatus,
 } from "./lib/gateway-bench-probes.ts";
+import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -351,7 +353,11 @@ function median(values: number[]): number {
   const sorted = [...values].toSorted((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
-    return (sorted[middle - 1] + sorted[middle]) / 2;
+    return (
+      (expectDefined(sorted[middle - 1], "lower middle gateway startup sample") +
+        expectDefined(sorted[middle], "upper middle gateway startup sample")) /
+      2
+    );
   }
   return sorted[middle] ?? 0;
 }
@@ -535,7 +541,7 @@ function formatStats(stats: SummaryStats | null): string {
   return `p50=${formatMs(stats.p50)} avg=${formatMs(stats.avg)} min=${formatMs(stats.min)} max=${formatMs(stats.max)}`;
 }
 
-function formatMemoryStats(stats: SummaryStats | null): string {
+function formatMemoryStats(stats: SummaryStats | null | undefined): string {
   if (!stats) {
     return "n/a";
   }
@@ -547,13 +553,6 @@ function formatRatioStats(stats: SummaryStats | null): string {
     return "n/a";
   }
   return `p50=${formatRatio(stats.p50)} avg=${formatRatio(stats.avg)} min=${formatRatio(stats.min)} max=${formatRatio(stats.max)}`;
-}
-
-function getStartupTraceStat(
-  startupTrace: Record<string, SummaryStats>,
-  key: string,
-): SummaryStats | null {
-  return startupTrace[key] ?? null;
 }
 
 async function waitForProbe(params: {
@@ -694,10 +693,13 @@ function sanitizedEnv(
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
   const phaseMatch = /startup trace: ([^ ]+) ([0-9.]+)ms total=([0-9.]+)ms(?: (.*))?/u.exec(line);
   if (phaseMatch) {
-    startupTrace[phaseMatch[1]] = Number(phaseMatch[2]);
-    startupTrace[`${phaseMatch[1]}.total`] = Number(phaseMatch[3]);
+    const phase = expectDefined(phaseMatch[1], "gateway startup trace phase name");
+    startupTrace[phase] = Number(expectDefined(phaseMatch[2], `${phase} startup duration`));
+    startupTrace[`${phase}.total`] = Number(
+      expectDefined(phaseMatch[3], `${phase} total startup duration`),
+    );
     for (const metric of parseStartupTraceMetrics(phaseMatch[4] ?? "")) {
-      startupTrace[`${phaseMatch[1]}.${metric.key}`] = metric.value;
+      startupTrace[`${phase}.${metric.key}`] = metric.value;
     }
     return;
   }
@@ -705,8 +707,10 @@ function collectStartupTrace(line: string, startupTrace: Record<string, number>)
   if (!detailMatch) {
     return;
   }
-  for (const metric of parseStartupTraceMetrics(detailMatch[2])) {
-    startupTrace[`${detailMatch[1]}.${metric.key}`] = metric.value;
+  const phase = expectDefined(detailMatch[1], "gateway startup detail phase name");
+  const detail = expectDefined(detailMatch[2], `${phase} startup detail metrics`);
+  for (const metric of parseStartupTraceMetrics(detail)) {
+    startupTrace[`${phase}.${metric.key}`] = metric.value;
   }
 }
 
@@ -727,8 +731,8 @@ function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: numb
     if (!metricMatch) {
       continue;
     }
-    const key = metricMatch[1];
-    const value = Number(metricMatch[2]);
+    const key = expectDefined(metricMatch[1], "gateway startup trace metric key");
+    const value = Number(expectDefined(metricMatch[2], `${key} startup trace metric value`));
     if (
       !Number.isFinite(value) ||
       (key !== "eventLoopMax" &&
@@ -929,15 +933,12 @@ function printResult(result: CaseResult): void {
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
   console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
   console.log(
-    `  ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.externalMb"))}`,
+    `  ready memory: rss=${formatMemoryStats(result.summary.startupTrace["memory.ready.rssMb"])} heap=${formatMemoryStats(result.summary.startupTrace["memory.ready.heapUsedMb"])} external=${formatMemoryStats(result.summary.startupTrace["memory.ready.externalMb"])}`,
   );
   console.log(
-    `  post-ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.externalMb"))}`,
+    `  post-ready memory: rss=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.rssMb"])} heap=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.heapUsedMb"])} external=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.externalMb"])}`,
   );
-  const trace = Object.entries(result.summary.startupTrace)
-    .filter(([name]) => !name.endsWith(".total") && !name.startsWith("memory."))
-    .toSorted((a, b) => (b[1].avg ?? 0) - (a[1].avg ?? 0))
-    .slice(0, 8);
+  const trace = selectSlowStartupTraceDurations(result.summary.startupTrace, 8);
   if (trace.length > 0) {
     console.log("  trace top:");
     for (const [name, stats] of trace) {
@@ -1023,4 +1024,3 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     process.exitCode = 1;
   });
 }
-export { testing as __testing };

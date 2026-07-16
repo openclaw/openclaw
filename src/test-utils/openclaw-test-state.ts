@@ -24,7 +24,7 @@ type OpenClawTestStateScenario =
   | "gateway-loopback"
   | "external-service";
 
-export type OpenClawTestStateOptions = {
+type OpenClawTestStateOptions = {
   prefix?: string;
   label?: string;
   layout?: OpenClawTestStateLayout;
@@ -269,7 +269,10 @@ export async function createOpenClawTestState(
 ): Promise<OpenClawTestState> {
   const label = normalizeLabel(options.label ?? options.scenario);
   const prefix = options.prefix ?? `${DEFAULT_PREFIX}${label}-`;
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  // Canonicalize: macOS tmpdir sits behind a symlink (/var -> /private/var) and
+  // production code realpaths state paths, so symlinked roots break tests that
+  // intercept or compare fs paths by equality.
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
   const layout = options.layout ?? "home";
   const paths = resolveLayout(root, layout);
 

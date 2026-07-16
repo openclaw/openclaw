@@ -22,6 +22,7 @@ scenario:
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
+    suiteIsolation: isolated
     summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
     config:
       prompt: |-
@@ -47,6 +48,9 @@ scenario:
       expectedChildLabels:
         - qa-fanout-alpha
         - qa-fanout-beta
+      expectedChildCompletionMarkers:
+        - ALPHA-OK
+        - BETA-OK
 
 flow:
   steps:
@@ -105,8 +109,25 @@ flow:
                               - lambda:
                                   params: [text]
                                   expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(text).includes(needle)))"
-                              - expr: "env.providerMode === 'mock-openai' ? 10000 : 30000"
+                              - expr: "30000"
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+                          - if:
+                              # The parent reply can arrive before child transcript writes finish.
+                              # Wait before opening the store so its integrity check sees settled FTS state.
+                              expr: "Boolean(env.mock) && env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME !== 'codex'"
+                              then:
+                                - forEach:
+                                    items:
+                                      expr: "config.expectedChildCompletionMarkers"
+                                    item: childCompletionMarker
+                                    actions:
+                                      - call: waitForOutboundMessage
+                                        args:
+                                          - ref: state
+                                          - lambda:
+                                              params: [candidate]
+                                              expr: "String(candidate.text ?? '').trim() === childCompletionMarker"
+                                          - 30000
                           - if:
                               expr: "Boolean(env.mock)"
                               then:
@@ -159,6 +180,21 @@ flow:
                           - if:
                               expr: "/timed out after/i.test(formatErrorMessage(attemptError))"
                               then:
+                                - if:
+                                    expr: "Boolean(env.mock) && env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME !== 'codex'"
+                                    then:
+                                      - forEach:
+                                          items:
+                                            expr: "config.expectedChildCompletionMarkers"
+                                          item: childCompletionMarker
+                                          actions:
+                                            - call: waitForOutboundMessage
+                                              args:
+                                                - ref: state
+                                                - lambda:
+                                                    params: [candidate]
+                                                    expr: "String(candidate.text ?? '').trim() === childCompletionMarker"
+                                                - 30000
                                 - call: readRawQaSessionStore
                                   saveAs: timeoutStore
                                   args:

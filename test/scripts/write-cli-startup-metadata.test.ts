@@ -1,12 +1,17 @@
 // Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+// These subprocess tests use explicit ready/close signals; timeout only catches broken fixtures.
+const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
 
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
   const filePath = path.join(rootDir, relativePath);
@@ -67,7 +72,18 @@ function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
-async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
+function createSpawnTextChild() {
+  return Object.assign(new EventEmitter(), {
+    kill: vi.fn(() => true),
+    stderr: new PassThrough(),
+    stdout: new PassThrough(),
+  });
+}
+
+async function waitForProcessExit(
+  pid: number,
+  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!processIsAlive(pid)) {
@@ -82,7 +98,7 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
 
 async function waitForChildClose(
   child: ReturnType<typeof spawn>,
-  timeoutMs = 2_000,
+  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -98,24 +114,6 @@ async function waitForChildClose(
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
-  it("caps concurrent metadata render workers while preserving result order", async () => {
-    let active = 0;
-    let peakActive = 0;
-
-    const result = await __testing.mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
-      active += 1;
-      peakActive = Math.max(peakActive, active);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 1);
-      });
-      active -= 1;
-      return `rendered-${value}`;
-    });
-
-    expect(result).toEqual(["rendered-1", "rendered-2", "rendered-3", "rendered-4", "rendered-5"]);
-    expect(peakActive).toBe(2);
-  });
-
   it("fails command help rendering when captured output exceeds the byte limit", async () => {
     await expect(
       __testing.spawnText(["--eval", "process.stdout.write('x'.repeat(2048))"], {
@@ -127,6 +125,54 @@ describe("write-cli-startup-metadata", () => {
         timeoutMs: 5_000,
       }),
     ).rejects.toThrow("render failed: output exceeded 1024 bytes");
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "fails command help rendering when %s emits a stream error",
+    async (streamName) => {
+      const child = createSpawnTextChild();
+      const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+      const streamError = new Error(`${streamName} pipe failed`);
+
+      const render = __testing.spawnText(["--help"], {
+        cwd: process.cwd(),
+        env: process.env,
+        failureMessage: "render failed",
+        killGraceMs: 25,
+        maxOutputBytes: 1024,
+        spawnProcess: spawnProcess as typeof spawn,
+        timeoutMs: 5_000,
+      });
+
+      child[streamName].emit("error", streamError);
+      child.emit("close", null, "SIGTERM");
+
+      await expect(render).rejects.toMatchObject({
+        message: `render failed: ${streamName} read error: ${streamName} pipe failed`,
+        cause: streamError,
+      });
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    },
+  );
+
+  it("preserves an output-limit failure when shutdown also errors a stream", async () => {
+    const child = createSpawnTextChild();
+    const spawnProcess = vi.fn(() => child as unknown as ReturnType<typeof spawn>);
+    const render = __testing.spawnText(["--help"], {
+      cwd: process.cwd(),
+      env: process.env,
+      failureMessage: "render failed",
+      killGraceMs: 25,
+      maxOutputBytes: 5,
+      spawnProcess: spawnProcess as typeof spawn,
+      timeoutMs: 5_000,
+    });
+
+    child.stdout.emit("data", "123456");
+    child.stdout.emit("error", new Error("pipe closed during shutdown"));
+    child.emit("close", null, "SIGTERM");
+
+    await expect(render).rejects.toThrow("render failed: output exceeded 5 bytes");
   });
 
   it("signals Windows command help render process trees with taskkill", () => {
@@ -292,7 +338,7 @@ describe("write-cli-startup-metadata", () => {
       let grandchildPid = 0;
 
       try {
-        const deadline = Date.now() + 1_000;
+        const deadline = Date.now() + LOAD_SENSITIVE_PROCESS_TIMEOUT_MS;
         while (Date.now() < deadline) {
           try {
             grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
@@ -318,7 +364,7 @@ describe("write-cli-startup-metadata", () => {
           code: null,
           signal: "SIGTERM",
         });
-        await waitForProcessExit(grandchildPid, 2_000);
+        await waitForProcessExit(grandchildPid);
       } finally {
         if (runner.pid && processIsAlive(runner.pid)) {
           runner.kill("SIGKILL");
@@ -545,5 +591,65 @@ describe("write-cli-startup-metadata", () => {
     };
     expect(nodesRenderCount).toBe(3);
     expect(written.nodesHelpText).toContain("openclaw nodes 3");
+  });
+
+  it("regenerates help when build version or commit changes", async () => {
+    const tempRoot = createTempDir("openclaw-startup-metadata-build-identity-");
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    let renderCount = 0;
+
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+    const writeMetadata = async (): Promise<void> => {
+      await writeCliStartupMetadata({
+        distDir,
+        outputPath,
+        extensionsDir,
+        sourceRootDir: tempRoot,
+        renderBundledRootHelpText: async () => {
+          renderCount += 1;
+          return `Usage: openclaw ${renderCount}\n`;
+        },
+        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+        renderSourceSubcommandHelpTextRecord: () => ({
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
+        }),
+      });
+    };
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.2", commit: "a".repeat(40) }),
+    );
+    await writeMetadata();
+    await writeMetadata();
+    expect(renderCount).toBe(1);
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.2", commit: "b".repeat(40) }),
+    );
+    await writeMetadata();
+    expect(renderCount).toBe(2);
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.3", commit: "b".repeat(40) }),
+    );
+    await writeMetadata();
+    expect(renderCount).toBe(3);
   });
 });

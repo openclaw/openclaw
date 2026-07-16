@@ -2,6 +2,7 @@
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -38,8 +39,6 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
-
-export { pickInformativeStatusText } from "./reply-stream-controller.js";
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
@@ -180,9 +179,9 @@ export function createMSTeamsReplyDispatcher(params: {
   streamActiveRef.current = () => streamController.isStreamActive();
   streamCanceledRef.current = () => streamController.wasCanceled();
 
-  // Resolve block-streaming preference from new-shape config first
-  // (`streaming.mode = "block"` or `streaming.block.enabled = true`), falling
-  // back to the legacy `blockStreaming` boolean.
+  // Resolve block-streaming preference from the canonical nested config
+  // (`streaming.mode = "block"` or `streaming.block.enabled = true`); legacy
+  // flat `blockStreaming` is migrated by `openclaw doctor --fix`.
   const teamsStreamMode = resolveChannelPreviewStreamMode(msteamsCfg, "partial");
   const blockStreamingResolved =
     teamsStreamMode === "block" ? true : resolveChannelStreamingBlockEnabled(msteamsCfg);
@@ -461,20 +460,9 @@ export function createMSTeamsReplyDispatcher(params: {
           if (payload?.phase !== "update") {
             return;
           }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.explanation === "string"
-                ? { explanation: payload.explanation }
-                : {}),
-              ...(Array.isArray(payload?.steps) &&
-              payload.steps.every((s: unknown) => typeof s === "string")
-                ? { steps: payload.steps }
-                : {}),
-            }),
-          );
+          await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.planSteps), {
+            explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
+          });
         },
         onApprovalEvent: async (payload: PipelinePayload) => {
           if (payload?.phase !== "requested") {
@@ -561,8 +549,8 @@ export function createMSTeamsReplyDispatcher(params: {
         ? { suppressDefaultToolProgressMessages: true }
         : {}),
       // Pass-through to the reply pipeline. `false` = "use block streaming"
-      // (the default when streaming.mode=block or streaming.block.enabled=true,
-      // or the legacy blockStreaming=true boolean). `true` = "do not use it".
+      // (the default when streaming.mode=block or streaming.block.enabled=true).
+      // `true` = "do not use it".
       // `undefined` = "no preference" — let the pipeline decide.
       disableBlockStreaming: blockStreamingResolved == null ? undefined : !blockStreamingResolved,
       onModelSelected,

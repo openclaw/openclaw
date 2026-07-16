@@ -39,14 +39,14 @@ import {
 function createMockChild(params: { pid?: number } = {}) {
   const child = new EventEmitter() as EventEmitter & {
     pid?: number;
-    stdout: EventEmitter;
-    stderr: EventEmitter;
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
     kill: ReturnType<typeof vi.fn>;
     closeWith: (code?: number | null, signal?: NodeJS.Signals | null) => void;
   };
   child.pid = params.pid;
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   child.kill = vi.fn();
   child.closeWith = (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
     child.emit("close", code, signal);
@@ -277,7 +277,6 @@ describe("checkQmdBinaryAvailability", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
   });
-
   it("kills timed-out availability probes by process group on POSIX", async () => {
     platformSpy?.mockReturnValue("linux");
     const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -341,6 +340,8 @@ describe("runCliCommand", () => {
         stderr: "ggml-metal-device.m:612",
       });
       expect(err.message).toContain("qmd query test failed (code 134)");
+      expect(child.stdout.setEncoding).toHaveBeenCalledWith("utf8");
+      expect(child.stderr.setEncoding).toHaveBeenCalledWith("utf8");
     }
   });
 
@@ -429,6 +430,52 @@ describe("runCliCommand", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 
+  it("kills aborted cli command process groups on POSIX and rejects with the abort reason", async () => {
+    platformSpy?.mockReturnValue("linux");
+    const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createMockChild({ pid: 7654 });
+    spawnMock.mockReturnValueOnce(child);
+    const controller = new AbortController();
+
+    try {
+      const pending = runCliCommand({
+        commandSummary: "qmd query slow",
+        spawnInvocation: { command: "qmd", argv: ["query", "slow", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+        timeoutMs: 60_000,
+        signal: controller.signal,
+      });
+
+      controller.abort(new Error("memory_search timed out after 15s"));
+
+      await expect(pending).rejects.toThrow("memory_search timed out after 15s");
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ detached: true });
+      expect(killProcess).toHaveBeenCalledWith(-7654, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      killProcess.mockRestore();
+    }
+  });
+
+  it("rejects immediately without spawning when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(
+      runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("memory_search timed out after 15s");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("kills timed-out cli command process groups on POSIX", async () => {
     platformSpy?.mockReturnValue("linux");
     const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -478,5 +525,53 @@ describe("runCliCommand", () => {
       windowsHide: true,
     });
     expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects when %s stream emits an error",
+    async (streamName) => {
+      const child = createMockChild();
+      spawnMock.mockReturnValueOnce(child);
+      const streamError = new Error(`${streamName} EPIPE`);
+
+      const pending = runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+      });
+
+      child[streamName].emit("error", streamError);
+
+      await expect(pending).rejects.toMatchObject({
+        message: `qmd query test ${streamName} error: ${streamName} EPIPE`,
+        cause: streamError,
+      });
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    },
+  );
+
+  it("keeps the other stream guarded after stdout error", async () => {
+    const child = createMockChild();
+    spawnMock.mockReturnValueOnce(child);
+
+    const pending = runCliCommand({
+      commandSummary: "qmd query test",
+      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+      env: process.env,
+      cwd: tempDir,
+      maxOutputChars: 10_000,
+    });
+
+    child.stdout.emit("error", new Error("stdout EPIPE"));
+
+    expect(() => {
+      child.stderr.emit("error", new Error("stderr later"));
+    }).not.toThrow();
+
+    await expect(pending).rejects.toThrow("qmd query test stdout error: stdout EPIPE");
+    expect(child.kill).toHaveBeenCalledOnce();
   });
 });

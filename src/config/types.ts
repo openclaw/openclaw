@@ -8,6 +8,8 @@ export * from "./types.approvals.js";
 export * from "./types.auth.js";
 export * from "./types.base.js";
 export * from "./types.browser.js";
+export * from "./types.cloud-workers.js";
+export * from "./types.marketplaces.js";
 export * from "./types.channels.js";
 export * from "./types.cli.js";
 export * from "./types.commitments.js";
