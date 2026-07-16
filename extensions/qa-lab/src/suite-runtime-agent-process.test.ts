@@ -59,6 +59,7 @@ function createSpawnedProcess(params: { pid?: number } = {}) {
   child.stdout = createMockEmitter();
   child.stderr = createMockEmitter();
   child.kill = vi.fn();
+  child.unref = vi.fn();
   return child;
 }
 
@@ -119,6 +120,35 @@ describe("qa suite runtime agent process helpers", () => {
     );
     expect((spawnCall?.[2] as { env?: unknown } | undefined)?.env).toEqual({ PATH: "/usr/bin" });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "unrefs the detached child so it cannot keep the parent event loop alive",
+    async () => {
+      const child = createSpawnedProcess();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runQaCli(
+        {
+          repoRoot: "/repo",
+          gateway: { tempRoot: "/tmp/runtime", runtimeEnv: { PATH: "/usr/bin" } },
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna-mini",
+          providerMode: "mock-openai",
+        } as never,
+        ["qa", "suite"],
+      );
+
+      await waitForSpawnCount(1);
+      expect(child.unref).toHaveBeenCalledTimes(1);
+      child.stdout.emit("data", Buffer.from("ok\n"));
+      child.emit("close", 0);
+
+      await expect(pending).resolves.toBe("ok");
+      // Listeners must be detached on close so the resolved stream is not retained.
+      expect(child.stdout.listenerCount("data")).toBe(0);
+      expect(child.stderr.listenerCount("data")).toBe(0);
+    },
+  );
 
   it("caps oversized qa cli timeout timers", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");

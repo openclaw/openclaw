@@ -272,6 +272,9 @@ async function runQaCli(
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
+    // A detached child must not keep the parent's event loop alive once the
+    // promise settles; unref it so the caller can exit without reaping it.
+    child.unref();
     const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
     const timeout = setTimeout(() => {
       signalQaCliProcessTree(child, "SIGKILL");
@@ -279,14 +282,18 @@ async function runQaCli(
         new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
       );
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
-    child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
+    const onStdout = (chunk: Buffer) => appendQaChildOutput(stdout, chunk);
+    const onStderr = (chunk: Buffer) => appendQaChildOutputTail(stderr, chunk);
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);
     });
     child.once("close", (code) => {
       clearTimeout(timeout);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
       if (code === 0) {
         if (stdout.exceeded) {
           reject(
