@@ -127,6 +127,38 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
+        name: "canonical-temp-root",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "$originalTemp = $env:TEMP",
+          "$originalTmp = $env:TMP",
+          '$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-install-temp-test-" + [guid]::NewGuid().ToString("N"))',
+          '$longTemp = Join-Path $sandbox "Long Temp"',
+          "try {",
+          "  New-Item -ItemType Directory -Force -Path $longTemp | Out-Null",
+          "  $env:TEMP = '\\\\?\\C:\\Temp'",
+          "  $env:TMP = $longTemp",
+          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate.StartsWith('\\\\?\\')) { return '\\\\?\\' + $longTemp }; return $candidate }",
+          '  if ($resolved -ne $longTemp) { throw "extended=$resolved" }',
+          "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
+          "  $env:TMP = $longTemp",
+          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { throw 'stale short alias' }; return $candidate }",
+          '  if ($resolved -ne $longTemp) { throw "fallback=$resolved" }',
+          "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
+          "  Initialize-InstallerTempDirectory -LongPathResolver { param($candidate) return $longTemp }",
+          '  if ($script:InstallerTempDirectory -ne $longTemp) { throw "canonical=$script:InstallerTempDirectory" }',
+          '  if ($env:TEMP -ne $longTemp) { throw "TEMP=$env:TEMP" }',
+          '  if ($env:TMP -ne $longTemp) { throw "TMP=$env:TMP" }',
+          "} finally {",
+          "  $env:TEMP = $originalTemp",
+          "  $env:TMP = $originalTmp",
+          "  if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "sqlite-versions",
         source: [
           scriptWithoutEntryPoint,
@@ -508,6 +540,10 @@ describe("install.ps1 failure handling", () => {
     expectBatchedPowerShellCase("sqlite-versions");
   });
 
+  runIfPowerShell("normalizes and exports one installer temp root", () => {
+    expectBatchedPowerShellCase("canonical-temp-root");
+  });
+
   runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {
     expectBatchedPowerShellCase("winget-node-delayed-path");
     expectBatchedPowerShellCase("chocolatey-node-upgrade");
@@ -586,6 +622,28 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).toContain(
       'Invoke-NpmCommand -Arguments @("list", "-g", "--depth", "0", "--json")',
     );
+  });
+
+  it("selects one canonical temp root for installer and child process paths", () => {
+    const resolveBody = extractFunctionBody(source, "Resolve-InstallerTempDirectory");
+    const initializeBody = extractFunctionBody(source, "Initialize-InstallerTempDirectory");
+    const portableNodeBody = extractFunctionBody(source, "Install-PortableNode");
+    const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
+    const commandSafeBody = extractFunctionBody(source, "Get-WindowsCommandSafeDirectory");
+
+    expect(resolveBody).toContain("Scripting.FileSystemObject");
+    expect(resolveBody).toContain("$fileSystem.GetFolder($candidate).Path");
+    expect(resolveBody).toContain("$resolvedCandidate.Substring(8)");
+    expect(resolveBody).toContain("$resolvedCandidate.Substring(4)");
+    expect(resolveBody).toContain("Test-Path -LiteralPath $resolvedCandidate -PathType Container");
+    expect(initializeBody).toContain("$script:InstallerTempDirectory = $tempDirectory");
+    expect(initializeBody).toContain("$env:TEMP = $tempDirectory");
+    expect(initializeBody).toContain("$env:TMP = $tempDirectory");
+    expect(portableNodeBody).toContain("Join-Path $script:InstallerTempDirectory");
+    expect(portableGitBody).toContain("Join-Path $script:InstallerTempDirectory");
+    expect(commandSafeBody).toContain("return $script:InstallerTempDirectory");
+    expect(source.match(/^Initialize-InstallerTempDirectory$/gm)).toHaveLength(1);
+    expect(source).not.toContain("Get-InstallerTempDirectory");
   });
 
   it("rejects OpenClaw GitHub source targets for npm installs", () => {

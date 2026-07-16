@@ -104,39 +104,6 @@ function Complete-Install {
     throw "OpenClaw installation failed with exit code $($script:InstallExitCode)."
 }
 
-function Resolve-InstallerLongPath {
-    param(
-        [AllowNull()][string]$Path,
-        [scriptblock]$LongPathResolver
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        return $Path
-    }
-
-    if ($Path -notmatch '(?i)~\d') {
-        return $Path
-    }
-
-    try {
-        $resolvedPath = $null
-        if ($LongPathResolver) {
-            $resolvedPath = & $LongPathResolver $Path
-        } else {
-            $fileSystem = New-Object -ComObject Scripting.FileSystemObject
-            $resolvedPath = $fileSystem.GetFolder($Path).Path
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($resolvedPath)) {
-            return $resolvedPath
-        }
-    } catch {
-        # Keep the original value and let the fallback temp candidates decide.
-    }
-
-    return $Path
-}
-
 function Resolve-InstallerTempDirectory {
     param([scriptblock]$LongPathResolver)
 
@@ -157,46 +124,53 @@ function Resolve-InstallerTempDirectory {
         $candidates.Add((Join-Path $userHome "AppData\Local\Temp"))
     }
 
-    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($candidate in $candidates) {
-        if ([string]::IsNullOrWhiteSpace($candidate) -or -not $seen.Add($candidate)) {
+        $requiresCanonicalization = (
+            $candidate -match '(?i)~\d' -or
+            $candidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)
+        )
+        try {
+            if ($LongPathResolver) {
+                $resolvedCandidate = & $LongPathResolver $candidate
+            } else {
+                $fileSystem = New-Object -ComObject Scripting.FileSystemObject
+                $resolvedCandidate = $fileSystem.GetFolder($candidate).Path
+            }
+        } catch {
+            if ($requiresCanonicalization) {
+                continue
+            }
+            $resolvedCandidate = $candidate
+        }
+        if ([string]::IsNullOrWhiteSpace($resolvedCandidate)) {
             continue
         }
-
-        $resolvedCandidate = Resolve-InstallerLongPath -Path $candidate -LongPathResolver $LongPathResolver
-        if (-not [string]::IsNullOrWhiteSpace($resolvedCandidate) -and (Test-Path -LiteralPath $resolvedCandidate -PathType Container)) {
+        if ($resolvedCandidate.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $resolvedCandidate = "\\" + $resolvedCandidate.Substring(8)
+        } elseif ($resolvedCandidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $resolvedCandidate = $resolvedCandidate.Substring(4)
+        }
+        if (
+            Test-Path -LiteralPath $resolvedCandidate -PathType Container
+        ) {
             return $resolvedCandidate
         }
+        # Try the next existing root; archive and extraction children do not exist yet.
     }
 
-    return $env:TEMP
+    throw "Could not find a usable Windows temporary directory."
 }
 
-function Set-InstallerTempDirectory {
+function Initialize-InstallerTempDirectory {
     param([scriptblock]$LongPathResolver)
 
     $tempDirectory = Resolve-InstallerTempDirectory -LongPathResolver $LongPathResolver
-    if ([string]::IsNullOrWhiteSpace($tempDirectory)) {
-        return
-    }
-
     $script:InstallerTempDirectory = $tempDirectory
     $env:TEMP = $tempDirectory
     $env:TMP = $tempDirectory
 }
 
-function Get-InstallerTempDirectory {
-    if (
-        -not [string]::IsNullOrWhiteSpace($script:InstallerTempDirectory) -and
-        (Test-Path -LiteralPath $script:InstallerTempDirectory -PathType Container)
-    ) {
-        return $script:InstallerTempDirectory
-    }
-
-    return Resolve-InstallerTempDirectory
-}
-
-Set-InstallerTempDirectory
+Initialize-InstallerTempDirectory
 
 Write-Host ""
 Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
@@ -481,8 +455,7 @@ function Install-PortableNode {
     $download = Resolve-PortableNodeDownload
     $portableRoot = Get-PortableNodeRoot
     $portableParent = Split-Path -Parent $portableRoot
-    $tempDirectory = Get-InstallerTempDirectory
-    $tmpZip = Join-Path $tempDirectory $download.Name
+    $tmpZip = Join-Path $script:InstallerTempDirectory $download.Name
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
@@ -789,9 +762,8 @@ function Install-PortableGit {
     $download = Resolve-PortableGitDownload
     $portableRoot = Get-PortableGitRoot
     $portableParent = Split-Path -Parent $portableRoot
-    $tempDirectory = Get-InstallerTempDirectory
-    $tmpZip = Join-Path $tempDirectory $download.Name
-    $tmpExtract = Join-Path $tempDirectory ("openclaw-portable-git-" + [guid]::NewGuid().ToString("N"))
+    $tmpZip = Join-Path $script:InstallerTempDirectory $download.Name
+    $tmpExtract = Join-Path $script:InstallerTempDirectory ("openclaw-portable-git-" + [guid]::NewGuid().ToString("N"))
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
@@ -930,9 +902,8 @@ function Get-WindowsCommandSafeDirectory {
     if (-not [string]::IsNullOrWhiteSpace($userHome) -and (Test-Path $userHome)) {
         return $userHome
     }
-    $tempDirectory = Get-InstallerTempDirectory
-    if (-not [string]::IsNullOrWhiteSpace($tempDirectory) -and (Test-Path -LiteralPath $tempDirectory -PathType Container)) {
-        return $tempDirectory
+    if (Test-Path -LiteralPath $script:InstallerTempDirectory -PathType Container) {
+        return $script:InstallerTempDirectory
     }
     return $null
 }
