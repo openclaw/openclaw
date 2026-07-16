@@ -376,6 +376,19 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
+function readWorkflow(path: string) {
+  return parse(readFileSync(path, "utf8"));
+}
+
+const PULL_REQUEST_EDIT_FIELDS = ["title", "body", "base"] as const;
+
+function readPullRequestEditFields(condition: unknown) {
+  const expression = typeof condition === "string" ? condition : "";
+  return PULL_REQUEST_EDIT_FIELDS.filter((field) =>
+    expression.includes(`github.event.changes.${field}`),
+  );
+}
+
 function readTrackedText(relativePath: string): string {
   if (existsSync(relativePath)) {
     return readFileSync(relativePath, "utf8");
@@ -665,6 +678,52 @@ function runGeneratedPublisherScenario(
 }
 
 describe("ci workflow guards", () => {
+  it("routes PR edited metadata only to interested automation", () => {
+    const autoResponse = readWorkflow(".github/workflows/auto-response.yml");
+    const clawsweeperDispatch = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    const labeler = readWorkflow(".github/workflows/labeler.yml");
+    const realBehaviorProof = readWorkflow(".github/workflows/real-behavior-proof.yml");
+
+    for (const workflow of [autoResponse, clawsweeperDispatch, labeler, realBehaviorProof]) {
+      expect(workflow.on.pull_request_target.types).toContain("edited");
+    }
+
+    expect({
+      autoResponse: readPullRequestEditFields(autoResponse.jobs["auto-response"].if),
+      clawsweeperDispatch: readPullRequestEditFields(clawsweeperDispatch.jobs.dispatch.if),
+      labeler: readPullRequestEditFields(labeler.jobs.label.if),
+      realBehaviorProof: readPullRequestEditFields(
+        realBehaviorProof.jobs["real-behavior-proof"].if,
+      ),
+    }).toEqual({
+      autoResponse: [],
+      clawsweeperDispatch: [],
+      labeler: ["title", "base"],
+      realBehaviorProof: ["body", "base"],
+    });
+
+    const labelerSteps = labeler.jobs.label.steps;
+    const changedFieldsForStep = (matcher: (step: WorkflowStep) => boolean) =>
+      readPullRequestEditFields(labelerSteps.find(matcher)?.if);
+    expect({
+      pathLabels: changedFieldsForStep(
+        (step) => step.uses?.startsWith("actions/labeler@") === true,
+      ),
+      size: changedFieldsForStep((step) => step.name === "Apply PR size label"),
+      contributor: changedFieldsForStep(
+        (step) => step.name === "Apply maintainer or trusted-contributor label",
+      ),
+      betaBlocker: changedFieldsForStep((step) => step.name === "Apply beta-blocker title label"),
+      activePrLimit: changedFieldsForStep((step) => step.name === "Apply too-many-prs label"),
+    }).toEqual({
+      pathLabels: ["base"],
+      size: ["base"],
+      contributor: [],
+      betaBlocker: ["title"],
+      activePrLimit: [],
+    });
+  });
+
   it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
     const workflow = readCiWorkflow();
     const releaseGate = workflow.on.workflow_dispatch.inputs.release_gate;
@@ -1858,6 +1917,19 @@ describe("ci workflow guards", () => {
         "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
       );
     }
+  });
+
+  it("bounds the workflow sanity ShellCheck download", () => {
+    const workflow = readWorkflowSanityWorkflow();
+    const installStep = expectDefined(
+      workflow.jobs.actionlint.steps.find(
+        (step: WorkflowStep) => step.name === "Install ShellCheck",
+      ),
+      "ShellCheck install step",
+    );
+
+    expect(installStep.run).toContain("curl --connect-timeout 10 --max-time 120");
+    expect(installStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
   });
 
   it("runs generated baseline drift checks in workflow sanity", () => {
@@ -3449,6 +3521,9 @@ describe("ci workflow guards", () => {
     const smokeBuildStep = smokeProfileJob.steps.find(
       (step: WorkflowStep) => step.name === "Build QA smoke runtime",
     );
+    const smokeDockerCacheStep = smokeProfileJob.steps.find(
+      (step: WorkflowStep) => step.name === "Set up Blacksmith Docker layer cache",
+    );
     const smokeRunStep = smokeProfileJob.steps.find(
       (step: WorkflowStep) => step.name === "Run smoke profile part",
     );
@@ -3480,11 +3555,32 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);
-    expect(smokeProfileJob.strategy["max-parallel"]).toBe(2);
+    expect(smokeProfileJob.strategy["max-parallel"]).toBe(4);
     expect(
       smokeProfileJob.strategy.matrix.include.map((entry: { slug: string }) => entry.slug),
-    ).toEqual(["profile-1-of-2", "profile-2-of-2"]);
+    ).toEqual(["profile-1-of-4", "profile-2-of-4", "profile-3-of-4", "profile-4-of-4"]);
+    expect(
+      smokeProfileJob.strategy.matrix.include.filter(
+        (entry: { docker_cache?: boolean }) => entry.docker_cache,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        lane: "profile-2",
+        slug: "profile-2-of-4",
+        docker_cache: true,
+      }),
+    ]);
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(smokeDockerCacheStep.uses).toBe(
+      "useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba",
+    );
+    expect(smokeDockerCacheStep.if).toContain("matrix.docker_cache == true");
+    expect(smokeDockerCacheStep.if).toContain("github.event_name != 'workflow_dispatch'");
+    expect(smokeDockerCacheStep.if).toContain("github.repository == 'openclaw/openclaw'");
+    expect(smokeDockerCacheStep.if).toContain(
+      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+    );
+    expect(smokeDockerCacheStep.with["max-cache-size-mb"]).toBe(800000);
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
     expect(smokeRunStep.run).toContain("readQaScenarioPack");

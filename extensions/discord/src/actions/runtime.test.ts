@@ -2402,6 +2402,22 @@ describe("handleDiscordMessagingAction", () => {
     );
   });
 
+  it("rejects invalid autoArchiveMinutes before Discord thread create", async () => {
+    createThreadDiscord.mockClear();
+    await expect(
+      handleMessagingAction(
+        "threadCreate",
+        {
+          channelId: "C1",
+          name: "thread",
+          autoArchiveMinutes: 999,
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("autoArchiveMinutes must be one of 60, 1440, 4320, or 10080 minutes");
+    expect(createThreadDiscord).not.toHaveBeenCalled();
+  });
+
   it("returns partial success when Discord creates the thread but initial message send fails", async () => {
     const thread = { id: "T1", name: "thread", type: 11 };
     createThreadDiscord.mockRejectedValueOnce(

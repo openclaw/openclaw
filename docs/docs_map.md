@@ -335,6 +335,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Discord opens a blank page or reports blocked:csp
   - H3: “Not authorized”
   - H3: “Widget unavailable”
+  - H3: “You cannot launch Activities in this channel”
 
 ## channels/discord.md
 
@@ -7282,6 +7283,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
+  - H3: Terminal tool outcomes
   - H2: Current limitations
   - H2: Related
 

@@ -421,7 +421,16 @@ describe("Parallels smoke model selection", () => {
 
     expect(common).toContain('export * from "./host-command.ts"');
     expect(common).toContain('export * from "./lane-runner.ts"');
-    expect(common).toContain('export * from "./package-artifact.ts"');
+    const packageArtifactExports = new Set(
+      (common.match(/export \{([^}]*)\} from "\.\/package-artifact\.ts";/)?.[1] ?? "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean),
+    );
+    expect(packageArtifactExports).toContain("packOpenClaw");
+    expect(packageArtifactExports).toContain("packageVersionFromTgz");
+    expect(packageArtifactExports).toContain("resolveOpenClawRegistryVersion");
+    expect(common).not.toContain('export * from "./package-artifact.ts"');
     expect(common).toContain('export * from "./parallels-vm.ts"');
     expect(common).toContain('export * from "./snapshots.ts"');
     expect(hostCommand).toContain("export function shellQuote");

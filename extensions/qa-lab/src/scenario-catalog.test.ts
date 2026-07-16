@@ -623,7 +623,7 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("luna-thinking-visibility-switch");
     const config = readQaScenarioExecutionConfig("luna-thinking-visibility-switch") as
       | {
-          requiredProvider?: string;
+          liveProvider?: string;
           requiredModel?: string;
           offDirective?: string;
           maxDirective?: string;
@@ -632,7 +632,7 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/models/luna-thinking-visibility-switch.yaml");
-    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.liveProvider).toBe("openai");
     expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.offDirective).toBe("/think off");
     expect(config?.maxDirective).toBe("/think medium");
@@ -846,23 +846,28 @@ describe("qa scenario catalog", () => {
       "Mission: prove you followed the repo contract.",
     );
     expect(config?.prompt).toContain("Repo contract followthrough check.");
-    expect(scenario.execution.driver).toBe("qa-channel");
+    expect(scenario.execution.channel).toBe("qa-channel");
     expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
     expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
     expect(config?.expectedArtifactAny).toContain("evidence path");
     expect(scenario.title).toBe("Instruction followthrough repo contract");
   });
 
-  it("keeps native QA-channel fixtures out of Crabline profile selection", () => {
+  it("declares native QA-channel fixtures by channel", () => {
     const scenarioIds = [
+      "instruction-followthrough-repo-contract",
       "subagent-forked-context",
       "subagent-handoff",
+      "a2a-message-tool-mirror-dedupe",
       "group-message-tool-unavailable-fallback",
       "qa-channel-reconnect-dedupe",
       "reaction-edit-delete",
       "image-generation-roundtrip",
       "image-understanding-attachment",
       "native-image-generation",
+      "goal-context-next-turn",
+      "goal-context-survives-compaction",
+      "goal-followthrough-live",
       "active-memory-preprompt-recall",
       "memory-recall",
       "session-memory-ranking",
@@ -870,15 +875,17 @@ describe("qa scenario catalog", () => {
       "personal-channel-thread-reply",
       "personal-memory-preference-recall",
       "personal-reminder-roundtrip",
+      "cron-condition-watcher",
       "cron-natural-fire-no-duplicate",
       "cron-one-minute-ping",
       "cron-single-run-no-duplicate",
       "control-ui-qa-channel-image-roundtrip",
+      "control-ui-assistant-transcript-role-boundary",
       "config-apply-restart-wakeup",
     ];
 
     for (const scenarioId of scenarioIds) {
-      expect(readQaScenarioById(scenarioId).execution.driver, scenarioId).toBe("qa-channel");
+      expect(readQaScenarioById(scenarioId).execution.channel, scenarioId).toBe("qa-channel");
     }
   });
 
@@ -887,7 +894,6 @@ describe("qa scenario catalog", () => {
       const scenario = readQaScenarioById(scenarioId);
 
       expect(scenario.execution.channel, scenarioId).toBeUndefined();
-      expect(scenario.execution.driver, scenarioId).toBeUndefined();
       expect(Object.keys(scenario.execution.profiles ?? {}), scenarioId).toEqual(
         expect.arrayContaining(["matrix:adapter", "slack:adapter"]),
       );
@@ -898,7 +904,6 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("subagent-thread-spawn");
 
     expect(scenario.execution.channel).toBe("matrix");
-    expect(scenario.execution.driver).toBe("live");
   });
 
   it("routes native command session targeting through Crabline Telegram", () => {
@@ -910,24 +915,23 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
-    expect(scenario.execution.driver).toBeUndefined();
     expect(config?.requiredProviderMode).toBe("mock-openai");
   });
 
-  it("marks channel-owned scenarios that require the live driver", () => {
-    const liveScenarioIds = [
-      "slack-restart-resume",
-      "whatsapp-restart-resume",
-      "whatsapp-access-control-dm-disabled",
-      "whatsapp-access-control-dm-open",
-      "whatsapp-access-control-group-disabled",
-      "whatsapp-access-control-group-open",
-      "whatsapp-pairing-block",
-      "matrix-allowlist-hot-reload",
-    ];
+  it("keeps channel-owned scenarios independent from the driver implementation", () => {
+    const channelByScenarioId = new Map([
+      ["slack-restart-resume", "slack"],
+      ["whatsapp-restart-resume", "whatsapp"],
+      ["whatsapp-access-control-dm-disabled", "whatsapp"],
+      ["whatsapp-access-control-dm-open", "whatsapp"],
+      ["whatsapp-access-control-group-disabled", "whatsapp"],
+      ["whatsapp-access-control-group-open", "whatsapp"],
+      ["whatsapp-pairing-block", "whatsapp"],
+      ["matrix-allowlist-hot-reload", "matrix"],
+    ]);
 
-    for (const scenarioId of liveScenarioIds) {
-      expect(readQaScenarioById(scenarioId).execution.driver, scenarioId).toBe("live");
+    for (const [scenarioId, channel] of channelByScenarioId) {
+      expect(readQaScenarioById(scenarioId).execution.channel, scenarioId).toBe(channel);
     }
   });
 
@@ -937,6 +941,19 @@ describe("qa scenario catalog", () => {
 
     expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
+  });
+
+  it("settles subagent completions before reading the SQLite session store", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
+    const flow = JSON.stringify(scenario.execution.flow);
+    const completionWaits = [...flow.matchAll(/expectedChildCompletionMarkers/gu)].map(
+      (match) => match.index,
+    );
+    const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
+
+    expect(completionWaits).toHaveLength(2);
+    expect(storeReads).toHaveLength(2);
+    expect(completionWaits.every((wait, index) => wait < (storeReads[index] ?? -1))).toBe(true);
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

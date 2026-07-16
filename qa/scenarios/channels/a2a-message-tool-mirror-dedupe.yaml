@@ -37,7 +37,7 @@ scenario:
     - src/shared/transcript-only-openclaw-assistant.ts
   execution:
     kind: flow
-    driver: qa-channel
+    channel: qa-channel
     summary: Run a real QA Gateway/qa-channel A2A source-reply turn and assert the message-tool delivery mirror is not announced again.
     config:
       requiredProviderMode: mock-openai

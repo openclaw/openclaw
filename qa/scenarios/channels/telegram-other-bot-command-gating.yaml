@@ -24,7 +24,6 @@ scenario:
     kind: flow
     channel: telegram
     summary: Address a command to another bot and verify OpenClaw ignores it.
-    driver: live
 
 flow:
   steps:

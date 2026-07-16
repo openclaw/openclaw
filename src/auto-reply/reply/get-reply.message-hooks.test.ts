@@ -249,12 +249,12 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
-  it("skips utility media understanding for a model-locked harness session", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:locked-media";
+  it("runs configured audio transcription for a model-locked harness voice note", async () => {
+    const sessionKey = "agent:main:harness:claude-cli:locked-audio";
     const sessionEntry = {
       sessionId: "locked-session",
       updatedAt: 1,
-      agentHarnessId: "codex",
+      agentHarnessId: "claude-cli",
       modelSelectionLocked: true,
     };
     mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
@@ -276,24 +276,98 @@ describe("getReplyFromConfig message hooks", () => {
     await getReplyFromConfig(
       buildCtx({ SessionKey: sessionKey }),
       undefined,
-      withFastReplyConfig({}),
+      withFastReplyConfig({
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [
+                {
+                  type: "cli",
+                  command: "/usr/local/bin/stt-transcribe",
+                  args: ["{{MediaPath}}"],
+                },
+              ],
+            },
+          },
+        },
+      }),
     );
 
     expect(mocks.resolveReplySessionPreprocessingState).toHaveBeenCalledOnce();
     expect(mocks.initSessionState).toHaveBeenCalledOnce();
-    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
+    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ processingMode: "audio-only" }),
+    );
     expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         sessionEntry: expect.objectContaining({
-          agentHarnessId: "codex",
+          agentHarnessId: "claude-cli",
           modelSelectionLocked: true,
         }),
-        sessionCtx: expect.objectContaining({
-          BodyForAgent: "<media:audio>",
+        ctx: expect.objectContaining({
+          BodyForAgent: "[Audio]\nTranscript:\nvoice transcript",
           SessionKey: sessionKey,
         }),
       }),
     );
+  });
+
+  it("runs normal media understanding for an unlocked voice note", async () => {
+    await getReplyFromConfig(
+      buildCtx(),
+      undefined,
+      withFastReplyConfig({
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [
+                {
+                  type: "cli",
+                  command: "/usr/local/bin/stt-transcribe",
+                  args: ["{{MediaPath}}"],
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
+    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).not.toHaveProperty("processingMode");
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          BodyForAgent: "[Audio]\nTranscript:\nvoice transcript",
+        }),
+      }),
+    );
+  });
+
+  it("keeps unconfigured audio with a model-locked harness", async () => {
+    const sessionKey = "agent:main:harness:claude-cli:locked-unconfigured-audio";
+    const sessionEntry = {
+      sessionId: "locked-unconfigured-session",
+      updatedAt: 1,
+      agentHarnessId: "claude-cli",
+      modelSelectionLocked: true,
+    };
+    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
+      sessionEntry,
+      sessionKey,
+      storePath: "/tmp/sessions.json",
+    });
+
+    await getReplyFromConfig(
+      buildCtx({ SessionKey: sessionKey }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
   it("skips utility link understanding for a model-locked harness session", async () => {

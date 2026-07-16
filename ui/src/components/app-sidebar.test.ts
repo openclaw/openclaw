@@ -876,6 +876,15 @@ describe("AppSidebar session catalog pagination", () => {
             ],
           },
           {
+            hostId: "node:offline",
+            label: "Offline Node",
+            kind: "node",
+            connected: false,
+            nodeId: "offline",
+            sessions: [],
+            error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+          },
+          {
             hostId: "node:build",
             label: "Build Node",
             kind: "node",
@@ -911,6 +920,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(remote?.textContent).toContain("Build Node");
     expect(remote?.textContent).toContain("Remote review");
     expect(remote?.textContent).not.toContain("Local plan");
+    expect(section?.textContent).not.toContain("Offline Node");
   });
 
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
@@ -1127,10 +1137,9 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("shows catalog errors as warnings instead of empty counts", async () => {
+  it("shows actionable catalog errors once and hides empty offline hosts", async () => {
     vi.useFakeTimers();
     try {
-      const hostError = catalogErrorPage("Claude host unavailable", "claude").catalogs[0];
       const request = vi.fn().mockResolvedValue({
         catalogs: [
           {
@@ -1140,7 +1149,55 @@ describe("AppSidebar session catalog pagination", () => {
             hosts: [],
             error: { code: "unavailable", message: "Codex provider unavailable" },
           },
-          hostError,
+          {
+            id: "claude",
+            label: "Claude",
+            capabilities: {
+              continueSession: true,
+              archive: true,
+              createSession: { model: "anthropic/claude-opus-4-8" },
+            },
+            hosts: [
+              {
+                hostId: "node:offline-a",
+                label: "Offline A",
+                kind: "node",
+                connected: false,
+                sessions: [],
+                error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+              },
+              {
+                hostId: "node:offline-b",
+                label: "Offline B",
+                kind: "node",
+                connected: false,
+                sessions: [],
+                error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+              },
+              {
+                hostId: "node:registry",
+                label: "Paired nodes",
+                kind: "node",
+                connected: false,
+                sessions: [],
+                error: {
+                  code: "NODE_LIST_FAILED",
+                  message: "Paired nodes could not be listed",
+                },
+              },
+              {
+                hostId: "node:registry-duplicate",
+                label: "Paired nodes",
+                kind: "node",
+                connected: false,
+                sessions: [],
+                error: {
+                  code: "NODE_LIST_FAILED",
+                  message: "Paired nodes could not be listed",
+                },
+              },
+            ],
+          },
         ],
       });
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
@@ -1173,7 +1230,12 @@ describe("AppSidebar session catalog pagination", () => {
       ).toContain("[unavailable] Codex provider unavailable");
       expect(
         claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("[unavailable] Claude host unavailable");
+      ).toContain("[NODE_LIST_FAILED] Paired nodes could not be listed");
+      const claudeTitle =
+        claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title") ?? "";
+      expect(claudeTitle).not.toContain("NODE_OFFLINE");
+      expect(claudeTitle.match(/NODE_LIST_FAILED/g)).toHaveLength(1);
+      expect(claudeSection?.querySelectorAll("[data-session-catalog-host]")).toHaveLength(0);
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
       ).toContain("Settings > Automation > Plugins");
