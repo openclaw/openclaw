@@ -3,10 +3,37 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DefaultResourceLoader } from "./resource-loader.js";
 
 describe("DefaultResourceLoader", () => {
+  it("does not use unreadable prompt file paths as prompt content", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-resource-loader-"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const loader = new DefaultResourceLoader({
+        cwd: root,
+        agentDir: root,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+        systemPrompt: root,
+        appendSystemPrompt: [root],
+      });
+
+      await loader.reload();
+
+      expect(loader.getSystemPrompt()).toBeUndefined();
+      expect(loader.getAppendSystemPrompt()).toEqual([]);
+      expect(consoleError).toHaveBeenCalledTimes(2);
+    } finally {
+      consoleError.mockRestore();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("keeps deprecated SDK prompt override aliases wired to prompt transforms", async () => {
     // These aliases are deprecated but shipped SDK surface, so they still map
     // through the same transform path as the current options.
