@@ -114,4 +114,29 @@ describe("transport stream shared helpers", () => {
       expect(output.errorMessage).toBeTruthy();
     }
   });
+
+  it("extracts HTTP status and Retry-After from enriched transport errors", () => {
+    const error = Object.assign(
+      new Error("rate limit exceeded"),
+      { status: 429, retryAfterSeconds: 30 },
+    );
+
+    const output: Record<string, unknown> = { stopReason: "stop" };
+    assignTransportErrorDetails(output as Parameters<typeof assignTransportErrorDetails>[0], error);
+
+    expect(output.stopReason).toBe("error");
+    expect(output.errorMessage).toBe("rate limit exceeded");
+    expect(output.status).toBe(429);
+    expect(output.retryAfterSeconds).toBe(30);
+  });
+
+  it("does not include status or retryAfterSeconds when error lacks them", () => {
+    const error = new Error("plain error");
+    const output: Record<string, unknown> = { stopReason: "stop" };
+
+    assignTransportErrorDetails(output as Parameters<typeof assignTransportErrorDetails>[0], error);
+
+    expect(output.status).toBeUndefined();
+    expect(output.retryAfterSeconds).toBeUndefined();
+  });
 });

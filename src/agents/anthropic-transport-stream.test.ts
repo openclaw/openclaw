@@ -951,6 +951,33 @@ describe("anthropic transport stream", () => {
     expect((cancelReason as Error).message).toBe(result.errorMessage);
   });
 
+  it("preserves HTTP status and Retry-After header on 429 error responses", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "rate_limit_error", message: "rate limited" },
+        }),
+        {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "30" },
+        },
+      ),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.status).toBe(429);
+    expect(result.retryAfterSeconds).toBe(30);
+  });
+
   it("rejects oversized Anthropic SSE frames before buffering without bound", async () => {
     const controller = new AbortController();
     const encoder = new TextEncoder();
