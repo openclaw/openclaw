@@ -66,6 +66,11 @@ import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
+import {
+  FEISHU_SESSION_CONFLICT_FAILURE_TEXT,
+  FeishuSessionConflictExhaustedError,
+  runFeishuDispatchWithSessionInitConflictRetry,
+} from "./session-conflict-retry.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import {
@@ -1346,6 +1351,28 @@ export async function handleFeishuMessage(params: {
       };
     };
 
+    // Exhausted session-init retries would otherwise drop the inbound message
+    // silently (parity gap vs Slack/Signal/Discord/WhatsApp) — tell the sender.
+    const notifySessionConflictLoss = async (noticeCfg: ClawdbotConfig, cause: unknown) => {
+      error(
+        `feishu[${account.accountId}]: dropping inbound message after reply session init conflict retries: ${String(cause)}`,
+      );
+      try {
+        await sendMessageFeishu({
+          cfg: noticeCfg,
+          to: feishuTo,
+          text: FEISHU_SESSION_CONFLICT_FAILURE_TEXT,
+          replyToMessageId: replyTargetMessageId,
+          replyInThread,
+          accountId: account.accountId,
+        });
+      } catch (noticeErr) {
+        error(
+          `feishu[${account.accountId}]: failed to send session-conflict notice: ${String(noticeErr)}`,
+        );
+      }
+    };
+
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
       // event to every bot account in the group. Only one account should handle
@@ -1543,27 +1570,45 @@ export async function handleFeishuMessage(params: {
         }
       };
 
+      // Broadcast keeps its per-agent isolation catch, but each agent attempt
+      // gets the same conflict retry as single-agent dispatch so a transient
+      // session-init race does not silently drop that agent's turn.
+      const dispatchForAgentWithRetry = (agentId: string) =>
+        runFeishuDispatchWithSessionInitConflictRetry({
+          dispatch: () => dispatchForAgent(agentId),
+          onRetry: (attempt, delayMs) => {
+            log(
+              `feishu[${account.accountId}]: broadcast reply session init conflict for agent=${agentId}; retrying in ${delayMs}ms (attempt ${attempt})`,
+            );
+          },
+        });
+      // Only the active agent replies on Feishu, so only its exhausted
+      // conflict owes the sender a loss notice; observer failures stay logged.
+      const handleBroadcastDispatchFailure = async (agentId: string, err: unknown) => {
+        log(
+          `feishu[${account.accountId}]: broadcast dispatch failed for agent=${agentId}: ${String(err)}`,
+        );
+        if (err instanceof FeishuSessionConflictExhaustedError && agentId === activeAgentId) {
+          await notifySessionConflictLoss(cfg, err);
+        }
+      };
       if (strategy === "sequential") {
         for (const agentId of broadcastAgents) {
           try {
-            await dispatchForAgent(agentId);
+            await dispatchForAgentWithRetry(agentId);
           } catch (err) {
-            log(
-              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${agentId}: ${String(err)}`,
-            );
+            await handleBroadcastDispatchFailure(agentId, err);
           }
         }
       } else {
-        const results = await Promise.allSettled(broadcastAgents.map(dispatchForAgent));
+        const results = await Promise.allSettled(broadcastAgents.map(dispatchForAgentWithRetry));
         for (const [i, result] of results.entries()) {
           if (result.status === "rejected") {
             const agentId = broadcastAgents.at(i);
             if (agentId === undefined) {
               continue;
             }
-            log(
-              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${agentId}: ${String(result.reason)}`,
-            );
+            await handleBroadcastDispatchFailure(agentId, result.reason);
           }
         }
       }
@@ -1597,104 +1642,123 @@ export async function handleFeishuMessage(params: {
         storePath,
         sessionKey: route.sessionKey,
       });
-      const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } =
-        createFeishuReplyDispatcher({
-          cfg: effectiveCfg,
-          agentId: route.agentId,
-          runtime: runtime as RuntimeEnv,
-          chatId: ctx.chatId,
-          sendTarget: feishuTo,
-          allowReasoningPreview,
-          replyToMessageId: replyTargetMessageId,
-          typingTargetMessageId,
-          skipReplyToInMessages: !isGroup && !directThreadReply,
-          replyInThread,
-          rootId: ctx.rootId,
-          threadReply,
-          accountId: account.accountId,
-          identity,
-          mentionTargets: ctx.mentionTargets,
-          messageCreateTimeMs,
-          sessionKey: route.sessionKey,
-        });
+      // Each attempt rebuilds the dispatcher: a settled dispatcher must not
+      // carry queued/settled state into a session-init-conflict retry.
+      const runSingleAgentDispatch = async () => {
+        const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } =
+          createFeishuReplyDispatcher({
+            cfg: effectiveCfg,
+            agentId: route.agentId,
+            runtime: runtime as RuntimeEnv,
+            chatId: ctx.chatId,
+            sendTarget: feishuTo,
+            allowReasoningPreview,
+            replyToMessageId: replyTargetMessageId,
+            typingTargetMessageId,
+            skipReplyToInMessages: !isGroup && !directThreadReply,
+            replyInThread,
+            rootId: ctx.rootId,
+            threadReply,
+            accountId: account.accountId,
+            identity,
+            mentionTargets: ctx.mentionTargets,
+            messageCreateTimeMs,
+            sessionKey: route.sessionKey,
+          });
 
-      log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const turnResult = await core.channel.inbound.run({
-        channel: "feishu",
-        accountId: route.accountId,
-        raw: ctx,
-        adapter: {
-          ingest: () => ({
-            id: ctx.messageId,
-            timestamp: messageCreateTimeMs,
-            rawText: ctx.content,
-            textForAgent: ctxPayload.BodyForAgent,
-            textForCommands: ctxPayload.CommandBody,
-            raw: ctx,
-          }),
-          resolveTurn: () => ({
-            channel: "feishu",
-            accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
-            ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
-            record: {
-              updateLastRoute: buildFeishuInboundLastRouteUpdate({
-                sessionKey: route.sessionKey,
-                accountId: route.accountId,
-              }),
-              onRecordError: (err) => {
-                log(
-                  `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
-                );
-              },
-            },
-            history: {
-              isGroup,
-              historyKey,
-              historyMap: chatHistories,
-              limit: historyLimit,
-            },
-            onPreDispatchFailure: () =>
-              core.channel.reply.settleReplyDispatcher({
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
-              }),
-            runDispatch: () =>
-              core.channel.reply.withReplyDispatcher({
-                dispatcher,
-                onSettled: () => {
-                  markDispatchIdle();
+        log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+        const turnResult = await core.channel.inbound.run({
+          channel: "feishu",
+          accountId: route.accountId,
+          raw: ctx,
+          adapter: {
+            ingest: () => ({
+              id: ctx.messageId,
+              timestamp: messageCreateTimeMs,
+              rawText: ctx.content,
+              textForAgent: ctxPayload.BodyForAgent,
+              textForCommands: ctxPayload.CommandBody,
+              raw: ctx,
+            }),
+            resolveTurn: () => ({
+              channel: "feishu",
+              accountId: route.accountId,
+              routeSessionKey: route.sessionKey,
+              storePath,
+              ctxPayload,
+              recordInboundSession: core.channel.session.recordInboundSession,
+              record: {
+                updateLastRoute: buildFeishuInboundLastRouteUpdate({
+                  sessionKey: route.sessionKey,
+                  accountId: route.accountId,
+                }),
+                onRecordError: (err) => {
+                  log(
+                    `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
+                  );
                 },
-                run: () =>
-                  core.channel.reply.dispatchReplyFromConfig({
-                    ctx: ctxPayload,
-                    cfg: effectiveCfg,
-                    dispatcher,
-                    replyOptions,
-                  }),
-              }),
-          }),
-        },
-      });
-      if (!turnResult.dispatched) {
-        return;
-      }
-      const { dispatchResult } = turnResult;
-      const { queuedFinal, counts } = dispatchResult;
-      if (
-        shouldSendNoVisibleReplyFallback({
-          ...dispatchResult,
-          failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
-        })
-      ) {
-        await ensureNoVisibleReplyFallback("dispatch-complete-no-visible-reply");
-      }
+              },
+              history: {
+                isGroup,
+                historyKey,
+                historyMap: chatHistories,
+                limit: historyLimit,
+              },
+              onPreDispatchFailure: () =>
+                core.channel.reply.settleReplyDispatcher({
+                  dispatcher,
+                  onSettled: () => markDispatchIdle(),
+                }),
+              runDispatch: () =>
+                core.channel.reply.withReplyDispatcher({
+                  dispatcher,
+                  onSettled: () => {
+                    markDispatchIdle();
+                  },
+                  run: () =>
+                    core.channel.reply.dispatchReplyFromConfig({
+                      ctx: ctxPayload,
+                      cfg: effectiveCfg,
+                      dispatcher,
+                      replyOptions,
+                    }),
+                }),
+            }),
+          },
+        });
+        if (!turnResult.dispatched) {
+          return;
+        }
+        const { dispatchResult } = turnResult;
+        const { queuedFinal, counts } = dispatchResult;
+        if (
+          shouldSendNoVisibleReplyFallback({
+            ...dispatchResult,
+            failedCounts: dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 },
+          })
+        ) {
+          await ensureNoVisibleReplyFallback("dispatch-complete-no-visible-reply");
+        }
 
-      log(
-        `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
-      );
+        log(
+          `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
+        );
+      };
+      try {
+        await runFeishuDispatchWithSessionInitConflictRetry({
+          dispatch: runSingleAgentDispatch,
+          onRetry: (attempt, delayMs) => {
+            log(
+              `feishu[${account.accountId}]: reply session init conflict; retrying dispatch in ${delayMs}ms (attempt ${attempt})`,
+            );
+          },
+        });
+      } catch (err) {
+        if (!(err instanceof FeishuSessionConflictExhaustedError)) {
+          throw err;
+        }
+        await notifySessionConflictLoss(effectiveCfg, err);
+      }
     }
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
