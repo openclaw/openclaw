@@ -286,6 +286,8 @@ describe("parseRetryAfterHeaderSeconds", () => {
   it.each([
     ["delay seconds", " 15 ", Date.UTC(2026, 4, 1, 12, 0, 0), 15],
     ["HTTP date", "Fri, 01 May 2026 12:00:05 GMT", Date.UTC(2026, 4, 1, 12, 0, 0), 5],
+    ["RFC 850 date", "Friday, 01-May-26 12:00:05 GMT", Date.UTC(2026, 4, 1, 12, 0, 0), 5],
+    ["asctime date", "Fri May  1 12:00:05 2026", Date.UTC(2026, 4, 1, 12, 0, 0), 5],
     ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", Date.UTC(2026, 4, 1, 12, 0, 0), 0],
   ])("parses $name", (_name, value, now, expected) => {
     expect(parseRetryAfterHeaderSeconds(value, now)).toBe(expected);
