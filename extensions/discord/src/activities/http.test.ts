@@ -97,13 +97,18 @@ async function createWidget(
   runtime: DiscordActivitiesRuntime,
   params?: { createdAt?: number; channelId?: string; accountId?: string },
 ) {
+  const createdAt = params?.createdAt ?? 1;
   const widgetId = await runtime.store.createWidget({
     html: "<!doctype html><html><body><script>document.body.dataset.ready='yes'</script></body></html>",
     title: "Activity status",
     channelId: params?.channelId ?? "777",
     accountId: params?.accountId ?? "default",
-    createdAt: params?.createdAt ?? 1,
+    createdAt,
   });
+  await runtime.store.markWidgetDelivered(
+    widgetId,
+    String(1_000_000_000_000_000_000n + BigInt(createdAt)),
+  );
   return widgetId;
 }
 
@@ -534,21 +539,21 @@ describe("Discord Activity widget routes", () => {
     );
   });
 
-  it("returns 404 when multiple widgets match the Activity Instance API channel", async () => {
+  it("uses the latest widget when a client omits the custom ID", async () => {
     const runtime = createActivityTestRuntime();
     await createWidget(runtime, { channelId: "777", createdAt: 1 });
-    await createWidget(runtime, { channelId: "777", createdAt: 2 });
+    const newestId = await createWidget(runtime, { channelId: "777", createdAt: 2 });
     const session = await runtime.store.createSession({
       discordUserId: "42",
       accountId: "default",
     });
     const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
-    const response = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=missing&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${session}` } },
-    );
+    const response = await fetch(`${base}/discord/activity/api/widget?instance_id=instance-1`, {
+      headers: { Authorization: `Bearer ${session}` },
+    });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ id: newestId });
   });
 
   it("returns 404 when the Activity instance cannot be resolved", async () => {

@@ -1624,6 +1624,7 @@ export const id: TranslationMap = {
     connectionTimedOut: "Sesi tidak terhubung dalam waktu 30 detik.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "agen",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "terlepas",

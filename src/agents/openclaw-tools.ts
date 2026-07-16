@@ -73,6 +73,7 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
+import { createTerminalTool } from "./tools/terminal-tool.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -486,6 +487,14 @@ export function createOpenClawTools(
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
           }),
+          ...(options?.sandboxed
+            ? []
+            : [
+                createTerminalTool({
+                  agentId: sessionAgentId,
+                  agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+                }),
+              ]),
         ]),
     ...(!embedded && taskSuggestionSessionKey && options?.taskSuggestionDeliveryMode === "gateway"
       ? createTaskSuggestionTools({

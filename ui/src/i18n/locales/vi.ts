@@ -1625,6 +1625,7 @@ export const vi: TranslationMap = {
     connectionTimedOut: "Không thể kết nối với phiên trong vòng 30 giây.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "agent",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "đã tách",

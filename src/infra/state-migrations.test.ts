@@ -2641,61 +2641,9 @@ describe("state migrations", () => {
     );
   });
 
-  it("migrates home-state-dir plugin binding approvals only with the cross-state-dir opt-in", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, "custom-state");
-    const env = createEnv(stateDir);
-    const cfg = createConfig();
-    const sourcePath = path.join(root, ".openclaw", "plugin-binding-approvals.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        approvals: [
-          {
-            pluginRoot: "/plugins/codex-a",
-            pluginId: "codex",
-            channel: "telegram",
-            accountId: "default",
-            approvedAt: 2345,
-          },
-        ],
-      }),
-      "utf8",
-    );
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env,
-      homedir: () => root,
-      crossStateDirImports: true,
-    });
-    expect(detected.pluginBindingApprovals).toMatchObject({
-      sourcePath,
-      hasLegacy: true,
-    });
-
-    const result = await runLegacyStateMigrations({ detected, config: cfg });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain("Migrated 1 plugin binding approval → shared SQLite state");
-    expect(readPluginBindingApprovalRows(env)).toEqual([
-      {
-        plugin_root: "/plugins/codex-a",
-        channel: "telegram",
-        account_id: "default",
-        plugin_id: "codex",
-        plugin_name: null,
-        approved_at: 2345,
-      },
-    ]);
-    await expectMissingPath(sourcePath);
-  });
-
-  it("leaves home-state-dir plugin binding approvals alone without the cross-state-dir opt-in", async () => {
-    // Regression: an isolated gateway pointed at a temp OPENCLAW_STATE_DIR must
-    // not import (and archive) the default state dir's approvals file.
+  it("never imports home-state plugin approvals into a custom state dir", async () => {
+    // Regression: direct doctor repair follows the same trust boundary as
+    // automatic startup migration and cannot archive another state's policy.
     const root = await createTempDir();
     const stateDir = path.join(root, "custom-state");
     const env = createEnv(stateDir);
@@ -2721,9 +2669,6 @@ describe("state migrations", () => {
       sourcePath,
       hasLegacy: false,
     });
-    expect(detected.notices.join("\n")).toContain(
-      "Plugin binding approvals in the default state dir were not imported",
-    );
     expect(detected.preview).not.toContain(
       "- Plugin binding approvals: legacy JSON file → shared SQLite state",
     );
@@ -2770,10 +2715,8 @@ describe("state migrations", () => {
       cfg,
       env,
       homedir: () => root,
-      crossStateDirImports: true,
     });
 
-    expect(detected.execApprovals.hasLegacy).toBe(false);
     expect(detected.pluginBindingApprovals.hasLegacy).toBe(false);
     expect(detected.notices).toEqual([]);
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });

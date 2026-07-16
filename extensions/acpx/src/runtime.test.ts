@@ -11,6 +11,7 @@ import {
   type AcpRuntimeEvent,
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
+import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 import { AcpxRuntime, testing, type AcpSessionStore } from "./runtime.js";
 
@@ -21,11 +22,11 @@ type TestSessionStore = {
 
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
-const CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@0.13.0";
+const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.1.2";
 const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node "${path.resolve(
-  "node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+  "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
 )}"`;
 
 function makeRuntime(
@@ -938,7 +939,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         reasoningEffort: "medium",
       }),
     ).toBe(
-      "npx @zed-industries/codex-acp@0.13.0 -c model=gpt-5.4 -c model_reasoning_effort=medium",
+      `npx @agentclientprotocol/codex-acp@1.1.2 ${OPENCLAW_CODEX_CONFIG_ARG} '{"model":"gpt-5.4","model_reasoning_effort":"medium"}'`,
     );
     expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
   });
@@ -976,7 +977,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("maps explicit Codex ACP thinking to startup reasoning effort", async () => {
+  it("passes gpt-5.6-sol and medium as separate Codex ACP startup controls", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -997,18 +998,26 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:codex:acp:test",
       agent: "codex",
       mode: "persistent",
-      model: "openai/gpt-5.4",
-      thinking: "x-high",
+      model: "openai/gpt-5.6-sol",
+      thinking: "medium",
     });
 
-    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+    const ensureInput = readFirstEnsureSessionInput(ensure);
+    expect(ensureInput).toEqual({
       sessionKey: "agent:codex:acp:test",
       agent: "codex",
       mode: "persistent",
-      model: "gpt-5.4",
-      thinking: "x-high",
-      sessionOptions: { model: "gpt-5.4" },
+      model: "gpt-5.6-sol",
+      thinking: "medium",
+      sessionOptions: { model: "gpt-5.6-sol" },
     });
+    expect(JSON.stringify(ensureInput)).not.toContain("gpt-5.6-sol/medium");
+    expect(
+      testing.appendCodexAcpConfigOverrides(CODEX_ACP_WRAPPER_COMMAND, {
+        model: "gpt-5.6-sol",
+        reasoningEffort: "medium",
+      }),
+    ).not.toContain("gpt-5.6-sol/medium");
   });
 
   it("normalizes Codex ACP model config controls to adapter ids", async () => {
@@ -1293,7 +1302,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ),
     ).toBe(true);
     expect(testing.isClaudeAcpCommand("openclaw acp")).toBe(false);
-    expect(testing.isClaudeAcpCommand("npx @zed-industries/codex-acp")).toBe(false);
+    expect(testing.isClaudeAcpCommand("npx @agentclientprotocol/codex-acp")).toBe(false);
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
@@ -1427,7 +1436,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
               pid: 901,
               ppid: 900,
               command:
-                "node /tmp/openclaw/plugin-runtime-deps/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+                "node /tmp/openclaw/plugin-runtime-deps/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
             },
           ]),
           killProcess: vi.fn((pid, signal) => {

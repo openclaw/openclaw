@@ -108,6 +108,10 @@ const {
 describe("server-runtime-services", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    // Gateway test helpers set these at module load. Stub them off so a shared
+    // worker's import order cannot silently disable this suite's health monitor.
+    vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "");
+    vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "");
     resetGatewayWorkAdmission();
     hoisted.heartbeatRunner.stop.mockClear();
     hoisted.heartbeatRunner.updateConfig.mockClear();
@@ -131,6 +135,7 @@ describe("server-runtime-services", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     resetGatewayWorkAdmission();
   });
 

@@ -15,7 +15,9 @@ type DiscordActivityDocToken = NonNullable<
 >;
 type DiscordActivityStores = ConstructorParameters<typeof DiscordActivityStore>[0];
 
-export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> {
+export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> & {
+  update: NonNullable<PluginStateKeyedStore<T>["update"]>;
+} {
   const values = new Map<string, PluginStateEntry<T>>();
   return {
     async register(key, value) {
