@@ -234,9 +234,12 @@ describe("sandbox fs bridge anchored ops", () => {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes('stat -c "%F|%s|%y"')) {
+          const stderr = script.includes('LC_ALL=C stat -c "%F|%s|%y"')
+            ? "stat: cannot stat 'note.txt': No such file or directory\n"
+            : "stat: der Aufruf von statx für 'note.txt' ist nicht möglich: Datei oder Verzeichnis nicht gefunden\n";
           return {
             stdout: Buffer.alloc(0),
-            stderr: Buffer.from("stat: cannot stat 'note.txt': No such file or directory\n"),
+            stderr: Buffer.from(stderr),
             code: 1,
           };
         }
