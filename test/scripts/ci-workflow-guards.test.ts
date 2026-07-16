@@ -1435,6 +1435,23 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds OpenGrep installer downloads", () => {
+    for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
+      const workflow = parse(readFileSync(workflowPath, "utf8"));
+      const installStep = expectDefined(
+        workflow.jobs.scan.steps.find((step: WorkflowStep) =>
+          step.run?.includes("opengrep-install.sh"),
+        ),
+        `${workflowPath}: install opengrep step`,
+      );
+
+      expect(installStep.run).toContain("--connect-timeout 10 --max-time 120");
+      expect(installStep.run).toContain("curl -fsSL");
+      expect(installStep.run).toContain('"$opengrep_install"');
+      expect(installStep.run).toContain("rm -f");
+    }
+  });
+
   it("runs real behavior proof from the trusted workflow revision", () => {
     const workflow = readRealBehaviorProofWorkflow();
     const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
