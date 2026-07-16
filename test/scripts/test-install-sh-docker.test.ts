@@ -1044,6 +1044,19 @@ printf 'status=%s\\n' "$status"
     expect(run).not.toContain("install.sh | sh");
   });
 
+  it("downloads the non-root installer completely before execution", () => {
+    const runner = readFileSync(NONROOT_RUNNER_PATH, "utf8");
+
+    expect(runner).toContain('installer="$(mktemp)"');
+    expect(runner).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" "$INSTALL_URL"',
+    );
+    expect(runner).toContain('bash "$installer"');
+    expect(runner).toContain("trap 'rm -f \"$installer\"' EXIT");
+    expect(runner.indexOf('-o "$installer"')).toBeLessThan(runner.indexOf('bash "$installer"'));
+    expect(runner).not.toMatch(/curl[^\n]+\|\s*bash/u);
+  });
+
   it("prints package size audits for release smoke tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
