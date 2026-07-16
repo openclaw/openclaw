@@ -181,12 +181,14 @@ export {
 } from "./session-accessor.transcript.js";
 export { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 export {
+  isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
+  SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 export type {
   SessionTranscriptMessageAnchorPage,

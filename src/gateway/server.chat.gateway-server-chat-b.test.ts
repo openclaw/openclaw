@@ -21,11 +21,13 @@ import {
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -5911,6 +5913,10 @@ describe("gateway server chat", () => {
           targetId: "msg-active",
         }),
       ]);
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      });
 
       const stale = await fetchChatMessage(ws, {
         sessionKey: "main",
@@ -6042,6 +6048,35 @@ describe("gateway server chat", () => {
       expect(JSON.stringify(messages)).toContain("visible question");
       expect(JSON.stringify(messages)).toContain("visible answer");
       expect(JSON.stringify(messages)).not.toContain("NO_REPLY");
+    });
+  });
+
+  test("chat.history returns retryable unavailable while a dirty projection rebuilds", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ message: { role: "user", content: "ready after rebuild" } }),
+      ]);
+      const databaseOptions = {
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      };
+      const database = openOpenClawAgentDatabase(databaseOptions);
+      database.db
+        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+        .run("sess-main");
+
+      const rebuilding = await rpcReq(ws, "chat.history", { sessionKey: "main", limit: 1 });
+      expect(rebuilding.ok).toBe(false);
+      expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      const ready = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1,
+      });
+      expect(ready.ok).toBe(true);
+      expect(JSON.stringify(ready.payload?.messages)).toContain("ready after rebuild");
     });
   });
 
@@ -6266,6 +6301,10 @@ describe("gateway server chat", () => {
           },
         );
       }
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      });
 
       const history = await rpcReq<{
         messages?: Array<{ __openclaw?: { seq?: number } }>;

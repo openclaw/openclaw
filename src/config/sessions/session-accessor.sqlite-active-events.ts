@@ -1,5 +1,5 @@
 // Bounded reads over the materialized active transcript path. Dirty paths
-// rebuild synchronously once; clean reads deserialize only selected rows.
+// schedule maintenance and fail fast; clean reads deserialize selected rows.
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -9,7 +9,6 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type {
@@ -20,11 +19,8 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  deleteSessionTranscriptIndexInTransaction,
-  rebuildSessionTranscriptIndexInTransaction,
-  type SessionTranscriptProjectionState,
-} from "./session-transcript-index.js";
+import { type SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -49,6 +45,19 @@ export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPa
   hasOverreadContext: boolean;
   offset: number;
 };
+
+export class SessionTranscriptProjectionUnavailableError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Session transcript projection is rebuilding: ${sessionId}`);
+    this.name = "SessionTranscriptProjectionUnavailableError";
+  }
+}
+
+export function isSessionTranscriptProjectionUnavailableError(
+  error: unknown,
+): error is SessionTranscriptProjectionUnavailableError {
+  return error instanceof SessionTranscriptProjectionUnavailableError;
+}
 
 type CurrentProjection = {
   database: OpenClawAgentDatabase;
@@ -108,40 +117,6 @@ function readProjectionSnapshot(
   };
 }
 
-function reconcileCurrentProjection(
-  databaseOptions: ReturnType<typeof toDatabaseOptions>,
-  sessionId: string,
-): void {
-  runOpenClawAgentWriteTransaction(
-    (writeDatabase) => {
-      // Reread under the write lock. A concurrent append is either included
-      // here or dirties/advances the same projection in its own transaction.
-      const rows = executeSqliteQuerySync(
-        writeDatabase.db,
-        getActiveTranscriptKysely(writeDatabase)
-          .selectFrom("transcript_events")
-          .select(["event_json", "seq"])
-          .where("session_id", "=", sessionId)
-          .orderBy("seq", "asc"),
-      ).rows;
-      if (rows.length === 0) {
-        deleteSessionTranscriptIndexInTransaction(writeDatabase.db, sessionId);
-        return;
-      }
-      rebuildSessionTranscriptIndexInTransaction(
-        writeDatabase.db,
-        sessionId,
-        rows.map((row) => ({
-          event: JSON.parse(row.event_json) as TranscriptEvent,
-          seq: row.seq,
-        })),
-      );
-    },
-    databaseOptions,
-    { operationLabel: "sessions.history.reconcile" },
-  );
-}
-
 function withCurrentProjectionSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (projection: CurrentProjection) => T,
@@ -149,41 +124,43 @@ function withCurrentProjectionSnapshot<T>(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
   const database = openOpenClawAgentDatabase(databaseOptions);
-  // The watermark and selected rows must share one snapshot. Leave a dirty
-  // read transaction before rebuilding so SQLite never has to upgrade it.
-  for (;;) {
-    const result = runSqliteDeferredTransactionSync(
-      database.db,
-      () => {
-        const snapshot = readProjectionSnapshot(database, resolved.sessionId);
-        if (!snapshot) {
-          return {
-            kind: "value" as const,
-            value: read({ database, resolved, state: EMPTY_PROJECTION_STATE }),
-          };
-        }
-        if (
-          snapshot.state &&
-          !snapshot.state.needsRebuild &&
-          snapshot.state.indexedSeq === snapshot.latestSeq
-        ) {
-          return {
-            kind: "value" as const,
-            value: read({ database, resolved, state: snapshot.state }),
-          };
-        }
-        return { kind: "reconcile" as const };
-      },
-      {
-        databaseLabel: database.path,
-        operationLabel: "sessions.history.read",
-      },
-    );
-    if (result.kind === "value") {
-      return result.value;
-    }
-    reconcileCurrentProjection(databaseOptions, resolved.sessionId);
+  const result = runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const snapshot = readProjectionSnapshot(database, resolved.sessionId);
+      if (!snapshot) {
+        return {
+          kind: "value" as const,
+          value: read({ database, resolved, state: EMPTY_PROJECTION_STATE }),
+        };
+      }
+      if (
+        snapshot.state &&
+        !snapshot.state.needsRebuild &&
+        snapshot.state.indexedSeq === snapshot.latestSeq
+      ) {
+        return {
+          kind: "value" as const,
+          value: read({ database, resolved, state: snapshot.state }),
+        };
+      }
+      return { kind: "unavailable" as const };
+    },
+    {
+      databaseLabel: database.path,
+      operationLabel: "sessions.history.read",
+    },
+  );
+  if (result.kind === "value") {
+    return result.value;
   }
+  // Request latency never scales with transcript size. The maintenance owner
+  // rebuilds after this stack unwinds; callers return a retryable response.
+  startSessionTranscriptIndexReconcile({
+    ...databaseOptions,
+    preferredSessionId: resolved.sessionId,
+  });
+  throw new SessionTranscriptProjectionUnavailableError(resolved.sessionId);
 }
 
 function parseMessageEventRow(row: {

@@ -4,7 +4,7 @@
 // watermark's leaf_event_id always equals the append parent the accessor
 // would resolve next; an append that chains onto it forward-indexes in the
 // same transaction, anything ambiguous (leaf controls, branch switches)
-// marks the session dirty and the next history/search read rebuilds it from
+// marks the session dirty for its write or maintenance owner to rebuild from
 // the canonical visible-path resolver.
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -13,6 +13,12 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  extractTranscriptIndexEntry,
+  hasTranscriptMessage,
+  shouldProjectActiveEvent,
+  type TranscriptIndexEntry,
+} from "./session-transcript-projection-rebuild.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
@@ -33,13 +39,6 @@ type TranscriptIndexDatabase = Pick<
   | "transcript_events"
 >;
 
-type TranscriptIndexEntry = {
-  messageId: string;
-  role: "assistant" | "user";
-  text: string;
-  timestamp: number;
-};
-
 export type SessionTranscriptProjectionState = {
   activeEventCount: number;
   activeMessageCount: number;
@@ -55,75 +54,6 @@ type SessionTranscriptProjectionSourceRow = {
 
 function getIndexKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<TranscriptIndexDatabase>(db);
-}
-
-function readMessageText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const record = message as { content?: unknown; role?: unknown; text?: unknown };
-  if (record.role !== "user" && record.role !== "assistant") {
-    return undefined;
-  }
-  if (typeof record.content === "string") {
-    return record.content.trim() || undefined;
-  }
-  if (typeof record.text === "string") {
-    return record.text.trim() || undefined;
-  }
-  if (!Array.isArray(record.content)) {
-    return undefined;
-  }
-  const parts = record.content.flatMap((block) => {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
-      return [];
-    }
-    const part = block as { text?: unknown; type?: unknown };
-    if (part.type !== "text" && part.type !== "input_text" && part.type !== "output_text") {
-      return [];
-    }
-    return typeof part.text === "string" && part.text.trim() ? [part.text] : [];
-  });
-  return parts.length > 0 ? parts.join("\n") : undefined;
-}
-
-/**
- * Extracts the searchable payload from one transcript event. Only user and
- * assistant message text is indexed; tool results, reasoning blocks, and
- * images stay out of the index by construction.
- */
-function extractTranscriptIndexEntry(
-  event: unknown,
-  fallbackTimestamp: number,
-): TranscriptIndexEntry | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return undefined;
-  }
-  const record = event as { id?: unknown; message?: unknown; timestamp?: unknown; type?: unknown };
-  if (record.type !== "message" || typeof record.id !== "string" || !record.id.trim()) {
-    return undefined;
-  }
-  const message = record.message as { role?: unknown } | undefined;
-  const role = message?.role;
-  if (role !== "user" && role !== "assistant") {
-    return undefined;
-  }
-  const text = readMessageText(message);
-  if (!text) {
-    return undefined;
-  }
-  const timestamp =
-    typeof record.timestamp === "number"
-      ? record.timestamp
-      : typeof record.timestamp === "string"
-        ? Date.parse(record.timestamp)
-        : Number.NaN;
-  return {
-    messageId: record.id.trim(),
-    role,
-    text,
-    timestamp: Number.isFinite(timestamp) ? timestamp : fallbackTimestamp,
-  };
 }
 
 function readSessionTranscriptProjectionState(
@@ -184,31 +114,6 @@ function writeWatermark(
           updated_at: now,
         }),
       ),
-  );
-}
-
-function hasTranscriptMessage(event: unknown): boolean {
-  return (
-    typeof event === "object" &&
-    event !== null &&
-    !Array.isArray(event) &&
-    Object.hasOwn(event, "message") &&
-    (event as { message?: unknown }).message !== undefined
-  );
-}
-
-function shouldProjectActiveEvent(event: unknown): boolean {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return false;
-  }
-  const record = event as { type?: unknown };
-  if (record.type === "session") {
-    return false;
-  }
-  return (
-    isCanonicalSessionTranscriptEntry(event) ||
-    parseSessionTranscriptTreeEntry(event) !== undefined ||
-    hasTranscriptMessage(event)
   );
 }
 
@@ -282,13 +187,13 @@ export function indexAppendedTranscriptEventInTransaction(
     eventId: string | null;
     createdAt: number;
   },
-): void {
+): boolean {
   const watermark = readSessionTranscriptProjectionState(db, params.sessionId);
   if (!watermark) {
     if (params.seq !== 0) {
       // Pre-existing rows without index state (e.g. doctor-migrated
       // transcripts): stay unindexed until reconcile rebuilds the session.
-      return;
+      return true;
     }
     applyForwardIndex(db, params, {
       activeEventCount: 0,
@@ -297,15 +202,15 @@ export function indexAppendedTranscriptEventInTransaction(
       leafEventId: null,
       needsRebuild: false,
     });
-    return;
+    return false;
   }
   if (watermark.needsRebuild) {
-    return;
+    return true;
   }
   if (params.seq !== watermark.indexedSeq + 1) {
     // Out-of-band writes bypassed the hook; reconcile recomputes the truth.
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return;
+    return true;
   }
   if (
     isSessionTranscriptLeafControl(params.event) ||
@@ -315,14 +220,14 @@ export function indexAppendedTranscriptEventInTransaction(
     // the main chain; the visible path must be re-resolved rather than
     // guessed at append time.
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return;
+    return true;
   }
   const isCanonicalEvent = isCanonicalSessionTranscriptEntry(params.event);
   if (isCanonicalEvent && watermark.leafEventId === null && watermark.activeEventCount > 0) {
     // A canonical tree supersedes legacy flat message rows. Re-resolve once
     // instead of retaining rows that are no longer on the selected path.
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return;
+    return true;
   }
   const treeEntry = parseSessionTranscriptTreeEntry(params.event);
   if (
@@ -333,13 +238,14 @@ export function indexAppendedTranscriptEventInTransaction(
     // A noncanonical row after a tracked tree cursor may be a flat fallback or
     // an opaque append ancestor. Only the full resolver can decide visibility.
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return;
+    return true;
   }
   if (treeEntry && treeEntry.parentId !== watermark.leafEventId) {
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
-    return;
+    return true;
   }
   applyForwardIndex(db, params, watermark);
+  return false;
 }
 
 function applyForwardIndex(
@@ -467,6 +373,47 @@ export function rebuildSessionTranscriptIndexInTransaction(
     },
     now,
   );
+}
+
+/** Rebuilds one lagging projection under its current write transaction. */
+export function reconcileSessionTranscriptIndexInTransaction(
+  db: DatabaseSync,
+  sessionId: string,
+): boolean {
+  const latest = executeSqliteQueryTakeFirstSync(
+    db,
+    getIndexKysely(db)
+      .selectFrom("transcript_events")
+      .select("seq")
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "desc")
+      .limit(1),
+  );
+  if (!latest) {
+    deleteSessionTranscriptIndexInTransaction(db, sessionId);
+    return false;
+  }
+  const state = readSessionTranscriptProjectionState(db, sessionId);
+  if (state && !state.needsRebuild && state.indexedSeq === latest.seq) {
+    return false;
+  }
+  const rows = executeSqliteQuerySync(
+    db,
+    getIndexKysely(db)
+      .selectFrom("transcript_events")
+      .select(["event_json", "seq"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  ).rows;
+  rebuildSessionTranscriptIndexInTransaction(
+    db,
+    sessionId,
+    rows.map((row) => ({
+      event: JSON.parse(row.event_json) as unknown,
+      seq: row.seq,
+    })),
+  );
+  return true;
 }
 
 /**

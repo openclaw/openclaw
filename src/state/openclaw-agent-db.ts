@@ -373,8 +373,8 @@ function migrateSessionTranscriptActiveProjection(db: DatabaseSync, previousVers
       "ALTER TABLE session_transcript_index_state ADD COLUMN active_message_count INTEGER NOT NULL DEFAULT 0;",
     );
   }
-  // This table is derived state. Existing transcripts rebuild lazily through
-  // the same branch resolver as FTS instead of making database open scan history.
+  // This table is derived state. Gateway startup rebuilds it after all legacy
+  // imports finish, keeping schema-open work cheap and history reads bounded.
   db.exec(`
     DELETE FROM session_transcript_active_events;
     UPDATE session_transcript_index_state
