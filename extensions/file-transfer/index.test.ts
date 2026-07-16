@@ -90,4 +90,21 @@ describe("file-transfer plugin entry", () => {
     });
     expect(invokeNode).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["file.fetch", "{not valid json"],
+    ["dir.list", "not-json"],
+    ["dir.fetch", "{"],
+    ["file.write", "{invalid"],
+  ])("returns INVALID_PARAMS for malformed JSON in %s", async (command, paramsJSON) => {
+    const entry = pluginEntry.nodeHostCommands?.find((c) => c.command === command);
+    expect(entry).toBeDefined();
+    const result = await entry!.handle(paramsJSON);
+    const parsed = JSON.parse(result);
+    expect(parsed).toEqual({
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: expect.stringContaining("node command params must be valid JSON"),
+    });
+  });
 });
