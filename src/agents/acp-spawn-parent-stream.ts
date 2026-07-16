@@ -308,7 +308,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (!childSessionId || pendingLogEvents.length === 0) {
       return;
     }
-    const events = pendingLogEvents.splice(0, pendingLogEvents.length);
+    const events = pendingLogEvents.splice(0);
     try {
       recordAcpParentStreamEvents({
         agentId: params.agentId,

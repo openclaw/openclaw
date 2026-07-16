@@ -536,7 +536,7 @@ describe("OpenClaw rescue message", () => {
   });
 
   it("queues and applies persistent writes through conversational approval", async () => {
-    await withRescueStateDir("models-", async (tempDir) => {
+    await withRescueStateDir("models-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
       const deps = {
         verifyInferenceConfig: vi.fn(async () => ({
@@ -568,7 +568,7 @@ describe("OpenClaw rescue message", () => {
   });
 
   it("queues and applies gateway restart through conversational approval", async () => {
-    await withRescueStateDir("gateway-", async (tempDir) => {
+    await withRescueStateDir("gateway-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
       const deps = { runGatewayRestart: vi.fn(async () => {}) };
 
@@ -661,7 +661,7 @@ describe("OpenClaw rescue message", () => {
   });
 
   it("queues and applies agent creation through conversational approval", async () => {
-    await withRescueStateDir("agent-", async (tempDir) => {
+    await withRescueStateDir("agent-", async () => {
       const cfg: OpenClawConfig = { systemAgent: { rescue: { enabled: true } } };
       const deps = { runAgentsAdd: vi.fn(async () => {}) };
 

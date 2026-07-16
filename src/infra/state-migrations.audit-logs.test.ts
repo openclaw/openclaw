@@ -64,7 +64,7 @@ describe("legacy core audit log migration", () => {
       expect(
         listSystemAgentAuditEntriesForTests({ env })
           .map((entry) => entry.value.operation)
-          .sort(),
+          .toSorted(),
       ).toEqual(["config.set", "gateway.restart"]);
       await expect(fs.access(configPath)).rejects.toThrow();
       await expect(fs.access(systemPath)).rejects.toThrow();
