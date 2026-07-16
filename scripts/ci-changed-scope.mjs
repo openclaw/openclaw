@@ -236,18 +236,25 @@ function resolveChangedBranchName() {
   }
 }
 
-function resolveAllowedGeneratedMixBranch() {
-  const branchName = resolveChangedBranchName();
-  if (!RELEASE_BRANCH_RE.test(branchName)) {
+export function resolveAllowedGeneratedMixBranch(
+  env = process.env,
+  branchName = resolveChangedBranchName(),
+) {
+  if (env.GITHUB_ACTIONS === "true" && env.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX !== "true") {
     return "";
+  }
+  if (RELEASE_BRANCH_RE.test(branchName)) {
+    return branchName;
   }
   if (
-    process.env.GITHUB_ACTIONS === "true" &&
-    process.env.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX !== "true"
+    env.GITHUB_ACTIONS === "true" &&
+    env.GITHUB_EVENT_NAME === "push" &&
+    env.GITHUB_REF === "refs/heads/main" &&
+    branchName === "main"
   ) {
-    return "";
+    return branchName;
   }
-  return branchName;
+  return "";
 }
 
 export function shouldRunNativeI18n(changedPaths) {

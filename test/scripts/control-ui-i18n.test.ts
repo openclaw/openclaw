@@ -8,6 +8,7 @@ import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
+  resolveAllowedGeneratedMixBranch,
   shouldStrictControlUiI18n,
 } from "../../scripts/ci-changed-scope.mjs";
 import {
@@ -76,6 +77,40 @@ describe("control-ui-i18n generated ownership", () => {
     expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(true);
     expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/en.ts"])).toBe(false);
     expect(shouldStrictControlUiI18n(null)).toBe(true);
+  });
+
+  it("allows generated release output on trusted release and main runs only", () => {
+    const trustedActions = {
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: "true",
+    };
+
+    expect(
+      resolveAllowedGeneratedMixBranch(
+        {
+          ...trustedActions,
+          GITHUB_EVENT_NAME: "push",
+          GITHUB_REF: "refs/heads/main",
+        },
+        "main",
+      ),
+    ).toBe("main");
+    expect(
+      resolveAllowedGeneratedMixBranch(
+        {
+          ...trustedActions,
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_REF: "refs/pull/1/merge",
+        },
+        "main",
+      ),
+    ).toBe("");
+    expect(resolveAllowedGeneratedMixBranch(trustedActions, "release/2026.7.3")).toBe(
+      "release/2026.7.3",
+    );
+    expect(resolveAllowedGeneratedMixBranch({ GITHUB_ACTIONS: "true" }, "release/2026.7.3")).toBe(
+      "",
+    );
   });
 });
 

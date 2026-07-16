@@ -804,6 +804,28 @@ describe("ci workflow guards", () => {
     expect(validationStep.run).toContain(
       "release_gate cannot be combined with historical_target_tag",
     );
+    const diffBaseStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Resolve exact diff base",
+    );
+    expect(diffBaseStep.env).toMatchObject({
+      PULL_REQUEST_NUMBER: "${{ inputs.pull_request_number }}",
+      RELEASE_GATE: "${{ inputs.release_gate }}",
+    });
+    expect(diffBaseStep.run).toContain("refs/pull/${PULL_REQUEST_NUMBER}/merge");
+    expect(diffBaseStep.run).toContain('release_gate_head="$(git rev-parse "${merge_ref}^2")"');
+    expect(diffBaseStep.run).toContain(
+      "release_gate pull request head ${release_gate_head} does not match target ${target_head}",
+    );
+    const changedScopeStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Detect changed scopes",
+    );
+    expect(changedScopeStep.if).toContain(
+      "github.event_name == 'workflow_dispatch' && inputs.release_gate",
+    );
+    expect(changedScopeStep.env?.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX).toContain(
+      "github.event_name == 'workflow_dispatch'",
+    );
+    expect(changedScopeStep.run).toContain('elif [ "${{ github.event_name }}" = "pull_request" ]');
     expect(workflow.jobs.preflight.permissions).toEqual({ contents: "read" });
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",

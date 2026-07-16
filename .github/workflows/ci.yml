@@ -249,6 +249,8 @@ jobs:
         id: diff_base
         env:
           EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          RELEASE_GATE: ${{ inputs.release_gate }}
         run: |
           set -euo pipefail
           base_sha="$EVENT_BASE_SHA"
@@ -257,6 +259,19 @@ jobs:
             # commit's first parent is the exact target tree for this run.
             base_sha="$(node scripts/lib/merge-head-diff-base.mjs \
               --base "$base_sha" --head HEAD --prefer-first-parent)"
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" = "true" ]; then
+            merge_ref="refs/remotes/origin/release-gate-merge"
+            timeout --signal=TERM --kill-after=10s 120s git fetch \
+              --no-tags --no-recurse-submodules --depth=2 origin \
+              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:${merge_ref}"
+            release_gate_head="$(git rev-parse "${merge_ref}^2")"
+            target_head="$(git rev-parse HEAD)"
+            if [ "$release_gate_head" != "$target_head" ]; then
+              echo "release_gate pull request head ${release_gate_head} does not match target ${target_head}" >&2
+              exit 1
+            fi
+            base_sha="$(git rev-parse "${merge_ref}^1")"
           fi
           echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
 
@@ -320,19 +335,22 @@ jobs:
 
       - name: Detect changed scopes
         id: changed_scope
-        if: github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true'
+        if: (github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_gate)
         shell: bash
         env:
-          OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+          OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           set -euo pipefail
 
           if [ "${{ github.event_name }}" = "push" ]; then
             BASE="${{ steps.diff_base.outputs.sha }}"
             node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
-          else
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE="${{ steps.diff_base.outputs.sha }}"
             node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD --merge-head-first-parent
+          else
+            BASE="${{ steps.diff_base.outputs.sha }}"
+            node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
           fi
 
       - name: Build CI manifest
