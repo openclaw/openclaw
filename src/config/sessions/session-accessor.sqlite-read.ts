@@ -46,6 +46,23 @@ export function loadSqliteTranscriptEventsSync(
   return loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId);
 }
 
+/** Checks for at least one transcript row without aggregating the full session. */
+export function hasSqliteTranscriptEventsSync(scope: SessionTranscriptReadScope): boolean {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select("seq")
+        .where("session_id", "=", resolved.sessionId)
+        .limit(1),
+    ),
+  );
+}
+
 /** Loads the newest complete JSONL-sized transcript rows without materializing older history. */
 export function loadSqliteTranscriptTailEventsByJsonlBytesSync(
   scope: SessionTranscriptReadScope,

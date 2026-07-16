@@ -204,13 +204,7 @@ describe("SQLite CLI session history", () => {
     const stateDir = tempDirs.make("openclaw-cli-state-");
     const sessionId = "session-sqlite-relocated-store";
     const sessionKey = "agent:main:main";
-    const oldStorePath = path.join(
-      oldStateDir,
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    const oldStorePath = path.join(oldStateDir, "agents", "main", "sessions", "sessions.json");
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const sessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
@@ -263,11 +257,9 @@ describe("SQLite CLI session history", () => {
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const sessionFile = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const accessor = await import("../../config/sessions/session-accessor.js");
-    const statsSpy = vi
-      .spyOn(accessor, "readTranscriptStatsSync")
-      .mockImplementation(() => {
-        throw new Error("full transcript stats should not be read");
-      });
+    const statsSpy = vi.spyOn(accessor, "readTranscriptStatsSync").mockImplementation(() => {
+      throw new Error("full transcript stats should not be read");
+    });
 
     try {
       await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
@@ -291,12 +283,11 @@ describe("SQLite CLI session history", () => {
     }
   });
 
-  it("rejects markers outside the configured session identity and store", async () => {
+  it("rejects markers outside the configured session identity", async () => {
     const stateDir = tempDirs.make("openclaw-cli-state-");
     const sessionId = "session-sqlite-guard";
     const sessionKey = "agent:main:main";
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    const otherStorePath = path.join(stateDir, "other", "sessions.json");
 
     await withCliSessionState(stateDir, async () => {
       const transcript = [
@@ -318,11 +309,6 @@ describe("SQLite CLI session history", () => {
         { agentId: "main", sessionId, sessionKey, storePath },
         transcript,
       );
-      await replaceTranscriptEvents(
-        { agentId: "main", sessionId, sessionKey, storePath: otherStorePath },
-        transcript,
-      );
-
       const invalidMarkers = [
         formatSqliteSessionFileMarker({
           agentId: "main",
@@ -330,7 +316,6 @@ describe("SQLite CLI session history", () => {
           storePath,
         }),
         formatSqliteSessionFileMarker({ agentId: "worker", sessionId, storePath }),
-        formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath: otherStorePath }),
       ];
       for (const sessionFile of invalidMarkers) {
         await expect(

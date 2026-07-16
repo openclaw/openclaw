@@ -8,6 +8,7 @@ import {
   appendSqliteTranscriptMessage,
   appendSqliteTranscriptMessageSync,
   findSqliteTranscriptEvent,
+  hasSqliteTranscriptEventsSync,
   loadLatestSqliteAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
@@ -98,6 +99,11 @@ export function replaceTranscriptEventsSync(
 /** Reads parsed transcript records synchronously from the SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadSqliteTranscriptEventsSync(scope);
+}
+
+/** Checks for at least one transcript event without scanning the full transcript. */
+export function hasTranscriptEventsSync(scope: SessionTranscriptReadScope): boolean {
+  return hasSqliteTranscriptEventsSync(scope);
 }
 
 /** Reads the newest complete transcript rows within one JSONL-compatible byte budget. */

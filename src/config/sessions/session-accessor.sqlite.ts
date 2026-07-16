@@ -53,6 +53,7 @@ export { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.
 export { previewSqliteSessionDiskBudget } from "./session-accessor.sqlite-maintenance.js";
 export {
   findSqliteTranscriptEvent,
+  hasSqliteTranscriptEventsSync,
   loadLatestSqliteAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,

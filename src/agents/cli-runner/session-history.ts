@@ -11,10 +11,9 @@ import {
   resolveStorePath,
 } from "../../config/sessions/paths.js";
 import {
+  hasTranscriptEventsSync,
   loadTranscriptTailEventsByJsonlBytes,
-  readTranscriptStatsSync,
 } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import {
   parseSessionTranscriptTreeEntry,
@@ -473,24 +472,12 @@ function resolveSafeCliSqliteTranscript(params: CliSessionTranscriptParams):
   if (marker.sessionId !== params.sessionId || marker.agentId !== sessionAgentId) {
     return undefined;
   }
-  // SQLite markers feed persisted content into prompts. Accept only the current
-  // configured store so stale or caller-supplied markers cannot redirect history.
+  // Persisted markers retain their old absolute store after a supported state
+  // relocation. Identity-gate the marker, then read only the current canonical
+  // store so stale marker metadata cannot redirect transcript access.
   const storePath = resolveStorePath(params.storePath ?? params.config?.session?.store, {
     agentId: sessionAgentId,
   });
-  const expectedSqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-    agentId: sessionAgentId,
-  }).path;
-  const markerSqlitePath = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
-    agentId: sessionAgentId,
-  }).path;
-  if (
-    !expectedSqlitePath ||
-    !markerSqlitePath ||
-    path.resolve(markerSqlitePath) !== path.resolve(expectedSqlitePath)
-  ) {
-    return undefined;
-  }
   return {
     agentId: sessionAgentId,
     sessionId: params.sessionId,
@@ -590,7 +577,7 @@ export async function hasCliSessionTranscript(
   try {
     if (params.sessionFile.trim().startsWith("sqlite:")) {
       const transcriptScope = resolveSafeCliSqliteTranscript(params);
-      return transcriptScope ? readTranscriptStatsSync(transcriptScope).eventCount > 0 : false;
+      return transcriptScope ? hasTranscriptEventsSync(transcriptScope) : false;
     }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
