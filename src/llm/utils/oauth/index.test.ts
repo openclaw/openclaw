@@ -7,7 +7,7 @@
  * but getOAuthApiKey skipped it, silently returning the unchanged credential.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getOAuthApiKey } from "./index.js";
+import { getOAuthApiKey, getOAuthProvider, registerOAuthProvider, resetOAuthProviders } from "./index.js";
 import type { OAuthCredentials, OAuthProviderInterface } from "./types.js";
 
 const BASE_NOW = 1_700_000_000_000;
@@ -34,11 +34,13 @@ describe("getOAuthApiKey refresh margin", () => {
 
   beforeEach(() => {
     nowSpy = vi.spyOn(Date, "now").mockReturnValue(BASE_NOW);
+    resetOAuthProviders();
   });
 
   afterEach(() => {
     nowSpy.mockRestore();
     vi.restoreAllMocks();
+    resetOAuthProviders();
   });
 
   it("refreshes a credential that is within the refresh margin but not yet expired", async () => {
@@ -52,6 +54,10 @@ describe("getOAuthApiKey refresh margin", () => {
       scopes: undefined,
     };
     const refreshToken = vi.fn(async () => refreshed);
+
+    // Register mocked provider
+    const provider = makeProvider(refreshToken);
+    registerOAuthProvider(provider);
 
     const creds: OAuthCredentials = {
       type: "oauth",
@@ -75,6 +81,9 @@ describe("getOAuthApiKey refresh margin", () => {
     const refreshToken = vi.fn(async () => {
       throw new Error("should not be called");
     });
+
+    const provider = makeProvider(refreshToken);
+    registerOAuthProvider(provider);
 
     const creds: OAuthCredentials = {
       type: "oauth",
@@ -104,6 +113,9 @@ describe("getOAuthApiKey refresh margin", () => {
       scopes: undefined,
     };
     const refreshToken = vi.fn(async () => refreshed);
+
+    const provider = makeProvider(refreshToken);
+    registerOAuthProvider(provider);
 
     const creds: OAuthCredentials = {
       type: "oauth",

@@ -67,7 +67,7 @@ export function getOAuthProviders(): OAuthProviderInterface[] {
 // High-level API (uses provider registry)
 // ============================================================================
 
-import { hasUsableOAuthCredential } from "../../plugin-sdk/provider-auth.js";
+import { hasUsableOAuthCredential } from "../../../plugin-sdk/provider-auth.js";
 
 /**
  * Get API key for a provider from OAuth credentials.
@@ -79,7 +79,7 @@ import { hasUsableOAuthCredential } from "../../plugin-sdk/provider-auth.js";
 export async function getOAuthApiKey(
   providerId: OAuthProviderId,
   credentials: Record<string, OAuthCredentials>,
-): Promise<{ newCredentials: OAuthCredentials; apiKey: *** } | null> {
+): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
   const provider = getOAuthProvider(providerId);
   if (!provider) {
     throw new Error(`Unknown OAuth provider: ${providerId}`);
