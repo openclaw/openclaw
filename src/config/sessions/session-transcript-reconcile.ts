@@ -70,11 +70,23 @@ function resolveSessionTranscriptReconcileWorkerUrl(currentModuleUrl = import.me
 }
 
 function yieldToGateway(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function nextProjectionClaimId(): number {
   return -randomInt(1, 2 ** 47);
+}
+
+function normalizeReconcileError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+// Node Worker messages take a transfer list, unlike Window.postMessage.
+// Keep the empty list explicit so the platform contract stays unambiguous.
+function continueProjectionWorker(worker: Worker, accepted: boolean): void {
+  worker.postMessage({ accepted, type: "continue" }, []);
 }
 
 async function runProjectionWrite<T>(
@@ -201,7 +213,7 @@ export function reconcileSessionTranscriptIndexes(
   try {
     worker = new Worker(workerUrl, { workerData: input, execArgv: sourceWorkerExecArgv });
   } catch (error) {
-    return Promise.reject(error);
+    return Promise.reject(normalizeReconcileError(error));
   }
 
   return new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
@@ -241,7 +253,7 @@ export function reconcileSessionTranscriptIndexes(
             (database) => deleteOrphanedTranscriptIndexRowsInTransaction(database.db),
           );
         } catch (error) {
-          settle(() => reject(error), true);
+          settle(() => reject(normalizeReconcileError(error)), true);
           return;
         }
         settle(() => resolve({ reconciledSessions }), false);
@@ -253,7 +265,7 @@ export function reconcileSessionTranscriptIndexes(
             throw new Error("session transcript reconcile worker started overlapping plans");
           }
           active = await claimPreparedSessionTranscriptProjection(databaseOptions, message.plan);
-          worker.postMessage({ accepted: active !== undefined, type: "continue" });
+          continueProjectionWorker(worker, active !== undefined);
           return;
         }
         if (!active || active.plan.sessionId !== message.sessionId) {
@@ -265,7 +277,7 @@ export function reconcileSessionTranscriptIndexes(
           if (finalized) {
             reconciledSessions += 1;
           }
-          worker.postMessage({ accepted: finalized, type: "continue" });
+          continueProjectionWorker(worker, finalized);
           return;
         }
         const owned = await appendPreparedProjectionChunk(
@@ -278,16 +290,16 @@ export function reconcileSessionTranscriptIndexes(
         if (!owned) {
           active = undefined;
         }
-        worker.postMessage({ accepted: owned, type: "continue" });
+        continueProjectionWorker(worker, owned);
       } catch (error) {
-        settle(() => reject(error), true);
+        settle(() => reject(normalizeReconcileError(error)), true);
       }
     };
     worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
       void handleMessage(message);
     });
     worker.once("error", (error) => {
-      settle(() => reject(error), true);
+      settle(() => reject(normalizeReconcileError(error)), true);
     });
     worker.once("exit", (code) => {
       if (doneReceived && code === 0) {

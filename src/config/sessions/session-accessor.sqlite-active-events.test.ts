@@ -390,7 +390,9 @@ describe("SQLite active transcript event projection", () => {
       (error: unknown) => ({ error }),
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
     releaseWriter();
     await heldWriter;
 
