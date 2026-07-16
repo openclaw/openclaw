@@ -203,7 +203,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
       trigger: "user",
       senderId: "sender-123",
       chatId: "chat-456",
-      channelContext: { channel: "telegram", accountId: "primary" },
+      channelContext: { sender: { id: "sender-123" }, chat: { id: "chat-456" } },
     });
 
     const [, hookContext] = firstBeforeAgentReplyCall();
@@ -211,7 +211,10 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
       expect.objectContaining({
         senderId: "sender-123",
         chatId: "chat-456",
-        channelContext: expect.objectContaining({ channel: "telegram", accountId: "primary" }),
+        channelContext: expect.objectContaining({
+          sender: { id: "sender-123" },
+          chat: { id: "chat-456" },
+        }),
       }),
     );
   });
