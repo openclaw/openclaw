@@ -504,14 +504,26 @@ function readComputerToolTimeoutMs(value: JsonValue | undefined): number {
   // legacy pairing list. Screenshot/wait then capture once; input also acts.
   const gatewayCallCount = action === "screenshot" || action === "wait" ? 3 : 4;
   const durationMs =
-    action === "wait" || action === "hold_key"
-      ? Math.max(0, Number(args?.duration) || 0) * 1000
-      : 0;
+    action === "wait" || action === "hold_key" ? readComputerDurationMs(args?.duration) * 1000 : 0;
   // `timeoutMs` is a per-Gateway-call transport budget, not the whole dynamic
   // tool deadline. Computer use can resolve a node, perform/wait, then capture.
   return (
     durationMs + gatewayCallCount * gatewayTimeoutMs + CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS
   );
+}
+
+/** Returns a non-negative duration in seconds, rejecting hex/exponent strings. */
+function readComputerDurationMs(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, value);
+  }
+  if (typeof value === "string") {
+    const parsed = parseStrictNonNegativeInteger(value);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+  return 0;
 }
 
 function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
