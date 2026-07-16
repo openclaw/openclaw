@@ -75,6 +75,51 @@ function collectHostedGateEvidence(
 }
 
 describe("verify-pr-hosted-gates", () => {
+  it("accepts an in-progress CI run whose own ci-gate check succeeded", () => {
+    const inProgressRun = {
+      ...successfulRun("CI", 42, "2026-06-17T10:52:00Z"),
+      status: "in_progress",
+      conclusion: null,
+      check_suite_id: 777,
+    };
+    const gateCheck = {
+      name: "openclaw/ci-gate",
+      status: "completed",
+      conclusion: "success",
+      completed_at: "2026-06-17T10:51:30Z",
+      check_suite: { id: 777 },
+    };
+
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [inProgressRun],
+      ciGateCheckRuns: [gateCheck],
+    });
+    expect(evidence.workflows.map((workflow: { id: number }) => workflow.id)).toContain(42);
+
+    // A gate success from a different check suite (previous attempt) must
+    // never vouch for the current run.
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [inProgressRun],
+        ciGateCheckRuns: [{ ...gateCheck, check_suite: { id: 776 } }],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+
+    // A failed gate never vouches, and neither does a missing check.
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [inProgressRun],
+        ciGateCheckRuns: [{ ...gateCheck, conclusion: "failure" }],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+    expect(() =>
+      collectHostedGateEvidence({ sha, workflowRuns: [inProgressRun], ciGateCheckRuns: [] }),
+    ).toThrow(/Missing successful recent CI workflow/);
+  });
+
   it("requires the latest scheduled workflow run to pass", () => {
     const evidence = collectHostedGateEvidence({
       sha,

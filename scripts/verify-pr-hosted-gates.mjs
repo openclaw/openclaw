@@ -148,6 +148,48 @@ function isSuccessfulRecentRun(run, nowMs) {
   return run?.status === "completed" && run.conclusion === "success" && isRecentRun(run, nowMs);
 }
 
+const CI_GATE_CHECK_NAME = "openclaw/ci-gate";
+
+/**
+ * True when this run's own openclaw/ci-gate check already succeeded. The gate
+ * job needs every selected lane and fails on any non-success result, so a
+ * successful gate bound to this run's check suite proves the merge-relevant
+ * outcome minutes before post-gate stragglers (timing summaries, artifact
+ * uploads) let the run itself reach completed.
+ */
+export function hasSuccessfulCiGateCheck(run, ciGateCheckRuns, nowMs) {
+  if (!run?.check_suite_id || !Array.isArray(ciGateCheckRuns)) {
+    return false;
+  }
+  return ciGateCheckRuns.some((checkRun) => {
+    if (checkRun?.name !== CI_GATE_CHECK_NAME) {
+      return false;
+    }
+    if (checkRun?.status !== "completed" || checkRun?.conclusion !== "success") {
+      return false;
+    }
+    // Exact attempt binding: the check suite ties the gate to this run, so a
+    // stale success from a previous attempt can never vouch for a rerun.
+    if (checkRun?.check_suite?.id !== run.check_suite_id) {
+      return false;
+    }
+    const completedAtMs = Date.parse(String(checkRun?.completed_at ?? ""));
+    return (
+      Number.isFinite(completedAtMs) &&
+      completedAtMs >= nowMs - HOSTED_GATE_MAX_AGE_MS &&
+      completedAtMs <= nowMs + HOSTED_GATE_CLOCK_SKEW_MS
+    );
+  });
+}
+
+function isGateProvenInProgressRun(run, ciGateCheckRuns, nowMs) {
+  return (
+    (run?.status === "in_progress" || run?.status === "queued") &&
+    isRecentRun(run, nowMs) &&
+    hasSuccessfulCiGateCheck(run, ciGateCheckRuns, nowMs)
+  );
+}
+
 function preferredCiRun(runs, nowMs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
   const latestScheduledRun = latestRun(scheduledRuns);
@@ -171,16 +213,19 @@ function successfulRunOrThrow(
   runs,
   workflowName,
   sha,
-  { allowManual = true, nowMs = Date.now() } = {},
+  { allowManual = true, nowMs = Date.now(), ciGateCheckRuns = [] } = {},
 ) {
   const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual);
   const run = workflowName === "CI" ? preferredCiRun(matchingRuns, nowMs) : latestRun(matchingRuns);
-  if (!isSuccessfulRecentRun(run, nowMs)) {
-    throw new Error(
-      `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
-    );
+  if (isSuccessfulRecentRun(run, nowMs)) {
+    return run;
   }
-  return run;
+  if (workflowName === "CI" && isGateProvenInProgressRun(run, ciGateCheckRuns, nowMs)) {
+    return run;
+  }
+  throw new Error(
+    `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
+  );
 }
 
 function hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs) {
@@ -267,6 +312,7 @@ export function collectHostedGateEvidence({
   pullRequestHeadBranch = "",
   pullRequestHeadRepository = "",
   workflowRuns,
+  ciGateCheckRuns = [],
   changelogOnly = false,
   nowMs = Date.now(),
 }) {
@@ -283,6 +329,8 @@ export function collectHostedGateEvidence({
         successfulRunOrThrow(workflowRuns, "CI", evidenceSha, {
           allowManual,
           nowMs,
+          // Gate proof only vouches for the exact head under verification.
+          ciGateCheckRuns: evidenceSha === sha ? ciGateCheckRuns : [],
         }),
       );
     }
@@ -476,6 +524,19 @@ function loadPullRequestCommitShas(repo, { baseSha, headSha }) {
   return shas;
 }
 
+function loadCiGateCheckRuns(repo, sha) {
+  const payload = JSON.parse(
+    execGhApiRead(
+      `repos/${repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(CI_GATE_CHECK_NAME)}&per_page=20`,
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ),
+  );
+  return Array.isArray(payload?.check_runs) ? payload.check_runs : [];
+}
+
 function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const pullRequest = JSON.parse(
@@ -502,6 +563,7 @@ function main(argv = process.argv.slice(2)) {
     pullRequestHeadBranch: headBranch,
     pullRequestHeadRepository: headRepository,
     workflowRuns: loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch),
+    ciGateCheckRuns: loadCiGateCheckRuns(args.repo, args.sha),
     changelogOnly: args.changelogOnly,
   });
   const evidenceHeadSha = evidence.evidenceHeadSha ?? args.sha;
