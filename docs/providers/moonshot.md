@@ -45,7 +45,7 @@ overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
 `frequency_penalty`) that K3 fixes to provider defaults. Kimi K2.7 Code also
 always uses native thinking but requires both `thinking` and
 `reasoning_effort` to be omitted. Kimi K2.6 remains the onboarding default.
-See Moonshot's [Kimi K3 quickstart](https://platform.kimi.com/docs/guide/kimi-k3-quickstart).
+See Moonshot's [Kimi K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart).
 
 ## Getting started
 
@@ -234,7 +234,7 @@ onboarding.
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
-    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). The stable model ref is `kimi/kimi-for-coding`; legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to that model id.
+    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Kimi K3 uses `kimi/k3` for a 256K context or `kimi/k3[1m]` for the 1M tier. Kimi K2.7 Code keeps the stable ref `kimi/kimi-for-coding`; legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to that model id.
     </Note>
 
     <Steps>
@@ -266,6 +266,13 @@ onboarding.
         ```
       </Step>
     </Steps>
+
+    Kimi K3 always uses deep thinking at `max`. OpenClaw ignores stale K2
+    thinking toggles for `kimi/k3` and `kimi/k3[1m]` and sends the K3
+    adaptive/max request contract. The 1M model requires an Allegretto or
+    higher Kimi membership; use `kimi/k3` on Moderato.
+
+    See the official [Kimi Code model table](https://www.kimi.com/code/docs/en/kimi-code/models.html) for current plan availability.
 
     ### Config example
 

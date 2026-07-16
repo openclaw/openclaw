@@ -412,7 +412,8 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 - Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Example model: `kimi/kimi-for-coding`
+- Kimi K3: `kimi/k3` (256K) or `kimi/k3[1m]` (1M, Allegretto and above)
+- Kimi K2.7 Code: `kimi/kimi-for-coding`
 
 ```json5
 {
