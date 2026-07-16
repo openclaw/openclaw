@@ -1430,6 +1430,36 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds OpenGrep and OpenShell install script downloads", () => {
+    const fullWorkflow = parse(readFileSync(OPENGREP_FULL_WORKFLOW, "utf8"));
+    const prDiffWorkflow = parse(readFileSync(OPENGREP_PR_DIFF_WORKFLOW, "utf8"));
+    const liveAndE2eWorkflow = parse(
+      readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
+    );
+
+    const fullInstallStep = fullWorkflow.jobs.scan.steps.find((step: WorkflowStep) =>
+      step.run?.includes("install.sh"),
+    );
+    const prDiffInstallStep = prDiffWorkflow.jobs.scan.steps.find((step: WorkflowStep) =>
+      step.run?.includes("install.sh"),
+    );
+    const openShellInstallStep = liveAndE2eWorkflow.jobs["live-e2e-matrix"].steps.find(
+      (step: WorkflowStep) =>
+        step.name?.includes("Install OpenShell") && step.run?.includes("install.sh"),
+    );
+
+    expectDefined(fullInstallStep, "OpenGrep full install step");
+    expectDefined(prDiffInstallStep, "OpenGrep PR diff install step");
+    expectDefined(openShellInstallStep, "OpenShell install step");
+
+    expect(fullInstallStep.run).toContain("--connect-timeout 10");
+    expect(fullInstallStep.run).toContain("--max-time 60");
+    expect(prDiffInstallStep.run).toContain("--connect-timeout 10");
+    expect(prDiffInstallStep.run).toContain("--max-time 60");
+    expect(openShellInstallStep.run).toContain("--connect-timeout 10");
+    expect(openShellInstallStep.run).toContain("--max-time 60");
+  });
+
   it("runs real behavior proof from the trusted workflow revision", () => {
     const workflow = readRealBehaviorProofWorkflow();
     const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
