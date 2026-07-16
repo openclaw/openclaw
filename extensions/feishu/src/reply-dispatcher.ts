@@ -691,6 +691,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const hasText = reply.hasText;
         const hasMedia = reply.hasMedia;
         const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+        const ttsTextAlreadyVisible = ttsSupplement?.visibleTextAlreadyDelivered === true;
         const hasVoiceMedia =
           hasMedia &&
           reply.mediaUrls.some((mediaUrl) =>
@@ -731,7 +732,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const shouldDiscardStreamingPreview =
           info?.kind === "final" &&
           (finalTextExceedsStreamingLimit ||
-            (hasMedia && ((hasVoiceMedia && !shouldDeliverText) || skipTextForDuplicateFinal)));
+            (hasMedia &&
+              ((hasVoiceMedia && !shouldDeliverText && !ttsTextAlreadyVisible) ||
+                skipTextForDuplicateFinal)));
 
         if (!shouldDeliverText && !hasMedia) {
           return;
