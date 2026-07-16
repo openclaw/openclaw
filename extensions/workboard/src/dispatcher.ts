@@ -3,6 +3,7 @@ import path from "node:path";
 import type {
   WorkboardCard,
   WorkboardExecution,
+  WorkboardExecutionEngine,
   WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -90,17 +91,25 @@ function buildSessionKey(card: WorkboardCard): string {
   return card.agentId ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}` : suffix;
 }
 
+function resolveExecutionEngine(provider?: string): WorkboardExecutionEngine {
+  if (provider === "anthropic" || provider === "claude") {
+    return "claude";
+  }
+  return "codex";
+}
+
 function buildExecution(params: {
   card: WorkboardCard;
   sessionKey: string;
   runId: string;
   model: string;
+  engine: WorkboardExecutionEngine;
   now: number;
 }): WorkboardExecution {
   return {
-    id: params.card.execution?.id ?? `${params.card.id}:codex`,
+    id: params.card.execution?.id ?? `${params.card.id}:${params.engine}`,
     kind: "agent-session",
-    engine: "codex",
+    engine: params.engine,
     mode: "autonomous",
     status: "running",
     model: params.model,
@@ -431,6 +440,7 @@ export async function dispatchAndStartWorkboardCards(params: {
           sessionKey,
           runId: run.runId,
           model,
+          engine: resolveExecutionEngine(params.options?.provider),
           now,
         }),
         ...(materializedWorkspace ? { workspace: materializedWorkspace } : {}),
