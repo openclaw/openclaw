@@ -64,6 +64,7 @@ type EmbeddedAgentQueueFailureReason =
   | "not_streaming"
   | "stale_run"
   | "compacting"
+  | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch"
   | "transcript_commit_wait_unsupported"
@@ -927,7 +928,7 @@ function forceClearEmbeddedAgentRun(
   return forceClearReplyRunBySessionId(sessionId, cause) || cleared;
 }
 
-export const testing = {
+const testing = {
   resetActiveEmbeddedRuns() {
     for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
       for (const waiter of waiters) {
@@ -947,4 +948,9 @@ export const testing = {
     ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.embeddedRunsTestApi")] =
+    testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -16,10 +16,10 @@ import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
-  persistUserTurnTranscript,
   resolvePersistedUserTurnText,
   type UserTurnInput,
 } from "./user-turn-transcript.js";
+import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 
 describe("user turn transcript persistence", () => {
   const tempDirs: string[] = [];

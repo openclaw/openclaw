@@ -21,23 +21,26 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "fs_move",
   // Patch application can rewrite arbitrary files
   "apply_patch",
+  // Agent-owned host terminal — interactive RCE surface
+  "terminal",
   // Session orchestration — spawning agents remotely is RCE
   "sessions_spawn",
   // Cross-session injection — message injection across sessions
   "sessions_send",
   // Persistent automation control plane — can create/update/remove scheduled runs
   "cron",
-  // Gateway control plane — prevents gateway reconfiguration via HTTP
+  // Gateway config can expose secrets and host topology
   "gateway",
   // Node command relay can reach system.run on paired hosts
   "nodes",
   // Desktop control on a paired Mac (pointer/keyboard) and screen reads
   "computer",
+  "openclaw",
 ] as const;
 
 /**
- * Persistent control-plane tools that can change Gateway configuration or
- * create scheduled automation.
+ * Sensitive control-plane tools. `cron` can persist automation; `gateway`
+ * exposes configuration and schema details even though its agent actions are read-only.
  */
 export const GATEWAY_CONTROL_PLANE_TOOLS = ["cron", "gateway"] as const;
 
@@ -48,6 +51,10 @@ export const GATEWAY_CONTROL_PLANE_TOOLS = ["cron", "gateway"] as const;
  */
 export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   ...GATEWAY_CONTROL_PLANE_TOOLS,
+  "sessions",
+  "screen",
+  "terminal",
   "nodes",
   "computer",
+  "openclaw",
 ] as const;

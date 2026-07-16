@@ -54,6 +54,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Computer",
       detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
     },
+    screen: {
+      emoji: "🖥️",
+      title: "Screen",
+      detailKeys: ["action", "sessionKey", "dock"],
+    },
+    terminal: {
+      emoji: "⌨️",
+      title: "Terminal",
+      detailKeys: ["action", "sessionId", "command", "cwd"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -313,12 +323,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     gateway: {
       emoji: "🔌",
       title: "Gateway",
-      actions: {
-        restart: {
-          label: "restart",
-          detailKeys: ["reason", "delayMs"],
-        },
-      },
+      detailKeys: ["action", "path"],
     },
     exec: {
       emoji: "🛠️",
@@ -339,6 +344,20 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "📊",
       title: "Session Status",
       detailKeys: ["sessionKey", "model"],
+    },
+    sessions: {
+      emoji: "🗂️",
+      title: "Session Settings",
+      actions: {
+        patch: {
+          label: "update",
+          detailKeys: ["sessionKey", "label", "pinned", "archived", "model", "thinkingLevel"],
+        },
+        group_list: { label: "groups" },
+        group_set: { label: "set groups", detailKeys: ["names"] },
+        group_rename: { label: "rename group", detailKeys: ["name", "to"] },
+        group_delete: { label: "delete group", detailKeys: ["name"] },
+      },
     },
     sessions_list: {
       emoji: "🗂️",

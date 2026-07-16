@@ -70,7 +70,6 @@
     <string name="native_0905f7f59021c2a8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Powierzchnia"</string>
     <string name="native_0929c9dc7f794852" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Brak propozycji"</string>
     <string name="native_0979c6fdbdca1675" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Otwórz czat"</string>
-    <string name="native_09f0bda624faadd4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s…"</string>
     <string name="native_0a0b7cf7c428c703" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Żądanie działania"</string>
     <string name="native_0a708e7b03aaf1fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list pins"</string>
     <string name="native_0ab0e1629576aecf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połącz się z Gateway, aby wczytać propozycje Warsztatu Skills."</string>
@@ -345,7 +344,6 @@
     <string name="native_3a5ecca188c0579c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zaktualizowano"</string>
     <string name="native_3a65cf1204f18864" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połączono (węzeł offline)"</string>
     <string name="native_3a78695388b38b5c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Strona główna"</string>
-    <string name="native_3ace60b0a0c1b6c9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"restart"</string>
     <string name="native_3b28b535950f8175" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dyktowanie nasłuchuje"</string>
     <string name="native_3b851469ea31d489" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wybierz i sprawdź asystentów dostępnych na tym gateway."</string>
     <string name="native_3be0085a6bd88cdd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tryb rozmowy aktywny"</string>
@@ -442,6 +440,7 @@
     <string name="native_4e35d595e6975128" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktywność sesji"</string>
     <string name="native_4e8c72cab82e0711" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Automatyzacja ma nieprawidłową konfigurację."</string>
     <string name="native_4ec30e9d85725d41" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lista dozwolonych"</string>
+    <string name="native_4ed379d418bb8629" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"groups"</string>
     <string name="native_4efca0d10c5feb8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Informacje"</string>
     <string name="native_4f1bc100d1dccc1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Na tym obrazie nie znaleziono kodu QR konfiguracji. Wybierz kod QR wygenerowany przez openclaw qr lub wprowadź kod konfiguracji ręcznie."</string>
     <string name="native_4f993457edb69110" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Przeglądaj sesje"</string>
@@ -542,6 +541,7 @@
     <string name="native_5f09a378bea71719" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · Lokalizacja: Zawsze"</string>
     <string name="native_5f2c3c8856593678" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wczytaj z Gateway"</string>
     <string name="native_5f9bbdd124f822a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wymaga"</string>
+    <string name="native_5fa1d457ddfcd26c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"rename group"</string>
     <string name="native_5fa7aac5375c5815" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gotowe"</string>
     <string name="native_5fc1927ca948f31c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dziennik czeka na pierwszy wpis."</string>
     <string name="native_600c9c27960112a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Strona na żywo"</string>
@@ -598,6 +598,7 @@
     <string name="native_695c03727ff0251f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nasłuchuj słów aktywujących"</string>
     <string name="native_6965fdd9e5a18c87" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera snap"</string>
     <string name="native_6974b6348bd6f124" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway wybrał nieznanego dostawcę %1$s"</string>
+    <string name="native_698ef855b198408f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"delete group"</string>
     <string name="native_69909e834a13b2a8" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Śledź Android · %1$s"</string>
     <string name="native_69e36568cd8b4659" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"channel"</string>
     <string name="native_6a58d83c8b7683d3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI."</string>
@@ -690,6 +691,7 @@
     <string name="native_76ddc3b6e89f8deb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kod konfiguracji wskazuje na niezabezpieczony zdalny Gateway. %1$s %2$s"</string>
     <string name="native_76ed42d22129dc35" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Computer"</string>
     <string name="native_76fc9d5d79736bfd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway rozłączony."</string>
+    <string name="native_7703e4288a7ca2db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Settings"</string>
     <string name="native_7718167ea9c39713" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połącz Gateway, aby rozpocząć"</string>
     <string name="native_7728331d12fcfc1a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Informacja o bezpieczeństwie"</string>
     <string name="native_7765ad1890a192a8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Odrzuć ostrzeżenie o udostępnionym obrazie"</string>
@@ -738,6 +740,7 @@
     <string name="native_7fe837d777c45948" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Za %1$s godz."</string>
     <string name="native_8026a36a8868431c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oczekiwanie na zatwierdzenie Gateway. Uruchom to polecenie na hoście Gateway:"</string>
     <string name="native_812fc837108361ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wymagany dostęp administratora"</string>
+    <string name="native_8169e4741bbe5fa4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"set groups"</string>
     <string name="native_8193ee8a22d25208" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Przypnij model"</string>
     <string name="native_81c2c4f30a4bec68" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wyczyść wyszukiwanie"</string>
     <string name="native_81d38aca5306940b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Włączono dla kwalifikujących się agentów."</string>
@@ -1068,6 +1071,7 @@
     <string name="native_bfcef86c38cb24d4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wcześniejsza odpowiedź już odrzuciła to zatwierdzenie."</string>
     <string name="native_bfda026e6c598dde" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połączono"</string>
     <string name="native_bfe59c5dac8860ff" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Otwórz %1$s"</string>
+    <string name="native_c0401b1b10c85562" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
     <string name="native_c0dd528567bf67e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uruchomienie automatyzacji zakończyło się z nieznanym stanem."</string>
     <string name="native_c126029e43f5ff90" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kolejka offline jest pełna (%1$s wiadomości); najpierw usuń elementy z kolejki."</string>
     <string name="native_c1272aab485f1172" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Publiczne bramy Gateway wymagają wss:// lub Tailscale Serve. Protokół ws:// jest dozwolony dla localhost, hostów .local, emulatora Androida i prywatnych adresów IP w sieci LAN."</string>
@@ -1185,9 +1189,11 @@
     <string name="native_d20f43f925e706ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połączony agent OpenClaw może korzystać z włączonych przez Ciebie funkcji urządzenia. Kontynuuj tylko wtedy, gdy ufasz Gateway i agentowi, z którym się łączysz."</string>
     <string name="native_d23d9ee57a18a989" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Przyznano dostęp do wybranych zdjęć lub pełny dostęp do zdjęć."</string>
     <string name="native_d2b0d89c925920b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Brakuje elementów: %1$s"</string>
+    <string name="native_d2b1f7d46a6d8c27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zwiń listę kontrolną planu"</string>
     <string name="native_d2e42a0613646388" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wymagane zatwierdzenie węzła"</string>
     <string name="native_d2e4d963ab64f29d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Połącz Gateway"</string>
     <string name="native_d2ee46edf00c8eb6" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"... +%1$s więcej"</string>
+    <string name="native_d30f33731adb6b40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rozwiń listę kontrolną planu"</string>
     <string name="native_d31de1a5c5c8ba2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Przeglądarka"</string>
     <string name="native_d354ee936f59115e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen record"</string>
     <string name="native_d3974fd6d3b6c81f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oczekujące uruchomienie"</string>

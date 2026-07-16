@@ -70,7 +70,6 @@
     <string name="native_0905f7f59021c2a8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พื้นผิว"</string>
     <string name="native_0929c9dc7f794852" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่มีข้อเสนอ"</string>
     <string name="native_0979c6fdbdca1675" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิดแชต"</string>
-    <string name="native_09f0bda624faadd4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s…"</string>
     <string name="native_0a0b7cf7c428c703" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"คำขอดำเนินการ"</string>
     <string name="native_0a708e7b03aaf1fa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list pins"</string>
     <string name="native_0ab0e1629576aecf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อกับ Gateway เพื่อโหลดข้อเสนอ Skill Workshop"</string>
@@ -345,7 +344,6 @@
     <string name="native_3a5ecca188c0579c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"อัปเดตเมื่อ"</string>
     <string name="native_3a65cf1204f18864" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อแล้ว (โหนดออฟไลน์)"</string>
     <string name="native_3a78695388b38b5c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"หน้าแรก"</string>
-    <string name="native_3ace60b0a0c1b6c9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"restart"</string>
     <string name="native_3b28b535950f8175" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การป้อนตามคำบอกกำลังฟังอยู่"</string>
     <string name="native_3b851469ea31d489" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เลือกและตรวจสอบผู้ช่วยที่พร้อมใช้งานบน gateway นี้"</string>
     <string name="native_3be0085a6bd88cdd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"โหมดพูดคุยทำงานอยู่"</string>
@@ -442,6 +440,7 @@
     <string name="native_4e35d595e6975128" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กิจกรรมเซสชัน"</string>
     <string name="native_4e8c72cab82e0711" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ระบบอัตโนมัติมีการกำหนดค่าที่ไม่ถูกต้อง"</string>
     <string name="native_4ec30e9d85725d41" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รายการที่อนุญาต"</string>
+    <string name="native_4ed379d418bb8629" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"groups"</string>
     <string name="native_4efca0d10c5feb8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เกี่ยวกับ"</string>
     <string name="native_4f1bc100d1dccc1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่พบคิวอาร์โค้ดสำหรับตั้งค่าในรูปภาพนั้น โปรดเลือกคิวอาร์ที่สร้างโดย openclaw qr หรือป้อนรหัสตั้งค่าด้วยตนเอง"</string>
     <string name="native_4f993457edb69110" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เรียกดูเซสชัน"</string>
@@ -542,6 +541,7 @@
     <string name="native_5f09a378bea71719" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · ตำแหน่งที่ตั้ง: ตลอดเวลา"</string>
     <string name="native_5f2c3c8856593678" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"โหลดจาก Gateway"</string>
     <string name="native_5f9bbdd124f822a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ต้องการ"</string>
+    <string name="native_5fa1d457ddfcd26c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"rename group"</string>
     <string name="native_5fa7aac5375c5815" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พร้อม"</string>
     <string name="native_5fc1927ca948f31c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไดอารีกำลังรอรายการแรก"</string>
     <string name="native_600c9c27960112a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"หน้าไลฟ์"</string>
@@ -598,6 +598,7 @@
     <string name="native_695c03727ff0251f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ฟังคำปลุก"</string>
     <string name="native_6965fdd9e5a18c87" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera snap"</string>
     <string name="native_6974b6348bd6f124" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway เลือกผู้ให้บริการที่ไม่รู้จัก %1$s"</string>
+    <string name="native_698ef855b198408f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"delete group"</string>
     <string name="native_69909e834a13b2a8" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ติดตาม Android · %1$s"</string>
     <string name="native_69e36568cd8b4659" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"channel"</string>
     <string name="native_6a58d83c8b7683d3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI."</string>
@@ -690,6 +691,7 @@
     <string name="native_76ddc3b6e89f8deb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รหัสตั้งค่าชี้ไปยัง Gateway ระยะไกลที่ไม่ปลอดภัย %1$s %2$s"</string>
     <string name="native_76ed42d22129dc35" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Computer"</string>
     <string name="native_76fc9d5d79736bfd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ถูกตัดการเชื่อมต่อ"</string>
+    <string name="native_7703e4288a7ca2db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Settings"</string>
     <string name="native_7718167ea9c39713" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อ Gateway เพื่อเริ่มต้น"</string>
     <string name="native_7728331d12fcfc1a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ประกาศด้านความปลอดภัย"</string>
     <string name="native_7765ad1890a192a8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ปิดคำเตือนรูปภาพที่แชร์"</string>
@@ -738,6 +740,7 @@
     <string name="native_7fe837d777c45948" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ในอีก %1$s ชม."</string>
     <string name="native_8026a36a8868431c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การอนุมัติ Gateway อยู่ระหว่างรอดำเนินการ เรียกใช้คำสั่งนี้บนโฮสต์ Gateway:"</string>
     <string name="native_812fc837108361ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ต้องมีสิทธิ์ผู้ดูแลระบบ"</string>
+    <string name="native_8169e4741bbe5fa4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"set groups"</string>
     <string name="native_8193ee8a22d25208" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ปักหมุดโมเดล"</string>
     <string name="native_81c2c4f30a4bec68" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ล้างการค้นหา"</string>
     <string name="native_81d38aca5306940b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิดใช้งานสำหรับเอเจนต์ที่มีสิทธิ์"</string>
@@ -1068,6 +1071,7 @@
     <string name="native_bfcef86c38cb24d4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การตอบกลับก่อนหน้านี้ปฏิเสธการอนุมัตินี้แล้ว"</string>
     <string name="native_bfda026e6c598dde" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมโยงแล้ว"</string>
     <string name="native_bfe59c5dac8860ff" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิด %1$s"</string>
+    <string name="native_c0401b1b10c85562" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
     <string name="native_c0dd528567bf67e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การทำงานของระบบอัตโนมัติเสร็จสิ้นโดยมีสถานะที่ไม่ทราบ"</string>
     <string name="native_c126029e43f5ff90" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"คิวออฟไลน์เต็มแล้ว (%1$s ข้อความ) โปรดลบรายการที่อยู่ในคิวก่อน"</string>
     <string name="native_c1272aab485f1172" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway สาธารณะต้องใช้ wss:// หรือ Tailscale Serve ส่วน ws:// ใช้ได้กับ localhost, โฮสต์ .local, โปรแกรมจำลอง Android และ IP ของ LAN ส่วนตัว"</string>
@@ -1185,9 +1189,11 @@
     <string name="native_d20f43f925e706ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เอเจนต์ OpenClaw ที่เชื่อมต่ออยู่สามารถใช้ความสามารถของอุปกรณ์ที่คุณเปิดใช้งานได้ ดำเนินการต่อเฉพาะเมื่อคุณเชื่อถือ Gateway และเอเจนต์ที่คุณเชื่อมต่อเท่านั้น"</string>
     <string name="native_d23d9ee57a18a989" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"อนุญาตการเข้าถึงรูปภาพที่เลือกหรือทั้งหมดแล้ว"</string>
     <string name="native_d2b0d89c925920b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ขาด %1$s รายการ"</string>
+    <string name="native_d2b1f7d46a6d8c27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ยุบรายการตรวจสอบแผน"</string>
     <string name="native_d2e42a0613646388" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ต้องอนุมัติโหนด"</string>
     <string name="native_d2e4d963ab64f29d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อ Gateway"</string>
     <string name="native_d2ee46edf00c8eb6" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"... +%1$s เพิ่มเติม"</string>
+    <string name="native_d30f33731adb6b40" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ขยายรายการตรวจสอบแผน"</string>
     <string name="native_d31de1a5c5c8ba2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เบราว์เซอร์"</string>
     <string name="native_d354ee936f59115e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen record"</string>
     <string name="native_d3974fd6d3b6c81f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รอการเรียกใช้"</string>

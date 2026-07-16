@@ -6,7 +6,6 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../commands/doctor-invocation.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -281,17 +280,19 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
 
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const dirs: string[] = [];
-  const cwd = normalizeDir(opts.cwd);
-  if (cwd) {
-    dirs.push(cwd);
-  }
   const argv1 = normalizeDir(opts.argv1);
   if (argv1) {
+    // Keep the lexical shim path ahead of a module-derived cwd. pnpm 11 module
+    // realpaths can point into a shared store that does not identify the owner.
     dirs.push(path.dirname(argv1));
     const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
     if (packageRoot) {
       dirs.push(packageRoot);
     }
+  }
+  const cwd = normalizeDir(opts.cwd);
+  if (cwd) {
+    dirs.push(cwd);
   }
   let proc: string | null;
   try {
@@ -1632,7 +1633,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       const doctorStep = await runStep(
         step("openclaw doctor", doctorArgv, gitRoot, {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
           ...(opts.deferConfiguredPluginInstallRepair
             ? { [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1" }
             : {}),
@@ -1828,7 +1828,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           timeoutMs,
           env: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
-            [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
             [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: allowGatewayServiceRepair

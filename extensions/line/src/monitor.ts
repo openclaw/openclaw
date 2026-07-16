@@ -20,17 +20,18 @@ import {
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
+  runDetachedWebhookWork,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
-  createImageMessage,
   createLocationMessage,
   createQuickReplyItems,
   createTextMessageWithQuickReplies,
@@ -230,7 +231,7 @@ export async function monitorLineProvider(
                       createTextMessageWithQuickReplies,
                       pushMessagesLine,
                       createFlexMessage,
-                      createImageMessage,
+                      buildMediaMessage: buildLineMediaMessage,
                       createLocationMessage,
                       onReplyError: (replyErr) => {
                         logVerbose(
@@ -245,10 +246,11 @@ export async function monitorLineProvider(
                     // Text reached the user but a rich/media bubble did not.
                     // Surface the tagged partial failure after adopting the
                     // consumed reply-token state so later blocks in this turn
-                    // route correctly; recordChannelRuntimeState is skipped
-                    // because this delivery was not a clean success.
+                    // route correctly without retrying text the user already saw.
                     throw deliveryResult.error;
                   }
+
+                  return { visibleReplySent: deliveryResult.visibleReplySent };
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
@@ -382,13 +384,15 @@ export async function monitorLineProvider(
 
           if (body.events && body.events.length > 0) {
             logVerbose(`line: received ${body.events.length} webhook events`);
-            void Promise.resolve()
-              .then(() => match.target.bot.handleWebhook(body))
-              .catch((err: unknown) => {
+            // Detach event processing from the request admission before the ack
+            // releases it; an inherited released admission refuses queue work.
+            void runDetachedWebhookWork(() => match.target.bot.handleWebhook(body)).catch(
+              (err: unknown) => {
                 match.target.runtime.error?.(
                   danger(`line webhook dispatch failed: ${String(err)}`),
                 );
-              });
+              },
+            );
           }
         } catch (err) {
           if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {

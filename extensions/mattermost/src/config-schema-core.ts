@@ -4,17 +4,21 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
-const MattermostGroupSchema = z
-  .object({
-    /** Whether mentions are required to trigger the bot in this group. */
-    requireMention: z.boolean().optional(),
-  })
-  .strict();
+const MattermostGroupSchema = buildGroupEntrySchema().omit({
+  tools: true,
+  toolsBySender: true,
+  skills: true,
+  enabled: true,
+  allowFrom: true,
+  systemPrompt: true,
+});
 
 function requireMattermostOpenAllowFrom(params: {
   policy?: string;
@@ -87,11 +91,13 @@ const MattermostStreamingProgressSchema = z
     maxLines: z.number().int().positive().optional(),
     maxLineChars: z.number().int().positive().optional(),
     toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const MattermostStreamingPreviewSchema = z
   .object({
     toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const MattermostStreamingBlockSchema = z
@@ -162,21 +168,13 @@ const MattermostAccountSchemaBase = z
   })
   .strict();
 
-const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, ctx) => {
-  requireMattermostOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-  });
-});
-
-export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
-  accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  requireMattermostOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-  });
+export const MattermostConfigSchema = buildMultiAccountChannelSchema(MattermostAccountSchemaBase, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
+    requireMattermostOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+    });
+  },
 });

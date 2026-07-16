@@ -21,7 +21,7 @@ import {
   writeLegacyCallsJsonl,
 } from "./src/manager.test-harness.js";
 import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./src/manager/store.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./src/runtime-state.js";
+import { setVoiceCallStateRuntime } from "./src/runtime-state.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -109,7 +109,6 @@ describe("voice-call doctor state migration", () => {
         historyCallIds: history.map((entry) => entry.callId),
       };
     } finally {
-      clearVoiceCallStateRuntime();
       resetPluginStateStoreForTests();
       await fs.rm(warmStateDir, { recursive: true, force: true });
       await fs.rm(warmStorePath, { recursive: true, force: true });
@@ -125,7 +124,6 @@ describe("voice-call doctor state migration", () => {
   });
 
   afterEach(async () => {
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
     await fs.rm(storePath, { recursive: true, force: true });
@@ -281,11 +279,15 @@ describe("voice-call doctor state migration", () => {
     await expect(migration.detectLegacyState(params)).resolves.toEqual({
       preview: [
         "- Voice Call SQLite schema: audit event ledger -> versioned message lifecycle schema",
+        "- Voice Call SQLite schema: tables -> SQLite STRICT typing",
       ],
     });
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
       changes: [
         "Migrated Voice Call SQLite audit event ledger -> versioned message lifecycle schema",
+        expect.stringMatching(
+          /^Migrated Voice Call SQLite tables to SQLite STRICT typing \(\d+\)$/,
+        ),
       ],
       warnings: [],
     });

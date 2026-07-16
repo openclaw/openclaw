@@ -62,6 +62,7 @@ import type {
   SystemRunParams,
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
+import { buildNodeEventParams } from "./node-event-params.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
@@ -693,9 +694,11 @@ async function dispatchInvoke(
     });
     return;
   }
-
   try {
-    const pluginResult = await invokePlugin(command, frame.paramsJSON, runtime.pluginCommandIo);
+    const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
+    const invokeContext =
+      context && frame.sessionKey ? { ...context, sessionKey: frame.sessionKey } : context;
+    const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
     if (pluginResult !== null) {
       await sendRawPayloadResult(client, frame, pluginResult);
       return;
@@ -1064,17 +1067,6 @@ function buildNodeInvokeResultParams(
   return params;
 }
 
-function buildNodeEventParams(
-  event: string,
-  payload: unknown,
-): { event: string; payloadJSON: string | null } {
-  const payloadJSON = payload === undefined ? undefined : JSON.stringify(payload);
-  return {
-    event,
-    payloadJSON: typeof payloadJSON === "string" ? payloadJSON : null,
-  };
-}
-
 async function sendNodeEvent(client: NodeHostClient, event: string, payload: unknown) {
   try {
     await client.request("node.event", buildNodeEventParams(event, payload));
@@ -1083,10 +1075,15 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
   }
 }
 
-export const testing = {
+const testing = {
   MCP_TEXT_CONTENT_MAX_BYTES,
   MCP_INVOKE_PAYLOAD_MAX_BYTES,
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostInvokeTestApi")] =
+    testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

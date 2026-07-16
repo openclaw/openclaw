@@ -8,6 +8,7 @@ import { lazyCompile } from "./protocol-validator.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
+export * from "./schema/ui-command.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -269,6 +270,7 @@ import {
   TerminalTextResultSchema,
   TerminalUploadParamsSchema,
   TerminalUploadResultSchema,
+  UiCommandParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -341,6 +343,8 @@ import {
   SessionsDescribeParamsSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
+  SessionsReclaimParamsSchema,
+  SessionsReclaimResultSchema,
   SessionGroupSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsListParamsSchema,
@@ -641,6 +645,8 @@ export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSche
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
 export const validateSessionsDispatchResult = lazyCompile(SessionsDispatchResultSchema);
+export const validateSessionsReclaimParams = lazyCompile(SessionsReclaimParamsSchema);
+export const validateSessionsReclaimResult = lazyCompile(SessionsReclaimResultSchema);
 export const validateSessionsMessagesSubscribeParams = lazyCompile(
   SessionsMessagesSubscribeParamsSchema,
 );
@@ -829,6 +835,7 @@ export const validateChatEvent = lazyCompile(ChatEventSchema);
 export const validateChatMessageGetResult = lazyCompile(ChatMessageGetResultSchema);
 export const validateUpdateStatusParams = lazyCompile(UpdateStatusParamsSchema);
 export const validateUpdateRunParams = lazyCompile(UpdateRunParamsSchema);
+export const validateUiCommandParams = lazyCompile(UiCommandParamsSchema);
 export const validateWebLoginStartParams = lazyCompile(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = lazyCompile(WebLoginWaitParamsSchema);
 
@@ -993,6 +1000,8 @@ export {
   SessionsCreateResultSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
+  SessionsReclaimParamsSchema,
+  SessionsReclaimResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
@@ -1548,6 +1557,8 @@ export type {
   SessionWorktreeInfo,
   SessionsDispatchParams,
   SessionsDispatchResult,
+  SessionsReclaimParams,
+  SessionsReclaimResult,
   SessionsCreateResult,
   SessionsPatchParams,
   SessionsResetParams,

@@ -2201,7 +2201,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("keeps thinking off by default but allows an explicit thinking override", async () => {
+  it("keeps thinking off and fast mode inherited by default but allows explicit overrides", async () => {
     await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food? default-thinking-check",
@@ -2216,11 +2216,14 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().thinkLevel).toBe("off");
+    expect(lastEmbeddedRunParams().fastMode).toBeUndefined();
     expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
 
     api.pluginConfig = {
       agents: ["main"],
       thinking: "medium",
+      fastMode: true,
+      logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
@@ -2238,7 +2241,66 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().thinkLevel).toBe("medium");
+    expect(lastEmbeddedRunParams().fastMode).toBe(true);
     expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
+
+    const infoLines = vi
+      .mocked(api.logger.info)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "thinking=medium fast=on start");
+  });
+
+  it("inherits parent session fast mode before the agent default", async () => {
+    api.config = {
+      agents: {
+        defaults: {
+          model: { primary: "github-copilot/gpt-5.4-mini" },
+        },
+        list: [{ id: "main", fastModeDefault: true }],
+      },
+    };
+    hoisted.sessionStore["agent:main:main"] = {
+      sessionId: "s-main",
+      updatedAt: 0,
+      fastMode: false,
+    };
+    api.pluginConfig = { agents: ["main"], logging: true };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await requireHook("before_prompt_build")(
+      {
+        prompt: "What is my favorite food? session-fast-mode-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().fastMode).toBe(false);
+    let infoLines = vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "fast=off start");
+
+    delete hoisted.sessionStore["agent:main:main"].fastMode;
+    await requireHook("before_prompt_build")(
+      {
+        prompt: "What is my favorite food? agent-fast-mode-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().fastMode).toBe(true);
+    infoLines = vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "fast=on start");
   });
 
   it("allows appending extra prompt instructions without replacing the base prompt", async () => {
@@ -3261,10 +3323,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -3308,10 +3370,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout from SQLite runtime transcript rows", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -4311,10 +4373,10 @@ describe("active-memory plugin", () => {
   it("does not recover transcript partials after a later unavailable search times out", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4370,10 +4432,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial when unavailable debug arrives after the last poll", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4430,7 +4492,7 @@ describe("active-memory plugin", () => {
     testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4498,10 +4560,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial after an unmirrored custom memory tool fails", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       toolsAllow: ["memory_lookup_custom"],
       logging: true,
     };
@@ -6427,6 +6489,14 @@ describe("active-memory plugin", () => {
     const config = testing.normalizePluginConfig({});
     expect(config.circuitBreakerMaxTimeouts).toBe(3);
     expect(config.circuitBreakerCooldownMs).toBe(60_000);
+  });
+
+  it("normalizes explicit fast-mode overrides and ignores invalid values", () => {
+    expect(testing.normalizePluginConfig({}).fastMode).toBeUndefined();
+    expect(testing.normalizePluginConfig({ fastMode: true }).fastMode).toBe(true);
+    expect(testing.normalizePluginConfig({ fastMode: false }).fastMode).toBe(false);
+    expect(testing.normalizePluginConfig({ fastMode: "auto" }).fastMode).toBe("auto");
+    expect(testing.normalizePluginConfig({ fastMode: "on" }).fastMode).toBeUndefined();
   });
 
   it("normalizes setup grace config with a zero default and bounded opt-in", () => {

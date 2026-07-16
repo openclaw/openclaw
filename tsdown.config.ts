@@ -11,6 +11,10 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "./scripts/lib/tsdown-config-groups.mjs";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -152,6 +156,7 @@ function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig 
     dts: TSDOWN_DECLARATIONS,
     entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
     env,
+    name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,
     outDir: config.outDir ?? tsdownPackageOutputRoot(packageDir),
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: buildInputOptions,
@@ -323,6 +328,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
     "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
     "system-agent/system-agent": "src/system-agent/system-agent.ts",
@@ -521,6 +527,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
 
 const configs = [
   nodeBuildConfig({
+    name: TSDOWN_PACKAGE_CONFIG_GROUP,
     entry: buildAgentCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("agent-core"),
     deps: {
@@ -575,6 +582,7 @@ const configs = [
   }),
   nodeWorkspacePackageBuildConfig("model-catalog-core"),
   nodeBuildConfig({
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),

@@ -188,8 +188,6 @@ export const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =
   /upload-file action to send a PNG with caption\s+((?:WHATSAPP_QA_AGENT_UPLOAD|WHATSAPP_QA_GROUP_AGENT_UPLOAD)_[A-Z0-9]+)/i;
 export const QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE =
   /\bWHATSAPP_QA_PENDING_HISTORY_TRIGGER_([A-Z0-9]+)\b/u;
-export const QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL =
-  "Chat history since last reply (untrusted, for context):";
 export const QA_WHATSAPP_BROADCAST_PROMPT_RE =
   /\bopenclawqa broadcast fanout check\s+([A-Z0-9_]+)\b/i;
 export const QA_WHATSAPP_RUNTIME_AGENT_RE = /\bRuntime:\s*[^\n]*\bagent=([A-Za-z0-9_-]+)/i;

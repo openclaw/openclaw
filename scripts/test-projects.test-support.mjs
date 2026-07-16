@@ -51,8 +51,10 @@ import {
   toolingIsolatedTestFiles,
 } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import {
+  getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
+  resolveUnitFastIsolatedTestIncludePattern,
   resolveUnitFastTestIncludePattern,
   resolveUnitFastTimerTestIncludePattern,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
@@ -164,6 +166,7 @@ const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.conf
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
+const UNIT_FAST_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.unit-fast-isolated.config.ts";
 const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
@@ -201,6 +204,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.tasks.config.ts", 165],
   [CHANNEL_VITEST_CONFIG, 164],
   [UNIT_FAST_VITEST_CONFIG, 160],
+  [UNIT_FAST_ISOLATED_VITEST_CONFIG, 159],
   [AUTO_REPLY_REPLY_VITEST_CONFIG, 155],
   [INFRA_VITEST_CONFIG, 145],
   ["test/vitest/vitest.secrets.config.ts", 140],
@@ -385,6 +389,7 @@ const VITEST_CONFIG_BY_KIND = {
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
+  unitFastIsolated: UNIT_FAST_ISOLATED_VITEST_CONFIG,
   unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
@@ -684,6 +689,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
+    ".github/actions/setup-node-env/sticky-importers.sh",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
     ".github/actions/setup-pnpm-store-cache/action.yml",
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
@@ -692,7 +701,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/setup-pnpm-store-cache-ensure-node.test.ts"],
   ],
   [".github/images/live-media-runner/Dockerfile", LIVE_MEDIA_RUNNER_IMAGE_TEST_TARGETS],
+  [".github/workflows/auto-response.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/clawsweeper-dispatch.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/labeler.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/real-behavior-proof.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/workflows/security-sensitive-guard.yml",
     ["test/scripts/security-sensitive-guard-workflow.test.ts"],
@@ -1053,6 +1066,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/mobile-release-ref.ts", ["test/scripts/mobile-release-ref.test.ts"]],
   ["scripts/apple-release-source-check.sh", ["test/scripts/apple-release-source-check.test.ts"]],
+  ["scripts/compare-release-evidence-zip.py", ["test/scripts/package-acceptance-workflow.test.ts"]],
   ["scripts/android-release.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
   ["scripts/android-release-signing.mjs", ["test/scripts/android-release-signing.test.ts"]],
   ["scripts/android-release-upload.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
@@ -1087,6 +1101,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/release-workflow-matrix-plan.test.ts"],
   ],
   ["scripts/release-fast-pretag-check.sh", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  ["scripts/openclaw-npm-resume-run.mjs", ["test/scripts/openclaw-npm-resume-run.test.ts"]],
   ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
   ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
   ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
@@ -1766,6 +1781,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
     ["test/scripts/codex-install-assertions.test.ts", "test/scripts/docker-build-helper.test.ts"],
   ],
+  [
+    "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs",
+    ["test/scripts/docker-build-helper.test.ts"],
+  ],
   ["scripts/e2e/lib/codex-install-utils.mjs", ["test/scripts/codex-install-assertions.test.ts"]],
   [
     "scripts/e2e/lib/codex-on-demand/assertions.mjs",
@@ -2103,6 +2122,7 @@ const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
+  ["scripts/openclaw-npm-resume-run.d.mts", "scripts/openclaw-npm-resume-run.mjs"],
   ["scripts/periphery-intersection.d.mts", "scripts/periphery-intersection.mjs"],
   [
     "scripts/lib/bundled-plugin-build-entries.d.mts",
@@ -2565,7 +2585,10 @@ function listToolingFullSuiteTestTargets(cwd) {
 
 function listUnitFastFullSuiteTestTargets() {
   const timerTargets = new Set(getUnitFastTimerTestFiles());
-  return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
+  const isolatedTargets = new Set(getUnitFastIsolatedTestFiles());
+  return getUnitFastTestFiles().filter(
+    (file) => !timerTargets.has(file) && !isolatedTargets.has(file),
+  );
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd) {
@@ -2677,7 +2700,8 @@ function isPathLikeTargetArg(arg, cwd) {
     isGlobTarget(arg) ||
     isFileLikeTarget(arg) ||
     isVitestConfigPathLikeTarget(relative) ||
-    isExistingPathTarget(arg, cwd)
+    isExistingPathTarget(arg, cwd) ||
+    Boolean(resolveExplicitTestPrefixTargets(arg, cwd)?.length)
   );
 }
 
@@ -2744,6 +2768,26 @@ function listExplicitTestTargetFilesForCwd(cwd) {
   return cachedExplicitTestTargetFiles;
 }
 
+function resolveExplicitTestPrefixTargets(targetArg, cwd) {
+  if (isExistingPathTarget(targetArg, cwd) || isGlobTarget(targetArg)) {
+    return null;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd).replace(/\/+$/u, "");
+  if (!relative || isLikelyFileTarget(relative)) {
+    return null;
+  }
+  const directory = path.posix.dirname(relative);
+  const prefix = `${relative}.`;
+  const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
+    (file) =>
+      fs.existsSync(path.join(cwd, file)) &&
+      path.posix.dirname(file) === directory &&
+      file.startsWith(prefix) &&
+      isTestFileTarget(file),
+  );
+  return targets.length > 0 ? targets.toSorted((left, right) => left.localeCompare(right)) : null;
+}
+
 function includePatternMatchesAnyFile(pattern, files) {
   return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
 }
@@ -2787,6 +2831,10 @@ function expandExplicitSourceTestTargets(targetArgs, cwd) {
   const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
   return targetArgs.flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    const prefixTargets = resolveExplicitTestPrefixTargets(targetArg, cwd);
+    if (prefixTargets) {
+      return prefixTargets;
+    }
     if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
     }
@@ -2905,6 +2953,9 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
 
     const absolute = path.resolve(cwd, targetArg);
     if (!fs.existsSync(absolute)) {
+      if (resolveExplicitTestPrefixTargets(targetArg, cwd)) {
+        continue;
+      }
       unmatched.push({
         target: targetArg,
         reason: "path-does-not-exist",
@@ -3798,6 +3849,9 @@ function classifyTarget(arg, cwd) {
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
+  if (resolveUnitFastIsolatedTestIncludePattern(relative)) {
+    return "unitFastIsolated";
+  }
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
@@ -3991,6 +4045,10 @@ function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
     const includePattern = resolveUnitFastTimerTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;
   }
+  if (kind === "unitFastIsolated") {
+    const includePattern = resolveUnitFastIsolatedTestIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
   if (kind === "pluginSdkLight") {
     const includePattern = resolvePluginSdkLightIncludePattern(relative);
     return includePattern ? [includePattern] : null;
@@ -4170,6 +4228,7 @@ export function buildVitestRunPlans(
 
   const orderedKinds = [
     "unitFast",
+    "unitFastIsolated",
     "unitFastFakeTimers",
     "default",
     "boundary",
@@ -4399,7 +4458,7 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
   });
 }
 
-export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
+function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   if (hasConservativeVitestWorkerBudget(env)) {
     return false;
   }
@@ -4408,7 +4467,7 @@ export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   );
 }
 
-export function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
+function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
   return env.CI !== "true" && env.GITHUB_ACTIONS !== "true";
 }
 
@@ -4549,6 +4608,27 @@ export function shouldRetryVitestNoOutputTimeout(env = process.env) {
     return false;
   }
   return !["0", "false", "no", "off"].includes(value ?? "");
+}
+
+// Shards may pin a short no-output window so the known warm-cache stall dies
+// fast (see AGENTS_CORE_RUNTIME_ENV in ci-node-test-plan.mjs). A cold Vitest
+// module cache makes those same imports legitimately silent for minutes, so
+// the retry attempt must get the full watchdog window or it re-dies at the
+// short limit and the job fails without ever running a test.
+const RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS = 300_000;
+
+export function withRetryNoOutputTimeout(spec) {
+  const current = Number(spec.env?.[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
+  if (!Number.isFinite(current) || current <= 0 || current >= RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS) {
+    return spec;
+  }
+  return {
+    ...spec,
+    env: {
+      ...spec.env,
+      [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS),
+    },
+  };
 }
 
 export function createVitestRunSpecs(args, params = {}) {
