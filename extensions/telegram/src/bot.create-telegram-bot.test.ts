@@ -1592,7 +1592,11 @@ describe("createTelegramBot", () => {
       expect(payload.Body).toMatch(
         /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
       );
-      expect(payload.BodyForAgent).toBe("first forwarded note\nsecond forwarded note");
+      expect(payload.BodyForAgent).toMatch(
+        /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
+      );
+      expect(payload.BodyForAgent).not.toContain("Conversation info (untrusted metadata)");
+      expect(payload.CommandBody).toBe("first forwarded note\nsecond forwarded note");
       expect(payload.ForwardedFrom).toBeUndefined();
     } finally {
       setTimeoutSpy.mockRestore();

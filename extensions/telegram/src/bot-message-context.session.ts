@@ -567,7 +567,7 @@ export async function buildTelegramInboundContextPayload(params: {
       inboundEventKind,
       body,
       rawBody,
-      bodyForAgent: bodyText,
+      bodyForAgent: hasMultiMessageDebounceBatch ? visibleBodyText : bodyText,
       commandBody,
       inboundHistory,
       sourceModality: msg.voice ? "voice" : undefined,

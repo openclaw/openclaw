@@ -47,7 +47,9 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
       /ordinary note\n\[Forwarded from Original B[^\]]*\]\nforwarded note/,
     );
     expect(payload?.Body).not.toContain("Wrong inherited origin");
-    expect(payload?.BodyForAgent).toBe("ordinary note\nforwarded note");
+    expect(payload?.BodyForAgent).toMatch(
+      /ordinary note\n\[Forwarded from Original B[^\]]*\]\nforwarded note/,
+    );
     expect(payload?.ForwardedFrom).toBeUndefined();
   });
 
@@ -106,6 +108,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
     expect(payload?.Body).toContain("ordinary note\nprivate forwarded note");
     expect(payload?.Body).not.toContain("[Forwarded from");
     expect(payload?.Body).not.toContain("Hidden");
+    expect(payload?.BodyForAgent).toBe("ordinary note\nprivate forwarded note");
     expect(payload?.ForwardedFrom).toBeUndefined();
   });
 
@@ -155,8 +158,9 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
       },
     });
 
-    expect(context?.ctxPayload.Body).toMatch(
-      /\[Forwarded from Original A[^\]]*\]\n<media:image>\n\[Forwarded from Original B[^\]]*\]\n<media:image>/,
-    );
+    const expectedBody =
+      /\[Forwarded from Original A[^\]]*\]\n<media:image>\n\[Forwarded from Original B[^\]]*\]\n<media:image>/;
+    expect(context?.ctxPayload.Body).toMatch(expectedBody);
+    expect(context?.ctxPayload.BodyForAgent).toMatch(expectedBody);
   });
 });
