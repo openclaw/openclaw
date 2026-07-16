@@ -38,8 +38,12 @@ jobs:
           OPENGREP_VERSION: v1.22.0
           OPENGREP_INSTALL_SHA: f458d7f0d52cc58eae1ca3cf3d5caf101e637519
         run: |
-          curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
-            | bash -s -- -v "$OPENGREP_VERSION"
+          opengrep_installer="$(mktemp)"
+          curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 \
+            -o "$opengrep_installer" \
+            "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh"
+          bash "$opengrep_installer" -v "$OPENGREP_VERSION"
+          rm -f "$opengrep_installer"
           echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
 
       - name: Verify opengrep
