@@ -55,6 +55,12 @@ function mount(
   start: number | null,
   end: number | null,
   breakdownMode: "total" | "by-type" = "total",
+  filters: {
+    startDate?: string;
+    endDate?: string;
+    selectedDays?: string[];
+    timeZone?: "local" | "utc";
+  } = {},
 ) {
   const container = document.createElement("div");
   render(
@@ -69,9 +75,10 @@ function mount(
       start,
       end,
       vi.fn(),
-      "",
-      "",
-      [],
+      filters.startDate ?? "",
+      filters.endDate ?? "",
+      filters.selectedDays ?? [],
+      filters.timeZone ?? "local",
       [],
       false,
       false,
@@ -92,6 +99,35 @@ function mount(
 }
 
 describe("renderSessionDetailPanel filtered usage", () => {
+  it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
+    const previousTimeZone = process.env.TZ;
+    process.env.TZ = "Asia/Shanghai";
+    try {
+      const points = [
+        point({ timestamp: Date.parse("2026-05-13T18:00:00.000Z") }),
+        point({ timestamp: Date.parse("2026-05-13T23:59:59.999Z") }),
+      ];
+      const filters = {
+        startDate: "2026-05-13",
+        endDate: "2026-05-13",
+        selectedDays: ["2026-05-13"],
+      };
+
+      const utc = mount(points, null, null, "total", { ...filters, timeZone: "utc" });
+      const local = mount(points, null, null, "total", { ...filters, timeZone: "local" });
+
+      expect(utc.querySelectorAll(".ts-bar")).toHaveLength(2);
+      expect(local.querySelectorAll(".ts-bar")).toHaveLength(0);
+      expect(local.querySelector(".usage-empty-block")).not.toBeNull();
+    } finally {
+      if (previousTimeZone === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previousTimeZone;
+      }
+    }
+  });
+
   it("aggregates token, cost, type, message, and duration data inside the selected range", () => {
     const container = mount(
       [

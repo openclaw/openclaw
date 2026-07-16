@@ -37,6 +37,26 @@ function normalizeLogTimestamp(ts: number): number {
   return ts < 1e12 ? ts * 1000 : ts;
 }
 
+function dateBoundaryMs(date: string, timeZone: "local" | "utc", nextDay: boolean): number {
+  const value = new Date(`${date}T00:00:00${timeZone === "utc" ? "Z" : ""}`);
+  if (nextDay) {
+    if (timeZone === "utc") {
+      value.setUTCDate(value.getUTCDate() + 1);
+    } else {
+      value.setDate(value.getDate() + 1);
+    }
+  }
+  return value.getTime();
+}
+
+function dateKey(timestamp: number, timeZone: "local" | "utc"): string {
+  const value = new Date(timestamp);
+  const year = timeZone === "utc" ? value.getUTCFullYear() : value.getFullYear();
+  const month = (timeZone === "utc" ? value.getUTCMonth() : value.getMonth()) + 1;
+  const day = timeZone === "utc" ? value.getUTCDate() : value.getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 /** Filter session logs by a timestamp range. */
 function filterLogsByRange(
   logs: SessionLogEntry[],
@@ -241,6 +261,7 @@ function renderSessionDetailPanel(
   startDate: string,
   endDate: string,
   selectedDays: string[],
+  timeZone: "local" | "utc",
   sessionLogs: SessionLogEntry[] | null,
   sessionLogsLoading: boolean,
   sessionLogsExpanded: boolean,
@@ -336,6 +357,7 @@ function renderSessionDetailPanel(
             startDate,
             endDate,
             selectedDays,
+            timeZone,
             timeSeriesCursorStart,
             timeSeriesCursorEnd,
             onTimeSeriesCursorRangeChange,
@@ -378,6 +400,7 @@ function renderTimeSeriesCompact(
   startDate?: string,
   endDate?: string,
   selectedDays?: string[],
+  timeZone: "local" | "utc" = "local",
   cursorStart?: number | null,
   cursorEnd?: number | null,
   onCursorRangeChange?: (start: number | null, end: number | null) => void,
@@ -400,17 +423,15 @@ function renderTimeSeriesCompact(
   // Filter and recalculate (same logic as main function)
   let points = timeSeries.points;
   if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
-    const startTs = startDate ? new Date(startDate + "T00:00:00").getTime() : 0;
-    const endTs = endDate ? new Date(endDate + "T23:59:59").getTime() : Infinity;
+    const startTs = startDate ? dateBoundaryMs(startDate, timeZone, false) : 0;
+    const endTs = endDate ? dateBoundaryMs(endDate, timeZone, true) : Infinity;
     const selectedDaySet = selectedDays?.length ? new Set(selectedDays) : undefined;
     points = timeSeries.points.filter((p) => {
-      if (p.timestamp < startTs || p.timestamp > endTs) {
+      if (p.timestamp < startTs || p.timestamp >= endTs) {
         return false;
       }
       if (selectedDaySet) {
-        const d = new Date(p.timestamp);
-        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        return selectedDaySet.has(dateStr);
+        return selectedDaySet.has(dateKey(p.timestamp, timeZone));
       }
       return true;
     });
