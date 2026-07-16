@@ -92,7 +92,7 @@ export class PondGatewayRpc {
 
   request(method, params = {}, options = {}) {
     if (this.terminalError) {
-      return Promise.reject(this.terminalError);
+      return Promise.reject(asError(this.terminalError));
     }
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error(`Gateway socket is not open for RPC: ${method}`));
