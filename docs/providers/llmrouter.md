@@ -87,14 +87,22 @@ Response headers from LLMRouter expose the routing decision (`x-llmrouter-model`
 ## Pinning a specific model
 
 Any model slug other than `auto` pins that upstream model directly instead of routing. LLMRouter
-exposes 500+ slugs (`GET /v1/models`) spanning OpenAI, Anthropic, Gemini, DeepSeek, and other
-families; pass any of them straight through as `llmrouter/<slug>`, no config changes required:
+exposes 500+ bare slugs (`GET /v1/models`, no provider prefix) spanning OpenAI, Anthropic, Gemini,
+DeepSeek, and other families; pass any of them straight through as `llmrouter/<slug>`, no config
+changes required. For example:
+
+| Family    | Example slug      | Model ref                   |
+| --------- | ----------------- | --------------------------- |
+| OpenAI    | `gpt-5.4`         | `llmrouter/gpt-5.4`         |
+| Anthropic | `claude-opus-4.6` | `llmrouter/claude-opus-4.6` |
+| Google    | `gemini-2.5-pro`  | `llmrouter/gemini-2.5-pro`  |
+| DeepSeek  | `deepseek-r1`     | `llmrouter/deepseek-r1`     |
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "llmrouter/claude-opus-4-6" },
+      model: { primary: "llmrouter/claude-opus-4.6" },
     },
   },
 }

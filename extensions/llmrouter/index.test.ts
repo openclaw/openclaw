@@ -52,16 +52,24 @@ describe("LLMRouter provider registration", () => {
     );
   });
 
-  it("resolves unknown model ids as pinned pass-through slugs", async () => {
+  it.each([
+    ["claude-opus-4.6", "anthropic"],
+    ["gpt-5.4", "openai"],
+    ["gemini-2.5-pro", "google"],
+    ["deepseek-r1", "deepseek"],
+  ])("resolves unknown model id %s as a pinned pass-through slug", async (modelId) => {
+    // LLMRouter's registry uses bare slugs with no provider prefix (`GET
+    // /v1/models`), so a pinned model ref stays exactly `llmrouter/<slug>`
+    // regardless of which upstream family it resolves to.
     const provider = await registerSingleProviderPlugin(llmrouterPlugin);
     const resolved = provider.resolveDynamicModel?.({
       provider: "llmrouter",
-      modelId: "anthropic/claude-opus-4-6",
+      modelId,
     } as never);
 
     expect(resolved).toMatchObject({
-      id: "anthropic/claude-opus-4-6",
-      name: "anthropic/claude-opus-4-6",
+      id: modelId,
+      name: modelId,
       provider: "llmrouter",
       api: "openai-completions",
       baseUrl: "https://api.llmrouter.sh/v1",
