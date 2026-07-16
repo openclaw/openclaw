@@ -238,7 +238,7 @@ describe("secret ref resolver", () => {
           },
         },
       },
-      env: { MISSING_API_KEY: "configured-but-denied" },
+      env: { MISSING_API_KEY: "test-missing-api-key" },
     }).catch((error: unknown) => error);
     expect(isMissingSecretRefResolutionError({ ref, error: policyError })).toBe(false);
   });
