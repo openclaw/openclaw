@@ -78,9 +78,10 @@ describe("resolveOpenPathCommand", () => {
 describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config $(touch pwned).json" }, async () => {
-      runExecMock.mockImplementation(async (command: string, args: string[]) => {
+      runExecMock.mockImplementation(async (command: string, args: string[], options: unknown) => {
         expect(["open", "xdg-open", "powershell.exe"]).toContain(command);
         expect(args).toEqual(["/tmp/config $(touch pwned).json"]);
+        expect(options).toEqual({ logOutput: false, timeoutMs: 5_000 });
         return { stdout: "", stderr: "" };
       });
 

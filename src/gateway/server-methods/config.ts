@@ -72,6 +72,7 @@ import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 const CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS = 5_000;
+const CONFIG_OPEN_COMMAND_TIMEOUT_MS = 5_000;
 
 let configSchemaResponseCache: {
   expiresAtMs: number;
