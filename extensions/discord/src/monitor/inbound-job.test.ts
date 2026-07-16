@@ -2,11 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { Message } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
-import {
-  buildDiscordInboundJob,
-  materializeDiscordInboundJob,
-  resolveDiscordInboundJobQueueKey,
-} from "./inbound-job.js";
+import { buildDiscordInboundJob, materializeDiscordInboundJob } from "./inbound-job.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
 function jsonRoundTrip<T>(value: T): T {
@@ -32,9 +28,9 @@ describe("buildDiscordInboundJob", () => {
       messageChannelId: "channel-fallback",
     });
 
-    expect(resolveDiscordInboundJobQueueKey(routed)).toBe("agent:main:discord:direct:routed");
-    expect(resolveDiscordInboundJobQueueKey(baseOnly)).toBe("agent:main:discord:direct:base-only");
-    expect(resolveDiscordInboundJobQueueKey(channelFallback)).toBe("channel-fallback");
+    expect(buildDiscordInboundJob(routed).queueKey).toBe("agent:main:discord:direct:routed");
+    expect(buildDiscordInboundJob(baseOnly).queueKey).toBe("agent:main:discord:direct:base-only");
+    expect(buildDiscordInboundJob(channelFallback).queueKey).toBe("channel-fallback");
   });
 
   it("keeps live runtime references out of the payload", async () => {
@@ -72,6 +68,13 @@ describe("buildDiscordInboundJob", () => {
         },
         ownerId: "user-1",
       },
+      preparedMedia: [
+        {
+          path: "/tmp/openclaw-discord-test/photo.png",
+          contentType: "image/png",
+          placeholder: "<media:image>",
+        },
+      ],
     });
 
     const job = buildDiscordInboundJob(ctx);
@@ -95,6 +98,7 @@ describe("buildDiscordInboundJob", () => {
       ownerId: "user-1",
     });
     const serializedPayload = jsonRoundTrip(job.payload);
+    expect(serializedPayload.preparedMedia).toEqual(ctx.preparedMedia);
     expect(serializedPayload.threadChannel).toEqual({
       id: "thread-1",
       name: "codex",

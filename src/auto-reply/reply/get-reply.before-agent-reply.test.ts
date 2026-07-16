@@ -1,4 +1,5 @@
 // Tests before-agent-reply hooks in the get-reply pipeline.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -9,6 +10,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import "./get-reply.test-runtime-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -29,9 +31,11 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
 
 function createContinueDirectivesResult() {
@@ -59,6 +63,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     mocks.initSessionState.mockReset();
     mocks.hasHooks.mockReset();
     mocks.runBeforeAgentReply.mockReset();
+    vi.mocked(runPreparedReplyMock).mockReset().mockResolvedValue(undefined);
 
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
@@ -99,27 +104,32 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
 
     expect(result).toEqual({ text: "plugin reply" });
     expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
-    const [[body, hookCtx]] = mocks.runBeforeAgentReply.mock.calls as unknown as Array<
-      [
-        { cleanedBody?: string },
-        {
-          agentId?: string;
-          sessionKey?: string;
-          sessionId?: string;
-          workspaceDir?: string;
-          messageProvider?: string;
-          trigger?: string;
-          channelId?: string;
-          senderId?: string;
-          chatId?: string;
-          channel?: string;
-          channelContext?: {
-            sender?: { id?: string };
-            chat?: { id?: string };
-          };
-        },
-      ]
-    >;
+    const [body, hookCtx] = expectDefined(
+      (
+        mocks.runBeforeAgentReply.mock.calls as unknown as Array<
+          [
+            { cleanedBody?: string },
+            {
+              agentId?: string;
+              sessionKey?: string;
+              sessionId?: string;
+              workspaceDir?: string;
+              messageProvider?: string;
+              trigger?: string;
+              channelId?: string;
+              senderId?: string;
+              chatId?: string;
+              channel?: string;
+              channelContext?: {
+                sender?: { id?: string };
+                chat?: { id?: string };
+              };
+            },
+          ]
+        >
+      )[0],
+      "(mocks.runBeforeAgentReply.mock.calls as unknown as Array<\n        [\n          { cleanedBody?: string },\n          {\n            agentId?: string;\n            sessionKey?: string;\n            sessionId?: string;\n            workspaceDir?: string;\n            messageProvider?: string;\n            trigger?: string;\n            channelId?: string;\n            senderId?: string;\n            chatId?: string;\n            channel?: string;\n            channelContext?: {\n              sender?: { id?: string };\n              chat?: { id?: string };\n            };\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(body.cleanedBody).toBe("hello world");
     expect(hookCtx.agentId).toBe("main");
     expect(hookCtx.sessionKey).toBe("agent:main:telegram:-100123");
@@ -144,6 +154,36 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
 
     expect(result).toEqual({ text: SILENT_REPLY_TOKEN });
+  });
+
+  it("defers dispatch-owned hooks into the admitted reply run", async () => {
+    mocks.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: { text: "durable plugin reply" },
+    });
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:telegram:-100123",
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+
+    try {
+      await expect(
+        getReplyFromConfig(buildGetReplyGroupCtx(), { replyOperation } as never, {}),
+      ).resolves.toBeUndefined();
+
+      expect(mocks.runBeforeAgentReply).not.toHaveBeenCalled();
+      const runParams = expectDefined(
+        vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0],
+        "runPreparedReply params",
+      );
+      await expect(runParams.beforeAgentReply?.()).resolves.toEqual({
+        text: "durable plugin reply",
+      });
+      expect(mocks.runBeforeAgentReply).toHaveBeenCalledOnce();
+    } finally {
+      replyOperation.complete();
+    }
   });
 });
 afterEach(() => {

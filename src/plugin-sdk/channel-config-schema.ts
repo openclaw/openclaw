@@ -1,9 +1,17 @@
-/** Shared config-schema primitives for channel plugins with DM/group policy knobs. */
+/**
+ * Shared config-schema primitives for channel plugins with DM/group policy knobs.
+ *
+ * Canonical config-schema module: internal/bundled code imports this subpath;
+ * the primitives/bundled/legacy facades are re-export shells over it.
+ */
 export {
   AllowFromListSchema,
+  ChannelGroupEntrySchema,
   buildChannelConfigSchema,
   buildCatchallMultiAccountChannelSchema,
+  buildGroupEntrySchema,
   buildJsonChannelConfigSchema,
+  buildMultiAccountChannelSchema,
   buildNestedDmConfigSchema,
 } from "../channels/plugins/config-schema.js";
 export {

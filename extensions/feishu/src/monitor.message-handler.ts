@@ -1,13 +1,10 @@
 // Feishu plugin module implements monitor.message handler behavior.
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { claimUnprocessedFeishuMessage, releaseFeishuMessageProcessing } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { isMentionForwardRequest } from "./mention.js";
-import {
-  releaseFeishuMessageProcessing,
-  tryBeginFeishuMessageProcessing,
-} from "./processing-claims.js";
 import { createSequentialQueue } from "./sequential-queue.js";
 import type { FeishuChatType } from "./types.js";
 
@@ -141,8 +138,7 @@ function resolveFeishuDebounceMentions(params: {
   if (entries.length === 0) {
     return undefined;
   }
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
+  for (const entry of entries.toReversed()) {
     if (isMentionForwardRequest(entry, botOpenId)) {
       return mergeFeishuDebounceMentions([entry]);
     }
@@ -347,8 +343,13 @@ export function createFeishuMessageReceiveHandler({
       return;
     }
     const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
-    if (!tryBeginFeishuMessageProcessing(messageDedupeKey, accountId)) {
-      log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
+    const claim = await claimUnprocessedFeishuMessage({
+      messageId: messageDedupeKey,
+      namespace: accountId,
+      log,
+    });
+    if (claim !== "claimed") {
+      log(`feishu[${accountId}]: dropping ${claim} event for message ${messageId}`);
       return;
     }
     const processMessage = async () => {

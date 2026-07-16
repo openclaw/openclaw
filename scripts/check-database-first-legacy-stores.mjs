@@ -4,9 +4,17 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import {
+  explicitUndefinedLegacyObjectPropertyValue,
+  mergeConditionalLegacyObjectPropertyValue,
+  mergeConditionalLiteralTexts,
+  mergeExhaustiveLiteralTexts,
+  mergeLegacyObjectPropertyValues,
+  mergeLegacyPathBranchAssignments,
+} from "./lib/legacy-store-path-domain.mjs";
 import { resolveRepoRoot, runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
-export const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
+const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
 
 const legacyWriteCallees = new Set([
   "appendFile",
@@ -82,9 +90,17 @@ const legacyStorePatterns = [
   /\bcache\/[^"'`]*\.json\b/u,
   /\bagents\/[^"'`]+\/agent\/(?:auth|models)\.json\b/u,
   /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|workspace-state)\.json\b/u,
+  /\btui\/last-session\.json\b/u,
+  /\bcommitments\/commitments\.json\b/u,
+  /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
+  /\bpush\/(?:apns-registrations|web-push-subscriptions|vapid-keys)\.json\b/u,
+  /\bnode\.json\b/u,
+  /\bsubagents\/runs\.json\b/u,
+  /\btmp\/skill-uploads\b/u,
+  /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
   /\bcron\/(?:runs\/[^"'`]+\.jsonl|jobs\.json|jobs-state\.json)\b/u,
   /\b(?:process-leases|session-toggles|known-users|msteams-conversations|msteams-polls|msteams-sso-tokens|bot-storage|sync-store|thread-bindings|inbound-dedupe|startup-verification|storage-meta|crypto-idb-snapshot|command-deploy-cache|plugin-binding-approvals|plugins\/installs|config-health|port-guard|restart-sentinel|gateway-restart-intent|gateway-supervisor-restart-handoff)\.json\b/u,
-  /\b(?:calls|ref-index|audit\/file-transfer|audit\/crestodian)\.jsonl\b/u,
+  /\b(?:calls|ref-index|audit\/file-transfer|audit\/openclaw)\.jsonl\b/u,
   /\b(?:reply-cache|sent-echoes|events|claims)\.jsonl\b/u,
   /\bplugin-state\/state\.sqlite\b/u,
   /\btasks\/(?:runs\.sqlite|flows\/registry\.sqlite)\b/u,
@@ -93,16 +109,22 @@ const legacyStorePatterns = [
 
 const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
+  "src/commands/doctor-usage-cost-cache.ts",
   "src/infra/session-state-migration.ts",
   "src/infra/state-migrations.ts",
+  "src/infra/state-migrations.tui-last-session.ts",
+  "src/infra/state-migrations.commitments.ts",
+  "src/infra/state-migrations.managed-outgoing-images.ts",
+  "src/infra/state-migrations.apns.ts",
+  "src/infra/state-migrations.web-push.ts",
+  "src/infra/state-migrations.node-host.ts",
+  "src/infra/state-migrations.subagent-registry.ts",
+  "src/infra/state-migrations.rescue-pending.ts",
   "src/commands/session-state-migration.ts",
   "src/commands/doctor-state-migrations.test.ts",
 ];
 
-const allowedFixturePaths = new Set([
-  "extensions/qa-lab/src/providers/shared/auth-store.ts",
-  "extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts",
-]);
+const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
 const allowedCurrentLegacyWriteViolations = [
   "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",
@@ -1049,42 +1071,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return element && !ts.isSpreadElement(element) ? element : null;
   }
 
-  function mergeConditionalLiteralTexts(previous, next) {
-    if (next.length === 0) {
-      return previous ?? null;
-    }
-    return [...new Set([...(previous ?? []), ...next])];
-  }
-
-  function mergeExhaustiveLiteralTexts(left, right) {
-    if (left.length === 0 && right.length === 0) {
-      return null;
-    }
-    return [...new Set([...left, ...right])];
-  }
-
-  function mergeLegacyObjectPropertyValues(left, right) {
-    if (left === true || right === true) {
-      return true;
-    }
-    if (
-      left === explicitUndefinedLegacyObjectPropertyValue ||
-      right === explicitUndefinedLegacyObjectPropertyValue ||
-      left === undefined ||
-      right === undefined
-    ) {
-      return explicitUndefinedLegacyObjectPropertyValue;
-    }
-    return false;
-  }
-
-  function mergeConditionalLegacyObjectPropertyValue(previous, next) {
-    if (previous === undefined && next === false) {
-      return null;
-    }
-    return mergeLegacyObjectPropertyValues(previous, next);
-  }
-
   function legacyObjectPropertyRewriteValues(objectName, initializer, existingScope) {
     const values = new Map();
     markLegacyObjectProperties(objectName, initializer, values, null);
@@ -1097,34 +1083,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
     }
     return values;
-  }
-
-  function branchAssignmentPropertyValue(assignment, propertyKey) {
-    if (assignment.objectProperties.has(propertyKey)) {
-      return { known: true, value: assignment.objectProperties.get(propertyKey) };
-    }
-    if (assignment.knownObjectLiteral) {
-      return { known: true, value: explicitUndefinedLegacyObjectPropertyValue };
-    }
-    return { known: false, value: null };
-  }
-
-  function mergeBranchLegacyObjectPropertyValue(leftAssignment, rightAssignment, propertyKey) {
-    const left = branchAssignmentPropertyValue(leftAssignment, propertyKey);
-    const right = branchAssignmentPropertyValue(rightAssignment, propertyKey);
-    if (!left.known && !right.known) {
-      return null;
-    }
-    if (left.value === true || right.value === true) {
-      return true;
-    }
-    if (
-      left.value === explicitUndefinedLegacyObjectPropertyValue ||
-      right.value === explicitUndefinedLegacyObjectPropertyValue
-    ) {
-      return explicitUndefinedLegacyObjectPropertyValue;
-    }
-    return left.known && right.known ? false : null;
   }
 
   function lookupLegacyObjectProperty(
@@ -2236,9 +2194,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
   const unknownObjectLiteralPropertyInitializer = Symbol(
     "unknown object literal property initializer",
   );
-  const explicitUndefinedLegacyObjectPropertyValue = Symbol(
-    "explicit undefined legacy object property value",
-  );
   const explicitUndefinedNestedWrapperValue = Symbol("explicit undefined nested wrapper value");
   const knownObjectLiteralNestedWrapperValue = Symbol("known object literal nested wrapper value");
   const unknownNestedWrapperObjectValue = Symbol("unknown nested wrapper object value");
@@ -2634,37 +2589,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
       const { index, name } = thenAssignment;
       mergedIdentifierNames.add(branchIdentifierAssignmentKey(index, name));
-      const mergedValue = thenAssignment.value === true || elseAssignment.value === true;
-      const propertyKeys = new Set([
-        ...thenAssignment.objectProperties.keys(),
-        ...elseAssignment.objectProperties.keys(),
-      ]);
-      const mergedProperties = new Map();
-      for (const propertyKey of propertyKeys) {
-        const mergedPropertyValue = mergeBranchLegacyObjectPropertyValue(
-          thenAssignment,
-          elseAssignment,
-          propertyKey,
-        );
-        if (mergedPropertyValue !== null) {
-          mergedProperties.set(propertyKey, mergedPropertyValue);
-        }
-      }
-      const mergedKnownObjectLiteral =
-        thenAssignment.knownObjectLiteral && elseAssignment.knownObjectLiteral;
-      const mergedKnownUndefined = thenAssignment.knownUndefined || elseAssignment.knownUndefined;
-      const knownObjectLiteralKeys = new Set([
-        ...thenAssignment.knownObjectLiterals.keys(),
-        ...elseAssignment.knownObjectLiterals.keys(),
-      ]);
-      const mergedKnownObjectLiterals = new Map();
-      for (const knownObjectLiteralKey of knownObjectLiteralKeys) {
-        mergedKnownObjectLiterals.set(
-          knownObjectLiteralKey,
-          thenAssignment.knownObjectLiterals.get(knownObjectLiteralKey) === true &&
-            elseAssignment.knownObjectLiterals.get(knownObjectLiteralKey) === true,
-        );
-      }
+      const merged = mergeLegacyPathBranchAssignments(thenAssignment, elseAssignment);
       if (applyToTargetScopes) {
         const pathScope = legacyPathScopes[index];
         const literalScope = literalTextScopes[index];
@@ -2672,48 +2597,36 @@ export function collectDatabaseFirstLegacyStoreViolations(
         const propertyScope = legacyObjectPropertyScopes[index];
         const knownObjectLiteralScope = legacyKnownObjectLiteralScopes[index];
         clearKnownLegacyObjectLiterals(knownObjectLiteralScope, name);
-        knownObjectLiteralScope.set(name, mergedKnownObjectLiteral);
-        for (const [knownObjectLiteralKey, value] of mergedKnownObjectLiterals) {
+        knownObjectLiteralScope.set(name, merged.knownObjectLiteral);
+        for (const [knownObjectLiteralKey, value] of merged.knownObjectLiterals) {
           knownObjectLiteralScope.set(knownObjectLiteralKey, value);
         }
-        pathScope.set(name, mergedValue);
-        knownUndefinedScope.set(name, mergedKnownUndefined);
-        literalScope.set(
-          name,
-          mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts),
-        );
+        pathScope.set(name, merged.value);
+        knownUndefinedScope.set(name, merged.knownUndefined);
+        literalScope.set(name, merged.literalTexts);
         clearLegacyObjectProperties(propertyScope, name);
-        for (const [propertyKey, value] of mergedProperties) {
+        for (const [propertyKey, value] of merged.objectProperties) {
           propertyScope.set(propertyKey, value);
         }
       }
       clearKnownLegacyObjectLiterals(currentLegacyKnownObjectLiteralScope(), name);
-      currentLegacyKnownObjectLiteralScope().set(name, mergedKnownObjectLiteral);
-      for (const [knownObjectLiteralKey, value] of mergedKnownObjectLiterals) {
+      currentLegacyKnownObjectLiteralScope().set(name, merged.knownObjectLiteral);
+      for (const [knownObjectLiteralKey, value] of merged.knownObjectLiterals) {
         currentLegacyKnownObjectLiteralScope().set(knownObjectLiteralKey, value);
       }
-      currentLegacyPathScope().set(name, mergedValue);
-      currentKnownUndefinedScope().set(name, mergedKnownUndefined);
-      currentLiteralTextScope().set(
-        name,
-        mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts),
-      );
+      currentLegacyPathScope().set(name, merged.value);
+      currentKnownUndefinedScope().set(name, merged.knownUndefined);
+      currentLiteralTextScope().set(name, merged.literalTexts);
       clearLegacyObjectProperties(currentLegacyObjectPropertyScope(), name);
-      for (const [propertyKey, value] of mergedProperties) {
+      for (const [propertyKey, value] of merged.objectProperties) {
         currentLegacyObjectPropertyScope().set(propertyKey, value);
       }
       if (parentEffect) {
         parentEffect.identifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
           index,
-          knownUndefined: mergedKnownUndefined,
-          knownObjectLiteral: mergedKnownObjectLiteral,
-          knownObjectLiterals: mergedKnownObjectLiterals,
-          literalTexts:
-            mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts) ??
-            [],
+          ...merged,
+          literalTexts: merged.literalTexts ?? [],
           name,
-          value: mergedValue,
-          objectProperties: mergedProperties,
         });
       }
     }

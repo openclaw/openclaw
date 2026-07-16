@@ -1,3 +1,7 @@
+import {
+  normalizeConversationReadInvocationOrigin,
+  type ConversationReadInvocationOrigin,
+} from "../channels/plugins/conversation-read-origin.js";
 /**
  * Runtime context resolver for OpenClaw plugin tools.
  *
@@ -17,7 +21,12 @@ export type OpenClawPluginToolOptions = {
   agentChannel?: GatewayMessageChannel;
   agentAccountId?: string;
   agentTo?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
+  /** Current routable conversation target when no explicit agent target is available. */
+  currentChannelId?: string;
   agentThreadId?: string | number;
+  nativeChannelId?: string;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -25,6 +34,8 @@ export type OpenClawPluginToolOptions = {
   modelProvider?: string;
   modelId?: string;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
   sessionId?: string;
   /**
@@ -70,7 +81,7 @@ export function resolveOpenClawPluginToolInputs(params: {
   // channel/account/thread shape as gateway-delivered agent tools.
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
-    to: options?.agentTo,
+    to: options?.agentTo ?? options?.currentMessagingTarget ?? options?.currentChannelId,
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
@@ -94,7 +105,12 @@ export function resolveOpenClawPluginToolInputs(params: {
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       deliveryContext,
+      nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
+      senderIsOwner: options?.senderIsOwner,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        options?.conversationReadOrigin,
+      ),
       sandboxed: options?.sandboxed,
       oneShotCliRun: options?.oneShotCliRun,
     },

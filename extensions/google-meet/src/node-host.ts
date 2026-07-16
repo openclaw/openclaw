@@ -6,6 +6,7 @@ import {
   DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
   DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
 } from "./config.js";
+import { normalizeMeetUrl } from "./meet-url.js";
 import {
   GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
   outputMentionsBlackHole2ch,
@@ -107,32 +108,28 @@ function wake(session: NodeBridgeSession) {
 }
 
 function stopSession(session: NodeBridgeSession) {
-  const wasClosed = session.closed;
+  // Process and stream errors can arrive together during teardown. Close once
+  // so the same children do not get duplicate termination timers.
+  if (session.closed) {
+    return;
+  }
   session.closed = true;
-  session.closedAt ??= new Date().toISOString();
+  session.closedAt = new Date().toISOString();
   terminateChild(session.input);
   terminateChild(session.output);
-  if (!wasClosed) {
-    wake(session);
-  }
+  wake(session);
 }
 
 function attachOutputProcessHandlers(session: NodeBridgeSession, outputProcess: ChildProcess) {
-  outputProcess.on("exit", () => {
+  const stopIfCurrent = () => {
     if (session.output === outputProcess) {
       stopSession(session);
     }
-  });
-  outputProcess.on("error", () => {
-    if (session.output === outputProcess) {
-      stopSession(session);
-    }
-  });
-  outputProcess.stdin?.on?.("error", () => {
-    if (session.output === outputProcess) {
-      stopSession(session);
-    }
-  });
+  };
+  outputProcess.on("exit", stopIfCurrent);
+  outputProcess.on("error", stopIfCurrent);
+  outputProcess.stdin?.on("error", stopIfCurrent);
+  outputProcess.stderr?.on("error", stopIfCurrent);
 }
 
 function startOutputProcess(command: { command: string; args: string[] }) {
@@ -178,9 +175,12 @@ function startCommandPair(params: {
     }
     wake(session);
   });
-  inputProcess.on("exit", () => stopSession(session));
+  const stop = () => stopSession(session);
+  inputProcess.on("exit", stop);
+  inputProcess.on("error", stop);
+  inputProcess.stdout?.on("error", stop);
+  inputProcess.stderr?.on("error", stop);
   attachOutputProcessHandlers(session, outputProcess);
-  inputProcess.on("error", () => stopSession(session));
   sessions.set(session.id, session);
   return session;
 }
@@ -279,10 +279,7 @@ function clearAudio(params: Record<string, unknown>) {
 }
 
 function startChrome(params: Record<string, unknown>) {
-  const url = readString(params.url);
-  if (!url) {
-    throw new Error("url required");
-  }
+  const url = normalizeMeetUrl(params.url);
   const timeoutMs = readNumber(params.joinTimeoutMs, 30_000);
   const mode = readString(params.mode);
 

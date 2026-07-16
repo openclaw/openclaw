@@ -149,18 +149,82 @@ if ([string]::IsNullOrWhiteSpace($GitDir)) {
 }
 
 # Check for Node.js
+function Test-NodeVersionSupported {
+    param([string]$Version)
+
+    $versionMatch = [regex]::Match($Version, '^v?(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)')
+    if (-not $versionMatch.Success) {
+        return $false
+    }
+    $major = [int]$versionMatch.Groups["major"].Value
+    $minor = [int]$versionMatch.Groups["minor"].Value
+    $patch = [int]$versionMatch.Groups["patch"].Value
+    if ($major -eq 22) {
+        return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 3))
+    }
+    if ($major -eq 24) {
+        return ($minor -ge 15)
+    }
+    if ($major -eq 25) {
+        return ($minor -ge 9)
+    }
+    return ($major -gt 25)
+}
+
+function Test-NodeSqliteSupported {
+    param([string]$Version)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
+        return $false
+    }
+    $versionMatch = [regex]::Match($Version, '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$')
+    if (-not $versionMatch.Success) {
+        return $false
+    }
+    $major = [int]$versionMatch.Groups["major"].Value
+    $minor = [int]$versionMatch.Groups["minor"].Value
+    $patch = [int]$versionMatch.Groups["patch"].Value
+    return (
+        $major -gt 3 -or
+        (
+            $major -eq 3 -and
+            (
+                $minor -gt 51 -or
+                ($minor -eq 51 -and $patch -ge 3) -or
+                ($minor -eq 50 -and $patch -ge 7) -or
+                ($minor -eq 44 -and $patch -ge 6)
+            )
+        )
+    )
+}
+
 function Check-Node {
     try {
-        $nodeVersion = (node -v 2>$null)
+        $nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $nodePath = $nodeCommand.Source
+        $nodeVersion = (& $nodePath -v 2>$null)
+        $sqliteProbe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get().version)); } finally { db.close(); }'
+        $sqliteVersion = ($sqliteProbe | & $nodePath - 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            $sqliteVersion = $null
+        }
         if ($nodeVersion) {
-            $versionMatch = [regex]::Match($nodeVersion, '^v(?<major>\d+)\.(?<minor>\d+)\.')
-            $major = if ($versionMatch.Success) { [int]$versionMatch.Groups["major"].Value } else { 0 }
-            $minor = if ($versionMatch.Success) { [int]$versionMatch.Groups["minor"].Value } else { 0 }
-            if (($major -gt 22) -or (($major -eq 22) -and ($minor -ge 19))) {
+            if (
+                (Test-NodeVersionSupported -Version $nodeVersion) -and
+                (Test-NodeSqliteSupported -Version $sqliteVersion)
+            ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
+            } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
+                $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {
+                    "unavailable"
+                } else {
+                    $sqliteVersion
+                }
+                Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required" -ForegroundColor Yellow
+                return $false
             } else {
-                Write-Host "[!] Node.js $nodeVersion found, but v22.19+ required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion found, but Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+ is required" -ForegroundColor Yellow
                 return $false
             }
         }
@@ -242,9 +306,30 @@ function Ensure-PortableNodeOnUserPath {
     }
 }
 
+function Get-WebRequestTimeoutParameters {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandName,
+        [Parameter(Mandatory = $true)]
+        [int]$LegacyTimeoutSec
+    )
+
+    $command = Get-Command $CommandName -ErrorAction Stop
+    # PowerShell 7.4+ exposes a per-read limit, which bounds body stalls without rejecting slow
+    # connections. Earlier versions only expose TimeoutSec, so downloads keep a longer allowance.
+    if ($command.Parameters.ContainsKey("OperationTimeoutSeconds")) {
+        return @{
+            OperationTimeoutSeconds = 30
+        }
+    }
+
+    return @{ TimeoutSec = $LegacyTimeoutSec }
+}
+
 function Resolve-PortableNodeDownload {
     $architecture = Get-WindowsPortableArchitecture
-    $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json"
+    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
+    $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" @requestTimeouts
     $release = $index |
         Where-Object { $_.version -match '^v24\.' } |
         Select-Object -First 1
@@ -332,7 +417,8 @@ function Install-PortableNode {
 
     try {
         Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
-        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip
+        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
+        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot
     } finally {
         if (Test-Path $tmpZip) {
@@ -356,10 +442,11 @@ function Install-Node {
     # Try winget first (Windows 11 / Windows 10 with App Installer)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host "  Using winget..." -ForegroundColor Gray
-        winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements
+        winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements | Out-Host
 
         # Refresh PATH
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        Refresh-ProcessPath
+        Add-InstalledNodeToProcessPath | Out-Null
         if (Check-Node) {
             Write-Host "[OK] Node.js installed via winget" -ForegroundColor Green
             return $true
@@ -372,20 +459,33 @@ function Install-Node {
     # Try Chocolatey
     if (Get-Command choco -ErrorAction SilentlyContinue) {
         Write-Host "  Using Chocolatey..." -ForegroundColor Gray
-        choco install nodejs-lts -y
+        choco upgrade nodejs-lts -y --install-if-not-installed | Out-Host
 
         # Refresh PATH
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
-        return $true
+        Refresh-ProcessPath
+        if (Check-Node) {
+            Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "[!] Chocolatey completed, but the installed Node.js runtime is unsupported" -ForegroundColor Yellow
+        return $false
     }
 
     # Try Scoop
     if (Get-Command scoop -ErrorAction SilentlyContinue) {
         Write-Host "  Using Scoop..." -ForegroundColor Gray
-        scoop install nodejs-lts
-        Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
-        return $true
+        scoop update | Out-Host
+        scoop install nodejs-lts | Out-Host
+        scoop update nodejs-lts | Out-Host
+
+        # Refresh PATH
+        Refresh-ProcessPath
+        if (Check-Node) {
+            Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "[!] Scoop completed, but the installed Node.js runtime is unsupported" -ForegroundColor Yellow
+        return $false
     }
 
     try {
@@ -401,7 +501,7 @@ function Install-Node {
     Write-Host ""
     Write-Host "Error: Could not install Node.js automatically." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Please install Node.js 22+ manually:" -ForegroundColor Yellow
+    Write-Host "Please install Node.js 24.15+ manually:" -ForegroundColor Yellow
     Write-Host "  https://nodejs.org/en/download/" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Or install winget (App Installer) from the Microsoft Store." -ForegroundColor Gray
@@ -442,6 +542,41 @@ function Add-ToProcessPath {
     }
 
     $env:Path = "$PathEntry;$env:Path"
+}
+
+function Add-InstalledNodeToProcessPath {
+    foreach ($programFilesRoot in @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ([string]::IsNullOrWhiteSpace($programFilesRoot)) {
+            continue
+        }
+        $nodeDir = Join-Path $programFilesRoot "nodejs"
+        if (Test-Path (Join-Path $nodeDir "node.exe")) {
+            Add-ToProcessPath $nodeDir
+            return $true
+        }
+    }
+    return $false
+}
+
+function Refresh-ProcessPath {
+    $entries = New-Object System.Collections.Generic.List[string]
+    $pathValues = @(
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        [Environment]::GetEnvironmentVariable("Path", "User"),
+        $env:Path
+    )
+
+    foreach ($pathValue in $pathValues) {
+        foreach ($entry in @($pathValue -split ";")) {
+            if (
+                -not [string]::IsNullOrWhiteSpace($entry) -and
+                -not ($entries | Where-Object { $_ -ieq $entry })
+            ) {
+                $entries.Add($entry)
+            }
+        }
+    }
+    $env:Path = $entries -join ";"
 }
 
 function Add-ToUserPath {
@@ -539,7 +674,8 @@ function Resolve-PortableGitDownload {
         "User-Agent" = "openclaw-installer"
         "Accept" = "application/vnd.github+json"
     }
-    $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers
+    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
+    $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers @requestTimeouts
     if (-not $release -or -not $release.assets) {
         throw "Could not resolve latest git-for-windows release metadata."
     }
@@ -595,7 +731,8 @@ function Install-PortableGit {
 
     try {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip
+        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
+        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
     } finally {
@@ -1113,7 +1250,8 @@ function Get-NpmDebugLogRootCandidates {
 }
 
 function Get-LatestNpmDebugLogPath {
-    foreach ($cacheDir in (Get-NpmDebugLogRootCandidates)) {
+    param([object[]]$CacheRoots)
+    foreach ($cacheDir in @($CacheRoots)) {
         $logDir = Join-Path $cacheDir "_logs"
         if (-not (Test-Path -LiteralPath $logDir -PathType Container)) {
             continue
@@ -1129,7 +1267,10 @@ function Get-LatestNpmDebugLogPath {
 }
 
 function Write-NpmInstallFailureDetails {
-    param([object[]]$Output)
+    param(
+        [object[]]$Output,
+        [object[]]$CacheRoots
+    )
     $printedOutput = $false
     foreach ($line in @($Output)) {
         if ($null -eq $line) {
@@ -1143,7 +1284,7 @@ function Write-NpmInstallFailureDetails {
         $printedOutput = $true
     }
 
-    $latestLog = Get-LatestNpmDebugLogPath
+    $latestLog = Get-LatestNpmDebugLogPath -CacheRoots $CacheRoots
     if ($latestLog) {
         Write-Host "Latest npm debug log ($latestLog):" -ForegroundColor Yellow
         Get-Content -LiteralPath $latestLog -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
@@ -1201,8 +1342,17 @@ function Install-OpenClaw {
     Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
     Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
     try {
-        $npmOutput = Invoke-NpmCommand -Arguments (@("install", "-g") + $freshnessArgs + @("$installSpec")) 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        # Resolve cache roots before the install so failure reporting cannot create a newer npm log.
+        $npmDebugLogRoots = @(Get-NpmDebugLogRootCandidates)
+        $npmInstallArguments = @("install", "-g") + $freshnessArgs + @("$installSpec")
+        $npmOutput = Invoke-NpmCommand -Arguments $npmInstallArguments 2>&1
+        $npmInstallStatus = $LASTEXITCODE
+        if ($npmInstallStatus -ne 0) {
+            Write-Host "[!] npm install failed; retrying once" -ForegroundColor Yellow
+            $npmOutput = Invoke-NpmCommand -Arguments $npmInstallArguments 2>&1
+            $npmInstallStatus = $LASTEXITCODE
+        }
+        if ($npmInstallStatus -ne 0) {
             Write-Host "[!] npm install failed" -ForegroundColor Red
             if ($npmOutput -match "spawn git" -or $npmOutput -match "ENOENT.*git") {
                 Write-Host "Error: git is missing from PATH." -ForegroundColor Red
@@ -1212,7 +1362,7 @@ function Install-OpenClaw {
                 Write-Host "Re-run with verbose output to see the full error:" -ForegroundColor Yellow
                 Write-Host '  powershell -c "irm https://openclaw.ai/install.ps1 | iex"' -ForegroundColor Cyan
             }
-            Write-NpmInstallFailureDetails -Output $npmOutput
+            Write-NpmInstallFailureDetails -Output $npmOutput -CacheRoots $npmDebugLogRoots
             return $false
         }
     } finally {

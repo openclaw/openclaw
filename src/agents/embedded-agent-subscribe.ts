@@ -2,13 +2,14 @@
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   buildCodeSpanIndex,
   createInlineCodeState,
 } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
@@ -31,6 +32,7 @@ import {
 } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
@@ -39,6 +41,7 @@ import {
   readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import {
+  cleanupRunToolStartData,
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./embedded-agent-subscribe.handlers.tools.js";
@@ -157,8 +160,6 @@ function collectPendingMediaFromInternalEvents(
   return pending;
 }
 
-export type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const reasoningMode = params.reasoningMode ?? "off";
@@ -203,6 +204,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
+    lastAssistantStreamContentIndex: undefined,
     lastAssistantStreamItemId: undefined,
     lastAssistantTextMessageIndex: -1,
     lastAssistantTextNormalized: undefined,
@@ -278,12 +280,23 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       stream: "assistant",
       data,
     });
-    void params.onAgentEvent?.({
-      stream: "assistant",
-      data,
-    });
+    if (params.onAgentEvent) {
+      runBestEffortCallback({
+        label: "assistant agent event",
+        log,
+        callback: () =>
+          params.onAgentEvent?.({
+            stream: "assistant",
+            data,
+          }),
+      });
+    }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      void params.onPartialReply(data);
+      runBestEffortCallback({
+        label: "assistant partial reply",
+        log,
+        callback: () => params.onPartialReply?.(data),
+      });
     }
   };
   const emitAssistantStreamData = (
@@ -324,7 +337,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
               assistantMessageIndex: options.assistantMessageIndex,
             })
           : payload;
-      const maybeTask = params.onBlockReply(taggedPayload);
+      const assistantMessageIndex =
+        options?.assistantMessageIndex ??
+        getReplyPayloadMetadata(taggedPayload)?.assistantMessageIndex;
+      const context = assistantMessageIndex === undefined ? undefined : { assistantMessageIndex };
+      const maybeTask = context
+        ? params.onBlockReply(taggedPayload, context)
+        : params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
         return true;
       }
@@ -431,6 +450,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingAssistantUsage = undefined;
     state.assistantUsageCommitted = false;
     state.assistantMessageIndex += 1;
+    state.lastAssistantStreamContentIndex = undefined;
     state.lastAssistantStreamItemId = undefined;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
@@ -722,15 +742,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (!parsed.text && filteredMediaUrls.length === 0) {
       return;
     }
-    try {
-      void params.onToolResult({
-        text: parsed.text,
-        mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
-        ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
-      });
-    } catch {
-      // ignore tool result delivery failures
-    }
+    runBestEffortCallback({
+      label: "tool result",
+      log,
+      callback: () =>
+        params.onToolResult?.({
+          text: parsed.text,
+          mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+          ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
+        }),
+    });
   };
   const emitToolSummary = (toolName?: string, meta?: string) => {
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
@@ -1051,7 +1072,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           messagingToolSentTextsNormalized,
         ));
     if (isMessagingDuplicate) {
-      log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
+      log.debug(
+        `Skipping block reply - already sent via messaging tool: ${truncateUtf16Safe(chunk, 50)}...`,
+      );
       if (prefixReplayCandidate) {
         markBlockReplyTextHandled();
       }
@@ -1201,9 +1224,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // render hook — uniformly, whether the thinking block rode in on a tool call
     // or arrived on its own. It still reaches the bus/archive above.
     if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
-      void params.onReasoningStream({
-        text: trimmed,
-        ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+      runBestEffortCallback({
+        label: "reasoning stream",
+        log,
+        callback: () =>
+          params.onReasoningStream?.({
+            text: trimmed,
+            ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+          }),
       });
     }
   };
@@ -1226,7 +1254,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.itemActiveIds.clear();
     state.itemStartedCount = 0;
     state.itemCompletedCount = 0;
-    state.lastToolError = undefined;
+    // Compaction retries restart presentation state, not attempt-wide mutation truth.
+    // Retain unresolved side effects so the retry cannot falsely finish as success.
+    if (state.lastToolError?.mutatingAction !== true) {
+      state.lastToolError = undefined;
+    }
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
@@ -1313,6 +1345,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    cleanupRunToolStartData(params.runId);
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (state.compactionRetryPromise) {
@@ -1350,6 +1383,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       toolCallId: string;
       args: unknown;
       replaySafe?: boolean;
+      hideFromChannelProgress?: boolean;
       execute: () => Promise<T>;
     }): Promise<T> => {
       await handleToolExecutionStart(ctx, {
@@ -1358,6 +1392,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         toolCallId: toolParams.toolCallId,
         args: toolParams.args,
         replaySafe: toolParams.replaySafe,
+        hideFromChannelProgress: toolParams.hideFromChannelProgress,
       } as never);
       try {
         const result = await toolParams.execute();
@@ -1368,6 +1403,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           isError: false,
           executionStarted: true,
           result,
+          hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
         return result;
       } catch (error) {
@@ -1378,6 +1414,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           isError: true,
           executionStarted: true,
           result: buildToolLifecycleErrorResult(error),
+          hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
         throw error;
       }
@@ -1477,3 +1514,4 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

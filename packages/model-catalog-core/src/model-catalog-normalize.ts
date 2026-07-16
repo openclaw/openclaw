@@ -375,6 +375,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsPromptCacheKey",
     "supportsDeveloperRole",
     "supportsReasoningEffort",
+    "supportsTemperature",
     "supportsUsageInStreaming",
     "supportsTools",
     "supportsStrictMode",
@@ -383,6 +384,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
+    "requiresReasoningContentOnAssistantMessages",
     "zaiToolStream",
     "sendSessionAffinityHeaders",
     "sendSessionIdHeader",
@@ -420,9 +422,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
 
   if (isRecord(value.reasoningEffortMap)) {
     const reasoningEffortMap = Object.fromEntries(
-      Object.entries(value.reasoningEffortMap)
-        .map(([key, mapped]) => [key.trim(), typeof mapped === "string" ? mapped.trim() : ""])
-        .filter(([key, mapped]) => key.length > 0 && mapped.length > 0),
+      Object.entries(value.reasoningEffortMap).flatMap(([rawKey, rawMapped]) => {
+        const key = rawKey.trim();
+        const mapped = typeof rawMapped === "string" ? rawMapped.trim() : "";
+        return key && mapped ? [[key, mapped]] : [];
+      }),
     );
     if (Object.keys(reasoningEffortMap).length > 0) {
       compat.reasoningEffortMap = reasoningEffortMap;
@@ -554,10 +558,12 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
   const api = normalizeModelCatalogApi(value.api);
   const headers = normalizeStringMap(value.headers);
+  const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
   return {
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
+    ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
     models,
   };
 }
@@ -757,15 +763,4 @@ export function normalizeModelCatalogProviderRows(params: {
 
   return rows.toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 }
-
-/** Normalize all provider catalogs into sorted runtime rows. */
-export function normalizeModelCatalogRows(params: {
-  providers: Record<string, ModelCatalogProvider>;
-  source: ModelCatalogSource;
-}): NormalizedModelCatalogRow[] {
-  return Object.entries(params.providers)
-    .flatMap(([provider, providerCatalog]) =>
-      normalizeModelCatalogProviderRows({ provider, providerCatalog, source: params.source }),
-    )
-    .toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

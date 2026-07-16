@@ -147,6 +147,11 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
 
+    it("returns false when MINIMAX_API_KEY env var is blank", () => {
+      process.env.MINIMAX_API_KEY = "   ";
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
+    });
+
     it("returns true when a MiniMax Token Plan env var is set", () => {
       expect(tokenPlanEnvConfigured).toBe(true);
     });
@@ -291,10 +296,20 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.overrides?.vol).toBe(3);
     });
 
-    it("warns on vol=0 (exclusive minimum)", () => {
-      const result = parseDirectiveToken({ key: "vol", value: "0", policy });
+    it("handles vol=10 (inclusive maximum)", () => {
+      const result = parseDirectiveToken({ key: "vol", value: "10", policy });
       expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings).toBeUndefined();
+      expect(result.overrides?.vol).toBe(10);
+    });
+
+    it.each(["0", "11"])("describes the MiniMax volume boundary for vol=%s", (value) => {
+      const result = parseDirectiveToken({ key: "vol", value, policy });
+      expect(result.handled).toBe(true);
+      expect(result.warnings).toEqual([
+        `invalid MiniMax volume "${value}" (must be greater than 0 and at most 10)`,
+      ]);
+      expect(result.overrides).toBeUndefined();
     });
 
     it("warns on non-decimal volume values", () => {
@@ -596,6 +611,22 @@ describe("buildMinimaxSpeechProvider", () => {
           timeoutMs: 30000,
         }),
       ).rejects.toThrow("MiniMax TTS auth missing");
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("does not send a request for a blank environment API key", async () => {
+      process.env.MINIMAX_API_KEY = "   ";
+
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: {},
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("MiniMax TTS auth missing");
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
     it("throws on API error with response body", async () => {

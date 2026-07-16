@@ -232,9 +232,10 @@ function buildAdapterWrapperScript(params: {
   stderrLogFileNamePrefix?: string;
 }): string {
   return `#!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 ${params.envSetup}
@@ -285,7 +286,25 @@ function redactDiagnosticText(text) {
   return redacted;
 }
 
+function tailUtf16Safe(text, maxChars) {
+  let start = Math.max(0, text.length - maxChars);
+  const startsInsideSurrogatePair =
+    start > 0 &&
+    start < text.length &&
+    text.charCodeAt(start) >= 0xdc00 &&
+    text.charCodeAt(start) <= 0xdfff &&
+    text.charCodeAt(start - 1) >= 0xd800 &&
+    text.charCodeAt(start - 1) <= 0xdbff;
+  if (startsInsideSurrogatePair) {
+    start += 1;
+  }
+  return text.slice(start);
+}
+
 let pendingStderrLogText = "";
+// Pipe chunks can split a UTF-8 sequence. Preserve decoder state so diagnostic
+// capture does not manufacture replacement characters between chunks.
+const stderrDecoder = new StringDecoder("utf8");
 const stderrPrivateKeyEndPattern = /-----END [A-Z ]*PRIVATE KEY-----/;
 
 function hasUnclosedPrivateKeyBlock(text) {
@@ -310,7 +329,7 @@ function writeRedactedStderrLog(text) {
     appendFileSync(stderrLogPath, redactDiagnosticText(text), "utf8");
     const current = readFileSync(stderrLogPath, "utf8");
     if (current.length > stderrLogMaxChars) {
-      writeFileSync(stderrLogPath, current.slice(-stderrLogMaxChars), "utf8");
+      writeFileSync(stderrLogPath, tailUtf16Safe(current, stderrLogMaxChars), "utf8");
     }
   } catch {
     // Stderr capture is diagnostic-only; never break the ACP adapter.
@@ -329,7 +348,7 @@ function flushFinalizedStderrLogText() {
   const lastLineBreak = pendingStderrLogText.lastIndexOf("\\n");
   if (lastLineBreak === -1) {
     if (pendingStderrLogText.length > stderrLogMaxChars) {
-      pendingStderrLogText = pendingStderrLogText.slice(-stderrLogMaxChars);
+      pendingStderrLogText = tailUtf16Safe(pendingStderrLogText, stderrLogMaxChars);
     }
     return;
   }
@@ -342,7 +361,7 @@ function flushFinalizedStderrLogText() {
   }
   if (flushEnd <= 0) {
     if (pendingStderrLogText.length > stderrLogMaxChars) {
-      pendingStderrLogText = pendingStderrLogText.slice(-stderrLogMaxChars);
+      pendingStderrLogText = tailUtf16Safe(pendingStderrLogText, stderrLogMaxChars);
     }
     return;
   }
@@ -352,7 +371,7 @@ function flushFinalizedStderrLogText() {
 }
 
 function appendStderrLog(chunk) {
-  const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  const text = stderrDecoder.write(chunk);
   if (!text) {
     return;
   }
@@ -361,6 +380,7 @@ function appendStderrLog(chunk) {
 }
 
 function finishStderrLog() {
+  pendingStderrLogText += stderrDecoder.end();
   const text = redactIncompletePrivateKeyTail(pendingStderrLogText);
   pendingStderrLogText = "";
   writeRedactedStderrLog(text);
@@ -381,13 +401,12 @@ function stripOpenClawWrapperArgs(args) {
 
 const rawConfiguredArgs = process.argv.slice(2);
 const stderrLogPath = resolveStderrLogPath(rawConfiguredArgs);
-
-try {
-  if (stderrLogPath) {
-    writeFileSync(stderrLogPath, "", "utf8");
+if (stderrLogPath) {
+  try {
+    rmSync(stderrLogPath, { force: true });
+  } catch {
+    // Diagnostic cleanup must never prevent the adapter from starting.
   }
-} catch {
-  // Stderr capture is diagnostic-only; never break the ACP adapter.
 }
 
 const configuredArgs = stripOpenClawWrapperArgs(rawConfiguredArgs);
@@ -768,3 +787,4 @@ export async function prepareAcpxCodexAuthConfig(params: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

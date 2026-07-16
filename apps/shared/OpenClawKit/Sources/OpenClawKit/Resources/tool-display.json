@@ -32,6 +32,27 @@
         "command"
       ]
     },
+    "computer": {
+      "emoji": "🖱️",
+      "title": "Computer",
+      "detailKeys": [
+        "action",
+        "coordinate",
+        "text",
+        "node",
+        "nodeId",
+        "screenIndex"
+      ]
+    },
+    "screen": {
+      "emoji": "🖥️",
+      "title": "Screen",
+      "detailKeys": [
+        "action",
+        "sessionKey",
+        "dock"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -409,6 +430,23 @@
         "plan.0.step"
       ]
     },
+    "spawn_task": {
+      "emoji": "✨",
+      "title": "Suggest Task",
+      "detailKeys": [
+        "title",
+        "tldr",
+        "cwd"
+      ]
+    },
+    "dismiss_task": {
+      "emoji": "🗑️",
+      "title": "Dismiss Task",
+      "detailKeys": [
+        "task_id",
+        "reason"
+      ]
+    },
     "skill_workshop": {
       "emoji": "🧰",
       "title": "Skill Workshop",
@@ -418,18 +456,22 @@
         "proposal_id"
       ]
     },
+    "openclaw": {
+      "emoji": "🦀",
+      "title": "OpenClaw",
+      "detailKeys": [
+        "action",
+        "path",
+        "model"
+      ]
+    },
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",
-      "actions": {
-        "restart": {
-          "label": "restart",
-          "detailKeys": [
-            "reason",
-            "delayMs"
-          ]
-        }
-      }
+      "detailKeys": [
+        "action",
+        "path"
+      ]
     },
     "exec": {
       "emoji": "🛠️",
@@ -455,6 +497,45 @@
         "sessionKey",
         "model"
       ]
+    },
+    "sessions": {
+      "emoji": "🗂️",
+      "title": "Session Settings",
+      "actions": {
+        "patch": {
+          "label": "update",
+          "detailKeys": [
+            "sessionKey",
+            "label",
+            "pinned",
+            "archived",
+            "model",
+            "thinkingLevel"
+          ]
+        },
+        "group_list": {
+          "label": "groups"
+        },
+        "group_set": {
+          "label": "set groups",
+          "detailKeys": [
+            "names"
+          ]
+        },
+        "group_rename": {
+          "label": "rename group",
+          "detailKeys": [
+            "name",
+            "to"
+          ]
+        },
+        "group_delete": {
+          "label": "delete group",
+          "detailKeys": [
+            "name"
+          ]
+        }
+      }
     },
     "sessions_list": {
       "emoji": "🗂️",
@@ -488,6 +569,15 @@
         "sessionKey",
         "limit",
         "includeTools"
+      ]
+    },
+    "sessions_search": {
+      "emoji": "🔎",
+      "title": "Session Search",
+      "detailKeys": [
+        "query",
+        "sessionKey",
+        "limit"
       ]
     },
     "transcripts": {

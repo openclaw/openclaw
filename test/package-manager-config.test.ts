@@ -72,6 +72,18 @@ describe("package manager build policy", () => {
     expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
   });
 
+  it("includes the Crabbox wrapper runtime modules in the published root package", () => {
+    const packageJson = readJson("package.json") as RootPackageJson;
+
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining([
+        "scripts/crabbox-wrapper.mjs",
+        "scripts/crabbox-wrapper-providers.mjs",
+        "scripts/testbox-lease-freshness.mjs",
+      ]),
+    );
+  });
+
   it("keeps npm shrinkwrap aligned with workspace overrides", () => {
     const workspace = parse(
       fs.readFileSync("pnpm-workspace.yaml", "utf8"),

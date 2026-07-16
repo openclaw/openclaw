@@ -47,6 +47,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { isReservedSystemAgentId } from "../../system-agent/agent-id.js";
 import { resolveUserPath } from "../../utils.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
@@ -411,14 +412,14 @@ function buildAgentConfigUpdate(params: {
   agentId: string;
   safeName?: string;
   workspaceDir?: string;
-  model?: string;
+  model?: string | null;
   identity?: IdentityConfig;
 }): Parameters<typeof updateAgentConfigEntry>[0] {
   return {
     agentId: params.agentId,
     ...(params.safeName ? { name: params.safeName } : {}),
     ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
-    ...(params.model ? { model: params.model } : {}),
+    ...(params.model !== undefined ? { model: params.model } : {}),
     ...(params.identity ? { identity: params.identity } : {}),
   };
 }
@@ -512,12 +513,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const rawName = params.name.trim();
     const agentId = normalizeAgentId(rawName);
-    if (agentId === DEFAULT_AGENT_ID) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `"${DEFAULT_AGENT_ID}" is reserved`),
-      );
+    if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `"${agentId}" is reserved`));
       return;
     }
 
@@ -620,7 +617,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? resolveUserPath(params.workspace.trim())
         : undefined;
 
-    const model = resolveOptionalStringParam(params.model);
+    const model = params.model === null ? null : resolveOptionalStringParam(params.model);
 
     const safeName =
       typeof params.name === "string" && params.name.trim()
@@ -886,3 +883,4 @@ export const agentsHandlers: GatewayRequestHandlers = {
   },
 };
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -18,6 +18,8 @@ vi.mock("@slack/web-api", () => {
 });
 
 let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
+let createSlackStartupAuthClient: typeof import("./client.js").createSlackStartupAuthClient;
+let createSlackLookupClient: typeof import("./client.js").createSlackLookupClient;
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
 let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
@@ -30,8 +32,10 @@ let WebClient: ReturnType<typeof vi.fn>;
 
 const SLACK_API_URL_KEYS = ["SLACK_API_URL", "OPENCLAW_SLACK_API_URL"] as const;
 const PROXY_KEYS = [
+  "ALL_PROXY",
   "HTTPS_PROXY",
   "HTTP_PROXY",
+  "all_proxy",
   "https_proxy",
   "http_proxy",
   "NO_PROXY",
@@ -93,6 +97,8 @@ beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
   ({
     createSlackWebClient,
+    createSlackStartupAuthClient,
+    createSlackLookupClient,
     createSlackWriteClient,
     createSlackTokenCacheKey,
     getSlackWriteClient,
@@ -184,6 +190,23 @@ describe("slack web client config", () => {
     });
   });
 
+  it("bounds startup auth while preserving listener transport options", () => {
+    const customAgent = {} as never;
+
+    createSlackStartupAuthClient("xoxb-startup", {
+      agent: customAgent,
+      slackApiUrl: "https://slack.test/api/",
+    });
+
+    expect(WebClient).toHaveBeenCalledWith("xoxb-startup", {
+      agent: customAgent,
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+      slackApiUrl: "https://slack.test/api/",
+      timeout: 10_000,
+    });
+  });
+
   it("applies the default retry config when constructing a client without proxy env", () => {
     clearProxyEnvForTest();
     try {
@@ -205,10 +228,17 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toEqual(SLACK_WRITE_RETRY_OPTIONS);
   });
 
-  it("serializes write client requests by default", () => {
-    const options = resolveSlackWriteClientOptions();
+  it("passes the bounded lookup policy into WebClient", () => {
+    const customAgent = {} as never;
 
-    expect(options.maxRequestConcurrency).toBe(1);
+    createSlackLookupClient("lookup-fixture", { agent: customAgent });
+
+    expect(WebClient).toHaveBeenCalledWith("lookup-fixture", {
+      agent: customAgent,
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+      timeout: 30_000,
+    });
   });
 
   it("respects explicit write client concurrency overrides", () => {
@@ -224,7 +254,6 @@ describe("slack web client config", () => {
 
     expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
       agent: customAgent,
-      maxRequestConcurrency: 1,
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       timeout: 4321,
     });
@@ -240,7 +269,6 @@ describe("slack web client config", () => {
       expect(WebClient).toHaveBeenCalledTimes(1);
       expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
         agent: undefined,
-        maxRequestConcurrency: 1,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       });
     } finally {

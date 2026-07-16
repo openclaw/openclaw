@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
@@ -25,6 +26,7 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -52,16 +54,8 @@ import {
 } from "./systemd.js";
 export type {
   GatewayServiceCommandConfig,
-  GatewayServiceControlArgs,
-  GatewayServiceEnv,
-  GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
-  GatewayServiceManageArgs,
-  GatewayServiceReadOptions,
-  GatewayServiceRestartResult,
   GatewayServiceStartRepairIssue,
-  GatewayServiceStartResult,
-  GatewayServiceStageArgs,
   GatewayServiceState,
 } from "./service-types.js";
 
@@ -91,32 +85,6 @@ export type GatewayService = {
   ) => Promise<GatewayServiceRuntime>;
 };
 
-function mergeGatewayServiceEnv(
-  baseEnv: GatewayServiceEnv,
-  command: GatewayServiceCommandConfig | null,
-): GatewayServiceEnv {
-  if (!command?.environment) {
-    return baseEnv;
-  }
-  const merged = {
-    ...baseEnv,
-    ...command.environment,
-  };
-  for (const key of [
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_WINDOWS_TASK_NAME",
-  ]) {
-    // Explicit caller env selects the target service identity; installed command
-    // env may come from a different profile or stale service file.
-    const value = baseEnv[key]?.trim();
-    if (value) {
-      merged[key] = value;
-    }
-  }
-  return merged;
-}
-
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
   path.resolve(entry),
 );
@@ -142,6 +110,7 @@ function isMissingProgramPath(value: string | undefined): boolean {
 
 function collectGatewayServiceStartRepairIssues(
   state: GatewayServiceState,
+  expectedPort?: number,
 ): GatewayServiceStartRepairIssue[] {
   const command = state.command;
   if (!state.loaded || !command) {
@@ -155,6 +124,15 @@ function collectGatewayServiceStartRepairIssues(
     issues.push({
       code: "version-mismatch",
       message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
+    });
+  }
+  const servicePort =
+    parseTcpPortFromArgs(command.programArguments) ??
+    parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
+  if (expectedPort !== undefined && servicePort !== null && servicePort !== expectedPort) {
+    issues.push({
+      code: "port-mismatch",
+      message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
     });
   }
   for (const candidate of command.programArguments.slice(0, 2)) {
@@ -173,6 +151,19 @@ function collectGatewayServiceStartRepairIssues(
     }
   }
   return issues;
+}
+
+/** Reads the installed service and reports definition drift that must be repaired before launch. */
+export async function inspectGatewayServiceStartRepair(
+  service: GatewayService,
+  args: GatewayServiceEnvArgs,
+  expectedPort?: number,
+): Promise<{ state: GatewayServiceState; issues: GatewayServiceStartRepairIssue[] }> {
+  const state = await readGatewayServiceState(service, args);
+  return {
+    state,
+    issues: collectGatewayServiceStartRepairIssues(state, expectedPort),
+  };
 }
 
 export function formatGatewayServiceStartRepairIssues(
@@ -208,8 +199,13 @@ export async function readGatewayServiceState(
 export async function startGatewayService(
   service: GatewayService,
   args: GatewayServiceControlArgs,
+  expectedPort?: number,
 ): Promise<GatewayServiceStartResult> {
-  const state = await readGatewayServiceState(service, { env: args.env });
+  const { state, issues: repairIssues } = await inspectGatewayServiceStartRepair(
+    service,
+    { env: args.env },
+    expectedPort,
+  );
   if (!state.loaded && !state.installed) {
     return {
       outcome: "missing-install",
@@ -217,7 +213,6 @@ export async function startGatewayService(
     };
   }
 
-  const repairIssues = collectGatewayServiceStartRepairIssues(state);
   if (repairIssues.length > 0) {
     return {
       outcome: "repair-required",

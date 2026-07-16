@@ -31,3 +31,19 @@ const KNOWN_OPERATOR_SCOPES: ReadonlySet<OperatorScope> = new Set(KNOWN_OPERATOR
 export function isOperatorScope(value: unknown): value is OperatorScope {
   return typeof value === "string" && KNOWN_OPERATOR_SCOPES.has(value as OperatorScope);
 }
+
+/** Filters unknown strings down to unique operator scopes; undefined stays undefined. */
+export function normalizeOperatorScopeList(
+  scopes: string[] | undefined,
+): OperatorScope[] | undefined {
+  if (!Array.isArray(scopes)) {
+    return undefined;
+  }
+  const normalized: OperatorScope[] = [];
+  for (const scope of scopes) {
+    if (isOperatorScope(scope) && !normalized.includes(scope)) {
+      normalized.push(scope);
+    }
+  }
+  return normalized;
+}

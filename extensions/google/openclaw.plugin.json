@@ -628,7 +628,9 @@
       "provider": "google",
       "method": "api-key",
       "choiceId": "gemini-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Google Gemini API key",
+      "choiceHint": "Free API key from aistudio.google.com/apikey",
       "groupId": "google",
       "groupLabel": "Google",
       "groupHint": "Gemini API key + OAuth",
@@ -642,8 +644,9 @@
       "provider": "google-gemini-cli",
       "method": "oauth",
       "choiceId": "google-gemini-cli",
+      "appGuidedAuth": "oauth",
       "choiceLabel": "Gemini CLI OAuth",
-      "choiceHint": "Google OAuth with project-aware token payload",
+      "choiceHint": "Sign in with your Google account (opens a browser)",
       "groupId": "google",
       "groupLabel": "Google",
       "groupHint": "Gemini API key + OAuth",
@@ -674,7 +677,8 @@
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"]
+    "webSearchProviders": ["gemini"],
+    "usageProviders": ["google-gemini-cli"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {
