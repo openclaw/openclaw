@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { EventType } from "@ag-ui/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@ describe("AG-UI HTTP handler", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = GATEWAY_SECRET;
     // Create fake API with the approved device
     fakeApi = createFakeApi([APPROVED_DEVICE_ID]);
-    handler = createAguiHttpHandler(fakeApi as any);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
   });
 
   it("rejects non-POST with 405", async () => {
@@ -184,9 +185,9 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     expect(rt.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call.sessionKey).toBe("agui:test-session:thread:t1");
     expect(call.runId).toBe("r1");
   });
@@ -195,7 +196,7 @@ describe("AG-UI HTTP handler", () => {
     // The handler forwards onPartialReply snapshots as TEXT_MESSAGE_CONTENT
     // deltas. A single cumulative snapshot of "Hello from agent" (from an empty
     // start) yields exactly that text as the delta.
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       params.onPartialReply({ text: "Hello from agent" });
       return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
@@ -226,7 +227,7 @@ describe("AG-UI HTTP handler", () => {
     // the FULL thinking-so-far — see btw.ts `reasoningText += delta`). The
     // adapter must forward only the newly-appended suffix, otherwise the
     // frontend stacks every snapshot into an exploding wall of repeated text.
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       params.onReasoningStream({ text: "**Writing**\n\nThe" });
       params.onReasoningStream({ text: "**Writing**\n\nThe user" });
@@ -263,7 +264,7 @@ describe("AG-UI HTTP handler", () => {
     // they execute in-loop and render via the before_tool_call /
     // tool_result_persist hooks. From the handler's perspective the run simply
     // streams its final assistant text and finishes.
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       params.onPartialReply({ text: "done" });
       return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
@@ -288,7 +289,7 @@ describe("AG-UI HTTP handler", () => {
   });
 
   it("emits RUN_ERROR on run failure", async () => {
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockRejectedValue(new Error("agent failed"));
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
@@ -314,7 +315,7 @@ describe("AG-UI HTTP handler", () => {
   it("suppresses text output when client tool was called", async () => {
     const { setClientToolCalled } = await import("./tool-store.js");
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       // Simulate a client tool being called (flag set by before_tool_call hook)
       setClientToolCalled(params.sessionKey);
@@ -347,7 +348,7 @@ describe("AG-UI HTTP handler", () => {
   });
 
   it("keeps tool calls and text in a single run (no run splitting)", async () => {
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       // Tool call followed by text — should stay in the same run
       params.onPartialReply({ text: "Here is the result" });
@@ -387,7 +388,7 @@ describe("AG-UI HTTP handler", () => {
   // -------------------------------------------------------------------------
 
   it("emits REASONING events when onReasoningStream/onReasoningEnd are invoked", async () => {
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       // Simulate reasoning stream the way OpenClaw's embedded run actually does
       // (embedded-agent-subscribe.ts): a CUMULATIVE `text` snapshot plus the
@@ -465,7 +466,7 @@ describe("AG-UI HTTP handler", () => {
   });
 
   it("does not emit REASONING events when no reasoning stream fires", async () => {
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       params.onPartialReply({ text: "Just text." });
       return { meta: { stopReason: "stop", pendingToolCalls: [] }, payloads: [] };
@@ -491,7 +492,7 @@ describe("AG-UI HTTP handler", () => {
   });
 
   it("auto-closes reasoning if final text fires before onReasoningEnd", async () => {
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       params.onReasoningStream({ text: "Thinking..." });
       // No onReasoningEnd call — the first text delta (closeReasoningIfOpen in
@@ -573,7 +574,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     expect(rt.channel.routing.resolveAgentRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "ag-ui",
@@ -595,7 +596,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     expect(rt.channel.routing.resolveAgentRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "ag-ui",
@@ -617,7 +618,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     expect(rt.channel.routing.resolveAgentRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "ag-ui",
@@ -639,8 +640,8 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    const rt = fakeApi.runtime;
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call.sessionKey).toBe("agui:test-session:thread:my-thread-42");
   });
 
@@ -656,8 +657,8 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    const rt = fakeApi.runtime;
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     // threadId defaults to "ag-ui-<uuid>" so it will have a thread suffix
     expect(call.sessionKey).toMatch(/^agui:test-session:thread:ag-ui-/);
   });
@@ -682,8 +683,8 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    const rt = fakeApi.runtime;
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call.sessionKey).toBe("agui:test-session:user:alice@example.com:thread:t-user");
   });
 
@@ -703,8 +704,8 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    const rt = fakeApi.runtime;
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call.sessionKey).toBe("agui:test-session:user:alice:thread:t-1");
   });
 
@@ -724,8 +725,8 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    const rt = fakeApi.runtime;
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call.sessionKey.startsWith("agui:test-session:")).toBe(true);
     expect(call.sessionKey).toContain(":user:totally-different");
   });
@@ -743,8 +744,8 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
-    const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+    const rt = fakeApi.runtime;
+    const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call.sessionKey).toBe("agui:test-session:thread:t-nouser");
     expect(call.sessionKey).not.toContain(":user:");
   });
@@ -846,8 +847,8 @@ describe("AG-UI HTTP handler", () => {
       await handler(req, res);
 
       expect(res.statusCode).toBe(200);
-      const rt = (fakeApi as any).runtime;
-      const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
+      const rt = fakeApi.runtime;
+      const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
       expect(call.sessionKey).toBe(`agui:test-session:user:${value}:thread:t-ok`);
     },
   );
@@ -868,13 +869,13 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     expect(rt.channel.routing.resolveAgentRoute).not.toHaveBeenCalled();
     expect(rt.agent.runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("handles client disconnect by aborting", async () => {
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     let capturedAbortSignal: AbortSignal | undefined;
     rt.agent.runEmbeddedAgent.mockImplementation(async (params: any) => {
       capturedAbortSignal = params.abortSignal;
@@ -913,7 +914,7 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_GATEWAY_TOKEN = GATEWAY_SECRET;
     fakeApi = createFakeApi([APPROVED_DEVICE_ID]);
-    handler = createAguiHttpHandler(fakeApi as any);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
   });
 
   // Context is no longer injected via finalizeInboundContext's BodyForAgent;
@@ -939,7 +940,7 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
     expect(call.prompt).toContain("## Context provided by the UI");
@@ -961,7 +962,7 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
     expect(call.prompt).not.toContain("## Context provided by the UI");
@@ -984,7 +985,7 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
     expect(call.prompt).toContain("### App state");
@@ -1010,7 +1011,7 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
     expect(call.prompt).not.toContain("## Context provided by the UI");
@@ -1029,7 +1030,7 @@ describe("AG-UI RunAgentInput.context forwarding", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     const call = rt.agent.runEmbeddedAgent.mock.calls[0]?.[0];
     expect(call).toBeDefined();
     expect(call.prompt).not.toContain("## Context provided by the UI");
@@ -1051,7 +1052,7 @@ describe("Device pairing", () => {
 
   it("returns pairing_pending with pairingCode and token when no auth header", async () => {
     fakeApi = createFakeApi([]);
-    handler = createAguiHttpHandler(fakeApi as any);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
 
     const req = createReq({
       headers: {}, // No authorization header
@@ -1070,7 +1071,7 @@ describe("Device pairing", () => {
 
   it("calls upsertPairingRequest when initiating pairing", async () => {
     fakeApi = createFakeApi([]);
-    handler = createAguiHttpHandler(fakeApi as any);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
 
     const req = createReq({
       headers: {}, // No authorization header
@@ -1079,7 +1080,7 @@ describe("Device pairing", () => {
     const res = createRes();
     await handler(req, res);
 
-    const rt = (fakeApi as any).runtime;
+    const rt = fakeApi.runtime;
     expect(rt.channel.pairing.upsertPairingRequest).toHaveBeenCalledTimes(1);
     expect(rt.channel.pairing.upsertPairingRequest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1090,7 +1091,7 @@ describe("Device pairing", () => {
 
   it("rejects invalid HMAC signature with 401", async () => {
     fakeApi = createFakeApi([]);
-    handler = createAguiHttpHandler(fakeApi as any);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
 
     // Token with invalid signature
     const req = createReq({
@@ -1106,7 +1107,7 @@ describe("Device pairing", () => {
   it("returns pairing_pending for valid token but unapproved device", async () => {
     // No approved devices
     fakeApi = createFakeApi([]);
-    handler = createAguiHttpHandler(fakeApi as any);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
 
     // Create valid HMAC token for a device that's not approved
     const unapprovedDeviceId = "87654321-4321-4321-4321-abcdef123456";
@@ -1127,7 +1128,7 @@ describe("Device pairing", () => {
 
   it("proceeds normally for valid token with approved device", async () => {
     fakeApi = createFakeApi([APPROVED_DEVICE_ID]);
-    handler = createAguiHttpHandler(fakeApi as any);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
 
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
 
@@ -1146,7 +1147,7 @@ describe("Device pairing", () => {
   it("returns 429 rate_limit when max pending pairing requests reached", async () => {
     // Simulate rate limit by returning empty code
     fakeApi = createFakeApi([], { pairingCode: "" });
-    handler = createAguiHttpHandler(fakeApi as any);
+    handler = createAguiHttpHandler(fakeApi as unknown as OpenClawPluginApi);
 
     const req = createReq({
       headers: {}, // No authorization header - initiates pairing

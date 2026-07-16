@@ -20,11 +20,17 @@ describe("aguiChannelPlugin", () => {
   });
 
   it("lists default account", () => {
-    expect(aguiChannelPlugin.config.listAccountIds({} as any)).toEqual(["default"]);
+    expect(
+      aguiChannelPlugin.config.listAccountIds(
+        {} as unknown as Parameters<typeof aguiChannelPlugin.config.listAccountIds>[0],
+      ),
+    ).toEqual(["default"]);
   });
 
   it("resolves default account", () => {
-    const account = aguiChannelPlugin.config.resolveAccount({} as any);
+    const account = aguiChannelPlugin.config.resolveAccount(
+      {} as unknown as Parameters<typeof aguiChannelPlugin.config.resolveAccount>[0],
+    );
     expect(account).toEqual({
       accountId: "default",
       enabled: true,
