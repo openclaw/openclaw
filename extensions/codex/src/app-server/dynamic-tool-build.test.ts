@@ -198,8 +198,8 @@ describe("Codex app-server dynamic tool build", () => {
       },
     });
 
-    expectDefined(capturedOnYield);
-    await capturedOnYield("Research started — results will follow.");
+    const onYield = expectDefined(capturedOnYield, "captured onYield callback");
+    await onYield("Research started — results will follow.");
     expect(yieldMessages).toEqual(["Research started — results will follow."]);
   });
 
