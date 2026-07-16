@@ -35,14 +35,14 @@ class JsonCharacterCursor {
   }
 
   async peek(): Promise<string | null> {
-    return (await this.fill()) ? this.chunk[this.offset] : null;
+    return (await this.fill()) ? (this.chunk[this.offset] ?? null) : null;
   }
 
   async take(): Promise<string | null> {
     if (!(await this.fill())) {
       return null;
     }
-    return this.chunk[this.offset++];
+    return this.chunk[this.offset++] ?? null;
   }
 
   async skipWhitespace(): Promise<void> {

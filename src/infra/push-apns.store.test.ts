@@ -133,6 +133,9 @@ describe("push APNs registration store", () => {
       environment: "production",
       baseDir,
     });
+    if (direct.transport !== "direct") {
+      throw new Error("expected direct APNs registration");
+    }
 
     const database = openOpenClawStateDatabase({ env: databaseEnv(baseDir) });
     const row = database.db
