@@ -4,7 +4,7 @@ import {
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -324,7 +324,7 @@ function createGatewayStatusObserver(params: {
   };
 }
 
-async function waitForGatewayReady(params: {
+export async function waitForGatewayReady(params: {
   gateway?: Pick<MutableDiscordGateway, "connect" | "disconnect" | "isConnected" | "ws">;
   abortSignal?: AbortSignal;
   beforePoll?: () => Promise<"continue" | "stop"> | "continue" | "stop";
@@ -399,10 +399,14 @@ async function waitForGatewayReady(params: {
     if (params.abortSignal?.aborted) {
       return;
     }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS);
-      timeout.unref?.();
-    });
+    try {
+      // sleepWithAbort rejects on abort; the catch returns quietly. The helper does not
+      // unref its timer, but the surrounding lifecycle keeps the process alive anyway,
+      // so dropping the previous bare setTimeout's unref is behavior-neutral here.
+      await sleepWithAbort(DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS, params.abortSignal);
+    } catch {
+      return;
+    }
   }
 }
 

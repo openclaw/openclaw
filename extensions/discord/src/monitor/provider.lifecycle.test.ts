@@ -741,6 +741,51 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 });
 
+describe("waitForGatewayReady", () => {
+  let waitForGatewayReady: typeof import("./provider.lifecycle.js").waitForGatewayReady;
+
+  beforeAll(async () => {
+    ({ waitForGatewayReady } = await import("./provider.lifecycle.js"));
+  });
+
+  it("returns promptly when abortSignal fires during the READY retry backoff", async () => {
+    // Regression for: backoff sleep used raw setTimeout without an abort listener, so a
+    // monitor.stop() firing during the 2s backoff waited the full backoff before returning.
+    // Real-timer proof: abort at +150ms into the 2000ms backoff → must resolve in <1s, not ~2s.
+    // Call-count assertions pin the loop to a single restart cycle: if the abort fell through
+    // to another iteration, `connect` would fire a second time.
+    const controller = new AbortController();
+    const gateway = {
+      isConnected: false,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    const runtime: RuntimeEnv = {
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    };
+
+    const started = Date.now();
+    const readyPromise = waitForGatewayReady({
+      gateway,
+      abortSignal: controller.signal,
+      readyTimeoutMs: 200,
+      runtime,
+    });
+
+    // Fire abort while the post-restart backoff sleep is in flight. Backoff is 2000ms,
+    // so firing 150ms into it should resolve well before 2000ms if the abort listener is wired.
+    setTimeout(() => controller.abort(), 350);
+
+    await expect(readyPromise).resolves.toBeUndefined();
+    const elapsedMs = Date.now() - started;
+    expect(elapsedMs).toBeLessThan(1_000);
+    expect(gateway.connect).toHaveBeenCalledTimes(1);
+    expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+  });
+});
+
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
