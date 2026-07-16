@@ -202,6 +202,35 @@ describe("Hermes migration provider", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "marks a dangling Hermes memory destination symlink as a conflict",
+    async () => {
+      const root = await makeTempRoot();
+      const source = path.join(root, "hermes");
+      const workspaceDir = path.join(root, "workspace");
+      const target = path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md");
+      await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.symlink(path.join(root, "missing-memory.md"), target);
+      const provider = buildHermesMigrationProvider();
+
+      const plan = await provider.plan(
+        makeContext({
+          source,
+          stateDir: path.join(root, "state"),
+          workspaceDir,
+          itemKinds: ["memory"],
+          overwrite: true,
+        }),
+      );
+
+      expect(itemById(plan.items, "memory:MEMORY.md")).toMatchObject({
+        status: "conflict",
+        reason: "target is not a regular file",
+      });
+    },
+  );
+
   it("copies memory bytes through the memory migration runtime", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
