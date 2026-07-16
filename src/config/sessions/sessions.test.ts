@@ -302,16 +302,34 @@ describe("session lifecycle timestamps", () => {
         "utf8",
       );
 
-      const timestamps = resolveSessionLifecycleTimestamps({
-        storePath,
-        entry: {
-          sessionId: "legacy-session",
-          sessionFile,
-          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
-        },
-      });
+      const realReadSync = fs.readSync.bind(fs);
+      let shortReadCalls = 0;
+      const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+        fd: number,
+        buffer: NodeJS.ArrayBufferView,
+        offset: number,
+        length: number,
+        position: fs.ReadPosition | null,
+      ) => {
+        shortReadCalls += 1;
+        return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+      }) as typeof fs.readSync);
 
-      expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      try {
+        const timestamps = resolveSessionLifecycleTimestamps({
+          storePath,
+          entry: {
+            sessionId: "legacy-session",
+            sessionFile,
+            updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+          },
+        });
+
+        expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+        expect(shortReadCalls).toBeGreaterThan(1);
+      } finally {
+        readSpy.mockRestore();
+      }
     } finally {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
