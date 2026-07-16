@@ -2,24 +2,26 @@ import { describe, expect, it } from "vitest";
 import {
   assertGatewayServiceMutationAllowed,
   formatExternalSupervisorUpdateRequired,
-  GATEWAY_SUPERVISOR_MODE_ENV,
   isGatewayExternallySupervised,
-  resolveGatewaySupervisorMode,
 } from "./gateway-supervision.js";
+
+const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 
 describe("gateway supervision", () => {
   it.each([
-    { value: undefined, expected: "auto" },
-    { value: "", expected: "auto" },
-    { value: "auto", expected: "auto" },
-    { value: "invalid", expected: "auto" },
-    { value: " EXTERNAL ", expected: "external" },
-  ])("resolves $value as $expected", ({ value, expected }) => {
-    const env = { [GATEWAY_SUPERVISOR_MODE_ENV]: value };
+    { value: undefined, externallySupervised: false },
+    { value: "", externallySupervised: false },
+    { value: "auto", externallySupervised: false },
+    { value: "invalid", externallySupervised: false },
+    { value: " EXTERNAL ", externallySupervised: true },
+  ])(
+    "resolves $value as externally supervised=$externallySupervised",
+    ({ value, externallySupervised }) => {
+      const env = { [GATEWAY_SUPERVISOR_MODE_ENV]: value };
 
-    expect(resolveGatewaySupervisorMode(env)).toBe(expected);
-    expect(isGatewayExternallySupervised(env)).toBe(expected === "external");
-  });
+      expect(isGatewayExternallySupervised(env)).toBe(externallySupervised);
+    },
+  );
 
   it("blocks native service mutation with actionable guidance", () => {
     expect(() =>

@@ -14,12 +14,6 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
-export {
-  createGatewayRestartHandoffCapabilities,
-  GATEWAY_RESTART_HANDOFF_PROTOCOL,
-  GATEWAY_RESTART_HANDOFF_PROTOCOL_VERSION,
-} from "./restart-handoff-contract.js";
-
 // Restart handoff rows let a supervisor explain a recent gateway restart after
 // the old process exits. The row is short-lived, bounded, and replaced on write.
 const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
@@ -77,7 +71,7 @@ export type GatewayRestartHandoff = {
   };
 };
 
-export type GatewayRestartHandoffConsumeResult =
+type GatewayRestartHandoffConsumeResult =
   | {
       status: "accepted";
       handoff: GatewayRestartHandoff;
