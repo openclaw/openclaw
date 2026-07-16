@@ -258,7 +258,11 @@ describe("irc inbound behavior", () => {
     const coreRuntime = createPluginRuntimeMock();
     const sendReply = vi.fn(async () => {});
     const dispatchReply = coreRuntime.channel.inbound.dispatchReply as unknown as ReturnType<
-      typeof vi.fn
+      typeof vi.fn<
+        (params: {
+          delivery: { deliver: (payload: { text: string }) => Promise<void> };
+        }) => Promise<void>
+      >
     >;
     dispatchReply.mockImplementation(
       async (params: { delivery: { deliver: (payload: { text: string }) => Promise<void> } }) => {
