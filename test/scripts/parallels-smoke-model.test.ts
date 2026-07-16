@@ -300,6 +300,34 @@ describe("Parallels smoke model selection", () => {
     expect(result.stdout.trim()).toBe("run-tests --app-option");
   });
 
+  it("bounds Windows prerequisite metadata downloads", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"; curl() { printf "%s\\n" "$@"; }; fetch_host_metadata "https://example.test/metadata"',
+        "bash",
+        WINDOWS_PREPARE_WRAPPER,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "-fsSL",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "120",
+      "--retry",
+      "2",
+      "https://example.test/metadata",
+    ]);
+
+    const controller = readFileSync(WINDOWS_PREPARE_WRAPPER, "utf8");
+    expect(controller.match(/\bcurl -fsSL\b/g)).toHaveLength(1);
+    expect(controller.match(/\bfetch_host_metadata\b/g)).toHaveLength(5);
+  });
+
   it("accepts leading package-manager separators and still honors later terminators", () => {
     expect(parseLinuxSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
     expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");

@@ -27,6 +27,10 @@ import {
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import {
+  detectLegacyApnsRegistrations,
+  migrateLegacyApnsRegistrations,
+} from "./state-migrations.apns.js";
+import {
   detectLegacyChannelPairingState,
   migrateLegacyChannelPairingState,
 } from "./state-migrations.channel-pairing.js";
@@ -373,6 +377,10 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const apns = detectLegacyApnsRegistrations({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const webPush = detectLegacyWebPush({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -543,6 +551,9 @@ export async function detectLegacyStateMigrations(params: {
   if (managedOutgoingImages.hasLegacy) {
     preview.push("- Managed outgoing images: legacy record JSON → shared SQLite state");
   }
+  if (apns.hasLegacy) {
+    preview.push("- APNs registrations: legacy JSON → shared SQLite state");
+  }
   if (webPush.hasLegacy) {
     preview.push("- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state");
   }
@@ -640,6 +651,7 @@ export async function detectLegacyStateMigrations(params: {
     tuiLastSessions,
     commitments,
     managedOutgoingImages,
+    apns,
     webPush,
     nodeHost,
     subagentRegistry,
@@ -833,6 +845,11 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.managedOutgoingImages,
     stateDir: detected.stateDir,
   });
+  const apns = await migrateLegacyApnsRegistrations({
+    detected: detected.apns,
+    env,
+    stateDir: detected.stateDir,
+  });
   const webPush = await migrateLegacyWebPush({
     detected: detected.webPush,
     env,
@@ -884,6 +901,7 @@ export async function runLegacyStateMigrations(params: {
     tuiLastSessions,
     commitments,
     managedOutgoingImages,
+    apns,
     webPush,
     nodeHost,
     subagentRegistry,
@@ -905,6 +923,7 @@ export async function runLegacyStateMigrations(params: {
       ...tuiLastSessions.changes,
       ...commitments.changes,
       ...managedOutgoingImages.changes,
+      ...apns.changes,
       ...webPush.changes,
       ...nodeHost.changes,
       ...subagentRegistry.changes,
@@ -933,6 +952,7 @@ export async function runLegacyStateMigrations(params: {
       ...tuiLastSessions.warnings,
       ...commitments.warnings,
       ...managedOutgoingImages.warnings,
+      ...apns.warnings,
       ...webPush.warnings,
       ...nodeHost.warnings,
       ...subagentRegistry.warnings,

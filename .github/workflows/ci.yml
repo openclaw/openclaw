@@ -2445,7 +2445,9 @@ jobs:
             esac
             swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
             swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
-            curl --fail --location --silent --show-error --retry 3 \
+            curl --fail --location --silent --show-error \
+              --connect-timeout 10 --max-time 120 \
+              --retry 3 --retry-max-time 120 \
               --output "$swiftformat_archive" \
               "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
             if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
@@ -2650,7 +2652,9 @@ jobs:
             esac
             swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
             swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
-            curl --fail --location --silent --show-error --retry 3 \
+            curl --fail --location --silent --show-error \
+              --connect-timeout 10 --max-time 120 \
+              --retry 3 --retry-max-time 120 \
               --output "$swiftformat_archive" \
               "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
             if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then

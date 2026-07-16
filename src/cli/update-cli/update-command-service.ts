@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -719,8 +720,7 @@ export function tryResolveInvocationCwd(): string | undefined {
   }
 }
 
-type PackageRuntimePreflightResult = {
-  error: string | null;
+type PackageRuntimePreflight = {
   nodeRunner?: string;
   replacedNodeRunner?: string;
   targetVersion?: string;
@@ -735,21 +735,18 @@ export async function resolvePackageRuntimePreflight(params: {
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<PackageRuntimePreflightResult> {
+}): Promise<Result<PackageRuntimePreflight, string>> {
   const nodeRunner = normalizeOptionalString(params.nodeRunner);
-  const unchanged = (): PackageRuntimePreflightResult => ({
-    error: null,
-    ...(nodeRunner ? { nodeRunner } : {}),
-  });
+  const unchanged = (): PackageRuntimePreflight => (nodeRunner ? { nodeRunner } : {});
   if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
-    return unchanged();
+    return ok(unchanged());
   }
   if (params.spec && !canResolveRegistryVersionForPackageTarget(params.spec)) {
-    return unchanged();
+    return ok(unchanged());
   }
   const target = params.tag.trim();
   if (!target) {
-    return unchanged();
+    return ok(unchanged());
   }
   const status = await fetchNpmPackageTargetStatus({
     target,
@@ -760,7 +757,7 @@ export async function resolvePackageRuntimePreflight(params: {
     env: params.env,
   });
   if (status.error) {
-    return unchanged();
+    return ok(unchanged());
   }
   const runtime = await resolvePackageRuntimeForPreflight({
     nodeRunner,
@@ -769,11 +766,10 @@ export async function resolvePackageRuntimePreflight(params: {
   const satisfies = nodeVersionSatisfiesEngine(runtime.version, status.nodeEngine);
   const targetVersion = status.version ?? target;
   if (satisfies === true) {
-    return {
-      error: null,
+    return ok({
       ...(nodeRunner ? { nodeRunner } : {}),
       targetVersion,
-    };
+    });
   }
   const fallbackNodeRunner = normalizeOptionalString(params.fallbackNodeRunner);
   if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
@@ -786,26 +782,24 @@ export async function resolvePackageRuntimePreflight(params: {
       status.nodeEngine,
     );
     if (fallbackSatisfies === true) {
-      return {
-        error: null,
+      return ok({
         nodeRunner: fallbackNodeRunner,
         replacedNodeRunner: nodeRunner,
         targetVersion,
-      };
+      });
     }
   }
   if (satisfies !== false) {
-    return {
-      error: null,
+    return ok({
       ...(nodeRunner ? { nodeRunner } : {}),
       targetVersion,
-    };
+    });
   }
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
-  return {
-    error: [
+  return resultError(
+    [
       `${runtimeLabel} is too old for openclaw@${targetVersion}.`,
       `The requested package requires ${status.nodeEngine}.`,
       runtime.nodeRunner
@@ -814,9 +808,7 @@ export async function resolvePackageRuntimePreflight(params: {
       "Bare `npm i -g openclaw` can silently install an older compatible release.",
       "After upgrading Node, use `npm i -g openclaw@latest`.",
     ].join("\n"),
-    ...(nodeRunner ? { nodeRunner } : {}),
-    targetVersion,
-  };
+  );
 }
 
 async function resolvePackageRuntimeForPreflight(params: {
