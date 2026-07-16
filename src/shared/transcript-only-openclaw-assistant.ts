@@ -10,6 +10,19 @@ const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set<string>([
   OPENCLAW_DELIVERY_MIRROR_MODEL,
   OPENCLAW_GATEWAY_INJECTED_MODEL,
 ]);
+const OPENCLAW_DELIVERY_MIRROR_KINDS = new Set([
+  "channel-final",
+  "channel-final-suppressed",
+  "message-tool-source-reply",
+]);
+
+function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const kind = (value as { kind?: unknown }).kind;
+  return typeof kind === "string" && OPENCLAW_DELIVERY_MIRROR_KINDS.has(kind);
+}
 
 export function isTranscriptOnlyOpenClawAssistantModel(provider: unknown, model: unknown): boolean {
   return (
@@ -24,8 +37,8 @@ export function isTranscriptOnlyOpenClawAssistantModel(provider: unknown, model:
  * that must not be replayed to providers.
  *
  * Primary check: provider="openclaw" + model in known transcript-only set.
- * Fallback: openclawDeliveryMirror field present — catches stripped-metadata
- * survivors from session rebuild / side-branch merge (#99470).
+ * Fallback: a valid openclawDeliveryMirror marker catches observed historical
+ * rows whose provider/model provenance was stripped (#99470).
  */
 export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): boolean {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -43,14 +56,7 @@ export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): bool
   if (isTranscriptOnlyOpenClawAssistantModel(entry.provider, entry.model)) {
     return true;
   }
-  // Session rebuild / side-branch merge can strip provider/model from
-  // delivery-mirror entries while leaving openclawDeliveryMirror intact.
-  // Treat any assistant message carrying that marker as transcript-only
-  // so it never leaks into a provider prompt (#99470).
-  if (entry.openclawDeliveryMirror != null) {
-    return true;
-  }
-  return false;
+  return isOpenClawDeliveryMirrorMarker(entry.openclawDeliveryMirror);
 }
 
 export function isOpenClawMessageToolMirrorAssistantMessage(message: unknown): boolean {

@@ -1,6 +1,7 @@
 /**
  * Sanitizes and validates replayed session history before model calls.
  */
+import { isDeepStrictEqual } from "node:util";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -51,6 +52,7 @@ import {
   shouldAllowProviderOwnedThinkingReplay,
 } from "../transcript-policy.js";
 import {
+  hasNonzeroUsage,
   makeZeroUsageSnapshot,
   normalizeUsage,
   type AssistantUsageSnapshot,
@@ -259,44 +261,30 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   return { ...message, content: sanitizedContent } as AgentMessage;
 }
 
-/**
- * Returns true when `next` is a byte-identical adjacent assistant duplicate of
- * the last entry in `out`. Delivery-mirror entries survive the metadata-only
- * filter when session rebuild/merge strips provider/model identity. Adjacent
- * dedup prevents the model from seeing "the assistant said everything twice"
- * (#99470).
- *
- * Tool-call-bearing turns are never treated as duplicates: a model never emits
- * two identical consecutive tool-call sequences, and delivery-mirror receipts
- * are text-only with no tool calls. A user turn resets adjacency, so legitimate
- * "say that again" flows are unaffected.
- */
-function isAdjacentAssistantDuplicate(out: AgentMessage[], next: AgentMessage): boolean {
-  if (out.length === 0) {
+function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
+  const previous = out.at(-1);
+  if (!previous || previous.role !== "assistant") {
     return false;
   }
-  const prev = out[out.length - 1];
-  if (prev.role !== "assistant") {
+  const usage = (next as { usage?: unknown }).usage;
+  if (
+    !usage ||
+    typeof usage !== "object" ||
+    hasNonzeroUsage(normalizeUsage(usage as UsageLike)) ||
+    (next as { stopReason?: unknown }).stopReason !== "stop" ||
+    extractToolCallsFromAssistant(previous).length > 0 ||
+    extractToolCallsFromAssistant(next).length > 0
+  ) {
     return false;
   }
-  const prevCalls = extractToolCallsFromAssistant(prev);
-  const nextCalls = extractToolCallsFromAssistant(
-    next as Extract<AgentMessage, { role: "assistant" }>,
+  const previousContent = (previous as { content?: unknown }).content;
+  const nextContent = (next as { content?: unknown }).content;
+  return (
+    Array.isArray(previousContent) &&
+    previousContent.length > 0 &&
+    Array.isArray(nextContent) &&
+    isDeepStrictEqual(previousContent, nextContent)
   );
-  if (prevCalls.length > 0 || nextCalls.length > 0) {
-    return false;
-  }
-  const prevRaw = (prev as { content?: unknown }).content;
-  const nextRaw = (next as { content?: unknown }).content;
-  const prevText = typeof prevRaw === "string" ? prevRaw : JSON.stringify(prevRaw);
-  const nextText = typeof nextRaw === "string" ? nextRaw : JSON.stringify(nextRaw);
-  // Empty content is a legitimate provider state (toolUse/length stop reasons,
-  // silent replies), not a delivery-mirror artifact. Delivery mirrors always
-  // carry text content so the duplicate check is still effective.
-  if (!prevText || prevText === "[]") {
-    return false;
-  }
-  return prevText === nextText;
 }
 
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
@@ -328,9 +316,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (typeof replayContent === "string") {
       const normalized = normalizeAssistantReplayTextContent(message, replayContent);
       if (normalized) {
-        if (!isAdjacentAssistantDuplicate(out, normalized)) {
-          out.push(normalized);
-        }
+        out.push(normalized);
       }
       touched = true;
       continue;
@@ -385,11 +371,14 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
         continue;
       }
     }
-    if (!isAdjacentAssistantDuplicate(out, assistantMessage)) {
-      out.push(assistantMessage);
-    } else {
+    // Historical side-branch rebuilds could strip every mirror marker while
+    // retaining the zero-usage receipt immediately after its source reply.
+    // Keep this recovery shape narrow; ordinary repeated model turns survive.
+    if (isBareDeliveryMirrorDuplicate(out, assistantMessage)) {
       touched = true;
+      continue;
     }
+    out.push(assistantMessage);
   }
 
   // Drop trailing stream-error / zero-usage-empty-stop placeholder turns. The

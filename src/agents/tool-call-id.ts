@@ -14,7 +14,7 @@ const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
 const OPENAI_TOOL_CALL_ID_RE = /^call_[A-Za-z0-9_-]+$/;
 
 const STRICT9_LEN = 9;
-const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall", "tool_use"]);
+const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 
 type ToolCallLike = {
   id: string;
