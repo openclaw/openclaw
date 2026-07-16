@@ -100,8 +100,9 @@ export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
   return null;
 }
 
-export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
-  const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE) ?? raw.match(PROVIDER_WRAPPED_HTTP_STATUS_RE);
+function extractHttpStatusMatch(
+  match: RegExpMatchArray | null,
+): { code: number; rest: string } | null {
   if (!match) {
     return null;
   }
@@ -110,6 +111,16 @@ export function extractLeadingHttpStatus(raw: string): { code: number; rest: str
     return null;
   }
   return { code, rest: (match[2] ?? "").trim() };
+}
+
+export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
+  return extractHttpStatusMatch(raw.match(HTTP_STATUS_CODE_PREFIX_RE));
+}
+
+export function extractProviderWrappedHttpStatus(
+  raw: string,
+): { code: number; rest: string } | null {
+  return extractHttpStatusMatch(raw.match(PROVIDER_WRAPPED_HTTP_STATUS_RE));
 }
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
