@@ -20,9 +20,6 @@ export type DedupeCacheOptions = {
   maxSize: number;
 };
 
-/** @deprecated Use resolveNonNegativeIntegerOption for new internal numeric option normalization. */
-export { resolveNonNegativeIntegerOption as resolveDedupeNonNegativeInteger };
-
 /** Creates a bounded in-memory dedupe cache with optional TTL expiry. */
 export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
