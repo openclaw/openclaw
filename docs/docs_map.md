@@ -1565,6 +1565,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Run the Gateway
   - H3: Options
   - H2: Restart the Gateway
+  - H3: External supervisors
   - H3: Gateway profiling
   - H2: Query a running Gateway
   - H3: gateway health

@@ -1632,6 +1632,7 @@ export const nl: TranslationMap = {
     connectionTimedOut: "Er kon niet binnen 30 seconden verbinding worden gemaakt met de sessie.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "agent",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "losgekoppeld",

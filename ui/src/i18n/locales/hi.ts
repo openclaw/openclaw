@@ -1614,6 +1614,7 @@ export const hi: TranslationMap = {
     connectionTimedOut: "सत्र 30 सेकंड के भीतर कनेक्ट नहीं हुआ।",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "एजेंट",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "अलग किया गया",

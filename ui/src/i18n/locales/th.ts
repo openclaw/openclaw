@@ -1605,6 +1605,7 @@ export const th: TranslationMap = {
     connectionTimedOut: "ไม่สามารถเชื่อมต่อเซสชันได้ภายใน 30 วินาที",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "เอเจนต์",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "แยกออกแล้ว",

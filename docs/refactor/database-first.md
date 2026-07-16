@@ -149,6 +149,10 @@ without exceptions outside doctor/import/export/debug boundaries.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
+- Exec approvals: `file-runtime`. TypeScript and macOS still read and write the
+  active state directory's `exec-approvals.json`; the reserved
+  `exec_approvals_config` schema has no runtime owner yet. A future cutover must
+  add same-state doctor import and move both runtimes together.
 - E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
   rows. The runtime-context Docker script creates legacy JSONL only inside the
   doctor migration seed and names the legacy session index path explicitly.
@@ -456,12 +460,9 @@ The branch already has a real shared SQLite base:
   `.openclaw/workspace-state.json`; runtime no longer reads or rewrites the
   legacy workspace marker, and helper APIs no longer pass around a fake
   `.openclaw/setup-state` path just to derive storage identity.
-- Exec approvals now live in the typed shared SQLite `exec_approvals_config`
-  singleton row. Doctor imports legacy `~/.openclaw/exec-approvals.json`;
-  runtime writes no longer create, rewrite, or report that file as its active
-  store location. The macOS companion reads and writes the same
-  `state/openclaw.sqlite` table row; it keeps only the Unix prompt socket on disk
-  because that is IPC, not durable runtime state.
+- The shared schema reserves an `exec_approvals_config` singleton row, but the
+  runtime cutover remains pending. TypeScript and the macOS companion still use
+  the state-scoped JSON file and must move to SQLite together.
 - Device identity, device auth, and bootstrap runtime modules now keep their
   SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers. Device identity uses typed `device_identities` rows and device auth

@@ -27,6 +27,7 @@ import {
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
   shouldRetryVitestNoOutputTimeout,
+  withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
@@ -5000,6 +5001,17 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
   it("allows changed checks to disable automatic silent-run retries", () => {
     expect(shouldRetryVitestNoOutputTimeout({})).toBe(true);
     expect(shouldRetryVitestNoOutputTimeout({ CI: "true" })).toBe(false);
+  });
+
+  it("raises short shard no-output timeouts for the retry attempt", () => {
+    const spec = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" } };
+    expect(withRetryNoOutputTimeout(spec).env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
+    const generous = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "600000" } };
+    expect(withRetryNoOutputTimeout(generous)).toBe(generous);
+    const disabled = { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" } };
+    expect(withRetryNoOutputTimeout(disabled)).toBe(disabled);
+    const unset = { env: {} };
+    expect(withRetryNoOutputTimeout(unset)).toBe(unset);
     expect(shouldRetryVitestNoOutputTimeout({ GITHUB_ACTIONS: "true" })).toBe(false);
     expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1" })).toBe(true);
     expect(shouldRetryVitestNoOutputTimeout({ OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0" })).toBe(false);

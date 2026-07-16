@@ -1052,7 +1052,6 @@ src/plugins/tools.optional.test.ts
 src/plugins/tools.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
-src/plugins/update.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/resolve-route.test.ts
 src/routing/resolve-route.ts

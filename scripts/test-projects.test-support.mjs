@@ -1781,6 +1781,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
     ["test/scripts/codex-install-assertions.test.ts", "test/scripts/docker-build-helper.test.ts"],
   ],
+  [
+    "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs",
+    ["test/scripts/docker-build-helper.test.ts"],
+  ],
   ["scripts/e2e/lib/codex-install-utils.mjs", ["test/scripts/codex-install-assertions.test.ts"]],
   [
     "scripts/e2e/lib/codex-on-demand/assertions.mjs",
@@ -4576,6 +4580,27 @@ export function shouldRetryVitestNoOutputTimeout(env = process.env) {
     return false;
   }
   return !["0", "false", "no", "off"].includes(value ?? "");
+}
+
+// Shards may pin a short no-output window so the known warm-cache stall dies
+// fast (see AGENTS_CORE_RUNTIME_ENV in ci-node-test-plan.mjs). A cold Vitest
+// module cache makes those same imports legitimately silent for minutes, so
+// the retry attempt must get the full watchdog window or it re-dies at the
+// short limit and the job fails without ever running a test.
+const RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS = 300_000;
+
+export function withRetryNoOutputTimeout(spec) {
+  const current = Number(spec.env?.[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
+  if (!Number.isFinite(current) || current <= 0 || current >= RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS) {
+    return spec;
+  }
+  return {
+    ...spec,
+    env: {
+      ...spec.env,
+      [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS),
+    },
+  };
 }
 
 export function createVitestRunSpecs(args, params = {}) {
