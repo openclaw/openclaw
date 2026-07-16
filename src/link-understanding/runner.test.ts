@@ -199,4 +199,39 @@ describe("runLinkUnderstanding", () => {
       }),
     );
   });
+
+  it("times out when a link fetch response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("<html>"));
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/html" } },
+        ),
+        finalUrl: "https://example.com/final",
+        release,
+      });
+      mockCommand("unused");
+
+      const resultPromise = runLinkUnderstanding({
+        cfg: cfg({ type: "cli", command: "summarize", timeoutSeconds: 1 }),
+        ctx: ctx("see https://example.com/page"),
+      });
+      const settled = expect(resultPromise).resolves.toEqual({
+        urls: ["https://example.com/page"],
+        outputs: [],
+      });
+      await vi.advanceTimersByTimeAsync(1_010);
+      await settled;
+      expect(release).toHaveBeenCalledOnce();
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -104,7 +104,11 @@ async function fetchLinkContent(params: {
     if (!response.ok) {
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
-    const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);
+    const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER, {
+      chunkTimeoutMs: params.timeoutMs,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Link fetch stalled: no data received for ${chunkTimeoutMs}ms`),
+    });
     const content = new TextDecoder().decode(buffer).trim();
     if (!content) {
       return null;
