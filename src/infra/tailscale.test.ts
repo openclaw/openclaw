@@ -138,6 +138,31 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
+  it("bounds the whois cache while retaining active and newly inserted clients", async () => {
+    const exec = vi.fn(async (_command: string, args: string[]) => ({
+      stdout: JSON.stringify({ UserProfile: { LoginName: `${args.at(-1)}@example.com` } }),
+      stderr: "",
+    }));
+
+    await readTailscaleWhoisIdentity("fd7a:115c:a1e0::1", exec);
+    await readTailscaleWhoisIdentity("fd7a:115c:a1e0::2", exec);
+    for (let index = 3; index <= 2000; index += 1) {
+      await readTailscaleWhoisIdentity(`fd7a:115c:a1e0::${index}`, exec);
+    }
+
+    // Refresh the first client so the second client becomes the least recently used entry.
+    await readTailscaleWhoisIdentity("fd7a:115c:a1e0::1", exec);
+    await readTailscaleWhoisIdentity("fd7a:115c:a1e0::2001", exec);
+    expect(exec).toHaveBeenCalledTimes(2001);
+
+    await readTailscaleWhoisIdentity("fd7a:115c:a1e0::1", exec);
+    await readTailscaleWhoisIdentity("fd7a:115c:a1e0::2001", exec);
+    expect(exec).toHaveBeenCalledTimes(2001);
+
+    await readTailscaleWhoisIdentity("fd7a:115c:a1e0::2", exec);
+    expect(exec).toHaveBeenCalledTimes(2002);
+  });
+
   it("enableTailscaleServe attempts normal first, then sudo", async () => {
     const exec = vi
       .fn()
