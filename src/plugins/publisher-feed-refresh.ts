@@ -29,6 +29,21 @@ export type PublisherFeedRefreshResult = {
   record: StoredPublisherFeedState;
 };
 
+function samePublisherFeedState(
+  left: StoredPublisherFeedState["state"],
+  right: StoredPublisherFeedState["state"],
+): boolean {
+  return (
+    left.feedId === right.feedId &&
+    left.sequence === right.sequence &&
+    left.generatedAt === right.generatedAt &&
+    left.publisherId === right.publisherId &&
+    left.handle === right.handle &&
+    left.displayName === right.displayName &&
+    JSON.stringify(left.entries) === JSON.stringify(right.entries)
+  );
+}
+
 function sourceOrigin(raw: string): string {
   const url = new URL(raw);
   if (
@@ -68,6 +83,7 @@ function snapshotRecord(params: {
 export async function refreshPublisherFeedState(
   params: PublisherFeedRefreshTarget & {
     store: PublisherFeedStateStore;
+    forceSnapshot?: boolean;
     now?: () => Date;
     dependencies?: PublisherFeedRefreshDependencies;
   },
@@ -84,11 +100,28 @@ export async function refreshPublisherFeedState(
     verification: params.verification,
     now,
   };
-  if (!current) {
+  if (!current || params.forceSnapshot) {
     const snapshot = await fetchSnapshot(transport);
     const record = snapshotRecord({ origin, snapshot, verifiedAt: now().toISOString() });
+    if (current && record.state.sequence < current.state.sequence) {
+      throw new Error("publisher feed snapshot is older than accepted state");
+    }
+    if (
+      current &&
+      record.state.sequence === current.state.sequence &&
+      !samePublisherFeedState(record.state, current.state)
+    ) {
+      throw new Error("publisher feed snapshot changed without a sequence increment");
+    }
     await params.store.write(record);
-    return { status: "initialized", record };
+    return {
+      status: current
+        ? record.state.sequence === current.state.sequence
+          ? "unchanged"
+          : "updated"
+        : "initialized",
+      record,
+    };
   }
 
   const changes = await fetchChanges({ ...transport, fromSequence: current.state.sequence });
