@@ -260,7 +260,9 @@ enum ApplicationRelocator {
             isReadOnlyVolume: isReadOnlyVolume
         )
     }
+}
 
+extension ApplicationRelocator {
     nonisolated static func replacementAction(
         launchedCodeDirectoryHash: Data,
         installedCodeDirectoryHash: Data?,
