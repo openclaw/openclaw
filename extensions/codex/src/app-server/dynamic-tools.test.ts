@@ -699,10 +699,7 @@ describe("createCodexDynamicToolBridge", () => {
     let bridge!: ReturnType<typeof createCodexDynamicToolBridge>;
     try {
       bridge = createCodexDynamicToolBridge({
-        tools: [
-          createTool({ name: "message" }),
-          nullParamTool,
-        ],
+        tools: [createTool({ name: "message" }), nullParamTool],
         signal: new AbortController().signal,
         hookContext: {
           agentId: "agent-null-schema",
