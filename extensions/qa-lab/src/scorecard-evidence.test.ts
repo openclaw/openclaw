@@ -14,12 +14,13 @@ import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js"
 function evidenceEntry(
   coverage: QaEvidenceSummaryEntry["coverage"],
   status: QaEvidenceSummaryEntry["result"]["status"] = "pass",
+  testId = "coverage-fixture",
 ): QaEvidenceSummaryEntry {
   return {
     test: {
       kind: "flow",
-      id: `${status}-coverage`,
-      title: `${status} coverage`,
+      id: testId,
+      title: "Coverage fixture",
     },
     coverage,
     refs: [],
@@ -210,7 +211,7 @@ describe("profile scorecard evidence", () => {
   ] as const)(
     "scores %s primary evidence from its execution result",
     async (status, fulfilled, categoryStatus) => {
-      const { scorecard } = await buildQaProfileScorecardEvidence({
+      const { scorecard, writtenEvidence } = await buildQaProfileScorecardEvidence({
         evidence: evidenceSummary([
           evidenceEntry([{ id: "coverage.one", role: "primary" }], status),
         ]),
@@ -229,6 +230,7 @@ describe("profile scorecard evidence", () => {
         fulfilled,
         missing: 1 - fulfilled,
       });
+      expect(writtenEvidence.entries[0]?.test.id).toBe("coverage-fixture");
     },
   );
 
@@ -244,16 +246,17 @@ describe("profile scorecard evidence", () => {
 
     const { scorecard, writtenEvidence } = await buildQaProfileScorecardEvidence({
       evidence: evidenceSummary([
-        evidenceEntry([{ id: "coverage.pass", role: "primary" }], "pass"),
+        evidenceEntry([{ id: "coverage.pass", role: "primary" }], "pass", "scenario-a"),
         evidenceEntry(
           [
             { id: "coverage.fail", role: "primary" },
             { id: "coverage.diagnostic", role: "secondary" },
           ],
           "fail",
+          "scenario-b",
         ),
-        evidenceEntry([{ id: "coverage.blocked", role: "primary" }], "blocked"),
-        evidenceEntry([{ id: "coverage.skipped", role: "primary" }], "skipped"),
+        evidenceEntry([{ id: "coverage.blocked", role: "primary" }], "blocked", "scenario-c"),
+        evidenceEntry([{ id: "coverage.skipped", role: "primary" }], "skipped", "scenario-d"),
       ]),
       filters: {},
       categories: [categoryInventory(coverageIds)],
