@@ -15,7 +15,8 @@ export type {
 } from "./delivery-queue-storage.js";
 export {
   drainPendingDeliveries,
+  isRecoveryEntryInProgress,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
-export type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";
+export type { DeliverFn, ReconnectDrainResult, RecoveryLogger } from "./delivery-queue-recovery.js";
