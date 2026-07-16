@@ -32,6 +32,7 @@ import {
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
@@ -1790,6 +1791,19 @@ function validateConfigObjectWithPluginsBase(
   if (Array.isArray(config.agents?.list)) {
     for (const [index, entry] of config.agents.list.entries()) {
       validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+    }
+
+    // Check that agents.list contains the required main agent
+    const hasMainAgent = config.agents.list.some(
+      (agent) =>
+        agent && typeof agent === "object" && "id" in agent && agent.id === DEFAULT_AGENT_ID,
+    );
+    if (!hasMainAgent) {
+      issues.push({
+        path: "agents.list",
+        message: `Missing required "${DEFAULT_AGENT_ID}" agent entry. The main agent is required for core routing and session management.`,
+        severity: "error",
+      });
     }
   }
 

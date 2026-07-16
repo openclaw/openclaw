@@ -10,6 +10,7 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
 } from "../config/io.js";
+import { writeConfigFile } from "../config/io.runtime.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -17,9 +18,11 @@ import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/r
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentConfigEntry } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../secrets/runtime-fast-path.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
@@ -129,7 +132,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     ));
   const configSnapshot = snapshotRead.snapshot;
   const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
-  const wroteConfig = false;
+  let wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw createInvalidConfigError(
       configSnapshot.path,
@@ -152,19 +155,65 @@ export async function loadGatewayStartupConfigSnapshot(params: {
           discovery: pluginMetadataSnapshot?.discovery,
         }),
       );
-  if (autoEnable.changes.length === 0) {
-    return {
-      snapshot: configSnapshot,
-      wroteConfig,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+
+  let effectiveConfig = autoEnable.changes.length === 0 ? configSnapshot.config : autoEnable.config;
+
+  // Check for missing main agent and recover if needed
+  const agentsList = effectiveConfig.agents?.list ?? [];
+  const hasMainAgent = agentsList.some(
+    (agent): agent is AgentConfigEntry =>
+      agent != null && typeof agent === "object" && "id" in agent && agent.id === DEFAULT_AGENT_ID,
+  );
+
+  if (!hasMainAgent && !params.minimalTestGateway) {
+    params.log.warn(
+      `Configuration missing required "${DEFAULT_AGENT_ID}" agent entry. ` +
+        `This can cause routing failures and session issues. Recovering with default main agent configuration...`,
+    );
+
+    // Create a minimal default main agent entry
+    const defaultMainAgent: AgentConfigEntry = {
+      id: DEFAULT_AGENT_ID,
+      name: "Main",
+      // Use minimal configuration to avoid overwriting user customizations
+      // The model will be resolved from defaults or environment
     };
+
+    // Prepend main agent to the list to ensure it's first
+    const recoveredAgentsList = [defaultMainAgent, ...agentsList];
+
+    effectiveConfig = {
+      ...effectiveConfig,
+      agents: {
+        ...effectiveConfig.agents,
+        list: recoveredAgentsList,
+      },
+    };
+
+    // Write the recovered config back to disk
+    try {
+      await writeConfigFile(effectiveConfig);
+      wroteConfig = true;
+      params.log.info(
+        `Recovered "${DEFAULT_AGENT_ID}" agent entry with minimal configuration. ` +
+          `Please review your configuration and customize as needed.`,
+      );
+    } catch (writeError) {
+      params.log.warn(
+        `Failed to write recovered configuration: ${String(writeError)}. ` +
+          `Gateway will continue with in-memory recovery, but config file remains unchanged.`,
+      );
+    }
   }
 
-  params.log.info(
-    `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
-  );
+  if (autoEnable.changes.length > 0 && !wroteConfig) {
+    params.log.info(
+      `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
+    );
+  }
+
   return {
-    snapshot: withRuntimeConfig(configSnapshot, autoEnable.config),
+    snapshot: withRuntimeConfig(configSnapshot, effectiveConfig),
     wroteConfig,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
