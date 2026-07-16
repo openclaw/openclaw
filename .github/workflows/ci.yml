@@ -104,6 +104,7 @@ jobs:
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       historical_target: ${{ steps.manifest.outputs.historical_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
+      run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
@@ -554,6 +555,13 @@ jobs:
             eventName !== "pull_request" ||
             typeof changedNodeTestPlan.hasQaSmokeAffectingChange !== "function" ||
             changedNodeTestPlan.hasQaSmokeAffectingChange(changedPaths);
+          // Prompt snapshots only change when the generator's import graph or
+          // its fixtures do; unaffected PR diffs skip the regeneration lane.
+          const changedScopeHasPromptSnapshotImpact =
+            changedPaths === null ||
+            eventName !== "pull_request" ||
+            typeof changedNodeTestPlan.hasPromptSnapshotAffectingChange !== "function" ||
+            changedNodeTestPlan.hasPromptSnapshotAffectingChange(changedPaths);
           const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
           const runQaSmokeCi =
             runNodeFull &&
@@ -614,6 +622,7 @@ jobs:
             historical_target: historicalTarget,
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
+            run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createMatrix(
@@ -1473,7 +1482,9 @@ jobs:
               // Frozen/compat targets ship older planners that declare fewer
               // profile parts; the declared parts still cover every scenario.
               if (/unknown QA smoke CI profile part/.test(String(error)) && partId !== "profile-1") {
-                console.log(`[skip] ${partId} is not declared by this checkout's smoke plan`);
+                // stdout is the TSV contract consumed below. Keep diagnostics on stderr
+                // so an empty compatibility shard remains empty instead of becoming a run.
+                console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`);
                 process.exit(0);
               }
               throw error;
@@ -1718,7 +1729,18 @@ jobs:
         run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
-        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+        # Scale the in-process Vitest worker budget with the runner class. Bins
+        # run one Vitest process at a time (planConcurrency 1), so workers are
+        # the only in-job parallelism; import-bound suites scale near-linearly.
+        # Timing-sensitive groups stay pinned to 2 via plan-level env.
+        env:
+          SHARD_RUNNER: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+        run: |
+          if [[ "$SHARD_RUNNER" == *"-8vcpu-"* ]]; then
+            echo "OPENCLAW_VITEST_MAX_WORKERS=6" >> "$GITHUB_ENV"
+          else
+            echo "OPENCLAW_VITEST_MAX_WORKERS=3" >> "$GITHUB_ENV"
+          fi
 
       - name: Run Node test shard
         # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
@@ -1815,6 +1837,7 @@ jobs:
         env:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
+          RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
@@ -1853,7 +1876,14 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              pnpm lint --threads=8
+              # Control-UI i18n catalogs only change with ui/ sources or the
+              # i18n tooling (manifest-gated); oxlint always runs.
+              if [ "$RUN_CONTROL_UI_I18N" = "true" ]; then
+                pnpm lint --threads=8
+              else
+                echo "[skip] changed scope cannot affect control-UI i18n catalogs"
+                node scripts/run-oxlint-shards.mjs --threads=8
+              fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
               fi
@@ -2008,6 +2038,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
@@ -2038,8 +2069,14 @@ jobs:
             prompt-snapshots)
               # No presence fallback: the boundary runner previously invoked
               # this unconditionally, and silent success would drop snapshot
-              # drift coverage.
-              run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
+              # drift coverage. The manifest gates the lane on the generator's
+              # import graph and fixtures; diffs outside both cannot change
+              # generated snapshots.
+              if [ "$RUN_PROMPT_SNAPSHOTS" != "true" ]; then
+                echo "[skip] changed scope cannot affect generated prompt snapshots"
+              else
+                run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
+              fi
               ;;
             session-accessor-boundary)
               if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
@@ -2746,54 +2783,18 @@ jobs:
           echo "checkout failed after 5 attempts" >&2
           exit 1
 
-      - name: Setup Java
-        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+      - name: Checkout CI Android toolchain action
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          distribution: temurin
-          # Keep sdkmanager on the stable JDK path for Linux CI runners.
-          java-version: 17
-          cache: gradle
-          cache-dependency-path: |
-            apps/android/**/*.gradle*
-            apps/android/**/gradle-wrapper.properties
-            apps/android/gradle/libs.versions.toml
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: .github/actions/setup-android-toolchain
+          persist-credentials: false
 
-      - name: Cache Android SDK
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-v1-
-
-      - name: Setup Android SDK cmdline-tools
-        run: |
-          set -euo pipefail
-          ANDROID_SDK_ROOT="$HOME/.android-sdk"
-          CMDLINE_TOOLS_VERSION="14742923"
-          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-          URL="https://dl.google.com/android/repository/${ARCHIVE}"
-
-          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-            curl -fsSL --connect-timeout 10 --max-time 300 "$URL" -o "/tmp/${ARCHIVE}"
-            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-            unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          fi
-
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
-            "platform-tools" \
-            "platforms;android-37.0" \
-            "build-tools;36.0.0"
+      - name: Setup Android toolchain
+        # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
+        # workflow-owned as before. Load them from the workflow revision so old targets work.
+        uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android

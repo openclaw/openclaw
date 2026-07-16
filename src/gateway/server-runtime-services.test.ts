@@ -55,6 +55,8 @@ vi.mock("../sessions/session-upstream-monitor.js", () => ({
 }));
 
 vi.mock("../infra/env.js", () => ({
+  isTruthyEnvValue: (value?: string) =>
+    ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? ""),
   isVitestRuntimeEnv: hoisted.isVitestRuntimeEnv,
 }));
 
@@ -98,6 +100,7 @@ const {
   runGatewayPostReadyMaintenance,
   scheduleGatewayIdleTask,
   scheduleGatewayPostReadyMaintenance,
+  startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
   startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
@@ -105,6 +108,10 @@ const {
 describe("server-runtime-services", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    // Gateway test helpers set these at module load. Stub them off so a shared
+    // worker's import order cannot silently disable this suite's health monitor.
+    vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "");
+    vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "");
     resetGatewayWorkAdmission();
     hoisted.heartbeatRunner.stop.mockClear();
     hoisted.heartbeatRunner.updateConfig.mockClear();
@@ -128,6 +135,7 @@ describe("server-runtime-services", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     resetGatewayWorkAdmission();
   });
 
@@ -171,6 +179,20 @@ describe("server-runtime-services", () => {
     services.heartbeatRunner.stop();
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
+
+  it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
+    "keeps channel health recovery disabled when %s suppresses startup",
+    (envKey) => {
+      const monitor = startGatewayChannelHealthMonitor({
+        cfg: {} as never,
+        channelManager: {} as never,
+        env: { [envKey]: "1" },
+      });
+
+      expect(monitor).toBeNull();
+      expect(hoisted.startChannelHealthMonitor).not.toHaveBeenCalled();
+    },
+  );
 
   it("starts model pricing refresh after scheduled services activate", async () => {
     const pluginLookUpTable = {

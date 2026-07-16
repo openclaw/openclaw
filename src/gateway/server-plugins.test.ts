@@ -1278,6 +1278,36 @@ describe("loadGatewayPlugins", () => {
     expect(params.deliver).toBe(false);
   });
 
+  test("returns resolved runtime metadata from plugin-owned subagent starts", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("resolved-subagent-runtime"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.req.method).toBe("agent");
+      opts.respond(true, {
+        runId: "run-claude",
+        runtime: {
+          harness: "claude-cli",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      });
+    });
+
+    await expect(
+      runtime.run({
+        sessionKey: "s-runtime",
+        message: "use configured runtime",
+      }),
+    ).resolves.toEqual({
+      runId: "run-claude",
+      runtime: {
+        harness: "claude-cli",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+  });
+
   test("forwards caller-supplied idempotencyKey on subagent run", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

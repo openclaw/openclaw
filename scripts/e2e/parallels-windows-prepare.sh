@@ -95,7 +95,18 @@ require_host_tools() {
 
 fetch_host_metadata() {
   # Keep host metadata lookups bounded like the guest download paths below.
-  curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 "$@"
+  local attempt output
+  for attempt in 1 2 3; do
+    if output="$(curl -fsSL --connect-timeout 10 --max-time 120 "$@")"; then
+      printf '%s' "$output"
+      return 0
+    fi
+    output=""
+    if [[ "$attempt" != "3" ]]; then
+      sleep "$attempt"
+    fi
+  done
+  return 1
 }
 
 vm_exists() {

@@ -7454,6 +7454,21 @@
       "translated": "OpenClaw đang chuẩn bị phản hồi."
     },
     {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "Thu gọn danh sách kiểm tra kế hoạch"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "Mở rộng danh sách kiểm tra kế hoạch"
+    },
+    {
       "id": "native.android.f3806d79e43f568f",
       "source": "Dismiss shared-image warning",
       "translated": "Bỏ qua cảnh báo hình ảnh được chia sẻ"
@@ -13687,6 +13702,21 @@
       "id": "native.apple.cc304ba214b8a9df",
       "source": "Review this exec request before continuing. Your decision will be sent back to the gateway.",
       "translated": "Xem lại yêu cầu thực thi này trước khi tiếp tục. Quyết định của bạn sẽ được gửi lại về gateway."
+    },
+    {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "Phần bổ trợ"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "Công cụ"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "Mức độ nghiêm trọng"
     },
     {
       "id": "native.apple.1f2576ef69108e39",
@@ -22342,6 +22372,16 @@
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "Đang chạy công cụ…"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "Thu gọn kế hoạch"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "Mở rộng kế hoạch"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
