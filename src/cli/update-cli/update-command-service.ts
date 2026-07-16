@@ -720,7 +720,7 @@ export function tryResolveInvocationCwd(): string | undefined {
   }
 }
 
-export type PackageRuntimePreflightResult = {
+type PackageRuntimePreflightResult = {
   error: string | null;
   nodeRunner?: string;
   replacedNodeRunner?: string;
