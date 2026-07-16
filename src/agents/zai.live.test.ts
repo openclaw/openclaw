@@ -35,21 +35,16 @@ async function expectModelReturnsAssistantText(
     contextWindow: modelId === "glm-5.2" ? 1_000_000 : 202_800,
     maxTokens: modelId === "glm-5.2" ? 131_072 : 131_100,
   };
-  const runProbe = (maxTokens: number) =>
-    completeSimple(
-      model,
-      {
-        messages: createSingleUserPromptMessage(),
-      },
-      { apiKey: ZAI_KEY, maxTokens },
-    );
-  const res = await runProbe(64);
-  let text = extractNonEmptyAssistantText(res.content);
-  // GLM can spend a tiny cap entirely on hidden reasoning. Retry only a
-  // provider-declared truncation; other empty responses remain failures.
-  if (text.length === 0 && res.stopReason === "length") {
-    text = extractNonEmptyAssistantText((await runProbe(256)).content);
-  }
+  // GLM-5 reasoning is enabled by default and consumes the same output budget.
+  // Keep enough headroom for a visible answer while retaining a bounded probe.
+  const res = await completeSimple(
+    model,
+    {
+      messages: createSingleUserPromptMessage(),
+    },
+    { apiKey: ZAI_KEY, maxTokens: 1_024 },
+  );
+  const text = extractNonEmptyAssistantText(res.content);
   expect(text.length).toBeGreaterThan(0);
 }
 
