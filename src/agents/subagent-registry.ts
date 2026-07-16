@@ -783,6 +783,7 @@ const {
   completeSubagentRun,
   finalizeResumedAnnounceGiveUp,
   refreshFrozenResultFromSession,
+  resumeRequesterSettleWake,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
 
@@ -853,6 +854,10 @@ function resumeSubagentRun(runId: string) {
     // Startup orphan recovery replays this durable exact-run winner before it
     // reads session/config state. Do not prune or resume it through announce.
     resumedRuns.add(runId);
+    return;
+  }
+  if (entry.requesterSettleWake) {
+    resumeRequesterSettleWake(runId, entry);
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -1166,6 +1171,10 @@ async function sweepSubagentRuns() {
       });
     }
     for (const [runId, entry] of subagentRuns.entries()) {
+      if (entry.requesterSettleWake) {
+        resumeRequesterSettleWake(runId, entry);
+        continue;
+      }
       if (isSuspendedPendingFinalDelivery(entry)) {
         const suspendedAgeMs = now - (entry.delivery?.suspendedAt ?? now);
         const expired = suspendedAgeMs >= resolveSuspendedDeliveryExpiryMs(entry);

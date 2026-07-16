@@ -206,7 +206,15 @@ function createLifecycleController({
       (await gatewayMocks.callGateway(opts)) as T,
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     runSubagentAnnounceFlow: vi.fn(async () => true),
-    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
+    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
+      async (wakeParams: {
+        settledEntry: { runId: string };
+        completeBatch(runIds: readonly string[]): void;
+      }) => {
+        wakeParams.completeBatch([wakeParams.settledEntry.runId]);
+        return false;
+      },
+    ),
     warn: vi.fn(),
   };
   Object.assign(params, overrides);
@@ -2246,7 +2254,7 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("does not reject cleanup give-up when task delivery status update throws", async () => {
-    const persist = vi.fn();
+    const persistOrThrow = vi.fn();
     const warn = vi.fn();
     const entry = createRunEntry({
       endedAt: 4_000,
@@ -2259,7 +2267,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     const controller = createLifecycleController({
       entry,
-      persist,
+      persistOrThrow,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
       warn,
     });
@@ -2282,7 +2290,7 @@ describe("subagent registry lifecycle hardening", () => {
       deliveryStatus: "failed",
     });
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
-    expect(persist).toHaveBeenCalled();
+    expect(persistOrThrow).toHaveBeenCalled();
   });
 
   it("cleans up tracked browser sessions before subagent cleanup flow", async () => {
@@ -2902,7 +2910,7 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {
-    const persist = vi.fn();
+    const persistOrThrow = vi.fn();
     const entry = createRunEntry({
       endedAt: 4_000,
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -2915,7 +2923,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     const controller = createLifecycleController({
       entry,
-      persist,
+      persistOrThrow,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
     });
 
@@ -2953,7 +2961,7 @@ describe("subagent registry lifecycle hardening", () => {
       terminalSummary:
         "Required completion delivery failed before reaching the requester: gateway request timeout for agent.",
     });
-    expect(persist).toHaveBeenCalled();
+    expect(persistOrThrow).toHaveBeenCalled();
   });
 
   it.each([
@@ -2975,7 +2983,7 @@ describe("subagent registry lifecycle hardening", () => {
   ])(
     "keeps $name completion cleanup terminal on retry exhaustion",
     async ({ endedReason, outcome }) => {
-      const persist = vi.fn();
+      const persistOrThrow = vi.fn();
       const entry = createRunEntry({
         endedAt: 4_000,
         endedReason,
@@ -2989,7 +2997,7 @@ describe("subagent registry lifecycle hardening", () => {
       const controller = createLifecycleController({
         entry,
         runs,
-        persist,
+        persistOrThrow,
         captureSubagentCompletionReply: vi.fn(async () => undefined),
       });
 
@@ -3007,7 +3015,7 @@ describe("subagent registry lifecycle hardening", () => {
       } else {
         expect(entry.cleanupCompletedAt).toBeTypeOf("number");
       }
-      expect(persist).toHaveBeenCalled();
+      expect(persistOrThrow).toHaveBeenCalled();
     },
   );
 
@@ -3437,11 +3445,13 @@ describe("requester settle wake trigger", () => {
       requesterSessionKey: "agent:main:main",
       requesterOrigin: undefined,
       settledEntry: entry,
-      settledRowRetired: false,
+      transitionBatch: expect.any(Function),
+      completeBatch: expect.any(Function),
     });
+    expect(entry.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
   });
 
-  it("fires the settle wake from delete-cleanup bookkeeping after the run is removed", () => {
+  it("retains delete-cleanup rows until the settle wake resolves", () => {
     const entry = createRunEntry({ endedAt: 4_000, cleanup: "delete" });
     const runs = new Map([[entry.runId, entry]]);
     const settleWake = vi.fn(async () => false);
@@ -3458,17 +3468,65 @@ describe("requester settle wake trigger", () => {
       completedAt: 5_000,
     });
 
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(runs.has(entry.runId)).toBe(true);
+    expect(entry.requesterSettleWake).toEqual({
+      status: "pending",
+      attemptCount: 0,
+      retireAfterSettle: true,
+    });
     expect(settleWake).toHaveBeenCalledTimes(1);
-    // The retired-row hint lets the wake ledger this row before its first
-    // await — the registry row is already gone at this point.
     expect(settleWake).toHaveBeenCalledWith(
       expect.objectContaining({
         requesterSessionKey: "agent:main:main",
         settledEntry: entry,
-        settledRowRetired: true,
       }),
     );
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+    ) => void;
+    completeBatch([entry.runId]);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("schedules every remaining requester wave after one batch resolves", async () => {
+    const first = createRunEntry({ runId: "run-first", endedAt: 4_000 });
+    const later = createRunEntry({ runId: "run-later", endedAt: 8_000 });
+    later.requesterSettleWake = { status: "pending", attemptCount: 0 };
+    const runs = new Map([
+      [first.runId, first],
+      [later.runId, later],
+    ]);
+    const settleWake = vi.fn(
+      async (
+        params: Parameters<
+          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+        >[0],
+      ) => {
+        if (params.settledEntry.runId === first.runId) {
+          params.completeBatch([first.runId]);
+        }
+        return false;
+      },
+    );
+    const controller = createLifecycleController({
+      entry: first,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: first.runId,
+      entry: first,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+
+    await vi.waitFor(() => expect(settleWake).toHaveBeenCalledTimes(2));
+    expect(settleWake.mock.calls.map(([params]) => params.settledEntry.runId)).toEqual([
+      "run-first",
+      "run-later",
+    ]);
+    expect(later.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
   });
 
   it("preserves delete-mode child results for the settle wake after delivered cleanup clears them", async () => {
@@ -3496,15 +3554,12 @@ describe("requester settle wake trigger", () => {
     });
     await vi.waitFor(() => expect(settleWake).toHaveBeenCalledTimes(1));
 
-    // The real delivered-finalize path clears the live entry's result text
-    // right before delete-mode bookkeeping retires the row...
-    expect(entry.completion?.resultText).toBeUndefined();
-    expect(runs.has(entry.runId)).toBe(false);
-    // ...so the wake must receive a pre-clearing snapshot that still carries
-    // the child's output for the requester findings.
+    // Delete-mode keeps the canonical row and result until the durable wake
+    // outbox reaches success or a terminal/no-wake disposition.
+    expect(entry.completion?.resultText).toBe("delete-mode findings");
+    expect(runs.has(entry.runId)).toBe(true);
     expect(settleWake).toHaveBeenCalledWith(
       expect.objectContaining({
-        settledRowRetired: true,
         settledEntry: expect.objectContaining({
           runId: entry.runId,
           completion: expect.objectContaining({ resultText: "delete-mode findings" }),
@@ -3513,7 +3568,7 @@ describe("requester settle wake trigger", () => {
     );
   });
 
-  it("fires the settle wake with the retired-row hint when a reconciled killed row is retired", () => {
+  it("retains a reconciled killed row until the settle wake resolves", () => {
     const entry = createRunEntry({
       endedAt: 4_000,
       endedReason: "subagent-killed",
@@ -3533,14 +3588,14 @@ describe("requester settle wake trigger", () => {
       completedAt: 5_000,
     });
 
-    expect(runs.has(entry.runId)).toBe(false);
+    expect(runs.has(entry.runId)).toBe(true);
+    expect(entry.requesterSettleWake?.retireAfterSettle).toBe(true);
     expect(settleWake).toHaveBeenCalledTimes(1);
-    expect(settleWake).toHaveBeenCalledWith(
-      expect.objectContaining({
-        settledEntry: entry,
-        settledRowRetired: true,
-      }),
-    );
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+    ) => void;
+    completeBatch([entry.runId]);
+    expect(runs.has(entry.runId)).toBe(false);
   });
 
   it("skips the settle wake when the caller opts out (suspended-delivery discard)", () => {
@@ -3586,6 +3641,7 @@ describe("requester settle wake trigger", () => {
 
     expect(entry.delivery?.status).toBe("suspended");
     expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(entry.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
     expect(settleWake).toHaveBeenCalledTimes(1);
     expect(settleWake).toHaveBeenCalledWith(
       expect.objectContaining({
