@@ -153,17 +153,18 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     unsubscribe();
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(auditEvents).toHaveLength(2);
-    expect(auditEvents.map((event) => event.sourceId)).toEqual([
-      `message:outbound:queue:${beforeDrain[0]?.id}:payload:0`,
-      `message:outbound:queue:${beforeDrain[0]?.id}:payload:1`,
-    ]);
-    expect(auditEvents.map((event) => event.outcome)).toEqual(["unknown", "unknown"]);
-    expect(auditEvents.map((event) => event.resultCount)).toEqual([0, 0]);
+    const afterDrain = await loadPendingDeliveries(tmpDir);
+    expect(afterDrain).toHaveLength(1);
+    expect(afterDrain[0]?.recoveryState).toBe("unknown_after_send");
+    expect(afterDrain[0]?.retryCount).toBe(beforeDrain[0]?.retryCount);
+    expect(afterDrain[0]?.lastAttemptAt).toBeTypeOf("number");
+    expect(afterDrain[0]?.lastError).toContain(
+      "refusing blind replay without adapter reconciliation",
+    );
+    expect(auditEvents).toEqual([]);
   });
 
-  it("does not retain a pre-send suppression across an ambiguous crash boundary", async () => {
+  it("does not emit terminal audit for a deferred ambiguous pre-send suppression", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     process.env.OPENCLAW_STATE_DIR = tmpDir;
@@ -189,8 +190,11 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     unsubscribe();
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(auditEvents.map((event) => event.outcome)).toEqual(["unknown", "unknown"]);
-    expect(auditEvents.map((event) => event.resultCount)).toEqual([0, 0]);
+    const afterDrain = await loadPendingDeliveries(tmpDir);
+    expect(afterDrain).toHaveLength(1);
+    expect(afterDrain[0]?.recoveryState).toBe("send_attempt_started");
+    expect(afterDrain[0]?.retryCount).toBe(beforeDrain[0]?.retryCount);
+    expect(auditEvents).toEqual([]);
   });
 
   it("retains retryable send-attempt state when an adapter fails before returning a result", async () => {

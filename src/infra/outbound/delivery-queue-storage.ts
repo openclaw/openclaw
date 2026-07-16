@@ -154,6 +154,19 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   }));
 }
 
+/** Record a recovery deferral that did not attempt delivery or reconciliation. */
+export async function deferDeliveryRecovery(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  updateQueuedDelivery(id, stateDir, (entry) => ({
+    ...entry,
+    lastAttemptAt: Date.now(),
+    lastError: error,
+  }));
+}
+
 /** Record a failed attempt whose retry provably cannot duplicate a recipient-visible send. */
 export async function failDeliveryBeforePlatformSend(
   id: string,

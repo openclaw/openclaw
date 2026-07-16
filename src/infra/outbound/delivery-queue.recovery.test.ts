@@ -121,6 +121,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
 
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -172,6 +173,7 @@ describe("delivery-queue recovery", () => {
       failed: 1,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
     expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
@@ -290,7 +292,7 @@ describe("delivery-queue recovery", () => {
     });
   });
 
-  it("audits max-retry deadletters as unknown when platform send may have started", async () => {
+  it("reconciles max-retry ambiguous entries before auditing unresolved sends as unknown", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     const id = await enqueueDelivery(
@@ -299,13 +301,26 @@ describe("delivery-queue recovery", () => {
     );
     setQueuedEntryState(tmpDir(), id, {
       retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 1_000_000,
       platformSendStartedAt: Date.now(),
       recoveryState: "send_attempt_started",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "unresolved",
+      error: "provider lookup timed out",
+      retryable: true,
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
     });
 
     const { result } = await runRecovery({ deliver: vi.fn() });
     unsubscribe();
 
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
     expect(result.skippedMaxRetries).toBe(1);
     expect(auditEvents).toHaveLength(1);
     expect(auditEvents[0]).toMatchObject({
@@ -314,6 +329,80 @@ describe("delivery-queue recovery", () => {
       failureStage: "queue",
     });
   });
+
+  it("acks max-retry ambiguous entries that reconciliation proves were sent", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 1_000_000,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue({
+      status: "sent",
+      messageId: "platform-1",
+      receipt: {
+        primaryPlatformMessageId: "platform-1",
+        platformMessageIds: ["platform-1"],
+        parts: [{ platformMessageId: "platform-1", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+    });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+
+    const deliver = vi.fn();
+    const { result } = await runRecovery({ deliver });
+
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ recovered: 1, skippedMaxRetries: 0 });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
+  it.each(["send_attempt_started", "unknown_after_send"] as const)(
+    "does not replay max-retry %s entries reconciled as not sent",
+    async (recoveryState) => {
+      const auditEvents: TrustedMessageAuditEvent[] = [];
+      const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+      const id = await enqueueDelivery(
+        { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir(),
+      );
+      setQueuedEntryState(tmpDir(), id, {
+        retryCount: MAX_RETRIES,
+        lastAttemptAt: Date.now() - 1_000_000,
+        platformSendStartedAt: Date.now(),
+        recoveryState,
+      });
+      const reconcileUnknownSend = vi.fn().mockResolvedValue({ status: "not_sent" });
+      resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+        durableFinal: {
+          capabilities: { reconcileUnknownSend: true },
+          reconcileUnknownSend,
+        },
+      });
+
+      const deliver = vi.fn();
+      const { result } = await runRecovery({ deliver });
+      unsubscribe();
+
+      expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ recovered: 0, skippedMaxRetries: 1 });
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+      expect(auditEvents).toEqual([
+        expect.objectContaining({ outcome: "failed", failureStage: "queue" }),
+      ]);
+    },
+  );
 
   it("increments retryCount on failed recovery attempt", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
@@ -411,8 +500,13 @@ describe("delivery-queue recovery", () => {
     const replay = vi.fn();
     await runRecovery({ deliver: replay });
     expect(replay).not.toHaveBeenCalled();
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    const afterReplay = await loadPendingDeliveries(tmpDir());
+    expect(afterReplay).toHaveLength(1);
+    expect(afterReplay[0]?.id).toBe(id);
+    expect(afterReplay[0]?.recoveryState).toBe("unknown_after_send");
+    expect(afterReplay[0]?.retryCount).toBe(0);
+    expect(afterReplay[0]?.lastAttemptAt).toBeTypeOf("number");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
   });
 
   it("keeps a best-effort recovery failure retryable when no payload was sent", async () => {
@@ -577,7 +671,7 @@ describe("delivery-queue recovery", () => {
     expect(typeof entries[0]?.platformSendStartedAt).toBe("number");
   });
 
-  it("does not ack a partially sent best-effort recovery batch", async () => {
+  it("does not ack or replay a partially sent best-effort recovery batch", async () => {
     const id = await enqueueDelivery(
       {
         channel: "demo-channel-c",
@@ -614,10 +708,16 @@ describe("delivery-queue recovery", () => {
     const replay = vi.fn();
     await runRecovery({ deliver: replay });
     expect(replay).not.toHaveBeenCalled();
-    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    const afterReplay = await loadPendingDeliveries(tmpDir());
+    expect(afterReplay).toHaveLength(1);
+    expect(afterReplay[0]?.id).toBe(id);
+    expect(afterReplay[0]?.recoveryState).toBe("unknown_after_send");
+    expect(afterReplay[0]?.retryCount).toBe(0);
+    expect(afterReplay[0]?.lastAttemptAt).toBeTypeOf("number");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
   });
 
-  it("moves entries abandoned after platform send may have started to failed without reconciliation", async () => {
+  it("keeps entries abandoned after platform send may have started pending without reconciliation", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     const id = await enqueueDelivery(
@@ -638,23 +738,23 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(result).toEqual({
       recovered: 0,
-      failed: 1,
+      failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 1,
     });
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(0);
+    expect(entries[0]?.lastAttemptAt).toBeTypeOf("number");
+    expect(entries[0]?.recoveryState).toBe("unknown_after_send");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
     expectMockMessageContaining(log.warn, "unknown_after_send");
-    expect(auditEvents).toHaveLength(1);
-    expect(auditEvents[0]).toMatchObject({
-      sourceId: `message:outbound:queue:${id}:payload:0`,
-      status: "unknown",
-      outcome: "unknown",
-      failureStage: "queue",
-    });
+    expect(auditEvents).toEqual([]);
   });
 
-  it("reports every payload unknown when a multi-payload send is crash-ambiguous", async () => {
+  it("does not report terminal audit while a multi-payload send remains crash-ambiguous", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     const id = await enqueueDelivery(
@@ -671,25 +771,20 @@ describe("delivery-queue recovery", () => {
       recoveryState: "unknown_after_send",
     });
 
-    await runRecovery({ deliver: vi.fn() });
+    const { result } = await runRecovery({ deliver: vi.fn() });
     unsubscribe();
 
-    expect(auditEvents).toHaveLength(2);
-    expect(auditEvents[0]).toMatchObject({
-      sourceId: `message:outbound:queue:${id}:payload:0`,
-      status: "unknown",
-      outcome: "unknown",
-      resultCount: 0,
+    expect(result).toMatchObject({
+      recovered: 0,
+      failed: 0,
+      deferredNoReconciler: 1,
     });
-    expect(auditEvents[1]).toMatchObject({
-      sourceId: `message:outbound:queue:${id}:payload:1`,
-      status: "unknown",
-      outcome: "unknown",
-      resultCount: 0,
-    });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
+    expect(auditEvents).toEqual([]);
   });
 
-  it("moves started entries without reconciliation to failed instead of blindly replaying", async () => {
+  it("keeps started entries without reconciliation pending instead of blindly replaying", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "not yet sent" }] },
       tmpDir(),
@@ -707,13 +802,189 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(result).toEqual({
       recovered: 0,
-      failed: 1,
+      failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 1,
     });
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(0);
+    expect(entries[0]?.lastAttemptAt).toBeTypeOf("number");
+    expect(entries[0]?.recoveryState).toBe("send_attempt_started");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
     expectMockMessageContaining(log.warn, "refusing blind replay without adapter reconciliation");
+  });
+
+  it("does not exhaust retry budget while ambiguous entries await adapter reconciliation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "maybe sent later" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    try {
+      const firstRun = await runRecovery({ deliver });
+      expect(firstRun.result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+        deferredNoReconciler: 1,
+      });
+      for (let i = 0; i < MAX_RETRIES; i += 1) {
+        const { result } = await runRecovery({ deliver });
+        expect(result).toEqual({
+          recovered: 0,
+          failed: 0,
+          skippedMaxRetries: 0,
+          deferredBackoff: 1,
+          deferredNoReconciler: 0,
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(deliver).not.toHaveBeenCalled();
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(0);
+    expect(entries[0]?.lastAttemptAt).toBe(Date.parse("2026-01-01T00:00:00.000Z"));
+    expect(entries[0]?.recoveryState).toBe("unknown_after_send");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
+  });
+
+  it("does not spend replay pacing on unavailable-reconciler deferrals", async () => {
+    vi.useFakeTimers();
+    // Far-future epoch so the leading deliverable pays no spacing wait, then
+    // seeds the pacer epoch to "now". Any later paced entry would sleep
+    // RECOVERY_REPLAY_SPACING_MS under fake timers and never resolve, so this
+    // run only completes if the no-reconciler deferrals skip the pacer.
+    vi.setSystemTime(new Date("2027-01-01T00:00:00.000Z"));
+    try {
+      const deliverableId = await enqueueDelivery(
+        { channel: "demo-channel-a", to: "+1", payloads: [{ text: "send" }] },
+        tmpDir(),
+      );
+      const ambiguousIds: string[] = [];
+      for (const to of ["+2", "+3", "+4"]) {
+        const id = await enqueueDelivery(
+          { channel: "demo-channel-a", to, payloads: [{ text: "maybe sent" }] },
+          tmpDir(),
+        );
+        setQueuedEntryState(tmpDir(), id, {
+          retryCount: 0,
+          platformSendStartedAt: Date.now(),
+          recoveryState: "unknown_after_send",
+        });
+        ambiguousIds.push(id);
+      }
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver, maxRecoveryMs: 60_000 });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        recovered: 1,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+        deferredNoReconciler: 3,
+      });
+      const pending = await loadPendingDeliveries(tmpDir());
+      expect(pending.map((entry) => entry.id).toSorted()).toEqual([...ambiguousIds].toSorted());
+      expect(pending.every((entry) => entry.retryCount === 0)).toBe(true);
+      expect(readOutboundQueueStatus(tmpDir(), deliverableId)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rechecks deferred ambiguous entries after the backoff elapses", async () => {
+    vi.useFakeTimers();
+    const start = new Date("2026-01-01T00:00:00.000Z");
+    vi.setSystemTime(start);
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "maybe sent after backoff" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      platformSendStartedAt: start.getTime(),
+      recoveryState: "unknown_after_send",
+    });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    try {
+      const firstRun = await runRecovery({ deliver });
+      expect(firstRun.result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+        deferredNoReconciler: 1,
+      });
+
+      vi.setSystemTime(new Date(start.getTime() + 5_001));
+      const secondRun = await runRecovery({ deliver });
+      expect(secondRun.result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+        deferredNoReconciler: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(deliver).not.toHaveBeenCalled();
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(0);
+    expect(entries[0]?.recoveryState).toBe("unknown_after_send");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
+  });
+
+  it("keeps max-retry ambiguous entries pending when no reconciler exists", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "old maybe sent" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: MAX_RETRIES,
+      lastAttemptAt: Date.now() - 1_000_000,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+      deferredNoReconciler: 1,
+    });
+    const pending = await loadPendingDeliveries(tmpDir());
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.retryCount).toBe(MAX_RETRIES);
+    expect(pending[0]?.recoveryState).toBe("unknown_after_send");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
   });
 
   it("replays started entries only after adapter proves they were not sent", async () => {
@@ -754,6 +1025,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
@@ -813,6 +1085,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     const reconcileInput = mockCallArg(reconcileUnknownSend) as {
       cfg?: unknown;
@@ -894,6 +1167,7 @@ describe("delivery-queue recovery", () => {
       failed: 1,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
@@ -934,7 +1208,39 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.lastError).toContain("provider lookup timed out");
   });
 
-  it("does not reconcile unknown-after-send entries unless the adapter declares the capability", async () => {
+  it("counts adapter null reconciliation results against retry budget", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "null result" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue(null);
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({ deliver });
+
+    expect(reconcileUnknownSend).toHaveBeenCalledTimes(1);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.failed).toBe(1);
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBe("unknown_after_send");
+    expect(entries[0]?.lastError).toContain("no unknown-send reconciliation result");
+  });
+
+  it("keeps unknown-after-send entries pending unless the adapter declares the capability", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "hidden method" }] },
       tmpDir(),
@@ -957,9 +1263,14 @@ describe("delivery-queue recovery", () => {
 
     expect(reconcileUnknownSend).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
-    expect(result.failed).toBe(1);
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expect(result.failed).toBe(0);
+    expect(result.deferredNoReconciler).toBe(1);
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(0);
+    expect(entries[0]?.recoveryState).toBe("unknown_after_send");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
     expectMockMessageContaining(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
@@ -1016,7 +1327,7 @@ describe("delivery-queue recovery", () => {
     expect(deliverInput.skipQueue).toBe(true);
   });
 
-  it("moves unknown-after-send entries to failed without replaying", async () => {
+  it("keeps unknown-after-send entries pending without replaying", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
       tmpDir(),
@@ -1029,12 +1340,17 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(result).toEqual({
       recovered: 0,
-      failed: 1,
+      failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 1,
     });
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(0);
+    expect(entries[0]?.recoveryState).toBe("unknown_after_send");
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
     expectMockMessageContaining(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
@@ -1085,6 +1401,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
@@ -1127,6 +1444,7 @@ describe("delivery-queue recovery", () => {
         failed: 1,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 0,
       });
       expect(recoveryStateAtAck).toBe("unknown_after_send");
       const pending = await loadPendingDeliveries(tmpDir());
@@ -1217,6 +1535,7 @@ describe("delivery-queue recovery", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 0,
       });
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
@@ -1480,6 +1799,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
 
     const remaining = await loadPendingDeliveries(tmpDir());
@@ -1505,6 +1825,7 @@ describe("delivery-queue recovery", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 0,
       });
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
       expectMockMessageContaining(log.warn, "deferred to next startup");
@@ -1532,6 +1853,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
     expectMockMessageContaining(log.info, "not ready for retry yet");
@@ -1563,6 +1885,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      deferredNoReconciler: 0,
     });
     expect(deliver).toHaveBeenCalledTimes(1);
     const deliverInput = mockCallArg(deliver) as {
@@ -1597,6 +1920,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      deferredNoReconciler: 0,
     });
     expect(firstDeliver).not.toHaveBeenCalled();
 
@@ -1608,6 +1932,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(secondDeliver).toHaveBeenCalledTimes(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -1624,6 +1949,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(deliver).not.toHaveBeenCalled();
   });

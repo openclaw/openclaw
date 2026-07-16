@@ -198,7 +198,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("moves unknown-after-send entries to failed without replaying during reconnect drain", async () => {
+  it("keeps unknown-after-send entries pending without replaying during reconnect drain", async () => {
     const log = createRecoveryLog();
     const deliver = vi.fn<DeliverFn>(async () => {});
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
@@ -207,8 +207,12 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    const entries = await loadPendingDeliveries(tmpDir);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBe("unknown_after_send");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBe("pending");
     expectLogMessageWith(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
