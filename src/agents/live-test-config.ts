@@ -17,24 +17,6 @@ export function isLiveProfileKeyModeEnabled(env: NodeJS.ProcessEnv = process.env
   return isTruthyEnvValue(env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
 }
 
-/** Return whether a provider requires profile credentials in the current live mode. */
-export function requiresLiveProfileCredential(
-  provider: string,
-  requireProfileKeys: boolean,
-): boolean {
-  return requireProfileKeys || provider === "openai";
-}
-
-/** Resolve whether profile or env credentials should be tried first. */
-export function resolveLiveCredentialPrecedence(
-  provider: string,
-  requireProfileKeys: boolean,
-): "profile-first" | "env-first" {
-  return requiresLiveProfileCredential(provider, requireProfileKeys)
-    ? "profile-first"
-    : "env-first";
-}
-
 /** Build a single user-message prompt for simple live model probes. */
 export function createSingleUserPromptMessage(content = LIVE_OK_PROMPT) {
   return [

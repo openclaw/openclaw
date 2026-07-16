@@ -9,13 +9,29 @@ export {
   extractNonEmptyAssistantText,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
-  requiresLiveProfileCredential,
-  resolveLiveCredentialPrecedence,
 } from "./live-test-config.js";
 
 export type CompleteSimpleContent<TApi extends Api = Api> = Awaited<
   ReturnType<typeof completeSimple<TApi>>
 >["content"];
+
+/** Return whether a provider requires profile credentials in the current live mode. */
+export function requiresLiveProfileCredential(
+  provider: string,
+  requireProfileKeys: boolean,
+): boolean {
+  return requireProfileKeys || provider === "openai";
+}
+
+/** Resolve whether profile or env credentials should be tried first. */
+export function resolveLiveCredentialPrecedence(
+  provider: string,
+  requireProfileKeys: boolean,
+): "profile-first" | "env-first" {
+  return requiresLiveProfileCredential(provider, requireProfileKeys)
+    ? "profile-first"
+    : "env-first";
+}
 
 /** Write a namespaced live-test progress line to stderr. */
 export function logLiveProgress(message: string): void {
