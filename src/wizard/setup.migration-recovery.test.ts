@@ -506,4 +506,23 @@ describe("setup migration recovery", () => {
       }),
     ).rejects.toThrow("Invalid onboarding migration recovery record");
   });
+
+  it("treats a not-directory migration root as no recovery record", async () => {
+    // When the migration report path itself exists but is a file rather than a
+    // directory, fs.readdir returns ENOTDIR (not ENOENT). Recovery must treat
+    // that the same as a missing report dir and resolve to no record instead of
+    // surfacing the ENOTDIR as an unexpected error during onboarding.
+    const stateDir = await makeTempRoot();
+    await fs.mkdir(path.join(stateDir, "migration"), { recursive: true });
+    await fs.writeFile(path.join(stateDir, "migration", "hermes"), "not a directory");
+
+    await expect(
+      resolveSetupMigrationRecovery({
+        stateDir,
+        providerId: "hermes",
+        workspaceDir: path.join(stateDir, "workspace"),
+        targetSnapshotHash: BEFORE_HASH,
+      }),
+    ).resolves.toEqual({ kind: "none" });
+  });
 });
