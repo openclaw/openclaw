@@ -36,6 +36,8 @@ import {
   resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
 
+const COMPUTER_USE_PROCESS_LIST_TIMEOUT_MS = 2_000;
+
 /** Minimal app-server request function needed by Computer Use setup. */
 type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
@@ -1120,6 +1122,7 @@ export async function killStaleComputerUseMcpChildren(
     const result = await runExec("/bin/ps", ["-axo", "pid=,ppid=,command="], {
       logOutput: false,
       maxBuffer: 5 * 1024 * 1024,
+      timeoutMs: COMPUTER_USE_PROCESS_LIST_TIMEOUT_MS,
     });
     stdout = result.stdout;
   } catch (error) {
