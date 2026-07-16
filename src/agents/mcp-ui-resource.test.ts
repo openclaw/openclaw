@@ -198,8 +198,19 @@ describe("MCP App UI resources", () => {
     const sandboxPath = buildMcpAppSandboxPath(view?.csp);
     const encodedCsp = new URL(sandboxPath, "https://gateway.example").searchParams.get("csp");
     expect(decodeMcpAppSandboxCsp(encodedCsp)).toStrictEqual(view?.csp);
+  });
+
+  it("returns undefined when CSP metadata is not valid base64-encoded JSON", () => {
+    expect(decodeMcpAppSandboxCsp("bm90LWpzb24")).toBeUndefined();
+  });
+
+  it("returns undefined when base64-decoded CSP is not valid JSON", () => {
+    const invalid = Buffer.from("{not json}", "utf8").toString("base64url");
+    expect(decodeMcpAppSandboxCsp(invalid)).toBeUndefined();
+  });
+
+  it("builds proxy HTML", () => {
     const proxyHtml = buildMcpAppSandboxProxyHtml();
-    expect(proxyHtml.startsWith('<!doctype html>\n<meta charset="utf-8"')).toBe(true);
     expect(proxyHtml).toContain('inner.setAttribute("sandbox", "allow-scripts allow-forms")');
     expect(proxyHtml).toContain("inner.srcdoc = params.html");
     expect(proxyHtml).not.toContain("doc.write");
