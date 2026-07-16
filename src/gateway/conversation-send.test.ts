@@ -51,6 +51,21 @@ function createDeps() {
     operations.set(operationId, next);
     return next;
   };
+  const runMessageActionMock = vi.fn(async (input: Record<string, unknown>) => {
+    const onDeliveryIntent = input.onDeliveryIntent as (intent: {
+      id: string;
+      channel: string;
+      to: string;
+      durability: "required";
+    }) => void;
+    onDeliveryIntent({
+      id: "queue-1",
+      channel: "reef",
+      to: "molty",
+      durability: "required",
+    });
+    return sentResult();
+  });
   return {
     beginOperation: vi.fn(
       (
@@ -95,21 +110,8 @@ function createDeps() {
       update(operationId, { status: "suppressed" }),
     ),
     resolveConversation: vi.fn((): typeof conversation | undefined => conversation),
-    runMessageAction: vi.fn(async (input: Record<string, unknown>) => {
-      const onDeliveryIntent = input.onDeliveryIntent as (intent: {
-        id: string;
-        channel: string;
-        to: string;
-        durability: "required";
-      }) => void;
-      onDeliveryIntent({
-        id: "queue-1",
-        channel: "reef",
-        to: "molty",
-        durability: "required",
-      });
-      return sentResult();
-    }) as never,
+    runMessageAction: runMessageActionMock as never,
+    runMessageActionMock,
     operations,
   };
 }
@@ -212,8 +214,8 @@ describe("runGatewayConversationSend", () => {
       workerDeps,
     );
 
-    const mainIntent = mainDeps.runMessageAction.mock.calls[0]?.[0]?.deliveryIntentId;
-    const workerIntent = workerDeps.runMessageAction.mock.calls[0]?.[0]?.deliveryIntentId;
+    const mainIntent = mainDeps.runMessageActionMock.mock.calls[0]?.[0]?.deliveryIntentId;
+    const workerIntent = workerDeps.runMessageActionMock.mock.calls[0]?.[0]?.deliveryIntentId;
     expect(mainIntent).toMatch(/^convq_[a-f0-9]{32}$/u);
     expect(workerIntent).toMatch(/^convq_[a-f0-9]{32}$/u);
     expect(mainIntent).not.toBe(workerIntent);
