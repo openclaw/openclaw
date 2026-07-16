@@ -1,6 +1,7 @@
 package ai.openclaw.wear
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -46,18 +47,20 @@ internal class WearThemePreferences(
 }
 
 internal class WearConversationPreferences(
-  context: Context,
+  private val preferences: SharedPreferences,
 ) {
-  private val preferences =
-    context.applicationContext.getSharedPreferences(
-      PREFERENCES_NAME,
-      Context.MODE_PRIVATE,
+  constructor(context: Context) :
+    this(
+      context.applicationContext.getSharedPreferences(
+        PREFERENCES_NAME,
+        Context.MODE_PRIVATE,
+      ),
     )
 
   fun readAutoSpeak(): Boolean =
     preferences.getBoolean(
       AUTO_SPEAK_KEY,
-      true,
+      DEFAULT_AUTO_SPEAK,
     )
 
   fun writeAutoSpeak(enabled: Boolean) {
@@ -67,6 +70,7 @@ internal class WearConversationPreferences(
   }
 
   private companion object {
+    const val DEFAULT_AUTO_SPEAK = false
     const val PREFERENCES_NAME = "openclaw.wear.conversation"
     const val AUTO_SPEAK_KEY = "autoSpeak"
   }
