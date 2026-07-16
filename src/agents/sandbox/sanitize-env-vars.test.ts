@@ -1,7 +1,11 @@
 // Sandbox env sanitizer tests cover credential filtering for inherited and
 // explicitly configured sandbox environment variables.
 import { describe, expect, it } from "vitest";
-import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
+import {
+  sanitizeEnvVars,
+  sanitizeExplicitSandboxEnvVars,
+  validateEnvVarValue,
+} from "./sanitize-env-vars.js";
 
 describe("sanitizeEnvVars", () => {
   it("keeps normal env vars and blocks obvious credentials", () => {
@@ -106,26 +110,11 @@ describe("sanitizeEnvVars", () => {
     expect(result.blocked).toStrictEqual(["NULL_SECRET"]);
   });
 
-  it("warns on multi-byte values whose UTF-8 byte length exceeds the limit", () => {
-    // Each CJK character is 3 UTF-8 bytes; 11000 chars × 3 bytes = 33000 bytes > 32768.
-    const multiByteValue = "值".repeat(11000);
-    expect(multiByteValue.length).toBe(11000); // UTF-16 length is below 32768
-    expect(Buffer.byteLength(multiByteValue, "utf8")).toBe(33000); // but UTF-8 exceeds limit
+  it("measures the value limit in UTF-8 bytes", () => {
+    const atLimit = "a!".repeat(16384);
 
-    const result = sanitizeEnvVars({ MULTIBYTE: multiByteValue });
-    expect(result.allowed).toEqual({ MULTIBYTE: multiByteValue });
-    expect(result.warnings).toContain("MULTIBYTE: Value exceeds maximum length");
-  });
-
-  it("allows ASCII values at the byte limit boundary", () => {
-    // Use characters outside the base64 charset to avoid triggering the
-    // base64-credential heuristic, which runs before the length check.
-    const atLimit = "a!b!".repeat(8192); // 8192*4 = 32768 bytes, contains !
-    const overLimit = atLimit + "x"; // 32769 bytes
-
-    expect(sanitizeEnvVars({ AT_LIMIT: atLimit }).warnings).toStrictEqual([]);
-    expect(sanitizeEnvVars({ OVER_LIMIT: overLimit }).warnings).toContain(
-      "OVER_LIMIT: Value exceeds maximum length",
-    );
+    expect(validateEnvVarValue(atLimit)).toBeUndefined();
+    expect(validateEnvVarValue(`${atLimit}x`)).toBe("Value exceeds maximum length");
+    expect(validateEnvVarValue("值".repeat(11000))).toBe("Value exceeds maximum length");
   });
 });
