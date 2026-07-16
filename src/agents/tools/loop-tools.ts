@@ -117,8 +117,8 @@ export function getLoopState(): LoopState | null {
   if (state !== undefined) return state;
   // Fallback: if only one session state exists, return it regardless of key.
   // This handles TUI → agent tool calls where ALS context may differ.
-  const entries = Array.from(loopStates.entries()).filter(([, v]) => v !== null);
-  if (entries.length === 1) return entries[0][1];
+  const entries = Array.from(loopStates.entries()).filter(([, v]) => v !== null) as Array<[string, LoopState]>;
+  if (entries.length === 1) return entries[0]![1];
   return null;
 }
 
@@ -464,7 +464,25 @@ function computeNextPhase(currentPhase: LoopPhase): LoopPhase | null {
 }
 
 /** Generates diagnostics for the current loop state */
-function generateLoopDiagnostics(state: LoopState): LoopDiagnostics {
+function generateLoopDiagnostics(state: LoopState): {
+  state: {
+    task: string;
+    sessionKey: string | undefined;
+    createdAt: string;
+    updatedAt: string;
+    version: string;
+    totalIterations: number;
+    completedPhases: string[];
+  };
+  activeSubtasks: number;
+  pendingSubtasks: number;
+  failedSubtasks: number;
+  skippedSubtasks: number;
+  nextPhase: string | null;
+  isBlocked: boolean;
+  blockReason: string | undefined;
+  cycleTime: number;
+} {
   const now = Date.now();
   const firstStarted = state.subtasks.find(s => s.startedAt);
   const startTime = firstStarted

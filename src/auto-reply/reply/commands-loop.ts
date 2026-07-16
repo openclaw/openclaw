@@ -2,12 +2,9 @@
  * Handles /loop autonomous agent loop command and result formatting.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
-  CommandHandler,
   CommandHandlerResult,
-  HandleCommandsParams,
 } from "./commands-types.js";
 import type { LoopPhase, LoopSubtask } from "../../loop/loop-types.js";
 import { LOOP_PHASE_LABELS } from "../../loop/loop-types.js";
@@ -40,7 +37,7 @@ export function parseLoopCommand(raw: string): {
   const flagArgs: Array<{ key: string; raw: string }> = [];
   let match: RegExpExecArray | null;
   while ((match = flagPattern.exec(argText)) !== null) {
-    flagArgs.push({ key: match[1], raw: match[2] });
+    flagArgs.push({ key: match[1]!, raw: match[2]! });
   }
 
   for (const { key, raw } of flagArgs) {
@@ -75,50 +72,6 @@ function loopReply(text: string): CommandHandlerResult {
   };
 }
 
-/**
- * Creates the /loop command handler.
- *
- * The handler validates the command, parses arguments, and delegates to
- * the caller's loop execution function. It does not run the loop itself
- * since that requires access to the agent instance.
- */
-export function createLoopCommandHandler(): CommandHandler {
-  return {
-    key: "loop",
-    handler: async (params: HandleCommandsParams) => {
-      const rejection = rejectUnauthorizedCommand(params, { requiredGroup: "all" });
-      if (rejection) {
-        return rejection;
-      }
-
-      const body = params.command.commandBodyNormalized;
-      const parsed = parseLoopCommand(body);
-      if (!parsed) {
-        return loopReply(
-          "Usage: /loop <task> [--max-iterations N] [--budget N]\n" +
-            "Start an autonomous multi-phase loop to complete a task.\n" +
-            "Phases: Analyze → Plan → Execute → Verify → Report\n" +
-            "Default max-iterations: 10. Default budget: unlimited.",
-        );
-      }
-
-      markCommandSessionMetadataChanged(params);
-
-      return loopReply(
-        `/loop started:\n  Task: ${parsed.task}\n  Max iterations: ${parsed.maxIterations}` +
-          (parsed.tokenBudget ? `\n  Token budget: ${parsed.tokenBudget}` : "") +
-          "\n\n" +
-          "The agent will now work through a structured 5-phase workflow:\n" +
-          "  1. Analyze — examine the codebase and requirements\n" +
-          "  2. Plan — create a detailed implementation plan\n" +
-          "  3. Execute — implement each subtask\n" +
-          "  4. Verify — validate the implementation\n" +
-          "  5. Report — generate a final summary\n" +
-          "Use the loop_phase and loop_status tools to check progress.",
-      );
-    },
-  };
-}
 
 // ── Phase prompt builders ──────────────────────────────────────────
 
@@ -402,9 +355,9 @@ export function parseSpawnedVerdict(
 ): { passed: boolean; summary: string } | null {
   const verdictMatch = text.match(/---VERDICT---\s*\n\s*passed:\s*(true|false)/i);
   if (!verdictMatch) return null;
-  const passed = verdictMatch[1].toLowerCase() === "true";
+  const passed = verdictMatch[1]!.toLowerCase() === "true";
   const summaryMatch = text.match(/---SUMMARY---\s*\n([\s\S]*?)(?:\n```|$)/);
-  const summary = summaryMatch ? summaryMatch[1].trim() : "";
+  const summary = summaryMatch ? summaryMatch[1]!.trim() : "";
   return { passed, summary };
 }
 
