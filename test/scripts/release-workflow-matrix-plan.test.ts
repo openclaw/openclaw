@@ -308,7 +308,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
 
     expect(plan.liveModels.count).toBe(0);
-    expect(plan.liveModels.omitted).toHaveLength(10);
+    expect(plan.liveModels.omitted).toHaveLength(9);
     expect(plan.liveModels.omitted[0]?.reason).toBe(
       "Docker live model matrix disabled by input selection",
     );
