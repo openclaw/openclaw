@@ -55,6 +55,36 @@ describe("config issue format", () => {
     ).toBe("- gateway.\\nbind: bad\\r\\n\\tvalue");
   });
 
+  it("formats numeric segments by traversing the display root", () => {
+    const displayRoot = {
+      agents: { list: [{ identity: { avatar: "~/avatar.png" } }] },
+      bindings: [{ acp: { agent: "claude" } }],
+      diagnostics: { otel: { headers: { "0": false } } },
+    };
+
+    expect(
+      formatConfigIssueLines(
+        [
+          { path: "bindings.0.acp", message: "binding union issue" },
+          { path: "agents.list.0.identity.avatar", message: "manual issue" },
+          { path: "diagnostics.otel.headers.0", message: "numeric object key" },
+        ],
+        "-",
+        { displayRoot },
+      ),
+    ).toEqual([
+      "- bindings[0].acp: binding union issue",
+      "- agents.list[0].identity.avatar: manual issue",
+      "- diagnostics.otel.headers.0: numeric object key",
+    ]);
+  });
+
+  it("keeps contract paths dotted when display context is absent", () => {
+    const issue = { path: "agents.list.0.identity.avatar", message: "invalid" };
+
+    expect(formatConfigIssueLine(issue, "-")).toBe("- agents.list.0.identity.avatar: invalid");
+  });
+
   it("formats concise issue summaries", () => {
     expect(formatConfigIssueSummary([])).toBeNull();
     expect(

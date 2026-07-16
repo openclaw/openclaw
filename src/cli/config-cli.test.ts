@@ -1095,10 +1095,16 @@ describe("config cli", () => {
       setSnapshotOnce({
         path: "/tmp/openclaw.json",
         exists: true,
-        raw: "{}",
-        parsed: {},
-        sourceConfig: {},
-        resolved: {},
+        raw: '{"$include":"./agents.json"}',
+        parsed: { $include: "./agents.json" },
+        sourceConfig: {
+          agents: { list: [{ id: "main", name: "main" }] },
+          diagnostics: { otel: { headers: { "0": "value" } } },
+        },
+        resolved: {
+          agents: { list: [{ id: "main", name: "main" }] },
+          diagnostics: { otel: { headers: { "0": "value" } } },
+        },
         valid: true,
         runtimeConfig: {},
         config: {},
@@ -1109,6 +1115,8 @@ describe("config cli", () => {
             message:
               'channels.mattermost.dmPolicy="open" but channels.mattermost.allowFrom does not include "*"; all DMs will be dropped.',
           },
+          { path: "agents.list.0.name", message: "agent name warning" },
+          { path: "diagnostics.otel.headers.0", message: "numeric object key warning" },
         ],
         legacyIssues: [],
       });
@@ -1119,6 +1127,9 @@ describe("config cli", () => {
       expect(mockError).not.toHaveBeenCalled();
       expectLogIncludes("Config valid:");
       expectLogIncludes("channels.mattermost.allowFrom");
+      expectLogIncludes("agents.list[0].name");
+      expectLogIncludes("diagnostics.otel.headers.0");
+      expectLogExcludes("diagnostics.otel.headers[0]");
       expectLogIncludes("all DMs will be dropped");
     });
 
@@ -1138,6 +1149,63 @@ describe("config cli", () => {
 
       expectErrorIncludes("config is invalid");
       expectErrorIncludes("agents.defaults.suppressToolErrorWarnings");
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it("formats array indexes only at the human display boundary", async () => {
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          parsed: { $include: "./agents.json" },
+          sourceConfig: {
+            agents: {
+              list: [
+                {
+                  id: "proof-agent",
+                  identity: { avatar: "~/avatar.png" },
+                  tools: { exec: { commandHighlighting: true } },
+                },
+              ],
+            },
+            bindings: [
+              {
+                type: "acp",
+                agentId: "main",
+                match: { channel: "test" },
+                acp: { label: "claude" },
+              },
+            ],
+            diagnostics: { otel: { headers: { "0": "value" } } },
+          },
+          issues: [
+            {
+              path: "agents.list.0.tools.exec.commandHighlighting",
+              message: "Expected boolean",
+            },
+            {
+              path: "bindings.0.acp",
+              message: 'Unrecognized key: "agent"',
+            },
+            {
+              path: "agents.list.0.identity.avatar",
+              message:
+                "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+            },
+            {
+              path: "diagnostics.otel.headers.0",
+              message: "Expected string",
+            },
+          ],
+        }),
+      );
+
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+
+      const output = mockError.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(output).toContain("agents.list[0].tools.exec.commandHighlighting");
+      expect(output).toContain("bindings[0].acp");
+      expect(output).toContain("agents.list[0].identity.avatar");
+      expect(output).toContain("diagnostics.otel.headers.0");
+      expect(output).not.toContain("diagnostics.otel.headers[0]");
       expect(mockLog).not.toHaveBeenCalled();
     });
 
@@ -1215,14 +1283,21 @@ describe("config cli", () => {
     it("returns machine-readable JSON with --json for invalid config", async () => {
       setSnapshotOnce(
         makeInvalidSnapshot({
-          issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
+          parsed: { bindings: [{ acp: { agent: "claude" } }] },
+          issues: [
+            { path: "gateway.bind", message: "Invalid enum value" },
+            { path: "bindings.0.acp", message: 'Unrecognized key: "agent"' },
+          ],
         }),
       );
 
       const payload = await runValidateJsonAndGetPayload();
       expect(payload.valid).toBe(false);
       expect(payload.path).toBe("/tmp/custom-openclaw.json");
-      expect(payload.issues).toEqual([{ path: "gateway.bind", message: "Invalid enum value" }]);
+      expect(payload.issues).toEqual([
+        { path: "gateway.bind", message: "Invalid enum value" },
+        { path: "bindings.0.acp", message: 'Unrecognized key: "agent"' },
+      ]);
       expect(mockError).not.toHaveBeenCalled();
     });
 
