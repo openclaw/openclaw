@@ -422,7 +422,9 @@ describe("createReefWebSocket handshake deadline", () => {
       for (const peer of peers) {
         peer.destroy();
       }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });
