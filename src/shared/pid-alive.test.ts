@@ -165,6 +165,7 @@ describe("process start times", () => {
         expect.objectContaining({
           encoding: "utf8",
           env: expect.objectContaining({ LC_ALL: "C", TZ: "UTC" }),
+          timeout: 1000,
         }),
       );
     });
