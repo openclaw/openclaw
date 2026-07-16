@@ -199,6 +199,10 @@ function probeLoginShellEnv(params: {
   });
   const cached = loginShellEnvProbeCache.get(cacheKey);
   if (cached) {
+    // Login-shell probes can consume the full timeout; keep active configurations ahead of
+    // colder entries when the shared insertion-order pruning helper enforces the bound.
+    loginShellEnvProbeCache.delete(cacheKey);
+    loginShellEnvProbeCache.set(cacheKey, cached);
     return cached.ok ? { ok: true, shellEnv: new Map(cached.entries) } : cached;
   }
 

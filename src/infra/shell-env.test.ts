@@ -367,13 +367,27 @@ describe("shell env fallback", () => {
       name: "successful",
       oldest: Buffer.from("PROBE_RESULT=oldest\0"),
       newest: new Error("newest failure"),
+      refreshOldest: false,
     },
     {
       name: "failed",
       oldest: new Error("oldest failure"),
       newest: Buffer.from("PROBE_RESULT=newest\0"),
+      refreshOldest: false,
     },
-  ])("evicts the oldest $name probe across success and failure entries", ({ oldest, newest }) => {
+    {
+      name: "recent successful",
+      oldest: Buffer.from("PROBE_RESULT=oldest\0"),
+      newest: new Error("newest failure"),
+      refreshOldest: true,
+    },
+    {
+      name: "recent failed",
+      oldest: new Error("oldest failure"),
+      newest: Buffer.from("PROBE_RESULT=newest\0"),
+      refreshOldest: true,
+    },
+  ])("bounds $name probe entries with LRU eviction", ({ oldest, newest, refreshOldest }) => {
     const logger = { warn: vi.fn() };
     const makeExec = (outcome: Buffer | Error) =>
       vi.fn(() => {
@@ -391,20 +405,31 @@ describe("shell env fallback", () => {
         logger,
       });
     const oldestExec = makeExec(oldest);
-    const fillerExecs = Array.from({ length: 63 }, (_, index) =>
-      makeExec(Buffer.from(`PROBE_RESULT=filler-${index}\0`)),
-    );
+    const oldestFillerExec = makeExec(Buffer.from("PROBE_RESULT=filler-0\0"));
+    const fillerExecs = [
+      oldestFillerExec,
+      ...Array.from({ length: 62 }, (_, index) =>
+        makeExec(Buffer.from(`PROBE_RESULT=filler-${index + 1}\0`)),
+      ),
+    ];
     const newestExec = makeExec(newest);
 
     for (const exec of [oldestExec, ...fillerExecs]) {
       runProbe(exec);
+    }
+    if (refreshOldest) {
+      runProbe(oldestExec);
     }
     runProbe(newestExec);
     runProbe(newestExec);
     runProbe(oldestExec);
 
     expect(newestExec).toHaveBeenCalledOnce();
-    expect(oldestExec).toHaveBeenCalledTimes(2);
+    expect(oldestExec).toHaveBeenCalledTimes(refreshOldest ? 1 : 2);
+    if (refreshOldest) {
+      runProbe(oldestFillerExec);
+      expect(oldestFillerExec).toHaveBeenCalledTimes(2);
+    }
   });
 
   it("tracks last applied keys across success, skip, and failure paths", () => {
