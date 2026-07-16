@@ -75,7 +75,7 @@ describe("terminal PTY invocation", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([{}, { TERM: "" }, { TERM: "dumb" }, { TERM: "DUMB" }])(
+  it.each([{}, { TERM: "" }, { TERM: "dumb" }, { TERM: "DUMB" }, { TERM: " dumb " }])(
     "upgrades non-interactive TERM for a real PTY: %o",
     async (env) => {
       mocks.spawn.mockReturnValueOnce(fakePty());

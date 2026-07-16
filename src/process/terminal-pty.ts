@@ -46,9 +46,9 @@ export async function spawnTerminalPty(params: {
   const env = { ...params.env };
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
-  if (!env.TERM?.trim() || env.TERM.toLowerCase() === "dumb") {
-    env.TERM = "xterm-256color";
-  }
+  const inheritedTerm = env.TERM?.trim();
+  env.TERM =
+    !inheritedTerm || inheritedTerm.toLowerCase() === "dumb" ? "xterm-256color" : inheritedTerm;
   const comSpec = env.ComSpec ?? env.COMSPEC;
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
