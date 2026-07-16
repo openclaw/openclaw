@@ -1,7 +1,7 @@
 import { matchesCommandPath } from "../cli/command-path-matches.js";
 import type { CliCatalogList } from "./list.js";
 
-export type CliCommandInspection = {
+type CliCommandInspection = {
   readonly schemaVersion: 1;
   readonly generatedFrom: "command-inventory-inspect";
   readonly commandPath: readonly string[];

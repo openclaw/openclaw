@@ -17,7 +17,7 @@ function markdownCodeCell(value: string): string {
   return longestFence > 0 ? `${fence} ${cell} ${fence}` : `${fence}${cell}${fence}`;
 }
 
-export type CliCatalogListDescriptor = {
+type CliCatalogListDescriptor = {
   readonly name: string;
   readonly description: string;
   readonly hasSubcommands: boolean;
@@ -35,7 +35,7 @@ export type CliCatalogListDescriptor = {
   readonly exposureTier?: "public" | "internal";
 };
 
-export type CliCatalogListCommandRoute = {
+type CliCatalogListCommandRoute = {
   readonly commandPath: readonly string[];
   readonly exact: boolean;
   readonly routeId?: NonNullable<CliCommandCatalogEntry["route"]>["id"];
@@ -46,7 +46,7 @@ export type CliCatalogListCommandRoute = {
   readonly visibility: readonly CliCatalogVisibility[];
 };
 
-export type CliCatalogListRoutedOperation = {
+type CliCatalogListRoutedOperation = {
   readonly id: string;
   readonly commandPaths: readonly (readonly string[])[];
   readonly risk: string;
@@ -57,8 +57,8 @@ export type CliCatalogListRoutedOperation = {
   readonly visibility: readonly CliCatalogVisibility[];
 };
 
-export type CliCatalogRuntimeCommandScope = "current-invocation-registered-tree";
-export type CliCatalogNodeCommandScope = "caller-supplied";
+type CliCatalogRuntimeCommandScope = "current-invocation-registered-tree";
+type CliCatalogNodeCommandScope = "caller-supplied";
 
 const RUNTIME_COMMAND_SCOPE: CliCatalogRuntimeCommandScope = "current-invocation-registered-tree";
 const NODE_COMMAND_SCOPE: CliCatalogNodeCommandScope = "caller-supplied";

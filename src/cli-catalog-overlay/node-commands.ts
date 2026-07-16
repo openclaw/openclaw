@@ -4,20 +4,20 @@ import type {
   CliCatalogVisibility,
 } from "../cli/catalog-metadata.js";
 
-export type CliCatalogNodeCommandSourceKind = "node-pairing" | "node-host-command" | "node-runtime";
+type CliCatalogNodeCommandSourceKind = "node-pairing" | "node-host-command" | "node-runtime";
 
-export type CliCatalogNodeCommandDiscoveryMode =
+type CliCatalogNodeCommandDiscoveryMode =
   | "paired-node-declaration"
   | "node-host-registry"
   | "runtime-node-query";
 
-export type CliCatalogNodeCommandAvailability =
+type CliCatalogNodeCommandAvailability =
   | "approved"
   | "pending-approval"
   | "available"
   | "unavailable";
 
-export type CliCatalogNodeCommandApprovalKind =
+type CliCatalogNodeCommandApprovalKind =
   | "pairing"
   | "gateway-allowlist"
   | "operator-confirmation"

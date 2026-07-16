@@ -1,7 +1,7 @@
 export type CliCatalogRisk = "low" | "medium" | "high";
 export type CliCatalogEffectMode = "read" | "mutating" | "mixed";
 export type CliCatalogVisibility = "docs" | "audit" | "operator" | "policy";
-export type CliCommandExposureTier = "public" | "internal";
+type CliCommandExposureTier = "public" | "internal";
 
 export type CommandEffectProfile = {
   readonly effectMode: CliCatalogEffectMode;

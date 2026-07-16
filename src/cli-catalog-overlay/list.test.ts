@@ -98,7 +98,7 @@ describe("command inventory list", () => {
 
   it("keeps supplied node metadata inside its Markdown table cells", () => {
     const command = {
-      ...sampleNodeCommands[0],
+      ...sampleNodeCommands[0]!,
       command: "filesystem.`read`|raw",
       nodeName: "Build | prod\nprimary",
       invocationHint: "nodes invoke `filesystem.read` | inspect\nnext",
