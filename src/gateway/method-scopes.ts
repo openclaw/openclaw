@@ -1,6 +1,7 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
+import { NODE_ADMIN_ONLY_INVOKE_COMMANDS } from "../infra/node-commands.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
@@ -19,6 +20,10 @@ import {
   isOperatorScope,
   type OperatorScope,
 } from "./operator-scopes.js";
+
+// Same admin-only command set as the Gateway node.invoke handler / pairing policy.
+// Client least-privilege must request admin for these or the handler rejects before dispatch.
+const NODE_INVOKE_ADMIN_COMMANDS = new Set<string>(NODE_ADMIN_ONLY_INVOKE_COMMANDS);
 
 export { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, READ_SCOPE, WRITE_SCOPE, type OperatorScope };
 
@@ -141,6 +146,23 @@ function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScop
   return [WRITE_SCOPE];
 }
 
+/**
+ * node.invoke is registered as operator.write, but the Gateway handler requires
+ * operator.admin for a fixed admin-only command subset (browser.proxy, fs.listDir,
+ * terminal.upload). Resolve the client connect scope from the shared command list
+ * so CLI/generic callers do not under-scope and fail with missing scope: operator.admin.
+ */
+function resolveNodeInvokeLeastPrivilegeScopes(params: unknown): OperatorScope[] {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return [WRITE_SCOPE];
+  }
+  const command = (params as { command?: unknown }).command;
+  if (typeof command === "string" && NODE_INVOKE_ADMIN_COMMANDS.has(command)) {
+    return [ADMIN_SCOPE];
+  }
+  return [WRITE_SCOPE];
+}
+
 function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params: unknown,
@@ -205,6 +227,11 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params?: unknown,
 ): OperatorScope[] {
+  // Command-aware override: static node.invoke is operator.write, but selected commands
+  // share an admin-only Gateway gate — request admin so least-privilege clients match it.
+  if (method === "node.invoke") {
+    return resolveNodeInvokeLeastPrivilegeScopes(params);
+  }
   if (isDynamicOperatorGatewayMethod(method)) {
     return resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params);
   }
@@ -224,6 +251,13 @@ export function authorizeOperatorScopesForMethod(
 ): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
+  }
+  if (method === "node.invoke") {
+    const missingScope = findMissingOperatorScope(
+      resolveNodeInvokeLeastPrivilegeScopes(params),
+      scopes,
+    );
+    return missingScope ? { allowed: false, missingScope } : { allowed: true };
   }
   if (isDynamicOperatorGatewayMethod(method)) {
     if (method === "sessions.create") {
