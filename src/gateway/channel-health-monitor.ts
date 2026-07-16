@@ -6,6 +6,7 @@ import {
   type ChannelHealthEscalationBudget,
 } from "../infra/channel-health-escalations.js";
 import { scheduleGatewaySigusr1Restart } from "../infra/restart.js";
+import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
@@ -52,6 +53,7 @@ type ChannelHealthMonitorDeps = {
     maxPerWindow: number;
     nowMs: number;
   }) => ChannelHealthEscalationBudget;
+  hasSupervisedRestart?: () => boolean;
 };
 
 export type ChannelHealthMonitor = {
@@ -86,6 +88,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     scheduleProcessRestart = (opts: { reason: string }) =>
       scheduleGatewaySigusr1Restart({ reason: opts.reason }),
     takeEscalationBudget = takeChannelHealthEscalationBudgetSync,
+    hasSupervisedRestart = () => detectRespawnSupervisor() !== null,
   } = deps;
   const checkIntervalMs = resolveTimerTimeoutMs(deps.checkIntervalMs, DEFAULT_CHECK_INTERVAL_MS);
   const timing = resolveTimingPolicy(deps);
@@ -172,6 +175,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
               restartsThisHour: [],
             };
             if (now - escalationRecord.lastRestartAt <= cooldownMs) {
+              continue;
+            }
+            // Without a supervisor the restart falls back to in-process, which
+            // cannot clear a process-scoped wedge: it would interrupt other
+            // channels without recovering this lane. Ask the operator instead.
+            if (!hasSupervisedRestart()) {
+              log.error?.(
+                `[${channelId}:${accountId}] health-monitor: channel needs a gateway process restart to clear an in-process wedge, but no supervisor is available to replace the process; restart the gateway manually (for example via your service manager or \`openclaw gateway restart\`)`,
+              );
+              escalationRecord.lastRestartAt = now;
+              restartRecords.set(key, escalationRecord);
               continue;
             }
             // The requested restart replaces this process (and its in-memory

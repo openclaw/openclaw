@@ -44,7 +44,7 @@ health commands above for live connectivity checks.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
 - These per-channel overrides apply to the built-in channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
 
-When a channel reports a wedged in-process runtime that a channel restart cannot recover (for example a Telegram spool lane that stays guarded because its handler never stopped after a reply abort), the health monitor escalates to a supervised gateway process restart instead of restarting the channel around the wedge. Escalations respect the per-account cooldown, and their `gateway.channelMaxRestartsPerHour` budget is persisted in the state database so it keeps binding across the gateway restarts the escalation itself causes.
+When a channel reports a wedged in-process runtime that a channel restart cannot recover (for example a Telegram spool lane that stays guarded because its handler never stopped after a reply abort), the health monitor escalates to a supervised gateway process restart instead of restarting the channel around the wedge. Escalations respect the per-account cooldown, and their `gateway.channelMaxRestartsPerHour` budget is persisted in the state database so it keeps binding across the gateway restarts the escalation itself causes. On unmanaged installs (no launchd/systemd/scheduled-task supervisor), the monitor does not restart the gateway — an in-process restart cannot clear the wedge — and instead logs that a manual gateway restart is required.
 
 ## Uptime monitoring
 

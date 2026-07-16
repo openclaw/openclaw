@@ -868,6 +868,7 @@ describe("channel-health-monitor", () => {
       const scheduleProcessRestart = vi.fn(() => ({ ok: true }));
       const takeEscalationBudget = allowBudget();
       const monitor = await startAndRunCheck(manager, {
+        hasSupervisedRestart: () => true,
         scheduleProcessRestart,
         takeEscalationBudget,
       });
@@ -894,6 +895,7 @@ describe("channel-health-monitor", () => {
       );
       const scheduleProcessRestart = vi.fn(() => ({ ok: true }));
       const monitor = await startAndRunCheck(manager, {
+        hasSupervisedRestart: () => true,
         scheduleProcessRestart,
         takeEscalationBudget: allowBudget(),
       });
@@ -911,6 +913,7 @@ describe("channel-health-monitor", () => {
       const manager = createSlackSnapshotManager(account);
       const scheduleProcessRestart = vi.fn(() => ({ ok: true }));
       const monitor = await startAndRunCheck(manager, {
+        hasSupervisedRestart: () => true,
         scheduleProcessRestart,
         takeEscalationBudget: allowBudget(),
       });
@@ -937,6 +940,7 @@ describe("channel-health-monitor", () => {
           : { allowed: false, usedInWindow: 2 };
       });
       const monitor = await startAndRunCheck(manager, {
+        hasSupervisedRestart: () => true,
         scheduleProcessRestart,
         takeEscalationBudget,
         cooldownCycles: 0,
@@ -945,6 +949,26 @@ describe("channel-health-monitor", () => {
       await vi.advanceTimersByTimeAsync(10 * DEFAULT_CHECK_INTERVAL_MS);
       expect(scheduleProcessRestart).toHaveBeenCalledTimes(2);
       expect(takeEscalationBudget.mock.calls.length).toBeGreaterThan(2);
+      monitor.stop();
+    });
+
+    it("does not restart the gateway when no supervisor can replace the process", async () => {
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({ processRestartRequired: true }),
+      );
+      const scheduleProcessRestart = vi.fn(() => ({ ok: true }));
+      const takeEscalationBudget = allowBudget();
+      const monitor = await startAndRunCheck(manager, {
+        hasSupervisedRestart: () => false,
+        scheduleProcessRestart,
+        takeEscalationBudget,
+      });
+      await vi.advanceTimersByTimeAsync(4 * DEFAULT_CHECK_INTERVAL_MS);
+      // An in-process fallback restart cannot clear the wedge; the monitor must
+      // neither schedule the restart nor consume the persisted budget.
+      expect(scheduleProcessRestart).not.toHaveBeenCalled();
+      expect(takeEscalationBudget).not.toHaveBeenCalled();
+      expect(manager.stopChannel).not.toHaveBeenCalled();
       monitor.stop();
     });
   });
