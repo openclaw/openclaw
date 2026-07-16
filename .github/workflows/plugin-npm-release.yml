@@ -1125,7 +1125,7 @@ jobs:
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${producer_attempt}/jobs?per_page=100" |
             jq -s '{total_count: ([.[].jobs[]] | length), jobs: [.[].jobs[]]}' > "$workflow_jobs"
-          curl --fail --location --silent --show-error \
+          curl --connect-timeout 10 --fail --location --silent --show-error \
             --retry 2 \
             --retry-all-errors \
             --max-time 120 \

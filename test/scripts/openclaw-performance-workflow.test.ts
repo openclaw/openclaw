@@ -117,6 +117,7 @@ describe("OpenClaw performance workflow", () => {
       '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
     );
     expect(installRun).toContain("--max-time 180");
+    expect(installRun).toContain("--connect-timeout 10");
     expect(installRun).toContain(
       "--retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused",
     );

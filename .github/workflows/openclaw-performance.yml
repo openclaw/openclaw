@@ -277,7 +277,7 @@ jobs:
           # retry-max-time only gates new retries; cap an active transfer separately
           # so a stalled release asset cannot consume the entire Kova job deadline.
           curl -fsSL --proto '=https' --tlsv1.2 \
-            --max-time 180 \
+            --connect-timeout 10 --max-time 180 \
             --retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused \
             -o "$ocm_archive" \
             "https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
