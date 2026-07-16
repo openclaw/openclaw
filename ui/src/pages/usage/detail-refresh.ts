@@ -9,7 +9,7 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { toUsageErrorMessage } from "./helpers.ts";
 
-export type UsageDetailRefreshFailure = {
+type UsageDetailRefreshFailure = {
   clearData: boolean;
   status: PanelRefreshStatus;
 };

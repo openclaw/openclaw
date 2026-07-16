@@ -25,10 +25,7 @@ export function completePanelRefresh(): PanelRefreshStatus {
   return { error: null, hasLoaded: true, stale: false };
 }
 
-export function failPanelRefresh(
-  status: PanelRefreshStatus,
-  error: string,
-): PanelRefreshStatus {
+export function failPanelRefresh(status: PanelRefreshStatus, error: string): PanelRefreshStatus {
   return {
     error,
     hasLoaded: status.hasLoaded,
