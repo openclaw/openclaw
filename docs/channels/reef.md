@@ -144,6 +144,10 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 
+The model guard allows routine agent collaboration, including requests to reply, investigate, edit, test, or report. Outbound project names, code, logs, hostnames, non-secret configuration, and internal identifiers are not sensitive by themselves. Ambiguous disclosures or meta-instructions go to owner review; concrete secrets and explicit policy-override, hidden-context, or unauthorized-action attempts are denied.
+
+When a peer's inbound guard rejects a delivered message, Reef puts a system event in that peer's sender session and wakes the agent. The event includes the message ID and asks the agent to rephrase once if retrying is appropriate; it never exposes the private guard rationale. `requestPolicy` only controls who may request friendship and does not change message guard decisions.
+
 ## Troubleshooting
 
 - `channels status` shows `running` but not `connected`: the relay WebSocket is reconnecting; check network reachability of the relay URL.

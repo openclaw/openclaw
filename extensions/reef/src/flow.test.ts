@@ -10,6 +10,7 @@ import {
   MemoryReplayStore,
   open,
   sha256Hex,
+  signReceipt,
   verifyReceipt,
   type GuardAdapter,
   type SignedReceipt,
@@ -431,7 +432,63 @@ describe("ReefMessageFlow outbound", () => {
       onOwnerNotice: async () => {},
     });
 
-    await expect(flow.send("bob", "ordinary text")).rejects.toMatchObject({ stage: "guard" });
+    await expect(flow.send("bob", "ordinary text")).rejects.toMatchObject({
+      stage: "guard",
+      message: expect.stringContaining("Rephrase once and resend"),
+    });
     expect(relay.sendEnvelope).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReefMessageFlow delivery receipts", () => {
+  it("surfaces one resend notice for a replayed signed guard rejection", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const onOwnerNotice = vi.fn(async () => {});
+    const relay = transport();
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trust({ alice: peerTrust(alice) }).store,
+      keys: bob,
+      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(11)),
+      replay: new MemoryReplayStore(),
+      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+      onAgentNotice: onOwnerNotice,
+    });
+    const id = await flow.send("alice", "ordinary coordination");
+    const receipt = signReceipt(
+      {
+        id,
+        bodyHash: sha256Hex(canonicalBytes({ text: "ordinary coordination" })),
+        auditHead: "b".repeat(64),
+        status: "rejected",
+        category: "guard_deny",
+      },
+      alice.signing.secretKey,
+    );
+    const entry: InboxEntry = {
+      seq: 1,
+      peer: "alice",
+      id,
+      kind: "receipt",
+      receipt,
+      ts: Math.floor(Date.now() / 1_000),
+    };
+
+    await flow.processEntries([entry]);
+    await flow.processEntries([{ ...entry, seq: 2 }]);
+
+    expect(onOwnerNotice).toHaveBeenCalledOnce();
+    expect(onOwnerNotice).toHaveBeenCalledWith({
+      text: expect.stringMatching(/rejected by the peer's inbound guard.*Rephrase it once/),
+      peer: "alice",
+      contextKey: `reef:delivery-rejected:${id}`,
+      wakeAgent: true,
+    });
   });
 });

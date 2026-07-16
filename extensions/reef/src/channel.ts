@@ -20,6 +20,7 @@ import {
 import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
+import { createReefOwnerNoticeHandler } from "./owner-notice.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./state.js";
@@ -207,9 +208,11 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           defaultEnabled: true,
         });
         if (loop.suppressed) {
-          await ownerNotice(
-            `Reef auto-reply budget exhausted for @${message.peer}; delivery paused until cooldown.`,
-          );
+          await ownerNotice({
+            text: `Reef auto-reply budget exhausted for @${message.peer}; delivery paused until cooldown.`,
+            peer: message.peer,
+            contextKey: `reef:budget:${message.peer}`,
+          });
           return;
         }
         await dispatchInboundDirectDmWithRuntime({
@@ -252,18 +255,12 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             ctx.log?.error?.(`reef inbound dispatch failed: ${String(error)}`),
         });
       };
-      const ownerNotice = async (text: string) => {
-        const route = runtime.channel.routing.resolveAgentRoute({
-          cfg: ctx.cfg,
-          channel: "reef",
-          accountId: "default",
-          peer: { kind: "direct", id: ctx.account.config.handle! },
-        });
-        runtime.system.enqueueSystemEvent(text, {
-          sessionKey: route.sessionKey,
-          contextKey: `reef:${ctx.account.config.handle}`,
-        });
-      };
+      const ownerNotice = createReefOwnerNoticeHandler({
+        runtime,
+        cfg: ctx.cfg,
+        accountId: "default",
+        handle: ctx.account.config.handle!,
+      });
       const flow: ReefMessageFlow = new ReefMessageFlow({
         config: ctx.account.config,
         trust,
@@ -275,7 +272,12 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         replay: stores.replay,
         reviews,
         onIngress,
-        onOwnerNotice: ownerNotice,
+        onOwnerNotice: async (text) =>
+          ownerNotice({
+            text,
+            contextKey: `reef:${ctx.account.config.handle}`,
+          }),
+        onAgentNotice: ownerNotice,
       });
       setActiveReef({ flow, friends, reviews });
 
