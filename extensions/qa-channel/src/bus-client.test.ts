@@ -7,6 +7,7 @@ import {
   parseQaTarget,
   pollQaBus,
   resolveQaTargetThread,
+  sendQaBusMessage,
 } from "./bus-client.js";
 
 const guardedFetchCalls = vi.hoisted(
@@ -159,6 +160,7 @@ describe("qa-bus client", () => {
   afterEach(async () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
     guardedFetchCalls.length = 0;
+    vi.restoreAllMocks();
   });
 
   it("roundtrips explicit group targets", () => {
@@ -291,6 +293,53 @@ describe("qa-bus client", () => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).name).toBe("AbortError");
     }
+  });
+
+  it("bounds stalled message requests with a total deadline", async () => {
+    const server = createServer((_req, _res) => {
+      // Accept the request without returning headers so the client deadline owns the outcome.
+    });
+    const port = await listenLoopbackServer(server);
+    stops.push(async () => {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    });
+
+    const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementationOnce(() => realAbortSignalTimeout(25));
+
+    await expect(
+      sendQaBusMessage({
+        baseUrl: `http://127.0.0.1:${port}`,
+        accountId: "acct-a",
+        to: "dm:alice",
+        text: "hello",
+      }),
+    ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+  });
+
+  it("keeps long polls within the server wait window plus response grace", async () => {
+    const server = await startJsonServer(() => ({
+      body: JSON.stringify({ cursor: 1, events: [] }),
+    }));
+    stops.push(server["stop"]);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+
+    await expect(
+      pollQaBus({
+        baseUrl: server.baseUrl,
+        accountId: "acct-a",
+        cursor: 0,
+        timeoutMs: 30_000,
+      }),
+    ).resolves.toEqual({ cursor: 1, events: [] });
+    expect(timeoutSpy).toHaveBeenCalledWith(40_000);
   });
 
   it("preserves baseUrl path prefixes when composing bus URLs", async () => {
