@@ -10,6 +10,8 @@ import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const browserFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
 const clickclackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
+const clickclackPluginWritePath =
+  "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
 const httpProbePath = "scripts/e2e/lib/openwebui/http-probe.mjs";
 
 function runScript(scriptPath: string, args: string[] = [], env: Record<string, string> = {}) {
@@ -264,5 +266,17 @@ describe("e2e helper numeric env limits", () => {
         url: "http://127.0.0.1/probe",
       }),
     ).resolves.toBe(true);
+  });
+
+  it("generates ClickClack plugin code with fetch timeout", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-clickclack-plugin-"));
+    try {
+      const result = runScript(clickclackPluginWritePath, [tempDir]);
+      expect(result.status).toBe(0);
+      const generated = fs.readFileSync(path.join(tempDir, "index.mjs"), "utf8");
+      expect(generated).toContain("AbortSignal.timeout(30_000)");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 });
