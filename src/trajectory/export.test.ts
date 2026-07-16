@@ -1,10 +1,11 @@
 // Trajectory export tests cover packaged trajectory output and metadata.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -21,6 +22,48 @@ function makeTempDir(): string {
   const dir = path.join(tempRoot, `case-${tempDirId++}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function isSamePath(left: unknown, right: string): boolean {
+  return path.resolve(String(left)) === path.resolve(right);
+}
+
+function growFileAfterSizeCheck(filePath: string): void {
+  let grewAfterStat = false;
+  const realStat = fsp.stat.bind(fsp);
+  vi.spyOn(fsp, "stat").mockImplementation((async (
+    target: Parameters<typeof fsp.stat>[0],
+    options?: Parameters<typeof fsp.stat>[1],
+  ) => {
+    const result = await realStat(target, options as never);
+    if (!grewAfterStat && isSamePath(target, filePath)) {
+      grewAfterStat = true;
+      fs.appendFileSync(filePath, "x", "utf8");
+    }
+    return result;
+  }) as typeof fsp.stat);
+
+  let grewAfterHandleStat = false;
+  const realOpen = fsp.open.bind(fsp);
+  vi.spyOn(fsp, "open").mockImplementation((async (
+    target: Parameters<typeof fsp.open>[0],
+    flags: Parameters<typeof fsp.open>[1] = "r",
+    mode?: Parameters<typeof fsp.open>[2],
+  ) => {
+    const handle = await realOpen(target, flags, mode);
+    if (isSamePath(target, filePath)) {
+      const realHandleStat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementation(async () => {
+        const result = await realHandleStat();
+        if (!grewAfterHandleStat) {
+          grewAfterHandleStat = true;
+          fs.appendFileSync(filePath, "x", "utf8");
+        }
+        return result;
+      });
+    }
+    return handle;
+  }) as typeof fsp.open);
 }
 
 const emptyUsage: Usage = {
@@ -195,6 +238,10 @@ afterAll(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("exportTrajectoryBundle", () => {
@@ -639,12 +686,65 @@ describe("exportTrajectoryBundle", () => {
     ).rejects.toThrow(/too large/u);
   });
 
+  it("rejects runtime trajectory files that grow beyond the cap after size check", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    fs.writeFileSync(
+      runtimeFile,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "near-cap-runtime",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+      })}\n`,
+      "utf8",
+    );
+    fs.truncateSync(runtimeFile, TRAJECTORY_RUNTIME_FILE_MAX_BYTES);
+    growFileAfterSizeCheck(runtimeFile);
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+        runtimeFile,
+      }),
+    ).rejects.toThrow(/runtime file is too large/u);
+  });
+
   it("rejects oversized session transcript files before export", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const outputDir = path.join(tmpDir, "bundle");
     fs.closeSync(fs.openSync(sessionFile, "w"));
     fs.truncateSync(sessionFile, 50 * 1024 * 1024 + 1);
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      }),
+    ).rejects.toThrow(/session file is too large/u);
+  });
+
+  it("rejects session transcript files that grow beyond the cap after size check", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    fs.truncateSync(sessionFile, 50 * 1024 * 1024);
+    growFileAfterSizeCheck(sessionFile);
 
     await expect(
       exportTrajectoryBundle({

@@ -1,5 +1,6 @@
 // Trajectory export helpers package recorded trajectories for diagnostics.
 import fsp from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
@@ -71,11 +72,13 @@ type SessionEntryCandidateRow = {
   row: number;
   value: unknown;
 };
+type LimitedUtf8File = { text: string } | null;
 
 const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
 const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
 const MAX_TRAJECTORY_SESSION_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TRAJECTORY_WARNING_ROWS = 20;
+const TRAJECTORY_EXPORT_READ_CHUNK_BYTES = 64 * 1024;
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -104,6 +107,68 @@ function formatSessionParseWarnings(
         ? "Skipped a session JSONL row that is not valid JSON."
         : "Skipped a session JSONL row that is not a session entry object.",
   }));
+}
+
+function runtimeFileTooLargeMessage(size: number, maxBytes: number): string {
+  return `Trajectory runtime file is too large to export (${size} bytes; limit ${maxBytes})`;
+}
+
+function sessionFileTooLargeMessage(size: number): string {
+  return `Trajectory session file is too large to export (${size} bytes; limit ${MAX_TRAJECTORY_SESSION_FILE_BYTES})`;
+}
+
+async function readOpenedUtf8FileWithinLimit(
+  handle: FileHandle,
+  maxBytes: number,
+  tooLargeMessage: (size: number) => string,
+): Promise<string> {
+  const chunks: Buffer[] = [];
+  const buffer = Buffer.alloc(Math.min(TRAJECTORY_EXPORT_READ_CHUNK_BYTES, maxBytes + 1));
+  let size = 0;
+  while (true) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+    if (bytesRead === 0) {
+      break;
+    }
+    size += bytesRead;
+    if (size > maxBytes) {
+      throw new Error(tooLargeMessage(size));
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+  }
+  return Buffer.concat(chunks, size).toString("utf8");
+}
+
+async function readRegularUtf8FileWithinLimit(
+  filePath: string,
+  params: {
+    maxBytes: number;
+    tooLargeMessage: (size: number) => string;
+  },
+): Promise<LimitedUtf8File> {
+  const initialStat = await fsp.stat(filePath);
+  if (!initialStat.isFile()) {
+    return null;
+  }
+  if (initialStat.size > params.maxBytes) {
+    throw new Error(params.tooLargeMessage(initialStat.size));
+  }
+
+  const handle = await fsp.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      return null;
+    }
+    if (stat.size > params.maxBytes) {
+      throw new Error(params.tooLargeMessage(stat.size));
+    }
+    return {
+      text: await readOpenedUtf8FileWithinLimit(handle, params.maxBytes, params.tooLargeMessage),
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 function collectSessionEntries(
@@ -188,9 +253,14 @@ async function readSessionEntries(params: {
 }> {
   const marker = parseSqliteSessionFileMarker(params.sessionFile);
   if (!marker) {
-    const { entries, warnings, rowByEntry } = parseSessionFileEntriesWithWarnings(
-      await fsp.readFile(params.sessionFile, "utf8"),
-    );
+    const sessionFile = await readRegularUtf8FileWithinLimit(params.sessionFile, {
+      maxBytes: MAX_TRAJECTORY_SESSION_FILE_BYTES,
+      tooLargeMessage: sessionFileTooLargeMessage,
+    });
+    if (!sessionFile) {
+      throw new Error("Trajectory session file must be a regular file");
+    }
+    const { entries, warnings, rowByEntry } = parseSessionFileEntriesWithWarnings(sessionFile.text);
     return {
       entries,
       warnings: formatSessionParseWarnings(warnings),
@@ -297,24 +367,22 @@ async function parseJsonlFile<T>(
     validate?: (value: unknown) => value is T;
   },
 ): Promise<{ events: T[]; warnings: JsonlParseWarning[] }> {
-  let stat;
+  let file;
   try {
-    stat = await fsp.stat(filePath);
+    file = await readRegularUtf8FileWithinLimit(filePath, {
+      maxBytes: params.maxBytes,
+      tooLargeMessage: (size) => runtimeFileTooLargeMessage(size, params.maxBytes),
+    });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return { events: [], warnings: [] };
     }
     throw error;
   }
-  if (!stat.isFile()) {
+  if (!file) {
     return { events: [], warnings: [] };
   }
-  if (stat.size > params.maxBytes) {
-    throw new Error(
-      `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${params.maxBytes})`,
-    );
-  }
-  const rows = (await fsp.readFile(filePath, "utf8")).split(/\r?\n/u);
+  const rows = file.text.split(/\r?\n/u);
   const parsed: T[] = [];
   const warnings: JsonlParseWarning[] = [];
   for (const [index, rawLine] of rows.entries()) {
@@ -1048,14 +1116,6 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
   });
-  if (!parseSqliteSessionFileMarker(params.sessionFile)) {
-    const sessionStat = await fsp.stat(params.sessionFile);
-    if (sessionStat.size > MAX_TRAJECTORY_SESSION_FILE_BYTES) {
-      throw new Error(
-        `Trajectory session file is too large to export (${sessionStat.size} bytes; limit ${MAX_TRAJECTORY_SESSION_FILE_BYTES})`,
-      );
-    }
-  }
   const {
     header,
     leafId,
