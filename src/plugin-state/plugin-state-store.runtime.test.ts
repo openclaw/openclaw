@@ -5,6 +5,7 @@ import type { PluginRecord } from "../plugins/registry-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resetPluginBlobStoreForTests } from "./plugin-blob-store.js";
 import { resetPluginStateStoreForTests } from "./plugin-state-store.js";
 
 function createPluginRecord(
@@ -55,6 +56,9 @@ function createTestPluginRegistry() {
     runtime: {
       state: {
         resolveStateDir,
+        openBlobStore: () => {
+          throw new Error("registry plugin runtime proxy should bind openBlobStore");
+        },
         openKeyedStore: () => {
           throw new Error("registry plugin runtime proxy should bind openKeyedStore");
         },
@@ -67,6 +71,7 @@ function createTestPluginRegistry() {
 }
 
 afterEach(() => {
+  resetPluginBlobStoreForTests();
   resetPluginStateStoreForTests();
 });
 
@@ -121,6 +126,42 @@ describe("plugin runtime state proxy", () => {
     });
   });
 
+  it("binds blob stores to the trusted plugin id", async () => {
+    await withOpenClawTestState({ label: "plugin-blob-runtime" }, async () => {
+      const registry = createTestPluginRegistry();
+      const record = createPluginRecord("diffs", "global", { trustedOfficialInstall: true });
+      registry.registry.plugins.push(record);
+      const api = registry.createApi(record, { config: {} });
+
+      const store = api.runtime.state.openBlobStore<{ kind: string }>({
+        namespace: "runtime",
+        maxEntries: 10,
+        maxBytesPerEntry: 1024,
+        maxBytesPerNamespace: 4096,
+      });
+      await expect(
+        store.registerIfAbsent("viewer", new Uint8Array([1, 2, 3]), { kind: "viewer" }),
+      ).resolves.toBe(true);
+      await expect(store.lookup("viewer")).resolves.toMatchObject({
+        key: "viewer",
+        metadata: { kind: "viewer" },
+        sizeBytes: 3,
+      });
+
+      const otherRecord = createPluginRecord("other", "bundled");
+      registry.registry.plugins.push(otherRecord);
+      const otherStore = registry
+        .createApi(otherRecord, { config: {} })
+        .runtime.state.openBlobStore<{ kind: string }>({
+          namespace: "runtime",
+          maxEntries: 10,
+          maxBytesPerEntry: 1024,
+          maxBytesPerNamespace: 4096,
+        });
+      await expect(otherStore.lookup("viewer")).resolves.toBeUndefined();
+    });
+  });
+
   it("rejects external plugins in this release", () => {
     const registry = createTestPluginRegistry();
     const record = createPluginRecord("external-plugin", "workspace");
@@ -133,16 +174,32 @@ describe("plugin runtime state proxy", () => {
     expect(() =>
       api.runtime.state.openSyncKeyedStore({ namespace: "runtime", maxEntries: 10 }),
     ).toThrow("openKeyedStore is only available for trusted plugins");
+    expect(() =>
+      api.runtime.state.openBlobStore({
+        namespace: "runtime",
+        maxEntries: 10,
+        maxBytesPerEntry: 1024,
+        maxBytesPerNamespace: 4096,
+      }),
+    ).toThrow("openBlobStore is only available for trusted plugins");
   });
 
   it("rejects untrusted global plugins", () => {
     const registry = createTestPluginRegistry();
-    const record = createPluginRecord("external-plugin", "global");
+    const record = createPluginRecord("diffs", "global");
     registry.registry.plugins.push(record);
     const api = registry.createApi(record, { config: {} });
 
     expect(() =>
       api.runtime.state.openKeyedStore({ namespace: "runtime", maxEntries: 10 }),
     ).toThrow("openKeyedStore is only available for trusted plugins");
+    expect(() =>
+      api.runtime.state.openBlobStore({
+        namespace: "runtime",
+        maxEntries: 10,
+        maxBytesPerEntry: 1024,
+        maxBytesPerNamespace: 4096,
+      }),
+    ).toThrow("openBlobStore is only available for trusted plugins");
   });
 });

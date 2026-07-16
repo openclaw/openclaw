@@ -243,7 +243,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +32: shared channel setup, config-schema, policy, and status helpers.
       // +2: shared channel replay-guard factory and claim handle.
       // Harvest: retired AudioConfig type -1.
-      7985,
+      // +4: bounded plugin blob store options, entry, entry info, and store types.
+      7989,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

@@ -128,6 +128,25 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
   });
 
+  it("flags retired Diffs viewer sidecar writes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(root, id, "viewer.html"), html);
+        await fs.writeFile(path.join(root, id, "meta.json"), metadata);
+        await fs.writeFile(path.join(root, id, "file-meta.json"), metadata);
+      `,
+      "extensions/diffs/src/legacy-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
+  });
+
   it("flags writes through local variables initialized from legacy store paths", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

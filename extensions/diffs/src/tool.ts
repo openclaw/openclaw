@@ -272,12 +272,12 @@ export function createDiffsTool(params: {
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,
-          artifactId: artifact.id,
           html: requireRenderedHtml(rendered.imageHtml, "image"),
           theme,
           image,
+          ttlMs,
+          context: artifactContext,
         });
-        await params.store.updateFilePath(artifact.id, artifactFile.path);
 
         return {
           content: [
@@ -381,38 +381,37 @@ function buildFileArtifactMessage(params: {
 async function renderDiffArtifactFile(params: {
   screenshotter: DiffScreenshotter;
   store: DiffArtifactStore;
-  artifactId?: string;
   html: string;
   theme: DiffTheme;
   image: DiffRenderOptions["image"];
   ttlMs?: number;
   context?: DiffArtifactContext;
 }): Promise<{ path: string; bytes: number; artifactId?: string; expiresAt?: string }> {
-  const standaloneArtifact = params.artifactId
-    ? undefined
-    : await params.store.createStandaloneFileArtifact({
-        format: params.image.format,
-        ttlMs: params.ttlMs,
-        context: params.context,
-      });
-  const outputPath = params.artifactId
-    ? params.store.allocateFilePath(params.artifactId, params.image.format)
-    : standaloneArtifact!.filePath;
-
-  await params.screenshotter.screenshotHtml({
-    html: params.html,
-    outputPath,
-    theme: params.theme,
-    image: params.image,
+  const fileArtifact = await params.store.createStandaloneFileArtifact({
+    format: params.image.format,
+    ttlMs: params.ttlMs,
+    context: params.context,
   });
+  try {
+    await params.screenshotter.screenshotHtml({
+      html: params.html,
+      outputPath: fileArtifact.filePath,
+      theme: params.theme,
+      image: params.image,
+    });
 
-  const stats = await fs.stat(outputPath);
-  return {
-    path: outputPath,
-    bytes: stats.size,
-    ...(standaloneArtifact?.id ? { artifactId: standaloneArtifact.id } : {}),
-    ...(standaloneArtifact?.expiresAt ? { expiresAt: standaloneArtifact.expiresAt } : {}),
-  };
+    const stats = await fs.stat(fileArtifact.filePath);
+    await params.store.completeFileArtifact(fileArtifact.id);
+    return {
+      path: fileArtifact.filePath,
+      bytes: stats.size,
+      artifactId: fileArtifact.id,
+      expiresAt: fileArtifact.expiresAt,
+    };
+  } catch (error) {
+    await params.store.deleteFileArtifact(fileArtifact.id);
+    throw error;
+  }
 }
 
 function buildArtifactContext(

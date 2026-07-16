@@ -74,7 +74,7 @@ describe("diffs tool", () => {
       },
     });
     expect(screenshotHtml).not.toHaveBeenCalled();
-    await expect(fs.readdir(rootDir)).resolves.toEqual([]);
+    await expect(fs.stat(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("uses configured viewerBaseUrl when tool input omits baseUrl", async () => {
@@ -336,6 +336,7 @@ describe("diffs tool", () => {
     expect(result?.content).toHaveLength(1);
     expect(readTextContent(result, 0)).toContain("File rendering failed");
     expect((result.details as Record<string, unknown>).fileError).toBe("browser missing");
+    await expect(fs.readdir(rootDir)).resolves.toEqual([]);
   });
 
   it("rejects invalid base URLs as tool input errors", async () => {
@@ -449,7 +450,8 @@ describe("diffs tool", () => {
 
     const viewerPath = String((result.details as Record<string, unknown>).viewerPath);
     const id = extractViewerArtifactId(viewerPath);
-    const html = await store.readHtml(id);
+    const viewer = await store.readAuthorizedViewer(id, extractViewerArtifactToken(viewerPath));
+    const html = Buffer.from(viewer!.html).toString("utf8");
     expect(html).toContain('body data-theme="light"');
     expect(html).toContain("--diffs-font-size: 17px;");
     expect(html).toContain("JetBrains Mono");
@@ -496,7 +498,8 @@ describe("diffs tool", () => {
     expect((result.details as Record<string, unknown>).fileMaxWidth).toBe(1320);
     const viewerPath = String((result.details as Record<string, unknown>).viewerPath);
     const id = extractViewerArtifactId(viewerPath);
-    const html = await store.readHtml(id);
+    const viewer = await store.readAuthorizedViewer(id, extractViewerArtifactToken(viewerPath));
+    const html = Buffer.from(viewer!.html).toString("utf8");
     expect(html).toContain('body data-theme="dark"');
   });
 
@@ -643,6 +646,14 @@ function extractViewerArtifactId(viewerPath: string): string {
     throw new Error(`Missing artifact id in viewer path: ${viewerPath}`);
   }
   return previousSegment;
+}
+
+function extractViewerArtifactToken(viewerPath: string): string {
+  const token = viewerPath.split("/").filter(Boolean).at(-1);
+  if (!token) {
+    throw new Error("expected viewer artifact token");
+  }
+  return token;
 }
 
 function readParametersProperties(parameters: unknown): Record<string, unknown> {
