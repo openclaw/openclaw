@@ -221,7 +221,7 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
-  it("warns when legacy openai-codex model refs are in agents.list.*.models maps via repair path", () => {
+  it("repairs legacy openai-codex model refs found only in agents.list.*.models maps", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         agents: {
