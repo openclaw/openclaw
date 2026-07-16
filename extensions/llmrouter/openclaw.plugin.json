@@ -1,0 +1,66 @@
+{
+  "id": "llmrouter",
+  "name": "LLMRouter",
+  "description": "OpenClaw LLMRouter provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["llmrouter"],
+  "modelCatalog": {
+    "providers": {
+      "llmrouter": {
+        "baseUrl": "https://api.llmrouter.sh/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "auto",
+            "name": "LLMRouter Auto",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "llmrouter": "static"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "llmrouter",
+        "envVars": ["LLMROUTER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "llmrouter",
+      "method": "api-key",
+      "choiceId": "llmrouter-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "LLMRouter API key",
+      "groupId": "llmrouter",
+      "groupLabel": "LLMRouter",
+      "groupHint": "Cost-aware auto model routing",
+      "optionKey": "llmrouterApiKey",
+      "cliFlag": "--llmrouter-api-key",
+      "cliOption": "--llmrouter-api-key <key>",
+      "cliDescription": "LLMRouter API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

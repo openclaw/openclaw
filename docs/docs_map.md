@@ -6580,6 +6580,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
 
+## plugins/reference/llmrouter.md
+
+- Route: /plugins/reference/llmrouter
+- Headings:
+  - H1: LLMRouter plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/lmstudio.md
 
 - Route: /plugins/reference/lmstudio
@@ -7997,6 +8006,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Configuration
   - H2: Image generation
   - H2: Advanced
+  - H2: Related
+
+## providers/llmrouter.md
+
+- Route: /providers/llmrouter
+- Headings:
+  - H2: Install plugin
+  - H2: Getting started
+  - H2: Auto routing
+  - H2: Pinning a specific model
+  - H2: Config example
   - H2: Related
 
 ## providers/lmstudio.md
