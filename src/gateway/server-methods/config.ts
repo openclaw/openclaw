@@ -54,6 +54,12 @@ import {
 } from "../control-plane-audit.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
+  execConfigOpenCommand,
+  formatConfigOpenError,
+  isConfigOpenHandlerUnavailable,
+  resolveConfigOpenCommand,
+} from "./config-open.js";
+import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
   didSharedGatewayAuthChange,
@@ -61,10 +67,6 @@ import {
   resolveGatewayConfigRestartWriteResult,
 } from "./config-write-flow.js";
 import {
-  execOpenPath,
-  formatOpenPathError,
-  isHeadlessOpenPathError,
-  resolveOpenPathCommand,
   sanitizePathForLog,
 } from "./open-path.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -72,7 +74,6 @@ import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 const CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS = 5_000;
-const CONFIG_OPEN_COMMAND_TIMEOUT_MS = 5_000;
 
 let configSchemaResponseCache: {
   expiresAtMs: number;
@@ -948,11 +949,11 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const configPath = createConfigIO().configPath;
     try {
-      await execOpenPath(resolveOpenPathCommand(configPath));
+      await execConfigOpenCommand(resolveConfigOpenCommand(configPath));
       respond(true, { ok: true, path: configPath }, undefined);
     } catch (error) {
-      const errorMessage = formatOpenPathError(error);
-      const isHeadlessError = isHeadlessOpenPathError(errorMessage);
+      const errorMessage = formatConfigOpenError(error);
+      const isHeadlessError = isConfigOpenHandlerUnavailable(error);
       const detailedError = isHeadlessError
         ? `Cannot open file in headless environment. File path: ${configPath}. This environment appears to lack a graphical or terminal browser handler.`
         : `Failed to open config file: ${errorMessage}`;
