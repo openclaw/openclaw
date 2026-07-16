@@ -235,7 +235,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, and SSRF policy helpers |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
-    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
+    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
 
   <Accordion title="Runtime and storage subpaths">
