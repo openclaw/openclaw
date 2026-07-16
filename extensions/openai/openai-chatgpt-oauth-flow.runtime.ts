@@ -6,6 +6,7 @@
  */
 
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { extractProviderErrorDetail } from "openclaw/plugin-sdk/provider-http";
 import {
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
@@ -227,11 +228,12 @@ async function exchangeAuthorizationCode(
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    const detail = await extractProviderErrorDetail(response).catch(() => "");
     return {
       type: "failed",
       status: response.status,
-      message: `OpenAI Codex token exchange failed (${response.status}): ${text || response.statusText}`,
+      message:
+        `OpenAI Codex token exchange failed (${response.status})` + (detail ? `: ${detail}` : ""),
     };
   }
 
