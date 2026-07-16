@@ -6,10 +6,12 @@ import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearProtocolCodec
 import ai.openclaw.wear.shared.WearRpcMethod
+import com.google.android.gms.tasks.TaskCompletionSource
 import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
@@ -93,6 +95,21 @@ class WearProxyBridgeTest {
       val failure = runCatching { Tasks.forCanceled<Int>().awaitWearTask() }.exceptionOrNull()
 
       assertTrue(failure is WearTaskCanceledException)
+    }
+
+  @Test
+  fun callerCancellationWinsLaterGoogleTaskCompletion() =
+    runTest {
+      val source = TaskCompletionSource<Int>()
+      val awaiting = backgroundScope.async { source.task.awaitWearTask() }
+      runCurrent()
+
+      awaiting.cancel()
+      runCurrent()
+      source.setResult(1)
+      runCurrent()
+
+      assertTrue(awaiting.isCancelled)
     }
 
   @Test

@@ -19,6 +19,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.concurrent.Executor
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 internal fun interface WearMessageSender {
   suspend fun send(
@@ -196,15 +198,15 @@ private val directTaskExecutor = Executor(Runnable::run)
 internal suspend fun <T> Task<T>.awaitWearTask(): T =
   suspendCancellableCoroutine { continuation ->
     addOnSuccessListener(directTaskExecutor) { value ->
-      continuation.tryResume(value)?.let(continuation::completeResume)
+      continuation.resume(value)
     }
     addOnFailureListener(directTaskExecutor) { error ->
-      continuation.tryResumeWithException(error)?.let(continuation::completeResume)
+      continuation.resumeWithException(error)
     }
     // Google Tasks do not invoke failure listeners for cancellation. Treat the Task's canceled
     // state as a send failure; cancellation of the calling coroutine remains owned by the
     // cancellable continuation and is still propagated as CancellationException.
     addOnCanceledListener(directTaskExecutor) {
-      continuation.tryResumeWithException(WearTaskCanceledException())?.let(continuation::completeResume)
+      continuation.resumeWithException(WearTaskCanceledException())
     }
   }

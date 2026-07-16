@@ -10,8 +10,9 @@ class WearProxyListenerService : WearableListenerService() {
   override fun onMessageReceived(messageEvent: MessageEvent) {
     if (messageEvent.path != WearProtocol.REQUEST_PATH) return
     val app = application as? NodeApp ?: return
-    // WearableListenerService callbacks run off-main-thread, and the service may be
-    // unbound when this callback returns. Keep the response inside that lifecycle.
+    // Google's Data Layer contract dispatches this callback on a background handler thread
+    // and explicitly recommends runBlocking there. Returning early can end the bound service
+    // lifetime before the correlated response is sent.
     runBlocking { app.wearProxyBridge.handleMessage(messageEvent.sourceNodeId, messageEvent.data) }
   }
 }
