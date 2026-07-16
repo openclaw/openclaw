@@ -30,7 +30,8 @@ class DebugHandlerTest : NodeHandlerRobolectricTest() {
 
     assertTrue(result.ok)
     val logs =
-      Json.parseToJsonElement(result.payloadJson ?: error("missing payload"))
+      Json
+        .parseToJsonElement(result.payloadJson ?: error("missing payload"))
         .jsonObject
         .getValue("logs")
         .jsonPrimitive
