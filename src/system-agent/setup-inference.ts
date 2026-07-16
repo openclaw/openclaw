@@ -1651,7 +1651,21 @@ async function activateSetupInferenceUnredacted(
             ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
           })
         : undefined;
-      const stageCandidate = (current: OpenClawConfig): OpenClawConfig => {
+      let manualAuthSourceBase = sourceCfg;
+      if (plan.manualAuth?.pluginId) {
+        const enableResult = (deps.enablePluginInConfig ?? enablePluginInConfig)(
+          sourceCfg,
+          plan.manualAuth.pluginId,
+        );
+        if (!enableResult.enabled) {
+          throw new Error(`Provider plugin ${plan.manualAuth.pluginId} is ${enableResult.reason}.`);
+        }
+        manualAuthSourceBase = enableResult.config;
+      }
+      const stageCandidate = (
+        current: OpenClawConfig,
+        options: { manualAuthConflictBase?: OpenClawConfig } = {},
+      ): OpenClawConfig => {
         let next =
           codexPluginPatch === undefined ? current : stripPendingPluginInstallRecords(current);
         if (plan.manualAuth) {
@@ -1659,6 +1673,7 @@ async function activateSetupInferenceUnredacted(
             next,
             plan.manualAuth,
             deps.enablePluginInConfig ?? enablePluginInConfig,
+            options.manualAuthConflictBase,
           );
         }
         if (codexPluginPatch !== undefined) {
@@ -1697,7 +1712,7 @@ async function activateSetupInferenceUnredacted(
       // absent from authored config. Compare source writes against the candidate
       // produced from the original source shape, without ignoring concurrent rows.
       const expectedSourceCandidateRoute = await projectDefaultInferenceRoute(
-        stageCandidate(sourceCfg),
+        stageCandidate(sourceCfg, { manualAuthConflictBase: manualAuthSourceBase }),
       );
       // Resolve every fallible config-commit dependency before writing a
       // credential into the real agent store. From this point onward, any
@@ -1805,7 +1820,9 @@ async function activateSetupInferenceUnredacted(
                 "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
               );
             }
-            const nextConfig = stageCandidate(current);
+            const nextConfig = stageCandidate(current, {
+              manualAuthConflictBase: manualAuthSourceBase,
+            });
             const nextRouteProjection = await projectDefaultInferenceRoute(nextConfig);
             const nextResolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(nextConfig);
             if (
@@ -2501,6 +2518,7 @@ function applyManualAuthConfig(
   config: OpenClawConfig,
   manualAuth: NonNullable<SetupInferenceTestPlan["manualAuth"]>,
   enablePlugin: typeof enablePluginInConfig = enablePluginInConfig,
+  conflictBase: OpenClawConfig = manualAuth.configBase,
 ): OpenClawConfig {
   let enabledConfig = config;
   if (manualAuth.pluginId) {
@@ -2510,7 +2528,7 @@ function applyManualAuthConfig(
     }
     enabledConfig = enableResult.config;
   }
-  if (mergePatchConflicts(manualAuth.configBase, enabledConfig, manualAuth.configPatch)) {
+  if (mergePatchConflicts(conflictBase, enabledConfig, manualAuth.configPatch)) {
     throw new Error(
       "Provider configuration changed during the live inference test, so the verified credential was not saved. Review the current provider settings and retry.",
     );

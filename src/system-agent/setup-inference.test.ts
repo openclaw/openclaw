@@ -1796,6 +1796,98 @@ describe("activateSetupInference", () => {
     }
   });
 
+  it("persists provider OAuth when runtime config materializes an empty auth shell", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const sourceConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    const runtimeConfig = {
+      ...sourceConfig,
+      auth: { profiles: {} },
+    } satisfies OpenClawConfig;
+    resolveAgentDir(sourceConfig, "main");
+    const runAuth = vi.fn(async () => ({
+      profiles: [
+        {
+          profileId: "openai:default",
+          credential: {
+            type: "oauth" as const,
+            provider: "openai",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+      defaultModel: "openai/gpt-5.6-sol",
+      configPatch: {
+        agents: { defaults: { models: { "openai/gpt-5.6-sol": {} } } },
+      },
+    }));
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      pluginId: "openai",
+      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: runAuth }],
+    };
+    const runEmbeddedAgent = vi.fn(
+      async (params: SuccessfulRunParams & { authProfileId?: string }) =>
+        successfulRun("openai", "gpt-5.6-sol", params),
+    );
+    const configHarness = createConfigTransformHarness(sourceConfig, runtimeConfig);
+
+    try {
+      const result = await activateSetupInference({
+        kind: "provider-auth",
+        authChoice: "openai",
+        workspace: "/tmp/openclaw-workspace",
+        surface: "gateway",
+        runtime,
+        prompter: { note: vi.fn(async () => {}) } as never,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            path: "/tmp/openclaw.json",
+            issues: [],
+            config: runtimeConfig,
+            sourceConfig,
+            runtimeConfig,
+          })) as never,
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: () => ({
+            pluginId: "openai",
+            providerId: "openai",
+            methodId: "oauth",
+            choiceId: "openai",
+            choiceLabel: "ChatGPT Login",
+            appGuidedAuth: "oauth",
+          }),
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
+      const activatedProfileId = runEmbeddedAgent.mock.calls[0]?.[0].authProfileId;
+      if (!activatedProfileId) {
+        throw new Error("expected setup auth profile");
+      }
+      expect(configHarness.current()).toMatchObject({
+        agents: { defaults: { model: `openai/gpt-5.6-sol@${activatedProfileId}` } },
+        auth: {
+          profiles: {
+            [activatedProfileId]: { provider: "openai", mode: "oauth" },
+          },
+        },
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
   it("does not probe or persist an interactive login after session cancellation", async () => {
     const runAuth = vi.fn(async () => ({ profiles: [], defaultModel: "openai/gpt-5.5" }));
     const runEmbeddedAgent = vi.fn();
