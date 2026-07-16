@@ -605,6 +605,14 @@ export function resolveTsdownBuildInvocation(params = {}) {
 export function resolveTsdownBuildInvocations(params = {}) {
   const forwardedArgs = params.args ?? [];
   const env = params.env ?? process.env;
+  let declarationsEnabled = env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  for (const arg of forwardedArgs) {
+    if (arg === "--dts") {
+      declarationsEnabled = true;
+    } else if (arg === "--no-dts") {
+      declarationsEnabled = false;
+    }
+  }
   const hasForwardedFilter = forwardedArgs.some(
     (arg) =>
       arg === "--filter" || arg.startsWith("--filter=") || arg === "-F" || arg.startsWith("-F="),
@@ -616,7 +624,7 @@ export function resolveTsdownBuildInvocations(params = {}) {
     }),
   ];
 
-  if (env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1" || hasForwardedFilter) {
+  if (!declarationsEnabled || hasForwardedFilter) {
     invocations.push(resolveTsdownBuildInvocation(params));
     return invocations;
   }

@@ -156,8 +156,27 @@ describe("resolveTsdownBuildInvocation", () => {
     );
   });
 
-  it("keeps no-DTS builds in one main invocation", () => {
+  it.each([
+    ["environment", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
+    ["CLI", ["--no-dts"], {}],
+  ])("keeps %s no-DTS builds in one main invocation", (_source, args, env) => {
     const results = resolveTsdownBuildInvocations({
+      args,
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env,
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results[0]?.args).toEqual(expect.arrayContaining(["--config", "tsdown.ai.config.ts"]));
+    expect(results[1]?.args).not.toContain("--filter");
+  });
+
+  it("serializes declaration graphs when --dts overrides the no-DTS environment", () => {
+    const results = resolveTsdownBuildInvocations({
+      args: ["--dts"],
       platform: "linux",
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
@@ -165,9 +184,9 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(results).toHaveLength(2);
-    expect(results[0]?.args).toEqual(expect.arrayContaining(["--config", "tsdown.ai.config.ts"]));
-    expect(results[1]?.args).not.toContain("--filter");
+    expect(results).toHaveLength(3);
+    expect(results[1]?.args).toEqual(expect.arrayContaining(["--filter", "openclaw-packages"]));
+    expect(results[2]?.args).toEqual(expect.arrayContaining(["--filter", "openclaw-unified"]));
   });
 
   it.each([
