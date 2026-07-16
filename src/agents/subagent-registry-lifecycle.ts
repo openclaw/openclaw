@@ -1453,17 +1453,17 @@ export function createSubagentRegistryLifecycleController(params: {
               return true;
             }
           : undefined,
-      onDeliveryResult: (delivery) => {
+      onDeliveryResult: (deliveryResult) => {
         if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
           retireSupersededCleanupInBackground(runId, entry, cleanupGeneration);
           return;
         }
-        recordAnnounceDeliveryResult(entry, delivery);
-        if (delivery.delivered) {
+        recordAnnounceDeliveryResult(entry, deliveryResult);
+        if (deliveryResult.delivered) {
           const deliveryState = ensureDeliveryState(entry);
           const visibleDeliveryError =
-            delivery.visibleDeliveryStatus === "failed"
-              ? (delivery.visibleDeliveryError ?? delivery.error)
+            deliveryResult.visibleDeliveryStatus === "failed"
+              ? (deliveryResult.visibleDeliveryError ?? deliveryResult.error)
               : undefined;
           if (visibleDeliveryError) {
             deliveryState.lastError = visibleDeliveryError;
@@ -1475,10 +1475,10 @@ export function createSubagentRegistryLifecycleController(params: {
           latestDeliveryError = undefined;
           return;
         }
-        if (delivery.path === "none") {
+        if (deliveryResult.path === "none") {
           ensureDeliveryState(entry).lastDropReason = "sink_unavailable";
         }
-        latestDeliveryError = formatAnnounceDeliveryError(delivery);
+        latestDeliveryError = formatAnnounceDeliveryError(deliveryResult);
         if (ensureDeliveryState(entry).lastError !== latestDeliveryError) {
           ensureDeliveryState(entry).lastError = latestDeliveryError;
           params.persist();

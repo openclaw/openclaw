@@ -2495,19 +2495,18 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("does not replay the requester turn after persisting terminal visible failure", async () => {
-    let entry!: SubagentRunRecord;
     let persistedFailedDelivery: SubagentRunRecord["delivery"];
-    const persist = vi.fn(() => {
-      if (entry.delivery?.status === "failed") {
-        persistedFailedDelivery = structuredClone(entry.delivery);
-      }
-    });
-    entry = createRunEntry({
+    const entry = createRunEntry({
       endedAt: 4_000,
       expectsCompletionMessage: true,
       completion: { required: true, resultText: "final answer" },
       outcome: { status: "ok" },
       retainAttachmentsOnKeep: true,
+    });
+    const persist = vi.fn(() => {
+      if (entry.delivery?.status === "failed") {
+        persistedFailedDelivery = structuredClone(entry.delivery);
+      }
     });
     let releaseFirstCleanup!: () => void;
     const firstCleanupStalled = new Promise<void>((resolve) => {
