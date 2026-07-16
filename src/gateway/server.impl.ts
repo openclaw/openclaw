@@ -1451,6 +1451,7 @@ export async function startGatewayServer(
         nodeReapprovalCoordinator.dispose();
       },
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
+      stopPublisherFeedRefresh: () => runtimeState.publisherFeedRefresh.stop(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: async () => {
         const monitor = runtimeState?.channelHealthMonitor;
@@ -2165,6 +2166,7 @@ export async function startGatewayServer(
           pluginLookUpTable,
         });
         runtimeState.heartbeatRunner = activated.heartbeatRunner;
+        runtimeState.publisherFeedRefresh = activated.publisherFeedRefresh;
         runtimeState.stopModelPricingRefresh = activated.stopModelPricingRefresh;
       });
     };
