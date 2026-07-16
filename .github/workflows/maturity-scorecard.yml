@@ -453,7 +453,7 @@ jobs:
           fi
 
       - name: Run Codex maturity scorecard agent
-        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
         env:
           MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
           MATURITY_SCORES_PATH: qa/maturity-scores.yaml
