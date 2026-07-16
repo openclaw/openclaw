@@ -10,8 +10,8 @@ import {
 const LEGACY_SCHEMA = "legacy_memory_sidecar";
 
 function explainQueryPlan(db: DatabaseSync, sql: string): string[] {
-  return (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail?: unknown }>).map((row) =>
-    String(row.detail ?? ""),
+  return (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>).map(
+    (row) => row.detail,
   );
 }
 
