@@ -141,7 +141,15 @@ struct ExecApprovalsIntegratedProofTests {
         buttonTitles: [String])?
     {
         for _ in 0..<500 {
-            if let observation = ExecApprovalsPromptPresenter.respondToActivePromptForTesting(.allowOnce) {
+            if let alert = ExecApprovalsPromptPresenter.activeAlertForTesting,
+               NSApp.modalWindow === alert.window,
+               let button = alert.buttons.first(where: { $0.title == "Allow Once" })
+            {
+                let observation = (
+                    messageText: alert.messageText,
+                    informativeText: alert.informativeText,
+                    buttonTitles: alert.buttons.map(\.title))
+                button.performClick(nil)
                 return observation
             }
             try? await Task.sleep(for: .milliseconds(10))

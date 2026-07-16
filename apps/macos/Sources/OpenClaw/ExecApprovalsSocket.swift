@@ -854,24 +854,8 @@ enum ExecApprovalsPromptPresenter {
 
 #if DEBUG
 extension ExecApprovalsPromptPresenter {
-    @MainActor
-    static func respondToActivePromptForTesting(
-        _ decision: ExecApprovalDecision) -> (
-        messageText: String,
-        informativeText: String,
-        buttonTitles: [String])?
-    {
-        guard let alert = self.activePrompt?.alert,
-              NSApp.modalWindow === alert.window,
-              let button = alert.buttons.first(where: { $0.title == self.buttonTitle(for: decision) })
-        else { return nil }
-
-        let observation = (
-            messageText: alert.messageText,
-            informativeText: alert.informativeText,
-            buttonTitles: alert.buttons.map(\.title))
-        button.performClick(nil)
-        return observation
+    @MainActor static var activeAlertForTesting: NSAlert? {
+        self.activePrompt?.alert
     }
 
     @MainActor
@@ -1619,10 +1603,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 id: request.id,
                 ok: false,
                 payload: nil,
-                error: ExecHostError(
-                    code: "INVALID_REQUEST",
-                    message: "replayed request",
-                    reason: "replay"))
+                error: ExecHostError(code: "INVALID_REQUEST", message: "replayed request", reason: "replay"))
         }
         guard let requestData = request.requestJson.data(using: .utf8),
               let payload = try? JSONDecoder().decode(ExecHostRequest.self, from: requestData)
