@@ -14,6 +14,7 @@ export type {
   QaBusReactToMessageInput,
   QaBusReadMessageInput,
   QaBusSearchMessagesInput,
+  QaBusSnapshotConversation,
   QaBusStateSnapshot,
   QaBusThread,
   QaBusToolCall,
