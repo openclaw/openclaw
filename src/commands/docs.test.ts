@@ -86,9 +86,9 @@ describe("docsSearchCommand", () => {
     await docsSearchCommand(["bad-json"], runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Docs search failed: Docs search response is malformed JSON"),
+      "Docs search failed: Docs search response is malformed JSON",
     );
-    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("SyntaxError"));
+    expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
