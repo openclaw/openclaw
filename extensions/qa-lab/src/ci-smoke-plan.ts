@@ -13,7 +13,7 @@ const QA_SMOKE_CI_SCENARIO_IDS = new Set([
   "system-agent-ring-zero-setup",
   "dreaming-shadow-trial-report",
   "gateway-smoke",
-  "luna-thinking-visibility-switch",
+  "model-switch-follow-up",
   "group-visible-reply-tool",
   "long-running-release-audit",
   "matrix-restart-resume",

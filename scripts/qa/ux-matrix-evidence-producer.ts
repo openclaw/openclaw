@@ -40,7 +40,7 @@ type MatrixCell = {
 type ChromiumLauncher = Awaited<typeof import("playwright")>["chromium"];
 type ChromiumBrowser = Awaited<ReturnType<ChromiumLauncher["launch"]>>;
 
-export type ProducerOptions = {
+type ProducerOptions = {
   artifactBase: string;
   repoRoot: string;
   skipVisualProof: boolean;

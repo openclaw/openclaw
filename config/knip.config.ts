@@ -7,7 +7,77 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
   return `${BUNDLED_PLUGIN_ROOT_DIR}/${pluginId}/${relativePath}${suffix}`;
 }
 
+// Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
+// files by path. They are executable roots rather than importable library modules.
+const repositoryScriptEntries = [
+  "scripts/build-discord-activity-sdk.mjs!",
+  "scripts/check-live-cache.ts!",
+  "scripts/check-package-dist-imports.mjs!",
+  "scripts/dev/ios-node-e2e.ts!",
+  "scripts/diffs-shiki-curated.ts!",
+  "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
+  "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
+  "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
+  "scripts/e2e/lib/clawhub-fixture-server.cjs!",
+  "scripts/e2e/lib/codex-media-path/client.mjs!",
+  "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs!",
+  "scripts/e2e/lib/codex-media-path/write-config.mjs!",
+  "scripts/e2e/lib/config-reload/assert-log.mjs!",
+  "scripts/e2e/lib/config-reload/mutate-metadata.mjs!",
+  "scripts/e2e/lib/docker-artifact-proof/write-identities.ts!",
+  "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs!",
+  "scripts/e2e/lib/doctor-install-switch/write-wrapper.mjs!",
+  "scripts/e2e/lib/fixture.mjs!",
+  "scripts/e2e/lib/fixtures/config.mjs!",
+  "scripts/e2e/lib/fixtures/plugins.mjs!",
+  "scripts/e2e/lib/fixtures/workspace.mjs!",
+  "scripts/e2e/lib/npm-telegram-live/prepare-package.mjs!",
+  "scripts/e2e/lib/onboard/assert-config.mjs!",
+  "scripts/e2e/lib/onboard/write-config.mjs!",
+  "scripts/e2e/lib/openai-chat-tools/client.mjs!",
+  "scripts/e2e/lib/openai-chat-tools/write-config.mjs!",
+  "scripts/e2e/lib/package-git-fixture.mjs!",
+  "scripts/e2e/lib/parallels-package/build-info-commit.mjs!",
+  "scripts/e2e/lib/parallels-package/log-progress-extract.mjs!",
+  "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
+  "scripts/e2e/lib/plugin-update/registry-server.mjs!",
+  "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
+  "scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs!",
+  "scripts/e2e/lib/release-scenarios/write-marketplace.mjs!",
+  "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs!",
+  "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
+  "scripts/e2e/lib/run-with-pty.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
+  "scripts/embedded-run-abort-leak.ts!",
+  "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
+  "scripts/ios-release-signing.mjs!",
+  "scripts/lib/docker-plugin-selection.mjs!",
+  "scripts/lib/openclaw-test-state.mjs!",
+  "scripts/list-prod-store-packages.mjs!",
+  // Invoked by scripts/lib/live-docker-stage.sh during container validation.
+  "scripts/live-docker-normalize-config.ts!",
+  "scripts/mcp-code-mode-gateway-e2e.ts!",
+  "scripts/openclaw-release-clawhub-plan.ts!",
+  "scripts/openclaw-release-clawhub-runtime-state.ts!",
+  "scripts/plugin-prerelease-liveish-matrix.mjs!",
+  "scripts/pr-gates-lock.mjs!",
+  "scripts/pr-lib/process-group-runner.mjs!",
+  "scripts/pre-commit/filter-staged-files.mjs!",
+  "scripts/qa-coverage-report.ts!",
+  "scripts/qa-parity-report.ts!",
+  "scripts/repro/tsx-name-repro.ts!",
+  "scripts/resolve-frozen-codex-live-suite.mjs!",
+  "scripts/secrets/openclaw-bws-resolver.mjs!",
+  "scripts/sync-labels.ts!",
+  "scripts/test-built-bundled-channel-entry-smoke.mjs!",
+  "scripts/update-clawtributors.ts!",
+  "scripts/verify-stable-main-closeout.mjs!",
+  "scripts/write-package-dist-inventory.ts!",
+  "scripts/write-plugin-sdk-entry-dts.ts!",
+] as const;
+
 const rootEntries = [
+  ...repositoryScriptEntries,
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
@@ -17,8 +87,16 @@ const rootEntries = [
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   "scripts/repro/code-mode-namespace-live.ts!",
+  // Workflow/package-script entrypoints are not imported from production modules.
+  "scripts/openclaw-cross-os-release-checks.ts!",
+  "scripts/bench-sqlite-reliability.ts!",
+  // Docker/manual E2E executables and their nested assertion/probe entrypoints.
+  "scripts/e2e/*.{js,mjs,ts}!",
+  "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/audit/audit-event-writer.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  // Split runtime loaded through a path assembled in subagent-registry.ts.
+  "src/agents/subagent-registry.runtime.ts!",
   // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
   "src/agents/subagent-orphan-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
@@ -38,6 +116,19 @@ const rootEntries = [
   "src/mcp/codex-supervision-tools-serve.ts!",
   // Spawned by generated system-agent MCP configs; this stdio entry is not statically imported.
   "src/mcp/openclaw-tools-serve.ts!",
+  // Spawned by ACPX and QA Lab from a generated plugin-tool MCP command line.
+  "src/mcp/plugin-tools-serve.ts!",
+  // Dedicated tsdown entry exercised against built plugin singletons.
+  "src/plugins/build-smoke-entry.ts!",
+  // Package-script owners invoke these generated-artifact modules directly.
+  "src/config/doc-baseline.ts!",
+  "src/plugins/runtime-sidecar-paths-baseline.ts!",
+  // Imported by scripts/tsdown-build.mjs as the AI package build configuration.
+  "tsdown.ai.config.ts!",
+  // Maintainer-owned compatibility data referenced by release/docs workflows.
+  "src/commands/doctor/shared/deprecation-compat.ts!",
+  // Compiled as the package-boundary failure canary by the extension checker.
+  "src/plugins/contracts/rootdir-boundary-canary.ts!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
@@ -49,7 +140,6 @@ const rootEntries = [
 ] as const;
 
 const bundledPluginEntries = [
-  "*.ts!",
   "index.ts!",
   "setup-entry.ts!",
   // Core resolves these public plugin artifacts by basename rather than by a
@@ -57,6 +147,15 @@ const bundledPluginEntries = [
   "*-api.ts!",
   "cli-metadata.ts!",
   "channel-entry.ts!",
+  // Manifest and SDK loaders resolve these public artifacts by basename.
+  "configured-state.ts!",
+  "auth-presence.ts!",
+  "thread-bindings-runtime.ts!",
+  "document-extractor.ts!",
+  "web-content-extractor.ts!",
+  "timeouts.ts!",
+  "action-runtime.runtime.ts!",
+  "allow-from.ts!",
   // Provider catalogs and web tools resolve these manifest/convention-owned
   // modules from the plugin root at runtime.
   "provider-discovery.ts!",
@@ -66,8 +165,6 @@ const bundledPluginEntries = [
   "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface,mcp-serve}.ts!",
   "src/subagent-hooks-api.ts!",
 ] as const;
-
-const strictBundledPluginEntries = bundledPluginEntries.filter((entry) => entry !== "*.ts!");
 
 const bundledPluginIgnoredRuntimeDependencies = [
   "@agentclientprotocol/claude-agent-acp",
@@ -113,10 +210,27 @@ const rootBundledPluginRuntimeDependencies = [
   "tokenjuice",
 ] as const;
 
-function strictBundledPluginWorkspace(extraEntries: readonly string[] = []) {
+// Root installation and build workflows deliberately mirror these dependencies from their
+// owning workspace, or invoke their package binaries/loaders without a static module import.
+const rootToolingAndWorkspaceDependencies = [
+  "@a2ui/lit",
+  "@copilotkit/aimock",
+  "@lit-labs/signals",
+  "@lit/context",
+  // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
+  "@vitest/browser-playwright",
+  "dompurify",
+  "jscpd",
+  "lit",
+  "oxlint",
+  "oxlint-tsgolint",
+  "signal-utils",
+] as const;
+
+function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
-    entry: [...strictBundledPluginEntries, ...extraEntries],
-    project: ["*.ts!", "src/**/*.{js,mjs,ts}!"],
+    entry: [...bundledPluginEntries, ...extraEntries],
+    project: ["**/*.{js,mjs,ts}!"],
     ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
   } as const;
 }
@@ -125,6 +239,7 @@ function strictBundledPluginWorkspace(extraEntries: readonly string[] = []) {
 // available to tests without becoming part of the production dead-code scan.
 const ignoredTestSupportFiles = [
   "**/__tests__/**",
+  "**/test/**",
   "src/test-utils/**",
   "**/test-helpers/**",
   "**/test-fixtures/**",
@@ -136,6 +251,9 @@ const ignoredTestSupportFiles = [
   "**/*test-harness.ts",
   "**/*test-utils.ts",
   "**/*test-support.ts",
+  "**/*.test-loader.ts",
+  "**/*.live-helpers.ts",
+  "**/*.live-probe-helpers.ts",
   "**/*test-shared.ts",
   "**/*mocks.ts",
   "**/*.e2e-mocks.ts",
@@ -169,13 +287,20 @@ const ignoredTestSupportFiles = [
   "**/*.test-mocks.ts",
   "**/*.test-utils.ts",
   "test/helpers/live-image-probe.ts",
+  // Legacy test-only owners whose filenames predate the test-support convention.
+  "src/plugins/contracts/host-hook-fixture.ts",
+  "src/plugins/contracts/tts-contract-suites.ts",
 ] as const;
 
 const config = {
   ignoreFiles: [
+    // Production mode excludes dev/maintainer executables. The full-tree
+    // companion config removes this exclusion and audits them as script roots.
     "scripts/**",
     "dist/**",
     "packages/*/dist/**",
+    // Declaration companions describe executable JavaScript modules; they are not standalone roots.
+    "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
     "src/secrets/credential-matrix.ts",
     "src/shared/text/assistant-visible-text.ts",
@@ -184,10 +309,14 @@ const config = {
   ],
   // Knip's `ignoreFiles` only suppresses unused-file findings. Test helpers
   // belong in `ignore` so they do not inflate unused-export/type findings.
-  ignore: ["dist/**", "packages/*/dist/**", ...ignoredTestSupportFiles],
+  ignore: ["dist/**", "packages/*/dist/**", "**/.boundary-stubs/**", ...ignoredTestSupportFiles],
+  // Script exports are checked with every script as an entry and entry-export
+  // reporting enabled. Suppress them only in this application-production scan.
+  ignoreIssues: {
+    "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+  },
   workspaces: {
     ".": {
-      entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
         // Docker packaging stages @openclaw/ai without nested dependencies after
@@ -202,14 +331,19 @@ const config = {
         "partial-json",
         "sqlite-vec",
         "tree-sitter-bash",
+        ...rootToolingAndWorkspaceDependencies,
         ...rootBundledPluginRuntimeDependencies,
       ],
+      // Platform tools and shell builtins used by package scripts and process-boundary tests.
+      ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
       project: [
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "*.config.{js,mjs,cjs,ts,mts,cts}!",
         "*.mjs!",
       ],
+      entry: [...rootEntries, "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!"],
     },
     ui: {
       entry: [
@@ -372,13 +506,17 @@ const config = {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
     },
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic-vertex`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: strictBundledPluginWorkspace([
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/anthropic-vertex`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: bundledPluginWorkspace([
+      // Copied as executable runtime internals by the package artifact manifest.
+      "src/runtime-internals/mcp-command-line.mjs!",
+      "src/runtime-internals/mcp-proxy.mjs!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: bundledPluginWorkspace([
       // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
       "browser-control-auth.ts!",
       "browser-config.ts!",
@@ -386,53 +524,77 @@ const config = {
       "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
       "browser-profiles.ts!",
+      // Chrome manifest/package scripts load these without TypeScript imports.
+      "chrome-extension/background.js!",
+      "chrome-extension/popup.js!",
+      "scripts/copy-chrome-extension.mjs!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot-proxy`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/codex`]: strictBundledPluginWorkspace([
-      // Codex provider runtime and harness surfaces are reached through plugin
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
+      // Package build/copy scripts are invoked from package.json.
+      "scripts/bundle-a2ui.mjs!",
+      "scripts/copy-a2ui.mjs!",
+      "scripts/pnpm-runner.mjs!",
+      // Rolldown consumes this config and its browser bootstrap entry.
+      "src/host/a2ui-app/rolldown.config.mjs!",
+      "src/host/a2ui-app/bootstrap.js!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot-proxy`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/codex`]: bundledPluginWorkspace([
+      // Provider runtime and harness surfaces are reached through plugin
       // registration contracts rather than static imports from the entrypoint.
       "harness.ts!",
       "media-understanding-provider.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: strictBundledPluginWorkspace([
-      // Channel package-state probes resolve this module from package metadata.
-      "configured-state.ts!",
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/diffs`]: bundledPluginWorkspace([
+      // scripts/build-diffs-viewer-runtime.mjs bundles this browser entry.
+      "src/viewer-client.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/elevenlabs`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/featherless`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/fal`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/fireworks`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/google`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/huggingface`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/github-copilot`]: strictBundledPluginWorkspace([
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/elevenlabs`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/featherless`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/fal`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/fireworks`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/google`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/huggingface`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/github-copilot`]: bundledPluginWorkspace([
       // Auth, replay, token, and stream helpers are runtime-owned provider
-      // surfaces that are consumed through plugin hooks and dynamic imports.
+      // surfaces consumed through plugin hooks and dynamic imports.
       "connection-bound-ids.ts!",
       "login.ts!",
       "stream.ts!",
       "token.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft-foundry`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-claude`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-hermes`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/minimax`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/mistral`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/moonshot`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/nvidia`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: strictBundledPluginWorkspace([
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/matrix`]: bundledPluginWorkspace([
+      // Native import wrapper shipped alongside the Matrix runtime bundle.
+      "src/plugin-entry.runtime.js!",
+      // The monitor lazy-loads outbound behavior on inbound-only processes.
+      "src/matrix/send.ts!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft-foundry`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-claude`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-hermes`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/minimax`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/mistral`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/moonshot`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/mxc`]: bundledPluginWorkspace([
+      // Copied to dist and spawned by the MXC backend.
+      "src/mxc-spawn-launcher.mjs!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/nvidia`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: bundledPluginWorkspace([
       // OpenAI exposes provider, OAuth, overlay, media, usage, and realtime
       // contracts to runtime/plugin integration paths that Knip cannot trace.
       "embedding-batch.ts!",
@@ -451,39 +613,47 @@ const config = {
       "tts.ts!",
       "usage.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: strictBundledPluginWorkspace([
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: bundledPluginWorkspace([
       // Session catalog and provider helpers are plugin-owned runtime surfaces.
       "media-understanding-provider.ts!",
       "provider-catalog.ts!",
       "session-catalog-plugin.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: strictBundledPluginWorkspace([
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: bundledPluginWorkspace([
       // OAuth, model, and media provider helpers are runtime/plugin surfaces.
       "image-generation-provider.ts!",
       "media-understanding-provider.ts!",
       "models.ts!",
       "oauth.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/pixverse`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: strictBundledPluginWorkspace([
-      // The plugin-SDK QA Lab facade resolves this CLI surface by basename.
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/pixverse`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: bundledPluginWorkspace([
+      // Core loads the CLI facade by basename; QA Lab also owns a nested Vite app.
       "cli.ts!",
-      // The debugger UI is a separate browser entrypoint outside src/.
+      "web/index.html!",
       "web/src/app.ts!",
+      "web/src/main.ts!",
+      "web/vite.config.ts!",
+      // Imported directly from the GitHub Actions smoke-plan script.
+      "src/ci-smoke-plan.ts!",
     ]),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/voyage`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/xiaomi`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/vault`]: bundledPluginWorkspace([
+      // Shipped resolver child process declared as a static plugin artifact.
+      "vault-secret-ref-resolver.js!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/voyage`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/xiaomi`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
-      project: ["*.ts!", "src/**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts}!"],
       ignoreDependencies: [
         // The provider resolves node-llama-cpp from its own package at runtime
         // so local embeddings use the plugin-owned native dependency.
@@ -491,21 +661,21 @@ const config = {
         ...bundledPluginIgnoredRuntimeDependencies,
       ],
     },
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {
       // Reef vendors its wire protocol under protocol/, which owns the noble
       // crypto dependencies. The protocol barrel is the vendored library's
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
       entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
-      project: ["*.ts!", "src/**/*.{js,mjs,ts}!", "protocol/**/*.ts!"],
+      project: ["**/*.{js,mjs,ts}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.
       entry: bundledPluginEntries,
-      project: ["*.ts!", "src/**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
   },
