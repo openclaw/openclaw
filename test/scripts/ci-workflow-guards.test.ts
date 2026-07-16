@@ -630,6 +630,7 @@ function runGeneratedPublisherScenario(
       '    printf "%s\\n" "$FAKE_AUTO_MERGE_ENABLED"',
       "    ;;",
       "  pr:merge)",
+      '    [[ "$GH_TOKEN" == "test-token" ]]',
       '    printf "%s\\n" "$*" >> "$FAKE_MERGE_CALLS"',
       '    if [[ "$*" == *"--disable-auto"* && "$FAKE_MOVE_PR_HEAD_AFTER_DISABLE" == "true" ]]; then',
       '      printf "%s\\n" "1111111111111111111111111111111111111111" > "$FAKE_PR_HEAD_OVERRIDE"',
@@ -1232,6 +1233,7 @@ describe("ci workflow guards", () => {
     expect(actionPublishStep.run).toContain("enable_auto_merge");
     expect(actionPublishStep.run).toContain("disable_existing_auto_merge");
     expect(actionPublishStep.run).toContain("--disable-auto");
+    expect(actionPublishStep.run).not.toContain('GH_TOKEN="${CONTENTS_TOKEN}"');
     expect(actionPublishStep.run).toContain(
       '--auto --squash --match-head-commit "${published_commit}"',
     );
@@ -1354,6 +1356,22 @@ describe("ci workflow guards", () => {
       expect(mergeCalls[0]).toContain("--disable-auto");
       expect(mergeCalls.at(-1)).toContain("--auto --squash --match-head-commit");
       expect(result.summary).toContain("Disabled inherited auto-merge");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps inherited auto-merge disabled when the publisher option is false",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: false,
+        existingAutoMerge: true,
+        existingPr: true,
+      });
+      const mergeCalls = result.mergeCalls.trim().split("\n");
+
+      expect(mergeCalls).toHaveLength(1);
+      expect(mergeCalls[0]).toContain("--disable-auto");
+      expect(result.summary).not.toContain("Enabled squash auto-merge");
     },
   );
 

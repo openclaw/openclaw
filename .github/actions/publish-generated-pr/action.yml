@@ -360,10 +360,9 @@ runs:
           if [[ "${AUTO_MERGE}" != "true" || -z "${published_pr_url:-}" ]]; then
             return 0
           fi
-          GH_TOKEN="${CONTENTS_TOKEN}" \
-            timeout --signal=TERM --kill-after=10s 60s \
-              gh pr merge "${published_pr_url}" --repo "${GITHUB_REPOSITORY}" \
-                --auto --squash --match-head-commit "${published_commit}"
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh pr merge "${published_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+              --auto --squash --match-head-commit "${published_commit}"
           echo "Enabled squash auto-merge for exact generated head: ${published_pr_url}" \
             >> "${GITHUB_STEP_SUMMARY}"
         }
@@ -371,9 +370,6 @@ runs:
           local auto_merge_enabled current_pr_head current_pr_record current_pr_url
           local existing_pr_head existing_pr_record existing_pr_url fetched_head
           local expected_head="$1"
-          if [[ "${AUTO_MERGE}" != "true" ]]; then
-            return 0
-          fi
           existing_pr_record="$(find_open_pr)"
           existing_pr_url="${existing_pr_record%%$'\t'*}"
           if [[ -z "${existing_pr_url}" ]]; then
@@ -384,11 +380,9 @@ runs:
             return 0
           fi
           auto_merge_enabled="$(
-            # Read with the PR token; the contents-only token may not grant PR reads.
-            GH_TOKEN="${GH_TOKEN}" \
-              timeout --signal=TERM --kill-after=10s 60s \
-                gh pr view "${existing_pr_url}" --repo "${GITHUB_REPOSITORY}" \
-                  --json autoMergeRequest --jq '.autoMergeRequest != null'
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh pr view "${existing_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+                --json autoMergeRequest --jq '.autoMergeRequest != null'
           )"
           if [[ "${auto_merge_enabled}" != "true" ]]; then
             return 0
@@ -399,9 +393,8 @@ runs:
           if [[ "${fetched_head}" != "${expected_head}" ]]; then
             return 0
           fi
-          GH_TOKEN="${CONTENTS_TOKEN}" \
-            timeout --signal=TERM --kill-after=10s 60s \
-              gh pr merge "${existing_pr_url}" --repo "${GITHUB_REPOSITORY}" --disable-auto
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh pr merge "${existing_pr_url}" --repo "${GITHUB_REPOSITORY}" --disable-auto
           echo "Disabled inherited auto-merge before replacing generated head: ${existing_pr_url}" \
             >> "${GITHUB_STEP_SUMMARY}"
 
@@ -412,10 +405,9 @@ runs:
           current_pr_head="${current_pr_record#*$'\t'}"
           if [[ "${current_pr_url}" = "${existing_pr_url}" &&
             "${current_pr_head}" != "${expected_head}" ]]; then
-            GH_TOKEN="${CONTENTS_TOKEN}" \
-              timeout --signal=TERM --kill-after=10s 60s \
-                gh pr merge "${current_pr_url}" --repo "${GITHUB_REPOSITORY}" \
-                  --auto --squash --match-head-commit "${current_pr_head}"
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh pr merge "${current_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+                --auto --squash --match-head-commit "${current_pr_head}"
             echo "Restored auto-merge for concurrently published generated head: ${current_pr_url}" \
               >> "${GITHUB_STEP_SUMMARY}"
             echo "::error::Generated branch moved while inherited auto-merge was being disabled."
