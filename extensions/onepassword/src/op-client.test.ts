@@ -127,7 +127,7 @@ describe("OpClient", () => {
       client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
     ).rejects.toMatchObject({
       code: "TOKEN_MISSING",
-      message: "1Password service account token file is too large",
+      message: `1Password service account token file at ${tokenFile} exceeds 16384 bytes.`,
     });
     expect(runner).not.toHaveBeenCalled();
   });
