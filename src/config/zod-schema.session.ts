@@ -167,6 +167,7 @@ export const MessagesSchema = z
     statusReactions: z
       .object({
         enabled: z.boolean().optional(),
+        activation: z.enum(["ack", "work"]).optional(),
         emojis: z
           .object({
             queued: z.string().optional(),
