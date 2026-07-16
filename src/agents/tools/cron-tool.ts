@@ -16,6 +16,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
   optionalFiniteNumberSchema,
@@ -25,7 +26,13 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
-import { normalizeToolName } from "../tool-policy.js";
+import { isToolAllowedByPolicyName } from "../tool-policy-match.js";
+import {
+  buildPluginToolGroups,
+  expandPolicyWithPluginGroups,
+  expandToolGroups,
+  normalizeToolName,
+} from "../tool-policy.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import {
   type AnyAgentTool,
@@ -39,22 +46,10 @@ import {
   isEmptyRecoveredCronPatch,
   recoverCronObjectFromFlatParams,
 } from "./cron-tool-canonicalize.js";
-import { capCronJobToolsAllowOnCreate } from "./cron-tool-creator-cap.js";
-import { assertNoCronShellExecution, updateCronJobFromAgentTool } from "./cron-tool-write.js";
-import type {
-  ChatMessage,
-  CronCreatorToolAllowlistEntry,
-  CronToolCallerScope,
-  CronToolDeps,
-  CronToolOptions,
-  GatewayToolCaller,
-} from "./cron-tool.types.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
-
-export type { CronCreatorToolAllowlistEntry } from "./cron-tool.types.js";
 
 // Spell out job/patch properties for model-facing schema; runtime validation
 // still happens in normalizeCronJob* to avoid nested union schemas.
@@ -132,7 +127,7 @@ function cronPayloadObjectSchema(params: {
       fallbacks: params.fallbacks,
       toolsAllow: params.toolsAllow,
     },
-    { additionalProperties: true },
+    { additionalProperties: false },
   );
 }
 
@@ -160,7 +155,7 @@ function createCronScheduleSchema(): TSchema {
         ),
         staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
   );
 }
@@ -203,7 +198,7 @@ function cronDeliverySchema(params: { nullableClears: boolean }) {
       }),
       mode: failureDestinationModeSchema({ nullableClears: params.nullableClears }),
     },
-    { additionalProperties: true },
+    { additionalProperties: false },
   );
 
   return Type.Optional(
@@ -232,7 +227,7 @@ function cronDeliverySchema(params: { nullableClears: boolean }) {
             )
           : Type.Optional(failureDestinationObject),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
   );
 }
@@ -263,7 +258,7 @@ function createCronFailureAlertSchema(): TSchema {
         mode: optionalStringEnum(["announce", "webhook"] as const),
         accountId: Type.Optional(Type.String()),
       },
-      additionalProperties: true,
+      additionalProperties: false,
       description: "Failure alert; false disables.",
     }),
   );
@@ -311,7 +306,7 @@ function createCronJobObjectSchema(): TSchema {
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
         failureAlert: createCronFailureAlertSchema(),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
   );
 }
@@ -345,7 +340,7 @@ function createCronPatchObjectSchema(): TSchema {
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
         failureAlert: createCronFailureAlertSchema(),
       },
-      { additionalProperties: true },
+      { additionalProperties: false },
     ),
   );
 }
@@ -383,9 +378,38 @@ function createCronToolSchema(): TSchema {
         }),
       ),
     },
-    { additionalProperties: true },
+    { additionalProperties: false },
   );
 }
+
+type CronToolOptions = {
+  agentSessionKey?: string;
+  currentDeliveryContext?: DeliveryContext;
+  /**
+   * Effective tool surface visible to the caller that created or edited a cron job.
+   * Isolated cron runs use a fresh session, so agent-origin jobs need this cap
+   * persisted on agentTurn payloads before the original session policy is lost.
+   */
+  creatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
+  selfRemoveOnlyJobId?: string;
+};
+
+type CronToolCallerScope = {
+  kind: "agentTool";
+  agentId: string;
+};
+
+export type CronCreatorToolAllowlistEntry =
+  | string
+  | {
+      name: string;
+      pluginId?: string;
+    };
+
+type NormalizedCronCreatorTool = {
+  name: string;
+  pluginId?: string;
+};
 
 export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
   target: CronCreatorToolAllowlistEntry[],
@@ -407,12 +431,194 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
   }
 }
 
+type GatewayToolCaller = typeof callGatewayTool;
+
+type CronToolDeps = {
+  callGatewayTool?: GatewayToolCaller;
+};
+
+type ChatMessage = {
+  role?: unknown;
+  content?: unknown;
+};
+
 function stripExistingContext(text: string) {
   const index = text.indexOf(REMINDER_CONTEXT_MARKER);
   if (index === -1) {
     return text;
   }
   return text.slice(0, index).trim();
+}
+
+function assertNoCronShellExecution(value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  const payload = isRecord(value.payload) ? value.payload : undefined;
+  if (normalizeLowercaseStringOrEmpty(payload?.kind) === "command") {
+    throw new Error(
+      "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+    );
+  }
+  const schedule = isRecord(value.schedule) ? value.schedule : undefined;
+  if (schedule?.kind === "on-exit") {
+    throw new Error(
+      "cron on-exit schedules cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+    );
+  }
+}
+
+function normalizeCronToolsAllow(values: readonly string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of expandToolGroups([...values])) {
+    const toolName = normalizeToolName(entry);
+    if (!toolName || seen.has(toolName)) {
+      continue;
+    }
+    seen.add(toolName);
+    normalized.push(toolName);
+  }
+  return normalized;
+}
+
+function normalizeCronCreatorToolsAllow(
+  values: readonly CronCreatorToolAllowlistEntry[],
+): NormalizedCronCreatorTool[] {
+  const normalized: NormalizedCronCreatorTool[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    const name = normalizeToolName(typeof entry === "string" ? entry : entry.name);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    const pluginId =
+      typeof entry === "string" || typeof entry.pluginId !== "string"
+        ? undefined
+        : normalizeToolName(entry.pluginId);
+    normalized.push(pluginId ? { name, pluginId } : { name });
+  }
+  return normalized;
+}
+
+function cronCreatorToolNames(tools: readonly NormalizedCronCreatorTool[]): string[] {
+  return tools.map((tool) => tool.name);
+}
+
+function capCronAgentTurnToolsAllow(params: {
+  payload: Record<string, unknown>;
+  creatorToolAllowlist: CronCreatorToolAllowlistEntry[];
+  defaultToolsAllow?: unknown;
+}): void {
+  if (params.payload.kind !== "agentTurn") {
+    return;
+  }
+  const creatorToolsAllow = normalizeCronCreatorToolsAllow(params.creatorToolAllowlist);
+  const creatorToolNames = cronCreatorToolNames(creatorToolsAllow);
+  const requestedRaw = Object.hasOwn(params.payload, "toolsAllow")
+    ? params.payload.toolsAllow
+    : params.defaultToolsAllow;
+  if (!Array.isArray(requestedRaw)) {
+    params.payload.toolsAllow = creatorToolNames;
+    params.payload.toolsAllowIsDefault = true;
+    return;
+  }
+  const requestedToolsAllow = normalizeCronToolsAllow(
+    requestedRaw.filter((entry): entry is string => typeof entry === "string"),
+  );
+  if (requestedToolsAllow.length === 0) {
+    params.payload.toolsAllow = [];
+    delete params.payload.toolsAllowIsDefault;
+    return;
+  }
+  if (requestedToolsAllow.includes("*")) {
+    params.payload.toolsAllow = creatorToolNames;
+    params.payload.toolsAllowIsDefault = true;
+    return;
+  }
+  const pluginGroups = buildPluginToolGroups({
+    tools: creatorToolsAllow,
+    toolMeta: (tool) => (tool.pluginId ? { pluginId: tool.pluginId } : undefined),
+  });
+  const requestedPolicy = expandPolicyWithPluginGroups(
+    { allow: requestedToolsAllow },
+    pluginGroups,
+  );
+  params.payload.toolsAllow = creatorToolNames.filter((toolName) =>
+    isToolAllowedByPolicyName(toolName, requestedPolicy),
+  );
+  delete params.payload.toolsAllowIsDefault;
+}
+
+function capCronAgentTurnJobToolsAllow(
+  value: unknown,
+  creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined,
+): void {
+  if (!creatorToolAllowlist || !isRecord(value) || !isRecord(value.payload)) {
+    return;
+  }
+  capCronAgentTurnToolsAllow({ payload: value.payload, creatorToolAllowlist });
+}
+
+function readCronPayloadKind(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return typeof value.kind === "string" ? value.kind : undefined;
+}
+
+async function capCronAgentTurnUpdatePatchToolsAllow(params: {
+  id: string;
+  patch: Record<string, unknown>;
+  creatorToolAllowlist: CronCreatorToolAllowlistEntry[] | undefined;
+  gatewayOpts: GatewayCallOptions;
+  callGateway: GatewayToolCaller;
+}): Promise<void> {
+  if (!params.creatorToolAllowlist) {
+    return;
+  }
+  const payload = isRecord(params.patch.payload) ? params.patch.payload : undefined;
+  const patchPayloadKind = readCronPayloadKind(payload);
+  const patchRequestsAgentTurn = patchPayloadKind === "agentTurn";
+  if (patchPayloadKind === "agentTurn" && payload && Object.hasOwn(payload, "toolsAllow")) {
+    capCronAgentTurnToolsAllow({
+      payload,
+      creatorToolAllowlist: params.creatorToolAllowlist,
+    });
+    return;
+  }
+  if (
+    patchPayloadKind === "systemEvent" ||
+    patchPayloadKind === "command" ||
+    (patchPayloadKind && patchPayloadKind !== "agentTurn")
+  ) {
+    return;
+  }
+
+  const existing = await params.callGateway("cron.get", params.gatewayOpts, {
+    id: params.id,
+  });
+  const existingPayload = isRecord(existing) ? existing.payload : undefined;
+  const existingPayloadKind = readCronPayloadKind(existingPayload);
+  if (!patchRequestsAgentTurn && existingPayloadKind !== "agentTurn") {
+    return;
+  }
+  const nextPayload: Record<string, unknown> = payload ?? {};
+  nextPayload.kind = "agentTurn";
+  params.patch.payload = nextPayload;
+  capCronAgentTurnToolsAllow({
+    payload: nextPayload,
+    creatorToolAllowlist: params.creatorToolAllowlist,
+    // Flagged defaults are re-derived so normal updates do not turn them into
+    // explicit restrictions or lose the marker needed after restart.
+    defaultToolsAllow:
+      existingPayloadKind === "agentTurn" &&
+      isRecord(existingPayload) &&
+      existingPayload.toolsAllowIsDefault !== true
+        ? existingPayload.toolsAllow
+        : undefined,
+  });
 }
 
 function truncateText(input: string, maxLen: number) {
@@ -852,7 +1058,7 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
             ) {
               delete job.enabled;
             }
-            capCronJobToolsAllowOnCreate(job, opts?.creatorToolAllowlist);
+            capCronAgentTurnJobToolsAllow(job, opts?.creatorToolAllowlist);
             if (job && typeof job === "object") {
               const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
               const resolvedSessionKey = opts?.agentSessionKey
@@ -988,13 +1194,17 @@ Restricted isolated runs may only self status/list, current get/runs, and remove
             if (callerScope) {
               assertCronToolSessionRefsMatchScope(patch, callerScope);
             }
+            await capCronAgentTurnUpdatePatchToolsAllow({
+              id,
+              patch,
+              creatorToolAllowlist: opts?.creatorToolAllowlist,
+              gatewayOpts,
+              callGateway,
+            });
             return jsonResult(
-              await updateCronJobFromAgentTool({
+              await callGateway("cron.update", gatewayOpts, {
                 id,
                 patch,
-                creatorToolAllowlist: opts?.creatorToolAllowlist,
-                gatewayOpts,
-                callGateway,
               }),
             );
           }
