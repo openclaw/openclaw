@@ -436,7 +436,11 @@ class GatewaySession(
         Triple(capturedLease, capturedTarget, current)
       }
     val refreshMethod =
-      when (target.options.role.trim().lowercase(Locale.ROOT)) {
+      when (
+        target.options.role
+          .trim()
+          .lowercase(Locale.ROOT),
+      ) {
         "node" -> GatewayMethod.NodePluginSurfaceRefresh
         "operator" -> GatewayMethod.PluginSurfaceRefresh
         else -> return null
