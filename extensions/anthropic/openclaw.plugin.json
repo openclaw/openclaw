@@ -36,7 +36,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "contextWindow": 1000000,
+            "contextWindow": 200000,
             "maxTokens": 128000
           },
           {
@@ -47,7 +47,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "contextWindow": 1000000,
+            "contextWindow": 200000,
             "maxTokens": 128000
           },
           {
@@ -58,7 +58,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
-            "contextWindow": 1000000,
+            "contextWindow": 200000,
             "maxTokens": 128000
           },
           {
@@ -69,7 +69,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
-            "contextWindow": 1000000,
+            "contextWindow": 200000,
             "maxTokens": 128000
           }
         ]

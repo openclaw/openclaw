@@ -319,7 +319,7 @@ function buildAnthropicForwardCompatModel(
       : isAnthropicSonnet5Model(trimmedModelId) && provider === PROVIDER_ID
         ? resolveAnthropicSonnet5Cost()
         : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: resolveAnthropicFixedContextWindow(trimmedModelId) ?? 200_000,
+    contextWindow: resolveAnthropicFixedContextWindow(provider, trimmedModelId) ?? 200_000,
     maxTokens: isAnthropic128kOutputModel(trimmedModelId)
       ? ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS
       : 64_000,
@@ -399,10 +399,12 @@ function isAnthropicSonnet5Model(modelId: string): boolean {
   return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
 }
 
-function resolveAnthropicFixedContextWindow(modelId: string): number | undefined {
+function resolveAnthropicFixedContextWindow(provider: string, modelId: string): number | undefined {
   return isAnthropicMandatoryClaude5Model(modelId) ||
     isAnthropicSonnet5Model(modelId) ||
-    isAnthropicGa1MModel(modelId)
+    (isAnthropicGa1MModel(modelId) &&
+      (normalizeLowercaseStringOrEmpty(provider) !== CLAUDE_CLI_BACKEND_ID ||
+        normalizeLowercaseStringOrEmpty(modelId).endsWith("[1m]")))
     ? ANTHROPIC_1M_CONTEXT_TOKENS
     : undefined;
 }
@@ -472,7 +474,10 @@ function applyAnthropicFixedContextWindow(params: {
   contractModelId: string;
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
-  const fixedContextWindow = resolveAnthropicFixedContextWindow(params.contractModelId);
+  const fixedContextWindow = resolveAnthropicFixedContextWindow(
+    params.provider,
+    params.contractModelId,
+  );
   if (fixedContextWindow === undefined) {
     return undefined;
   }

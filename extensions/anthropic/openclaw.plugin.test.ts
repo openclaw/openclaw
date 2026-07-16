@@ -57,7 +57,7 @@ describe("Anthropic plugin manifest", () => {
     });
   });
 
-  it("declares the exact GA 1M contract for opus-4-7 / sonnet-4-6 / opus-4-6", () => {
+  it("declares direct API limits without overstating bare Claude CLI context", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {
       expect(models.find((model) => model.id === id)).toMatchObject({
@@ -68,10 +68,14 @@ describe("Anthropic plugin manifest", () => {
     const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
     for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {
       expect(cliModels.find((model) => model.id === id)).toMatchObject({
-        contextWindow: 1_000_000,
+        contextWindow: 200_000,
         maxTokens: 128_000,
       });
     }
+    expect(cliModels.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
+      contextWindow: 200_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("resolves both official Claude Haiku 4.5 API identifiers from the static catalog", () => {
