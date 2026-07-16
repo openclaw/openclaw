@@ -71,13 +71,20 @@ async function postTokenForm(
     auditContext: "openai-chatgpt-oauth-token",
   });
   try {
+    // fetchWithSsrFGuard resolves after headers; keep the request deadline on the
+    // token body so a stalled OAuth response cannot hang login/refresh.
     const responseBody = await readResponseWithLimit(
       response,
       OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES,
       {
+        chunkTimeoutMs: timeoutMs,
         onOverflow: ({ size, maxBytes }) =>
           new Error(
             `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+          ),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(
+            `OpenAI Codex OAuth token response stalled: no data received for ${chunkTimeoutMs}ms`,
           ),
       },
     );

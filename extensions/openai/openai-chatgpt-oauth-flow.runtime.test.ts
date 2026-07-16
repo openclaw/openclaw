@@ -121,6 +121,41 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it("times out when a token exchange response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => undefined);
+      ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"access_token":'));
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        release,
+      });
+
+      const resultPromise = exchangeOpenAIAuthorizationCode(
+        "code",
+        "verifier",
+        resolveOpenAIRedirectUri("localhost"),
+        { timeoutMs: 50 },
+      );
+      const settled = expect(resultPromise).resolves.toMatchObject({
+        type: "failed",
+        message:
+          "OpenAI Codex token exchange error: OpenAI Codex OAuth token response stalled: no data received for 50ms",
+      });
+      await vi.advanceTimersByTimeAsync(60);
+      await settled;
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels token exchange requests with the caller signal", async () => {
     const controller = new AbortController();
     controller.abort();
