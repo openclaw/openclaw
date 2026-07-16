@@ -645,7 +645,8 @@ struct GatewayNodeSessionTests {
             onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
 
         async let first = gateway.refreshCanvasHostUrl(replacing: nil)
-        async let second = gateway.refreshCanvasHostUrl(replacing: nil)
+        async let second = gateway.refreshCanvasHostUrl(timeoutSeconds: 8)
+        async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 8)
         try await waitUntil("single surface refresh sent") {
             session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
         }
@@ -661,8 +662,9 @@ struct GatewayNodeSessionTests {
                 ],
             ])
 
-        let values = await (first, second)
+        let values = await (first, second, third)
         #expect(values.0 == values.1)
+        #expect(values.0 == values.2)
         #expect(values.0?.hasSuffix("/new-token") == true)
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
         await gateway.disconnect()

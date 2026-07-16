@@ -286,6 +286,7 @@ public actor GatewayNodeSession {
         let id: UUID
         let channelGeneration: UInt64
         let admissionGeneration: UInt64
+        let timeoutMs: Double
         let task: Task<String?, Never>
     }
 
@@ -630,6 +631,27 @@ public actor GatewayNodeSession {
         surface: String,
         replacing observedURL: String?) async -> String?
     {
+        await self.refreshPluginSurfaceUrl(
+            surface: surface,
+            observedURL: observedURL,
+            timeoutMs: Self.pluginSurfaceRefreshTimeoutMs)
+    }
+
+    @discardableResult
+    public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
+        let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSurface.isEmpty else { return nil }
+        return await self.refreshPluginSurfaceUrl(
+            surface: trimmedSurface,
+            observedURL: self.pluginSurfaceUrls[trimmedSurface],
+            timeoutMs: Double(timeoutSeconds) * 1000)
+    }
+
+    private func refreshPluginSurfaceUrl(
+        surface: String,
+        observedURL: String?,
+        timeoutMs: Double) async -> String?
+    {
         guard let channel else { return nil }
         let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSurface.isEmpty else { return nil }
@@ -640,7 +662,8 @@ public actor GatewayNodeSession {
         let admissionGeneration = self.admissionGeneration
         if let refresh = self.pluginSurfaceRefreshes[trimmedSurface],
            refresh.channelGeneration == channelGeneration,
-           refresh.admissionGeneration == admissionGeneration
+           refresh.admissionGeneration == admissionGeneration,
+           refresh.timeoutMs == timeoutMs
         {
             return await refresh.task.value
         }
@@ -653,12 +676,14 @@ public actor GatewayNodeSession {
                 channelGeneration: channelGeneration,
                 admissionGeneration: admissionGeneration,
                 surface: trimmedSurface,
-                observedURL: observedURL)
+                observedURL: observedURL,
+                timeoutMs: timeoutMs)
         }
         self.pluginSurfaceRefreshes[trimmedSurface] = PluginSurfaceRefresh(
             id: id,
             channelGeneration: channelGeneration,
             admissionGeneration: admissionGeneration,
+            timeoutMs: timeoutMs,
             task: task)
         let refreshed = await task.value
         if self.pluginSurfaceRefreshes[trimmedSurface]?.id == id {
@@ -672,6 +697,11 @@ public actor GatewayNodeSession {
         replacing observedURL: String?) async -> String?
     {
         await self.refreshPluginSurfaceUrl(surface: "canvas", replacing: observedURL)
+    }
+
+    @discardableResult
+    public func refreshCanvasHostUrl(timeoutSeconds: Int = 8) async -> String? {
+        await self.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: timeoutSeconds)
     }
 
     public func currentRemoteAddress() -> String? {
@@ -1019,14 +1049,15 @@ extension GatewayNodeSession {
         channelGeneration: UInt64,
         admissionGeneration: UInt64,
         surface: String,
-        observedURL: String?) async -> String?
+        observedURL: String?,
+        timeoutMs: Double) async -> String?
     {
         let method = "node.pluginSurface.refresh"
         do {
             let data = try await channel.request(
                 method: method,
                 params: ["surface": AnyCodable(surface)],
-                timeoutMs: Self.pluginSurfaceRefreshTimeoutMs)
+                timeoutMs: timeoutMs)
             let decoded = try decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
             let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
             guard let refreshed = urls[surface] else { return nil }
