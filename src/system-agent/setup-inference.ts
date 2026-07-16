@@ -368,7 +368,8 @@ type SetupInferenceTestPlan = {
   persistModelRef?: string;
   manualAuth?: {
     profiles: ProviderAuthResult["profiles"];
-    configBase: OpenClawConfig;
+    runtimeConfigBase: OpenClawConfig;
+    sourceConfigBase: OpenClawConfig;
     configPatch: unknown;
     pluginId?: string;
   };
@@ -791,6 +792,7 @@ async function buildTestPlan(params: {
   authChoice?: string;
   apiKey?: string;
   cfg: OpenClawConfig;
+  sourceCfg: OpenClawConfig;
   workspaceDir: string;
   pluginWorkspaceDir: string;
   agentDir: string;
@@ -963,13 +965,17 @@ async function buildTestPlan(params: {
             : "That key-based provider is not available on this Gateway.",
         };
       }
-      const enableResult = (params.deps.enablePluginInConfig ?? enablePluginInConfig)(
-        cfg,
-        choice.pluginId,
-      );
+      const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
+      const enableResult = enablePlugin(cfg, choice.pluginId);
       if (!enableResult.enabled) {
         return {
           error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).`,
+        };
+      }
+      const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
+      if (!sourceEnableResult.enabled) {
+        return {
+          error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
         };
       }
       const providers = (params.deps.resolvePluginProviders ?? resolvePluginProviders)({
@@ -1105,7 +1111,8 @@ async function buildTestPlan(params: {
         persistModelRef: modelRef,
         manualAuth: {
           profiles: preparedAuth.profiles,
-          configBase: enableResult.config,
+          runtimeConfigBase: enableResult.config,
+          sourceConfigBase: sourceEnableResult.config,
           configPatch: createMergePatch(enableResult.config, preparedAuth.config),
           ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
         },
@@ -1271,6 +1278,7 @@ async function activateSetupInferenceUnredacted(
       ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
       ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
       cfg,
+      sourceCfg,
       workspaceDir: tempDir,
       pluginWorkspaceDir: workspace,
       agentDir: testAgentDir,
@@ -1651,13 +1659,17 @@ async function activateSetupInferenceUnredacted(
             ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
           })
         : undefined;
-      const stageCandidate = (current: OpenClawConfig): OpenClawConfig => {
+      const stageCandidate = (
+        current: OpenClawConfig,
+        configKind: "runtime" | "source",
+      ): OpenClawConfig => {
         let next =
           codexPluginPatch === undefined ? current : stripPendingPluginInstallRecords(current);
         if (plan.manualAuth) {
           next = applyManualAuthConfig(
             next,
             plan.manualAuth,
+            configKind,
             deps.enablePluginInConfig ?? enablePluginInConfig,
           );
         }
@@ -1691,13 +1703,15 @@ async function activateSetupInferenceUnredacted(
       // so post-write reconciliation must compare against the stripped route
       // and verify the exact index record separately below.
       const persistedRoute = pendingCodexInstall
-        ? await projectDefaultInferenceRoute(stripPendingPluginInstallRecords(stageCandidate(cfg)))
+        ? await projectDefaultInferenceRoute(
+            stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")),
+          )
         : verifiedRoute;
       // Runtime config may materialize provider defaults that are intentionally
       // absent from authored config. Compare source writes against the candidate
       // produced from the original source shape, without ignoring concurrent rows.
       const expectedSourceCandidateRoute = await projectDefaultInferenceRoute(
-        stageCandidate(sourceCfg),
+        stageCandidate(sourceCfg, "source"),
       );
       // Resolve every fallible config-commit dependency before writing a
       // credential into the real agent store. From this point onward, any
@@ -1709,7 +1723,7 @@ async function activateSetupInferenceUnredacted(
       let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
       if (plan.manualAuth) {
         throwIfSetupInferenceCancelled(params);
-        const initialCandidate = stageCandidate(cfg);
+        const initialCandidate = stageCandidate(cfg, "runtime");
         const initialRoute = await projectDefaultInferenceRoute(initialCandidate);
         const resolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(initialCandidate);
         if (
@@ -1762,7 +1776,7 @@ async function activateSetupInferenceUnredacted(
             const latestRuntime = context.snapshot.runtimeConfig ?? context.snapshot.config;
             // Validate that the candidate is still admissible before reporting
             // broader route drift, so policy revocations retain their actionable error.
-            const stagedRuntime = stageCandidate(latestRuntime);
+            const stagedRuntime = stageCandidate(latestRuntime, "runtime");
             const latestBaseline = await projectDefaultInferenceRoute(latestRuntime);
             if (!sameDefaultInferenceRoute(latestBaseline, baselineRoute)) {
               throw new Error(
@@ -1805,7 +1819,7 @@ async function activateSetupInferenceUnredacted(
                 "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
               );
             }
-            const nextConfig = stageCandidate(current);
+            const nextConfig = stageCandidate(current, "source");
             const nextRouteProjection = await projectDefaultInferenceRoute(nextConfig);
             const nextResolvedRoute = await resolveSystemAgentConfiguredRouteFromConfig(nextConfig);
             if (
@@ -2193,6 +2207,7 @@ export async function verifySetupInferenceConfig(params: {
     const plan = await buildTestPlan({
       kind: "existing-model",
       cfg,
+      sourceCfg: cfg,
       workspaceDir: tempDir,
       pluginWorkspaceDir: tempDir,
       agentDir: path.join(tempDir, "agent"),
@@ -2500,6 +2515,7 @@ function mergePatchConflicts(base: unknown, current: unknown, patch: unknown): b
 function applyManualAuthConfig(
   config: OpenClawConfig,
   manualAuth: NonNullable<SetupInferenceTestPlan["manualAuth"]>,
+  configKind: "runtime" | "source",
   enablePlugin: typeof enablePluginInConfig = enablePluginInConfig,
 ): OpenClawConfig {
   let enabledConfig = config;
@@ -2510,7 +2526,11 @@ function applyManualAuthConfig(
     }
     enabledConfig = enableResult.config;
   }
-  if (mergePatchConflicts(manualAuth.configBase, enabledConfig, manualAuth.configPatch)) {
+  // Runtime validation includes resolved defaults; source validation must compare
+  // only authored state so normal materialization cannot impersonate a concurrent edit.
+  const configBase =
+    configKind === "runtime" ? manualAuth.runtimeConfigBase : manualAuth.sourceConfigBase;
+  if (mergePatchConflicts(configBase, enabledConfig, manualAuth.configPatch)) {
     throw new Error(
       "Provider configuration changed during the live inference test, so the verified credential was not saved. Review the current provider settings and retry.",
     );

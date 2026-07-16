@@ -1709,11 +1709,17 @@ describe("activateSetupInference", () => {
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
   });
 
-  it("runs provider OAuth interactively and persists it only after the live probe", async () => {
+  it("persists provider OAuth when runtime defaults are absent from source config", async () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "agent");
     const initialConfig = {
       agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    const runtimeConfig = {
+      agents: {
+        ...initialConfig.agents,
+        defaults: { models: { "openai/gpt-5.4": {} } },
+      },
     } satisfies OpenClawConfig;
     resolveAgentDir(initialConfig, "main");
     const runAuth = vi.fn(async () => ({
@@ -1730,6 +1736,9 @@ describe("activateSetupInference", () => {
         },
       ],
       defaultModel: "openai/gpt-5.5",
+      configPatch: {
+        agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
+      },
     }));
     const provider: ProviderPlugin = {
       id: "openai",
@@ -1741,7 +1750,7 @@ describe("activateSetupInference", () => {
       async (params: SuccessfulRunParams & { authProfileId?: string }) =>
         successfulRun("openai", "gpt-5.5", params),
     );
-    const configHarness = createConfigTransformHarness(initialConfig);
+    const configHarness = createConfigTransformHarness(initialConfig, runtimeConfig);
 
     try {
       const result = await activateSetupInference({
@@ -1759,7 +1768,7 @@ describe("activateSetupInference", () => {
             issues: [],
             config: initialConfig,
             sourceConfig: initialConfig,
-            runtimeConfig: initialConfig,
+            runtimeConfig,
           })) as never,
           resolvePluginProviders: () => [provider],
           resolveManifestProviderAuthChoice: () => ({
