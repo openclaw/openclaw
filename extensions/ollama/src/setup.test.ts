@@ -815,7 +815,7 @@ describe("ollama setup", () => {
       }
     });
 
-    it("bounds a dripping pull stream with a wall-clock deadline", async () => {
+    it("bounds a non-advancing drip with a no-progress timeout", async () => {
       vi.useFakeTimers();
       try {
         const progress = { update: vi.fn(), stop: vi.fn() };
@@ -855,8 +855,8 @@ describe("ollama setup", () => {
           config: createDefaultOllamaConfig("ollama/gemma4"),
           model: "ollama/gemma4",
           prompter,
-          streamDeadlineMs: 1_000,
-          // Keep idle well above the drip interval so only the wall-clock can win.
+          streamNoProgressTimeoutMs: 1_000,
+          // Keep idle well above the drip interval so only no-progress can win.
           streamIdleTimeoutMs: 10_000,
         }).catch((err: unknown) => err);
 
@@ -867,8 +867,78 @@ describe("ollama setup", () => {
         expect((pullError as Error).name).toBe("WizardCancelledError");
         expect((pullError as Error).message).toBe("Failed to download selected Ollama model");
         expect(progress.stop).toHaveBeenCalledWith(
-          "Failed to download gemma4: Ollama pull exceeded 1s wall-clock deadline",
+          "Failed to download gemma4: Ollama pull stalled: no progress for 1s",
         );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("allows advancing completed progress past the shortened no-progress timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        const progress = { update: vi.fn(), stop: vi.fn() };
+        const prompter = {
+          progress: vi.fn(() => progress),
+        } as unknown as WizardPrompter;
+        const encoder = new TextEncoder();
+        let completed = 0;
+        let progressTimer: ReturnType<typeof setInterval> | undefined;
+        const fetchMock = vi.fn(async (input: string | URL | Request) => {
+          const url = requestUrl(input);
+          if (url.endsWith("/api/tags")) {
+            return jsonResponse({ models: [] });
+          }
+          if (url.endsWith("/api/pull")) {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  progressTimer = setInterval(() => {
+                    completed += 100;
+                    controller.enqueue(
+                      encoder.encode(
+                        `{"status":"downloading","total":10000,"completed":${completed}}\n`,
+                      ),
+                    );
+                    if (completed >= 10000) {
+                      controller.enqueue(encoder.encode('{"status":"success"}\n'));
+                      controller.close();
+                      if (progressTimer !== undefined) {
+                        clearInterval(progressTimer);
+                        progressTimer = undefined;
+                      }
+                    }
+                  }, 200);
+                },
+                cancel() {
+                  if (progressTimer !== undefined) {
+                    clearInterval(progressTimer);
+                    progressTimer = undefined;
+                  }
+                },
+              }),
+              { status: 200 },
+            );
+          }
+          throw new Error(`Unexpected fetch: ${url}`);
+        });
+        vi.stubGlobal("fetch", fetchMock);
+
+        const pullPromise = ensureOllamaModelPulled({
+          config: createDefaultOllamaConfig("ollama/gemma4"),
+          model: "ollama/gemma4",
+          prompter,
+          // Shorter than the full advancing download (10000/100 * 200ms = 20s).
+          streamNoProgressTimeoutMs: 1_000,
+          streamIdleTimeoutMs: 10_000,
+        });
+
+        await vi.waitFor(() => expect(mockCallArg(fetchMock, 1)).toContain("/api/pull"));
+        // Past several no-progress windows while completed keeps advancing.
+        await vi.advanceTimersByTimeAsync(20_000);
+        await expect(pullPromise).resolves.toBeUndefined();
+        expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4");
+        expect(progress.stop).not.toHaveBeenCalledWith(expect.stringContaining("no progress for"));
       } finally {
         vi.useRealTimers();
       }

@@ -1,4 +1,5 @@
-// Loopback proof: dripping /api/pull NDJSON cannot outlive the wall-clock deadline.
+// Loopback proof: dripping /api/pull NDJSON cannot outlive the no-progress timeout,
+// while monotonically advancing `completed` may continue past that shortened budget.
 import { once } from "node:events";
 import * as http from "node:http";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
@@ -17,6 +18,40 @@ function createDripPullServer(dripTimers: Set<ReturnType<typeof setInterval>>): 
       const timer = setInterval(() => {
         res.write('{"status":"pulling manifest"}\n');
       }, 40);
+      dripTimers.add(timer);
+      res.on("close", () => {
+        clearInterval(timer);
+        dripTimers.delete(timer);
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  server.on("clientError", (_err, socket) => socket.destroy());
+  return server;
+}
+
+function createAdvancingPullServer(dripTimers: Set<ReturnType<typeof setInterval>>): http.Server {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/api/tags") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ models: [] }));
+      return;
+    }
+    if (req.url === "/api/pull") {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      let completed = 0;
+      const timer = setInterval(() => {
+        completed += 250;
+        res.write(`{"status":"downloading","total":2000,"completed":${completed}}\n`);
+        if (completed >= 2000) {
+          res.write('{"status":"success"}\n');
+          res.end();
+          clearInterval(timer);
+          dripTimers.delete(timer);
+        }
+      }, 80);
       dripTimers.add(timer);
       res.on("close", () => {
         clearInterval(timer);
@@ -64,7 +99,7 @@ function createLoopbackConfig(baseUrl: string) {
   };
 }
 
-describe("Ollama pull stream wall-clock loopback", () => {
+describe("Ollama pull stream no-progress loopback", () => {
   let server: http.Server | undefined;
   const dripTimers = new Set<ReturnType<typeof setInterval>>();
 
@@ -99,26 +134,24 @@ describe("Ollama pull stream wall-clock loopback", () => {
       config: createLoopbackConfig(baseUrl),
       model: "ollama/gemma4",
       prompter,
-      // Wall-clock above the idle observation window; drip keeps resetting idle.
-      streamDeadlineMs: 1_500,
+      // No-progress above the idle observation window; drip keeps resetting idle.
+      streamNoProgressTimeoutMs: 1_500,
       streamIdleTimeoutMs: 100,
     }).finally(() => {
       settled = true;
     });
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
     expect(settled).toBe(false);
 
-    // Cleanup: wall-clock still bounds the drip so afterEach does not hang.
+    // Cleanup: no-progress still bounds the drip so afterEach does not hang.
     await expect(pullPromise).rejects.toMatchObject({
       name: "WizardCancelledError",
     });
-    expect(stopMessages.some((message) => message.includes("wall-clock deadline"))).toBe(true);
+    expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(true);
   });
 
-  it("aborts a dripping /api/pull body within the wall-clock deadline", async () => {
+  it("aborts a non-advancing dripping /api/pull body within the no-progress timeout", async () => {
     server = createDripPullServer(dripTimers);
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -136,7 +169,7 @@ describe("Ollama pull stream wall-clock loopback", () => {
         config: createLoopbackConfig(baseUrl),
         model: "ollama/gemma4",
         prompter,
-        streamDeadlineMs: 250,
+        streamNoProgressTimeoutMs: 250,
         streamIdleTimeoutMs: 10_000,
       }),
     ).rejects.toMatchObject({
@@ -146,6 +179,34 @@ describe("Ollama pull stream wall-clock loopback", () => {
     const elapsedMs = Date.now() - startedAt;
     expect(elapsedMs).toBeGreaterThanOrEqual(200);
     expect(elapsedMs).toBeLessThan(2_000);
-    expect(stopMessages.some((message) => message.includes("wall-clock deadline"))).toBe(true);
+    expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(true);
+  });
+
+  it("allows advancing completed progress past the shortened no-progress timeout", async () => {
+    server = createAdvancingPullServer(dripTimers);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const { prompter, stopMessages } = createPullPrompter();
+
+    const startedAt = Date.now();
+    await ensureOllamaModelPulled({
+      config: createLoopbackConfig(baseUrl),
+      model: "ollama/gemma4",
+      prompter,
+      // Full advancing download needs ~640ms; no-progress window is shorter.
+      streamNoProgressTimeoutMs: 250,
+      streamIdleTimeoutMs: 10_000,
+    });
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeGreaterThanOrEqual(400);
+    expect(elapsedMs).toBeLessThan(3_000);
+    expect(stopMessages).toContain("Downloaded gemma4");
+    expect(stopMessages.some((message) => message.includes("no progress for"))).toBe(false);
   });
 });
