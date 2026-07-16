@@ -4,6 +4,7 @@
  * Builds common zod/JSON schema shapes and parses runtime config issues for channel plugins.
  */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
+import { ToolPolicySchema } from "../../config/zod-schema.agent-runtime.js";
 import { DmPolicySchema } from "../../config/zod-schema.core.js";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
@@ -28,6 +29,24 @@ const AllowFromEntrySchema = z.union([z.string(), z.number()]);
 /** Optional allowlist array used by channel config schema builders. */
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 
+/** Canonical per-group/room channel policy shape. */
+export const ChannelGroupEntrySchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: z.record(z.string(), ToolPolicySchema).optional(),
+    skills: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    allowFrom: AllowFromListSchema,
+    systemPrompt: z.string().optional(),
+  })
+  .strict();
+
+/** Extend the canonical group/room policy shape with channel-owned fields. */
+export function buildGroupEntrySchema(extraShape: ZodRawShape = {}) {
+  return ChannelGroupEntrySchema.extend(extraShape);
+}
+
 /** Build the common nested DM config block used by channel account schemas. */
 export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
   const baseShape = {
@@ -42,10 +61,46 @@ export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
 export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodObject>(
   accountSchema: T,
 ): T {
-  return accountSchema.extend({
-    accounts: z.object({}).catchall(accountSchema).optional(),
+  return buildMultiAccountChannelSchema(accountSchema as z.ZodObject, {
+    accountsMode: "catchall",
+  }) as unknown as T;
+}
+
+type MultiAccountSchemaOptions<T extends z.ZodObject, TAccount extends ZodTypeAny> = {
+  accountSchema?: TAccount;
+  accountsMode?: "record" | "catchall";
+  optionalAccount?: boolean;
+  refine?: (value: z.output<T>, ctx: z.RefinementCtx) => void;
+};
+
+type MultiAccountEnvelopeShape<TAccount extends ZodTypeAny> = {
+  accounts: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<TAccount>>>;
+  defaultAccount: z.ZodOptional<z.ZodString>;
+};
+
+/** Add the standard accounts/defaultAccount envelope and optional shared account/root refinement. */
+export function buildMultiAccountChannelSchema<
+  T extends z.ZodObject,
+  TAccount extends ZodTypeAny = T,
+>(
+  baseSchema: T,
+  options: MultiAccountSchemaOptions<T, TAccount> = {},
+): z.ZodObject<T["shape"] & MultiAccountEnvelopeShape<TAccount>> {
+  const refine = options.refine;
+  const rawAccountSchema = options.accountSchema ?? baseSchema;
+  const accountSchema = refine ? rawAccountSchema.superRefine(refine) : rawAccountSchema;
+  const accountValueSchema = options.optionalAccount ? accountSchema.optional() : accountSchema;
+  const accountsSchema =
+    options.accountsMode === "catchall"
+      ? z.object({}).catchall(accountValueSchema).optional()
+      : z.record(z.string(), accountValueSchema).optional();
+  const channelSchema = baseSchema.extend({
+    accounts: accountsSchema,
     defaultAccount: z.string().optional(),
-  }) as T;
+  });
+  return (refine ? channelSchema.superRefine(refine) : channelSchema) as z.ZodObject<
+    T["shape"] & MultiAccountEnvelopeShape<TAccount>
+  >;
 }
 
 type BuildChannelConfigSchemaOptions = {

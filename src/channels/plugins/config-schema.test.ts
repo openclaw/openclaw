@@ -2,10 +2,54 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+  ChannelGroupEntrySchema,
   buildChannelConfigSchema,
+  buildGroupEntrySchema,
   buildJsonChannelConfigSchema,
+  buildMultiAccountChannelSchema,
   emptyChannelConfigSchema,
 } from "./config-schema.js";
+
+describe("channel config composition", () => {
+  it("builds canonical and channel-extended group entries", () => {
+    expect(
+      ChannelGroupEntrySchema.safeParse({
+        requireMention: true,
+        tools: { allow: ["read"] },
+        toolsBySender: { U1: { deny: ["write"] } },
+        skills: ["search"],
+        enabled: true,
+        allowFrom: ["U1", 2],
+        systemPrompt: "Be concise",
+      }).success,
+    ).toBe(true);
+    expect(
+      buildGroupEntrySchema({ topic: z.boolean().optional() }).safeParse({ topic: true }).success,
+    ).toBe(true);
+    expect(ChannelGroupEntrySchema.safeParse({ unknown: true }).success).toBe(false);
+  });
+
+  it("applies one shared refinement to root and account entries", () => {
+    const base = z.object({
+      policy: z.enum(["closed", "open"]).optional(),
+      allow: z.boolean().optional(),
+    });
+    const schema = buildMultiAccountChannelSchema(base, {
+      optionalAccount: true,
+      refine: (value, ctx) => {
+        if (value.policy === "open" && !value.allow) {
+          ctx.addIssue({ code: "custom", path: ["allow"], message: "open requires allow" });
+        }
+      },
+    });
+
+    expect(schema.safeParse({ policy: "open" }).success).toBe(false);
+    expect(schema.safeParse({ accounts: { work: { policy: "open" } } }).success).toBe(false);
+    expect(
+      schema.safeParse({ policy: "open", allow: true, accounts: { work: undefined } }).success,
+    ).toBe(true);
+  });
+});
 
 describe("buildChannelConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {

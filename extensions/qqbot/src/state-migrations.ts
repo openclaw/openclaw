@@ -4,6 +4,7 @@ import type {
   PluginDoctorStateMigration,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor";
+import { fileExists } from "openclaw/plugin-sdk/security-runtime";
 import { buildQQBotStateKey } from "./engine/utils/state-keys.js";
 
 type CredentialBackup = {
@@ -29,14 +30,6 @@ const MAX_CREDENTIAL_BACKUPS = 1000;
 
 function safeName(id: string): string {
   return id.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    return (await fs.lstat(filePath)).isFile();
-  } catch {
-    return false;
-  }
 }
 
 async function readCredentialBackup(filePath: string): Promise<CredentialBackup | null> {
