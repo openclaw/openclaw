@@ -23,6 +23,11 @@ import {
 } from "../../infra/startup-migration-checkpoint.js";
 import { sleep } from "../../utils.js";
 import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
+import {
+  allListenersOwnedByRuntimePid,
+  hasListenerAttributionGap,
+  listenerOwnedByRuntimePid,
+} from "./restart-port-ownership.js";
 export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
 
 const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
@@ -76,24 +81,6 @@ type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
-
-function hasListenerAttributionGap(portUsage: PortUsage): boolean {
-  // lsof/netstat may report a busy port without a PID; keep that distinct from a free port.
-  if (portUsage.status !== "busy" || portUsage.listeners.length > 0) {
-    return false;
-  }
-  if (portUsage.errors?.length) {
-    return true;
-  }
-  return portUsage.hints.some((hint) => hint.includes("process details are unavailable"));
-}
-
-function listenerOwnedByRuntimePid(params: {
-  listener: PortUsage["listeners"][number];
-  runtimePid: number;
-}): boolean {
-  return params.listener.pid === params.runtimePid || params.listener.ppid === params.runtimePid;
-}
 
 function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
   if (code !== 1008) {
@@ -322,13 +309,7 @@ async function inspectGatewayPortHealth(params: {
     const expectedListenerPid = params.expectedListenerPid;
     const listenerOwnershipVerified =
       expectedListenerPid !== undefined &&
-      portUsage.listeners.length > 0 &&
-      portUsage.listeners.every((listener) =>
-        listenerOwnedByRuntimePid({
-          listener,
-          runtimePid: expectedListenerPid,
-        }),
-      );
+      allListenersOwnedByRuntimePid(portUsage.listeners, expectedListenerPid);
     try {
       healthy = (
         await confirmGatewayReachable({

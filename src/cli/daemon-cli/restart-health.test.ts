@@ -1,6 +1,7 @@
 // Daemon restart health tests cover health checks after daemon restart operations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
+import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports.js";
 
 type PortListenerKind = ReturnType<typeof import("../../infra/ports.js").classifyPortListener>;
@@ -89,6 +90,24 @@ function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
     throw new Error("Expected first mock call");
   }
   return call[0];
+}
+
+const previousGatewayLockIdentity: GatewayLockIdentity = {
+  pid: 4200,
+  ownerId: "gateway-owner-old",
+  createdAt: "2026-07-16T12:00:00.000Z",
+  port: 18789,
+};
+
+function mockGatewayLockReplacement(overrides: Partial<GatewayLockIdentity> = {}) {
+  const previousLockIdentity = { ...previousGatewayLockIdentity };
+  readActiveGatewayLockIdentity.mockResolvedValueOnce(previousLockIdentity).mockResolvedValue({
+    ...previousLockIdentity,
+    ownerId: "gateway-owner-new",
+    createdAt: "2026-07-16T12:00:01.000Z",
+    ...overrides,
+  });
+  return previousLockIdentity;
 }
 
 async function inspectGatewayRestartWithSnapshot(params: {
@@ -998,17 +1017,7 @@ describe("inspectGatewayRestart", () => {
       close: null,
       server: { version: "2026.7.16", connId: "gateway" },
     });
-    const previousLockIdentity = {
-      pid: 4200,
-      ownerId: "gateway-owner-old",
-      createdAt: "2026-07-16T12:00:00.000Z",
-      port: 18789,
-    };
-    readActiveGatewayLockIdentity.mockResolvedValueOnce(previousLockIdentity).mockResolvedValue({
-      ...previousLockIdentity,
-      ownerId: "gateway-owner-new",
-      createdAt: "2026-07-16T12:00:01.000Z",
-    });
+    const previousLockIdentity = mockGatewayLockReplacement();
 
     const { waitForGatewayHealthyListener } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyListener({
@@ -1041,18 +1050,7 @@ describe("inspectGatewayRestart", () => {
         ok: false,
         close: { code: 1008, reason: "device identity required" },
       });
-      const previousLockIdentity = {
-        pid: 4200,
-        ownerId: "gateway-owner-old",
-        createdAt: "2026-07-16T12:00:00.000Z",
-        port: 18789,
-      };
-      readActiveGatewayLockIdentity.mockResolvedValueOnce(previousLockIdentity).mockResolvedValue({
-        ...previousLockIdentity,
-        pid: 4300,
-        ownerId: "gateway-owner-new",
-        createdAt: "2026-07-16T12:00:01.000Z",
-      });
+      const previousLockIdentity = mockGatewayLockReplacement({ pid: 4300 });
 
       const { waitForGatewayHealthyListener } = await import("./restart-health.js");
       const snapshot = await waitForGatewayHealthyListener({
@@ -1075,17 +1073,7 @@ describe("inspectGatewayRestart", () => {
       listeners: [],
       hints: [],
     });
-    const previousLockIdentity = {
-      pid: 4200,
-      ownerId: "gateway-owner-old",
-      createdAt: "2026-07-16T12:00:00.000Z",
-      port: 18789,
-    };
-    readActiveGatewayLockIdentity.mockResolvedValueOnce(previousLockIdentity).mockResolvedValue({
-      ...previousLockIdentity,
-      ownerId: "gateway-owner-new",
-      createdAt: "2026-07-16T12:00:01.000Z",
-    });
+    const previousLockIdentity = mockGatewayLockReplacement();
 
     const { waitForGatewayHealthyListener } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyListener({
