@@ -591,6 +591,7 @@ describe("mattermostPlugin", () => {
             params,
             cfg,
             accountId: "default",
+            conversationReadOrigin: "direct-operator",
           }),
         );
       });
@@ -744,6 +745,79 @@ describe("mattermostPlugin", () => {
 
       expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
       expect(result?.details).toStrictEqual({});
+    });
+
+    it.each([
+      {
+        label: "named channel add",
+        rawTarget: "#town-square",
+        resolvedTarget: "channel:CHAN1",
+        mode: "add" as const,
+        remove: false,
+        postChannelId: "CHAN1",
+        expectedText: "Reacted with :thumbsup: on POST1",
+      },
+      {
+        label: "named channel remove",
+        rawTarget: "#town-square",
+        resolvedTarget: "channel:CHAN1",
+        mode: "remove" as const,
+        remove: true,
+        postChannelId: "CHAN1",
+        expectedText: "Removed reaction :thumbsup: from POST1",
+      },
+      {
+        label: "named user add",
+        rawTarget: "@alice",
+        resolvedTarget: "user:PEER1",
+        mode: "add" as const,
+        remove: false,
+        postChannelId: "DMCHAN1",
+        channelType: "D",
+        channelName: "BOT123__PEER1",
+        expectedText: "Reacted with :thumbsup: on POST1",
+      },
+      {
+        label: "named user remove",
+        rawTarget: "@alice",
+        resolvedTarget: "user:PEER1",
+        mode: "remove" as const,
+        remove: true,
+        postChannelId: "DMCHAN1",
+        channelType: "D",
+        channelName: "BOT123__PEER1",
+        expectedText: "Removed reaction :thumbsup: from POST1",
+      },
+    ])("uses the resolved target for $label", async (fixture) => {
+      const cfg = createMattermostTestConfig(`delegated-reaction-${++reactionActionSequence}`);
+      const fetchImpl = createMattermostReactionFetchMock({
+        mode: fixture.mode,
+        postId: "POST1",
+        postChannelId: fixture.postChannelId,
+        channelType: fixture.channelType,
+        channelName: fixture.channelName,
+        emojiName: "thumbsup",
+      });
+
+      const result = await withMockedGlobalFetch(fetchImpl, async () =>
+        mattermostPlugin.actions?.handleAction?.(
+          createMattermostActionContext({
+            action: "react",
+            params: {
+              target: fixture.rawTarget,
+              to: fixture.resolvedTarget,
+              messageId: "POST1",
+              emoji: "thumbsup",
+              remove: fixture.remove,
+            },
+            cfg,
+            accountId: "default",
+            conversationReadOrigin: "delegated",
+          }),
+        ),
+      );
+
+      expect(result?.content).toEqual([{ type: "text", text: fixture.expectedText }]);
     });
 
     it("only treats boolean remove flag as removal", async () => {
