@@ -155,6 +155,11 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
         { agentId, storePath },
         { conversationRef: conversation.conversationRef, replyToId },
       );
+      if (operation?.status === "replied" && operation.reply?.messageId === messageId) {
+        // A transport retry of the already-captured message remains consumed;
+        // starting an ordinary turn would surface the same peer reply twice.
+        return true;
+      }
       if (operation && operation.status !== "replied") {
         // With no process-local waiter, ordinary inbound dispatch owns this
         // reply. It proves the outbound send, but must not become replayable as

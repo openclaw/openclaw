@@ -1570,6 +1570,7 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
+        preparedMessageId: params.preparedMessageId,
         deliveryCompletion: params.deliveryCompletion,
       };
       if (params.deliveryIntentId) {

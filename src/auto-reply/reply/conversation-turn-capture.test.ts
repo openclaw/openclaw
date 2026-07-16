@@ -1,7 +1,6 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
@@ -16,19 +15,14 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import type { FinalizedMsgContext } from "../templating.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 
-const tempDirs: string[] = [];
-
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { force: true, recursive: true });
-  }
 });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function setupReefConversation() {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-conversation-capture-"));
-  tempDirs.push(stateDir);
+  const stateDir = tempDirs.make("openclaw-conversation-capture-");
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:reef:direct:peer-agent";
   const sessionId = "reef-session";
@@ -122,27 +116,25 @@ describe("conversation turn capture", () => {
     pending.setOutboundMessageId("reef-outbound-full");
     pending.markReady();
 
+    const inboundContext = {
+      AgentId: "main",
+      SessionKey: setup.sessionKey,
+      ChatType: "direct",
+      Provider: "reef",
+      InboundAccessAuthorized: true,
+      OriginatingChannel: "reef",
+      OriginatingTo: "reef:peer-agent",
+      NativeDirectUserId: "peer-agent",
+      MessageSid: "reef-inbound-short",
+      MessageSidFull: "reef-inbound-full",
+      ReplyToId: "wrong-short-id",
+      ReplyToIdFull: "reef-outbound-full",
+      RawBody: "peer acknowledged",
+      BodyForAgent: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
+      Timestamp: 1_710_000_000,
+    } as FinalizedMsgContext;
     await expect(
-      capturePendingConversationTurnReply({
-        cfg: setup.cfg,
-        ctx: {
-          AgentId: "main",
-          SessionKey: setup.sessionKey,
-          ChatType: "direct",
-          Provider: "reef",
-          InboundAccessAuthorized: true,
-          OriginatingChannel: "reef",
-          OriginatingTo: "reef:peer-agent",
-          NativeDirectUserId: "peer-agent",
-          MessageSid: "reef-inbound-short",
-          MessageSidFull: "reef-inbound-full",
-          ReplyToId: "wrong-short-id",
-          ReplyToIdFull: "reef-outbound-full",
-          RawBody: "peer acknowledged",
-          BodyForAgent: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
-          Timestamp: 1_710_000_000,
-        } as FinalizedMsgContext,
-      }),
+      capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
     ).resolves.toBe(true);
 
     await expect(pending.wait()).resolves.toMatchObject({
@@ -183,6 +175,27 @@ describe("conversation turn capture", () => {
         }),
       }),
     );
+    await expect(
+      capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
+    ).resolves.toBe(true);
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: {
+          ...inboundContext,
+          MessageSidFull: "reef-inbound-distinct",
+          RawBody: "new ordinary message",
+          BodyForAgent: "new ordinary message",
+        } as FinalizedMsgContext,
+      }),
+    ).resolves.toBe(false);
+    expect(
+      await sessionAccessor.loadTranscriptEvents({
+        agentId: "main",
+        sessionId: setup.sessionId,
+        storePath: setup.storePath,
+      }),
+    ).toHaveLength(1);
   });
 
   it("redacts the durable reply and its audit artifact before persistence", async () => {
@@ -340,8 +353,7 @@ describe("conversation turn capture", () => {
   });
 
   it("captures a threaded reply only for the exact conversation and message", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-conversation-capture-"));
-    tempDirs.push(stateDir);
+    const stateDir = tempDirs.make("openclaw-conversation-capture-");
     const storePath = path.join(stateDir, "sessions.json");
     const scope = { agentId: "main", storePath };
     const sessionKey = "agent:main:discord:channel:ops-room:thread:user-context";
@@ -417,8 +429,7 @@ describe("conversation turn capture", () => {
   });
 
   it("falls through without claiming when the inbound session cannot be resolved", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-conversation-capture-"));
-    tempDirs.push(stateDir);
+    const stateDir = tempDirs.make("openclaw-conversation-capture-");
     const pending = registerPendingConversationTurn({
       id: "turn-missing",
       conversationRef: buildConversationRef({

@@ -101,6 +101,82 @@ describe("conversations.turn Gateway handler", () => {
     await invoke({ handler, context: gatewayContext, respond: cachedRespond });
     expect(runConversationTurn).toHaveBeenCalledOnce();
     expect(cachedRespond).toHaveBeenCalledWith(true, result, undefined, { cached: true });
+
+    gatewayContext.dedupe.delete(`conversations.turn-identity:${request.turnId}`);
+    const mismatchedRespond = vi.fn<RespondFn>();
+    await invoke({
+      handler,
+      context: gatewayContext,
+      respond: mismatchedRespond,
+      request: { ...request, message: "different message" },
+    });
+    expect(runConversationTurn).toHaveBeenCalledOnce();
+    expect(mismatchedRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
+  it("rejects mismatched turn-id reuse instead of joining in-flight work", async () => {
+    let finish: ((value: typeof result) => void) | undefined;
+    const runConversationTurn = vi.fn(
+      async () =>
+        await new Promise<typeof result>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const handler = createConversationHandlers({
+      cancelConversationTurn: vi.fn(),
+      runConversationTurn,
+    })["conversations.turn"]!;
+    const gatewayContext = context();
+    const firstRespond = vi.fn<RespondFn>();
+    const first = invoke({ handler, context: gatewayContext, respond: firstRespond });
+    await vi.waitFor(() => expect(runConversationTurn).toHaveBeenCalledOnce());
+
+    const mismatchedRespond = vi.fn<RespondFn>();
+    await invoke({
+      handler,
+      context: gatewayContext,
+      respond: mismatchedRespond,
+      request: { ...request, agentId: "other-agent" },
+    });
+    expect(mismatchedRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(runConversationTurn).toHaveBeenCalledOnce();
+
+    finish?.(result);
+    await first;
+  });
+
+  it("retries transient unavailable failures instead of caching them", async () => {
+    const runConversationTurn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary outage"))
+      .mockResolvedValueOnce(result);
+    const handler = createConversationHandlers({
+      cancelConversationTurn: vi.fn(),
+      runConversationTurn,
+    })["conversations.turn"]!;
+    const gatewayContext = context();
+    const failedRespond = vi.fn<RespondFn>();
+
+    await invoke({ handler, context: gatewayContext, respond: failedRespond });
+    expect(failedRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+      expect.any(Object),
+    );
+
+    const retryRespond = vi.fn<RespondFn>();
+    await invoke({ handler, context: gatewayContext, respond: retryRespond });
+    expect(runConversationTurn).toHaveBeenCalledTimes(2);
+    expect(retryRespond).toHaveBeenCalledWith(true, result, undefined, { channel: "reef" });
   });
 
   it("maps unsupported conversation input to a stable invalid-request response", async () => {

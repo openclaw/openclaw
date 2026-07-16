@@ -77,6 +77,7 @@ describe("delivery-queue storage", () => {
           gifPlayback: true,
           silent: true,
           gatewayClientScopes: ["operator.write"],
+          preparedMessageId: "prepared-message-1",
           mirror: {
             sessionKey: "agent:main:main",
             expectedSessionId: "session-main",
@@ -117,6 +118,7 @@ describe("delivery-queue storage", () => {
       expect(entry.gifPlayback).toBe(true);
       expect(entry.silent).toBe(true);
       expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
+      expect(entry.preparedMessageId).toBe("prepared-message-1");
       expect(entry.mirror).toEqual({
         sessionKey: "agent:main:main",
         expectedSessionId: "session-main",

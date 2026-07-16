@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -17,12 +18,46 @@ import {
   runGatewayInflightWork,
   type GatewayInflightResult,
 } from "./inflight.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type ConversationHandlerDeps = {
   cancelConversationTurn: typeof cancelPendingConversationTurn;
   runConversationTurn: typeof runGatewayConversationTurn;
 };
+
+function bindConversationTurnIdentity(
+  context: GatewayRequestContext,
+  request: ConversationTurnParams,
+): string | null {
+  // timeoutMs is only the caller's wait budget; effectful input binds the id.
+  const identity = createHash("sha256")
+    .update(
+      JSON.stringify([
+        request.agentId,
+        request.sourceSessionKey ?? null,
+        request.conversationRef,
+        request.message,
+      ]),
+    )
+    .digest("hex");
+  const identityKey = `conversations.turn-identity:${request.turnId}`;
+  const completed = context.dedupe.get(`conversations.turn:${request.turnId}`);
+  if (completed && completed.requestIdentity !== identity) {
+    return null;
+  }
+  const prior = context.dedupe.get(identityKey);
+  if (prior) {
+    if (prior.ok !== true || prior.requestIdentity !== identity) {
+      return null;
+    }
+    context.dedupe.set(identityKey, { ...prior, ts: Date.now() });
+    return identity;
+  }
+  // Share the Gateway's bounded, TTL-pruned dedupe store so identity claims
+  // cover in-flight work without creating another unbounded lifecycle.
+  context.dedupe.set(identityKey, { ts: Date.now(), ok: true, requestIdentity: identity });
+  return identity;
+}
 
 export function createConversationHandlers(
   deps: ConversationHandlerDeps = {
@@ -59,6 +94,18 @@ export function createConversationHandlers(
         return;
       }
       const request = params as ConversationTurnParams;
+      const requestIdentity = bindConversationTurnIdentity(context, request);
+      if (!requestIdentity) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `conversation turn ${request.turnId} was already used with different input`,
+          ),
+        );
+        return;
+      }
       const inflight = resolveGatewayInflightRequest({
         context,
         dedupeKey: `conversations.turn:${request.turnId}`,
@@ -86,13 +133,12 @@ export function createConversationHandlers(
             payload,
             meta: { channel: payload.channel },
           };
-          cacheGatewayDedupeResult({ context, dedupeKey, result });
+          cacheGatewayDedupeResult({ context, dedupeKey, requestIdentity, result });
           return result;
         } catch (cause) {
+          const isTerminalInputError = cause instanceof ConversationTurnInputError;
           const error = errorShape(
-            cause instanceof ConversationTurnInputError
-              ? ErrorCodes.INVALID_REQUEST
-              : ErrorCodes.UNAVAILABLE,
+            isTerminalInputError ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
             cause instanceof Error ? cause.message : String(cause),
           );
           const result: GatewayInflightResult = {
@@ -100,7 +146,9 @@ export function createConversationHandlers(
             error,
             meta: { error: formatForLog(cause) },
           };
-          cacheGatewayDedupeResult({ context, dedupeKey, result });
+          if (isTerminalInputError) {
+            cacheGatewayDedupeResult({ context, dedupeKey, requestIdentity, result });
+          }
           return result;
         }
       })();

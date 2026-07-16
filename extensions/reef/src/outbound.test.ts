@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
-import { reefOutboundAdapter } from "./outbound.js";
+import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { setActiveReef } from "./runtime.js";
 
 describe("reefOutboundAdapter", () => {
@@ -9,7 +9,14 @@ describe("reefOutboundAdapter", () => {
   });
 
   it("normalizes the SDK target and delegates only message content/context to the guarded flow", async () => {
-    const send = vi.fn(async () => "01JZ0000000000000000000200");
+    const order: string[] = [];
+    const send = vi.fn(async () => {
+      order.push("send");
+      return "01JZ0000000000000000000200";
+    });
+    const onPlatformSendDispatch = vi.fn(async () => {
+      order.push("dispatch");
+    });
     setActiveReef({ flow: { send }, friends: {}, reviews: {} } as never);
 
     await expect(
@@ -21,6 +28,7 @@ describe("reefOutboundAdapter", () => {
         threadId: 42,
         replyToId: "01JZ0000000000000000000199",
         preparedMessageId: "01JZ0000000000000000000200",
+        onPlatformSendDispatch,
       } as never),
     ).resolves.toEqual({
       channel: "reef",
@@ -28,11 +36,32 @@ describe("reefOutboundAdapter", () => {
       chatId: "alice",
       toJid: "reef:alice",
     });
+    expect(order).toEqual(["dispatch", "send"]);
     expect(send).toHaveBeenCalledWith("alice", "hello", {
       thread: "42",
       replyTo: "01JZ0000000000000000000199",
       messageId: "01JZ0000000000000000000200",
     });
+  });
+
+  it("marks message-adapter dispatch before encrypted transport I/O", async () => {
+    const order: string[] = [];
+    const send = vi.fn(async () => {
+      order.push("send");
+      return "01JZ0000000000000000000200";
+    });
+    setActiveReef({ flow: { send }, friends: {}, reviews: {} } as never);
+
+    await reefMessageAdapter.send.text({
+      cfg: {},
+      to: "reef:Alice",
+      text: "hello",
+      onPlatformSendDispatch: async () => {
+        order.push("dispatch");
+      },
+    });
+
+    expect(order).toEqual(["dispatch", "send"]);
   });
 
   it("prepares a protocol-valid id without requiring an active Gateway runtime", () => {

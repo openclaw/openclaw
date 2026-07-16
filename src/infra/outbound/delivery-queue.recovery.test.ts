@@ -86,7 +86,12 @@ describe("delivery-queue recovery", () => {
 
   const enqueueCrashRecoveryEntries = async () => {
     await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        preparedMessageId: "prepared-message-a",
+      },
       tmpDir(),
     );
     await enqueueDelivery(
@@ -133,6 +138,10 @@ describe("delivery-queue recovery", () => {
     expect(deliver.mock.calls.map(([params]) => params.requireUnknownSendReconciliation)).toEqual([
       undefined,
       true,
+    ]);
+    expect(deliver.mock.calls.map(([params]) => params.preparedMessageId)).toEqual([
+      "prepared-message-a",
+      undefined,
     ]);
     expect(result).toEqual({
       recovered: 2,

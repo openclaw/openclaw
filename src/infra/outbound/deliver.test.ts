@@ -2808,6 +2808,9 @@ describe("deliverOutboundPayloads", () => {
     expect(sendText).toHaveBeenCalledWith(
       expect.objectContaining({ text: "abcd", preparedMessageId: "prepared-1" }),
     );
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ preparedMessageId: "prepared-1" }),
+    );
   });
 
   it("uses replyToId only on the first low-level send for single-use reply modes", async () => {

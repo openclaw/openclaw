@@ -70,6 +70,7 @@ async function send(
   threadId?: string | number | null,
   replyToId?: string | null,
   preparedMessageId?: string,
+  onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<OutboundDeliveryResult> {
   const peer = normalizeReefTarget(to);
   if (!peer) {
@@ -87,7 +88,9 @@ async function send(
     // here so response prefixes and other send-time transforms are included.
     throw new Error("Reef conversation turn exceeds the 32 KiB atomic message limit");
   }
-  const id = await getActiveReef().flow.send(peer, text, {
+  const flow = getActiveReef().flow;
+  await onPlatformSendDispatch?.();
+  const id = await flow.send(peer, text, {
     ...(threadId != null ? { thread: String(threadId) } : {}),
     ...(replyToId ? { replyTo: replyToId } : {}),
     ...(preparedMessageId ? { messageId: preparedMessageId } : {}),
@@ -108,8 +111,8 @@ export const reefOutboundAdapter: ChannelOutboundAdapter = {
       ? { ok: true, to: peer }
       : { ok: false, error: new Error("Reef target must be a handle") };
   },
-  sendText: async ({ to, text, threadId, replyToId, preparedMessageId }) =>
-    await send(to, text, threadId, replyToId, preparedMessageId),
+  sendText: async ({ to, text, threadId, replyToId, preparedMessageId, onPlatformSendDispatch }) =>
+    await send(to, text, threadId, replyToId, preparedMessageId, onPlatformSendDispatch),
 };
 
 export const reefMessageAdapter = defineChannelMessageAdapter({
@@ -123,6 +126,7 @@ export const reefMessageAdapter = defineChannelMessageAdapter({
         ctx.threadId,
         ctx.replyToId,
         ctx.preparedMessageId,
+        ctx.onPlatformSendDispatch,
       );
       const receipt = createMessageReceiptFromOutboundResults({
         results: [result],

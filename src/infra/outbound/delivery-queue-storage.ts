@@ -81,6 +81,8 @@ export type QueuedDeliveryPayload = {
   session?: OutboundSessionContext;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
+  /** Channel-valid id reserved before enqueue; recovery must reuse it atomically. */
+  preparedMessageId?: string;
   /** Serializable owner state finalized by both live delivery and recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
 };
@@ -131,6 +133,7 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     mirror: params.mirror,
     session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
+    preparedMessageId: params.preparedMessageId,
     deliveryCompletion: params.deliveryCompletion,
     retryCount: 0,
   };

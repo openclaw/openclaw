@@ -82,11 +82,13 @@ export async function runGatewayInflightWork(params: {
 export function cacheGatewayDedupeResult(params: {
   context: GatewayRequestContext;
   dedupeKey: string;
+  requestIdentity?: string;
   result: Pick<GatewayInflightResult, "ok" | "payload" | "error">;
 }) {
   params.context.dedupe.set(params.dedupeKey, {
     ts: Date.now(),
     ok: params.result.ok,
+    ...(params.requestIdentity ? { requestIdentity: params.requestIdentity } : {}),
     ...(params.result.payload !== undefined ? { payload: params.result.payload } : {}),
     ...(params.result.error ? { error: params.result.error } : {}),
   });
