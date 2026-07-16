@@ -58,6 +58,15 @@ type DiffAuthorizedViewer = {
   html: Uint8Array;
 };
 
+function isBlobLimitError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "PLUGIN_BLOB_LIMIT_EXCEEDED"
+  );
+}
+
 export class DiffArtifactStore {
   private readonly rootDir: string;
   private readonly blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
@@ -149,7 +158,7 @@ export class DiffArtifactStore {
 
     for (let attempt = 0; attempt < ARTIFACT_ID_ATTEMPTS; attempt += 1) {
       const id = crypto.randomBytes(10).toString("hex");
-      if (!(await this.blobStore.registerIfAbsent(id, EMPTY_BLOB, metadata, { ttlMs }))) {
+      if (!(await this.registerIfAbsentWithCleanup(id, EMPTY_BLOB, metadata, ttlMs))) {
         continue;
       }
       const artifactDir = this.artifactDir(id);
@@ -238,7 +247,7 @@ export class DiffArtifactStore {
   ): Promise<PluginBlobEntry<DiffArtifactBlobMetadata>> {
     for (let attempt = 0; attempt < ARTIFACT_ID_ATTEMPTS; attempt += 1) {
       const id = crypto.randomBytes(10).toString("hex");
-      if (!(await this.blobStore.registerIfAbsent(id, bytes, metadata, { ttlMs }))) {
+      if (!(await this.registerIfAbsentWithCleanup(id, bytes, metadata, ttlMs))) {
         continue;
       }
       const entry = await this.blobStore.lookup(id);
@@ -247,6 +256,25 @@ export class DiffArtifactStore {
       }
     }
     throw new Error("Failed to allocate a unique diff artifact id.");
+  }
+
+  private async registerIfAbsentWithCleanup(
+    id: string,
+    bytes: Uint8Array,
+    metadata: DiffArtifactBlobMetadata,
+    ttlMs: number,
+  ): Promise<boolean> {
+    try {
+      return await this.blobStore.registerIfAbsent(id, bytes, metadata, { ttlMs });
+    } catch (error) {
+      if (!isBlobLimitError(error)) {
+        throw error;
+      }
+      // Expired rows retain cleanup metadata and count toward physical fuses.
+      // Claim their cleanup before retrying a write that reached the quota.
+      await this.cleanupExpired();
+      return await this.blobStore.registerIfAbsent(id, bytes, metadata, { ttlMs });
+    }
   }
 
   private async deleteExpiredFile(

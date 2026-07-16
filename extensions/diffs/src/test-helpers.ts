@@ -71,14 +71,17 @@ export async function createDiffStoreHarness(prefix: string): Promise<{
     OPENCLAW_STATE_DIR: path.join(harnessRoot, "state"),
   };
   const openBlobStore = () =>
-    createPluginBlobStoreForTests<DiffArtifactBlobMetadata>("diffs", {
-      namespace: "diff-artifacts",
-      maxEntries: 2_048,
-      maxBytesPerEntry: 32 * 1024 * 1024,
-      maxBytesPerNamespace: 256 * 1024 * 1024,
-      overflowPolicy: "reject-new",
+    createPluginBlobStoreForTests<DiffArtifactBlobMetadata>(
+      "diffs",
+      {
+        namespace: "diff-artifacts",
+        maxEntries: 2_048,
+        maxBytesPerEntry: 32 * 1024 * 1024,
+        maxBytesPerNamespace: 256 * 1024 * 1024,
+        overflowPolicy: "reject-new",
+      },
       env,
-    });
+    );
   const blobStore = openBlobStore();
   return {
     rootDir,

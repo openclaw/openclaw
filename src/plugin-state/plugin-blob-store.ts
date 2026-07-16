@@ -229,10 +229,10 @@ function storedEntryToEntry<TMetadata>(
   };
 }
 
-/** Opens an async blob namespace for a non-core plugin id. */
-export function createPluginBlobStore<TMetadata>(
+function createPluginBlobStoreInternal<TMetadata>(
   pluginId: string,
   options: OpenBlobStoreOptions,
+  env?: NodeJS.ProcessEnv,
 ): PluginBlobStore<TMetadata> {
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
@@ -258,7 +258,6 @@ export function createPluginBlobStore<TMetadata>(
   }
   const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateTtl(options.defaultTtlMs, "open");
-  const env = options.env;
   assertConsistentOptions(pluginId, namespace, {
     maxEntries,
     maxBytesPerEntry,
@@ -353,8 +352,22 @@ export function createPluginBlobStore<TMetadata>(
   };
 }
 
-/** Test-only named factory exported by the plugin-state test runtime. */
-export const createPluginBlobStoreForTests = createPluginBlobStore;
+/** Opens an async blob namespace for a non-core plugin id. */
+export function createPluginBlobStore<TMetadata>(
+  pluginId: string,
+  options: OpenBlobStoreOptions,
+): PluginBlobStore<TMetadata> {
+  return createPluginBlobStoreInternal<TMetadata>(pluginId, options);
+}
+
+/** Test-only factory with an isolated state environment. */
+export function createPluginBlobStoreForTests<TMetadata>(
+  pluginId: string,
+  options: OpenBlobStoreOptions,
+  env: NodeJS.ProcessEnv,
+): PluginBlobStore<TMetadata> {
+  return createPluginBlobStoreInternal<TMetadata>(pluginId, options, env);
+}
 
 /** Resets facade signatures and the shared state database handle for tests. */
 export function resetPluginBlobStoreForTests(options: { closeDatabase?: boolean } = {}): void {

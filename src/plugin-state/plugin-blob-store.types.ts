@@ -41,7 +41,6 @@ export type OpenBlobStoreOptions = {
   maxBytesPerNamespace: number;
   overflowPolicy?: PluginBlobOverflowPolicy;
   defaultTtlMs?: number;
-  env?: NodeJS.ProcessEnv;
 };
 
 export type PluginBlobStoreErrorCode =

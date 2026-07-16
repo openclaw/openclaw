@@ -234,6 +234,29 @@ describe("DiffArtifactStore", () => {
     await expect(fs.stat(path.dirname(expired.filePath))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("cleans expired rows and retries a quota-limited registration", async () => {
+    const registerIfAbsent = blobStore.registerIfAbsent.bind(blobStore);
+    const registerSpy = vi
+      .spyOn(blobStore, "registerIfAbsent")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("physical quota reached"), {
+          code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
+        }),
+      )
+      .mockImplementation(registerIfAbsent);
+    const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
+
+    await store.createArtifact({
+      html: "<html>retry</html>",
+      title: "Retry",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    expect(registerSpy).toHaveBeenCalledTimes(2);
+    expect(cleanupSpy).toHaveBeenCalled();
+  });
+
   it("removes only old rowless temp directories without reading legacy metadata", async () => {
     const oldDir = path.join(rootDir, "a".repeat(20));
     const recentDir = path.join(rootDir, "b".repeat(20));

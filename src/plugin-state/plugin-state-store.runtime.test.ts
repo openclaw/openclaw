@@ -4,8 +4,9 @@ import { resolveStateDir } from "../config/paths.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resetPluginBlobStoreForTests } from "./plugin-blob-store.js";
+import { resetPluginBlobStoreForTests, type OpenBlobStoreOptions } from "./plugin-blob-store.js";
 import { resetPluginStateStoreForTests } from "./plugin-state-store.js";
 
 function createPluginRecord(
@@ -159,6 +160,39 @@ describe("plugin runtime state proxy", () => {
           maxBytesPerNamespace: 4096,
         });
       await expect(otherStore.lookup("viewer")).resolves.toBeUndefined();
+    });
+  });
+
+  it("ignores plugin-supplied state directory overrides", async () => {
+    await withOpenClawTestState({ label: "plugin-blob-runtime-env" }, async (state) => {
+      const registry = createTestPluginRegistry();
+      const record = createPluginRecord("diffs", "global", { trustedOfficialInstall: true });
+      registry.registry.plugins.push(record);
+      const api = registry.createApi(record, { config: {} });
+      const redirectedEnv = {
+        ...state.env,
+        OPENCLAW_STATE_DIR: `${state.stateDir}-redirected`,
+      };
+
+      const store = api.runtime.state.openBlobStore<{ kind: string }>({
+        namespace: "runtime-env",
+        maxEntries: 10,
+        maxBytesPerEntry: 1024,
+        maxBytesPerNamespace: 4096,
+        env: redirectedEnv,
+      } as OpenBlobStoreOptions & { env: NodeJS.ProcessEnv });
+      await store.register("viewer", new Uint8Array([1]), { kind: "viewer" });
+
+      resetPluginBlobStoreForTests();
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      expect(
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM plugin_blob_entries
+             WHERE plugin_id = ? AND namespace = ? AND entry_key = ?`,
+          )
+          .get("diffs", "runtime-env", "viewer"),
+      ).toEqual({ count: 1 });
     });
   });
 

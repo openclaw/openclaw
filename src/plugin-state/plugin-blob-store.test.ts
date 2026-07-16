@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createPluginBlobStore,
+  createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
   type OpenBlobStoreOptions,
 } from "./plugin-blob-store.js";
@@ -14,10 +14,12 @@ afterEach(() => {
   resetPluginBlobStoreForTests();
 });
 
+type TestBlobStoreOptions = OpenBlobStoreOptions & { env: NodeJS.ProcessEnv };
+
 function options(
   env: NodeJS.ProcessEnv,
   overrides: Partial<OpenBlobStoreOptions> = {},
-): OpenBlobStoreOptions {
+): TestBlobStoreOptions {
   return {
     namespace: "artifacts",
     maxEntries: 3,
@@ -26,6 +28,11 @@ function options(
     env,
     ...overrides,
   };
+}
+
+function createPluginBlobStore<TMetadata>(pluginId: string, testOptions: TestBlobStoreOptions) {
+  const { env, ...storeOptions } = testOptions;
+  return createPluginBlobStoreForTests<TMetadata>(pluginId, storeOptions, env);
 }
 
 describe("plugin blob store", () => {
