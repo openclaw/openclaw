@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
-import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
+import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import {
   calculateContextTokens,
   compact,
   estimateContextTokens,
   generateSummary,
+  getLastAssistantUsage,
 } from "./compaction.js";
 import { createFileOps } from "./utils.js";
 
@@ -40,6 +41,21 @@ describe("calculateContextTokens", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       }),
     ).toBe(927_907);
+  });
+
+  it("normalizes non-canonical token totals without producing NaN", () => {
+    expect(calculateContextTokens({ input: 10, output: 5, total: 15 } as unknown as Usage)).toBe(
+      15,
+    );
+    expect(
+      calculateContextTokens({
+        input: 10,
+        output: 5,
+        totalTokens: 0,
+        cache: { read: 3, write: 2 },
+      } as unknown as Usage),
+    ).toBe(20);
+    expect(calculateContextTokens({ input: 0, output: 0 } as unknown as Usage)).toBe(0);
   });
 
   it("estimates the transcript instead of using aggregate billing when context is unavailable", () => {
@@ -120,6 +136,93 @@ describe("calculateContextTokens", () => {
     expect(estimate.tokens).toBeGreaterThan(149_874);
     expect(estimate.tokens).toBeLessThan(927_907);
     expect(estimate.lastUsageIndex).toBe(0);
+  });
+
+  it("skips transcript-only delivery mirrors when sampling assistant usage", () => {
+    const realUsage: Usage = {
+      input: 100,
+      output: 25,
+      cacheRead: 50,
+      cacheWrite: 0,
+      contextUsage: {
+        state: "available",
+        promptTokens: 150,
+        totalTokens: 175,
+      },
+      totalTokens: 175,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const estimate = estimateContextTokens([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real assistant" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-fable-5",
+        usage: realUsage,
+        stopReason: "stop",
+        timestamp: 0,
+      },
+      { role: "user", content: "follow-up", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real assistant" }],
+        api: "openclaw-transcript",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: {
+          input: 0,
+          output: 0,
+          total: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+          cache: { read: 0, write: 0 },
+        } as unknown as Usage,
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    ]);
+
+    expect(estimate.usageTokens).toBe(175);
+    expect(estimate.tokens).toBeGreaterThan(175);
+    expect(estimate.lastUsageIndex).toBe(0);
+    expect(
+      getLastAssistantUsage([
+        {
+          type: "message",
+          id: "real",
+          parentId: null,
+          timestamp: "2026-07-06T00:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "real assistant" }],
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "claude-fable-5",
+            usage: realUsage,
+            stopReason: "stop",
+            timestamp: 0,
+          },
+        },
+        {
+          type: "message",
+          id: "mirror",
+          parentId: "real",
+          timestamp: "2026-07-06T00:00:01.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "real assistant" }],
+            api: "openclaw-transcript",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            usage: { input: 0, output: 0 } as unknown as Usage,
+            stopReason: "stop",
+            timestamp: 1,
+          },
+        },
+      ]),
+    ).toBe(realUsage);
   });
 });
 

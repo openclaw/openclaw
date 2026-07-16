@@ -25,6 +25,10 @@ import type {
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
 
+function normalizeCompactionTokensBefore(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     if (
@@ -98,7 +102,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       timestamp: new Date().toISOString(),
       summary,
       firstKeptEntryId,
-      tokensBefore,
+      tokensBefore: normalizeCompactionTokensBefore(tokensBefore),
       details,
       fromHook,
     };

@@ -24,6 +24,10 @@ import type {
 } from "../types.js";
 import { SessionError } from "../types.js";
 
+function normalizeCompactionTokensBefore(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 /** Build model context from the active session branch and its latest state markers. */
 export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionContext {
   let thinkingLevel = "off";
@@ -201,7 +205,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
       timestamp: new Date().toISOString(),
       summary,
       firstKeptEntryId,
-      tokensBefore,
+      tokensBefore: normalizeCompactionTokensBefore(tokensBefore),
       details,
       fromHook,
     } satisfies CompactionEntry);

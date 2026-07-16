@@ -146,13 +146,76 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   keepRecentTokens: 20000,
 };
 
+const OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER = "openclaw";
+const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set(["delivery-mirror", "gateway-injected"]);
+
+function readFiniteTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
+}
+
+function readPositiveTokenCount(value: unknown): number | undefined {
+  const count = readFiniteTokenCount(value);
+  return count !== undefined && count > 0 ? count : undefined;
+}
+
+function sumTokenCounts(values: readonly (number | undefined)[]): number | undefined {
+  if (values.every((value) => value === undefined)) {
+    return undefined;
+  }
+  return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+}
+
+function isTranscriptOnlyOpenClawAssistant(msg: AgentMessage): boolean {
+  return (
+    msg.role === "assistant" &&
+    msg.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS.has(msg.model)
+  );
+}
+
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
   if (usage.contextUsage?.state === "available") {
     return usage.contextUsage.totalTokens;
   }
-  return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  const usageRecord = usage as unknown as {
+    input?: unknown;
+    output?: unknown;
+    cacheRead?: unknown;
+    cacheWrite?: unknown;
+    total?: unknown;
+    totalTokens?: unknown;
+    total_tokens?: unknown;
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+    cache?: { read?: unknown; write?: unknown };
+  };
+  return (
+    readPositiveTokenCount(usageRecord.totalTokens) ??
+    readPositiveTokenCount(usageRecord.total) ??
+    readPositiveTokenCount(usageRecord.total_tokens) ??
+    sumTokenCounts([
+      readFiniteTokenCount(usageRecord.input) ??
+        readFiniteTokenCount(usageRecord.prompt_tokens) ??
+        readFiniteTokenCount(usageRecord.input_tokens),
+      readFiniteTokenCount(usageRecord.output) ??
+        readFiniteTokenCount(usageRecord.completion_tokens) ??
+        readFiniteTokenCount(usageRecord.output_tokens),
+      readFiniteTokenCount(usageRecord.cacheRead) ?? readFiniteTokenCount(usageRecord.cache?.read),
+      readFiniteTokenCount(usageRecord.cacheWrite) ??
+        readFiniteTokenCount(usageRecord.cache?.write),
+    ]) ??
+    0
+  );
 }
+
+function calculateUsableContextTokens(usage: Usage): number | undefined {
+  const tokens = calculateContextTokens(usage);
+  return tokens > 0 && Number.isFinite(tokens) ? tokens : undefined;
+}
+
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
   if (msg.role === "assistant" && "usage" in msg) {
     const assistantMsg = msg;
@@ -171,6 +234,9 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
   for (const entry of entries.toReversed()) {
     if (entry.type === "message") {
+      if (isTranscriptOnlyOpenClawAssistant(entry.message)) {
+        continue;
+      }
       const usage = getAssistantUsage(entry.message);
       if (usage) {
         return usage;
@@ -200,8 +266,15 @@ function getLastAssistantUsageInfo(
     if (!message) {
       continue;
     }
+    if (isTranscriptOnlyOpenClawAssistant(message)) {
+      continue;
+    }
     const usage = getAssistantUsage(message);
-    if (usage && usage.contextUsage?.state !== "unavailable") {
+    if (
+      usage &&
+      usage.contextUsage?.state !== "unavailable" &&
+      calculateUsableContextTokens(usage) !== undefined
+    ) {
       return { usage, index: i };
     }
   }
@@ -225,7 +298,19 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
     };
   }
 
-  const usageTokens = calculateContextTokens(usageInfo.usage);
+  const usageTokens = calculateUsableContextTokens(usageInfo.usage);
+  if (usageTokens === undefined) {
+    let estimated = 0;
+    for (const message of messages) {
+      estimated += estimateTokens(message);
+    }
+    return {
+      tokens: estimated,
+      usageTokens: 0,
+      trailingTokens: estimated,
+      lastUsageIndex: null,
+    };
+  }
   let trailingTokens = 0;
   for (const message of messages.slice(usageInfo.index + 1)) {
     trailingTokens += estimateTokens(message);

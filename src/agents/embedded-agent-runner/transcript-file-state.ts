@@ -171,6 +171,10 @@ function isOptionalBoolean(value: unknown): boolean {
   return value === undefined || typeof value === "boolean";
 }
 
+function normalizeCompactionTokensBefore(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 function isBashExecutionMessage(value: Record<string, unknown>): boolean {
   return (
     isString(value.command) &&
@@ -242,11 +246,11 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
         summary?: unknown;
         tokensBefore?: unknown;
       };
-      return (
-        isString(candidate.firstKeptEntryId) &&
-        typeof candidate.summary === "string" &&
-        typeof candidate.tokensBefore === "number"
-      );
+      if (!isString(candidate.firstKeptEntryId) || typeof candidate.summary !== "string") {
+        return false;
+      }
+      candidate.tokensBefore = normalizeCompactionTokensBefore(candidate.tokensBefore);
+      return true;
     }
     case "custom":
       return isString((entry as { customType?: unknown }).customType);
@@ -813,7 +817,7 @@ export class TranscriptFileState {
       timestamp: new Date().toISOString(),
       summary,
       firstKeptEntryId,
-      tokensBefore,
+      tokensBefore: normalizeCompactionTokensBefore(tokensBefore),
       details,
       fromHook,
     });

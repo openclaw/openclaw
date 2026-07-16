@@ -565,6 +565,56 @@ describe("readTranscriptFileState", () => {
     ]);
   });
 
+  it("keeps compaction summaries when persisted tokensBefore telemetry is null", async () => {
+    const root = await makeRoot("openclaw-transcript-state-compaction-null-tokens-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "old turn" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "kept reply" }] },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          id: "compact-1",
+          parentId: "assistant-1",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          summary: "summary",
+          firstKeptEntryId: "assistant-1",
+          tokensBefore: null,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const compaction = state.getEntries().find((entry) => entry.type === "compaction");
+
+    expect(compaction).toMatchObject({ id: "compact-1", tokensBefore: 0 });
+    expect(state.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "summary", tokensBefore: 0 },
+      { role: "assistant", content: [{ type: "text", text: "kept reply" }] },
+    ]);
+  });
+
   it("relinks valid current rows past malformed parents", async () => {
     const root = await makeRoot("openclaw-transcript-state-current-suffix-");
     const sessionFile = path.join(root, "session.jsonl");
