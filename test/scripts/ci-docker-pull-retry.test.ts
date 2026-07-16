@@ -204,4 +204,74 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
       /^2\b/u,
     );
   });
+
+  it("kills a hung first pull so a later retry can succeed", () => {
+    const binDir = makeTempBin("openclaw-ci-docker-pull-hang-retry-");
+    const attemptPath = path.join(binDir, "attempts");
+    writeFileSync(attemptPath, "0", "utf8");
+
+    writeExecutable(
+      path.join(binDir, "timeout"),
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
+        // Emulate GNU timeout: run the command under a wall-clock budget.
+        'kill_after=""; budget=""',
+        'while [ "$#" -gt 0 ]; do',
+        '  case "$1" in',
+        '    --kill-after=*) kill_after="${1#--kill-after=}"; shift ;;',
+        '    *s) budget="${1%s}"; shift; break ;;',
+        "    *) shift ;;",
+        "  esac",
+        "done",
+        '"$@" &',
+        "child=$!",
+        'sleep "$budget"',
+        'if kill -0 "$child" 2>/dev/null; then',
+        '  kill -TERM "$child" 2>/dev/null || true',
+        "  sleep 0.1",
+        '  kill -KILL "$child" 2>/dev/null || true',
+        '  wait "$child" 2>/dev/null || true',
+        "  exit 124",
+        "fi",
+        'wait "$child"',
+        "",
+      ].join("\n"),
+    );
+    writeExecutable(
+      path.join(binDir, "docker"),
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        `attempt_file=${JSON.stringify(attemptPath)}`,
+        'attempt="$(<"$attempt_file")"',
+        "attempt=$((attempt + 1))",
+        'printf "%s" "$attempt" >"$attempt_file"',
+        'if [ "$attempt" -eq 1 ]; then',
+        "  while true; do sleep 1; done",
+        "  exit 1",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+
+    const result = spawnSync("/bin/bash", [SCRIPT_PATH, "registry.example/openclaw:test"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_PULL_ATTEMPTS: "2",
+        OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS: "1",
+        OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS: "0",
+        // Keep system sleep/kill available; prefer the fake timeout/docker first.
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(execFileSync("cat", [attemptPath], { encoding: "utf8" }).trim()).toBe("2");
+    expect(result.stderr).toContain("Docker pull failed or timed out after 1s");
+  });
 });

@@ -1583,6 +1583,11 @@ describe("package artifact reuse", () => {
     );
     expect(dockerE2ePlanAction.match(/bash scripts\/ci-docker-pull-retry\.sh/g)?.length).toBe(2);
     expect(dockerE2ePlanAction).not.toContain('docker pull "${OPENCLAW_DOCKER_E2E_');
+
+    const dockerRelease = readFileSync(".github/workflows/docker-release.yml", "utf8");
+    expect(dockerRelease).toContain('bash scripts/ci-docker-pull-retry.sh "${BUILDKIT_IMAGE}"');
+    expect(dockerRelease).toContain('OPENCLAW_DOCKER_PULL_ATTEMPTS: "4"');
+    expect(dockerRelease).not.toMatch(/if docker pull "\$\{BUILDKIT_IMAGE\}"/u);
   });
 
   it("uses Blacksmith Docker build caching for prepared E2E images", () => {

@@ -137,20 +137,13 @@ jobs:
         shell: bash
         env:
           BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+          # Bounded per-attempt pull so a hung daemon/registry cannot skip retries.
+          OPENCLAW_DOCKER_PULL_ATTEMPTS: "4"
+          OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS: "180"
+          OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS: "10"
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4; do
-            if docker pull "${BUILDKIT_IMAGE}"; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "4" ]]; then
-              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 10))
-            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "${sleep_seconds}"
-          done
+          bash scripts/ci-docker-pull-retry.sh "${BUILDKIT_IMAGE}"
 
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
