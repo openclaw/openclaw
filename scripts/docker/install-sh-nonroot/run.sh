@@ -62,7 +62,10 @@ node -e '
 command -v npm >/dev/null
 
 echo "==> Run installer (non-root user)"
-curl -fsSL "$INSTALL_URL" | bash
+installer_tmp="$(mktemp)"
+curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer_tmp" "$INSTALL_URL"
+bash "$installer_tmp"
+rm -f "$installer_tmp"
 
 # Ensure PATH picks up user npm prefix
 export PATH="$HOME/.npm-global/bin:$PATH"

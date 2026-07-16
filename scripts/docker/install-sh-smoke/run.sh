@@ -255,10 +255,13 @@ resolve_update_baseline_version() {
 run_installer_for_package_spec() {
   local install_url="$1"
   local package_spec="$2"
+  local installer_tmp
 
+  installer_tmp="$(mktemp)"
+  curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer_tmp" "$install_url"
   timeout --kill-after=30s "${INSTALL_COMMAND_TIMEOUT}s" \
-    bash -c "curl -fsSL \"\$1\" | bash -s -- --install-method npm --version \"\$2\" --no-prompt --no-onboard" \
-    _ "$install_url" "$package_spec"
+    bash "$installer_tmp" --install-method npm --version "$package_spec" --no-prompt --no-onboard
+  rm -f "$installer_tmp"
 }
 
 run_install_smoke() {
@@ -594,13 +597,15 @@ run_freshness_smoke() {
   fi
 
   echo "==> Run installer with same npm freshness policy"
+  installer_tmp="$(mktemp)"
+  curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer_tmp" "$INSTALL_URL"
   env \
     HOME="$policy_home" \
     NPM_CONFIG_USERCONFIG="${policy_home}/.npmrc" \
     OPENCLAW_NO_ONBOARD=1 \
     OPENCLAW_NO_PROMPT=1 \
-    bash -c 'curl -fsSL "$1" | bash -s -- --install-method npm --version "$2" --no-prompt --no-onboard' \
-    _ "$INSTALL_URL" "$FRESHNESS_VERSION"
+    bash "$installer_tmp" --install-method npm --version "$FRESHNESS_VERSION" --no-prompt --no-onboard
+  rm -f "$installer_tmp"
 
   echo "==> Verify installed version"
   print_install_audit "freshness install"

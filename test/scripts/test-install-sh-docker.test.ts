@@ -470,6 +470,17 @@ describe("test-install-sh-docker", () => {
     expect(nonrootDockerfile).toContain('bash "$installer"');
     expect(nonrootDockerfile).toContain('rm -f "$installer"');
     expect(nonrootDockerfile).not.toMatch(/curl[^\n]+\|\s*bash/u);
+
+    const nonrootRunner = readFileSync(NONROOT_RUNNER_PATH, "utf8");
+    const smokeRunner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+    expect(nonrootRunner).toContain("--connect-timeout 10 --max-time 120");
+    expect(nonrootRunner).toContain('"$(mktemp)"');
+    expect(nonrootRunner).toContain("rm -f");
+    expect(nonrootRunner).not.toMatch(/curl[^\n]+\|\s*bash/u);
+    expect(smokeRunner).toContain("--connect-timeout 10 --max-time 120");
+    expect(smokeRunner).toContain('"$(mktemp)"');
+    expect(smokeRunner).toContain("rm -f");
+    expect(smokeRunner).not.toMatch(/curl[^\n]+\|\s*bash/u);
   });
 
   it("keeps shared install helpers parsing and verifying installed CLI versions", () => {
