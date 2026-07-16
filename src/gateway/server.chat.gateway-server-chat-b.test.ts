@@ -2557,16 +2557,19 @@ describe("gateway server chat", () => {
       });
       expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
       if (retryable) {
+        expect(stored?.restartRecoveryBeforeAgentReplyState).toBe("admitted");
         expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
           expect.stringMatching(/^hmac-sha256:v1:/u),
         );
         expect(stored?.restartRecoveryDeliveryRunId).toBe(runId);
         expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
+        expect(stored?.restartRecoverySourceIngress).toBe("control-ui");
         expect(stored?.restartRecoveryTerminalRunIds).toBeUndefined();
       } else {
         expect(stored?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
         expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
         expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+        expect(stored?.restartRecoverySourceIngress).toBeUndefined();
         expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
       }
       expect(loadTranscriptEventsSync(scope)).toEqual(
