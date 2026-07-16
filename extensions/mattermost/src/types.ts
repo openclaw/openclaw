@@ -1,5 +1,6 @@
 // Mattermost type declarations define plugin contracts.
 import type { ChannelPreviewStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelImplicitMentionsConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DmPolicy, GroupPolicy } from "./runtime-api.js";
 import type { SecretInput } from "./secret-input.js";
 
@@ -41,6 +42,8 @@ export type MattermostAccountConfig = {
   oncharPrefixes?: string[];
   /** Require @mention to respond in channels. Default: true. */
   requireMention?: boolean;
+  /** Implicit mention policy for replies, quotes, and participated threads. */
+  implicitMentions?: ChannelImplicitMentionsConfig;
   /** Direct message policy (pairing/allowlist/open/disabled). */
   dmPolicy?: DmPolicy;
   /** Allowlist for direct messages (user ids or @usernames). */

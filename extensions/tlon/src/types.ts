@@ -5,7 +5,10 @@ import {
   normalizeAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ChannelImplicitMentionsConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
@@ -29,6 +32,7 @@ type TlonAccountConfig = {
   autoAcceptGroupInvites?: boolean;
   defaultAuthorizedShips?: string[];
   ownerShip?: string;
+  implicitMentions?: ChannelImplicitMentionsConfig;
   accounts?: Record<string, TlonAccountConfig>;
 };
 

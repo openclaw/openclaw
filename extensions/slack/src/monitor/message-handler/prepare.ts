@@ -9,6 +9,7 @@ import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
   formatInboundEnvelope,
+  allowedImplicitMentionKindsFromConfig,
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
@@ -18,6 +19,7 @@ import {
   resolveUnmentionedGroupInboundPolicy,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
@@ -866,13 +868,7 @@ export async function prepareSlackMessage(params: {
       )
     : Promise.resolve({ ok: true, name: undefined });
   let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
-  if (
-    !isDirectMessage &&
-    ctx.botUserId &&
-    message.thread_ts &&
-    !ctx.threadRequireExplicitMention &&
-    !wasMentioned
-  ) {
+  if (!isDirectMessage && ctx.botUserId && message.thread_ts && !wasMentioned) {
     const replyToBotKinds = implicitMentionKindWhen(
       "reply_to_bot",
       message.parent_user_id === ctx.botUserId,
@@ -1000,6 +996,11 @@ export async function prepareSlackMessage(params: {
   const shouldRequireMention = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
   if (message["_ambiguousThreadReply"]) {
     ctx.logger.info(
       {
@@ -1037,7 +1038,7 @@ export async function prepareSlackMessage(params: {
     activation: {
       requireMention: shouldRequireMention,
       allowTextCommands,
-      ...(ctx.threadRequireExplicitMention ? { allowedImplicitMentionKinds: [] } : {}),
+      implicitMentions,
     },
   });
   const senderGate = messageIngress.senderAccess.gate;
@@ -1204,7 +1205,7 @@ export async function prepareSlackMessage(params: {
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
-      ...(ctx.threadRequireExplicitMention ? { allowedImplicitMentionKinds: [] } : {}),
+      allowedImplicitMentionKinds: allowedImplicitMentionKindsFromConfig(implicitMentions),
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;

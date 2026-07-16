@@ -403,4 +403,64 @@ describe("slack doctor", () => {
       enabled: true,
     });
   });
+
+  it("moves legacy thread mention policy to canonical root and account config", () => {
+    const normalize = getSlackCompatibilityNormalizer();
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          slack: {
+            thread: { requireExplicitMention: true, historyScope: "channel" },
+            accounts: {
+              work: {
+                thread: { requireExplicitMention: false },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.slack).toMatchObject({
+      thread: { historyScope: "channel" },
+      implicitMentions: { threadParticipation: false },
+      accounts: {
+        work: {
+          implicitMentions: { threadParticipation: true },
+        },
+      },
+    });
+    expect(result.config.channels?.slack?.implicitMentions).toEqual({
+      threadParticipation: false,
+    });
+    expect(result.config.channels?.slack?.accounts?.work?.implicitMentions).toEqual({
+      threadParticipation: true,
+    });
+    expect(result.config.channels?.slack?.accounts?.work?.thread).toBeUndefined();
+    expect(result.changes).toEqual([
+      "Moved channels.slack.thread.requireExplicitMention → channels.slack.implicitMentions.threadParticipation (false).",
+      "Moved channels.slack.accounts.work.thread.requireExplicitMention → channels.slack.accounts.work.implicitMentions.threadParticipation (true).",
+    ]);
+  });
+
+  it("keeps canonical thread participation policy when removing the legacy key", () => {
+    const normalize = getSlackCompatibilityNormalizer();
+    const result = normalize({
+      cfg: {
+        channels: {
+          slack: {
+            thread: { requireExplicitMention: true },
+            implicitMentions: { threadParticipation: true },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.slack?.thread).toBeUndefined();
+    expect(result.config.channels?.slack?.implicitMentions?.threadParticipation).toBe(true);
+    expect(result.changes).toEqual([
+      "Removed channels.slack.thread.requireExplicitMention (channels.slack.implicitMentions.threadParticipation already set).",
+    ]);
+  });
 });

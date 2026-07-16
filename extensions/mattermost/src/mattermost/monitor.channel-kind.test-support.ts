@@ -1,6 +1,6 @@
 // Mattermost test support covers monitor.channel kind plugin behavior.
 import { describe, expect, it } from "vitest";
-import { mapMattermostChannelTypeToChatType } from "./monitor-gating.js";
+import { mapMattermostChannelTypeToChatType } from "./monitor-auth.js";
 
 describe("mapMattermostChannelTypeToChatType", () => {
   it("maps direct and group dm channel types", () => {
