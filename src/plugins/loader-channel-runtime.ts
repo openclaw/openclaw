@@ -247,7 +247,10 @@ export function loadSetupRuntimeChannelCandidate(params: {
     }
   }
   if (registrationPlan.mode === "setup-runtime" && mergedSetupRegistration.registerSetupRuntime) {
-    const transaction = createPluginRegistrationTransaction({ registry: registryBuilder.registry });
+    const transaction = createPluginRegistrationTransaction({
+      registry: registryBuilder.registry,
+      activeRecord: record,
+    });
     try {
       runPluginRegisterSync(
         (registrationApi) => mergedSetupRegistration.registerSetupRuntime?.(registrationApi),
