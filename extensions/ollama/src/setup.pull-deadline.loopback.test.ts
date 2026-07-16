@@ -141,7 +141,9 @@ describe("Ollama pull stream no-progress loopback", () => {
       settled = true;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 500);
+    });
     expect(settled).toBe(false);
 
     // Cleanup: no-progress still bounds the drip so afterEach does not hang.
