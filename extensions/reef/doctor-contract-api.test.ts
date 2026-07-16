@@ -45,8 +45,10 @@ import {
   REEF_KEYS_NAMESPACE,
   REEF_DELIVERED_MAX_ENTRIES,
   REEF_DELIVERED_NAMESPACE,
+  REEF_DELIVERED_TTL_MS,
   REEF_REPLAY_MAX_ENTRIES,
   REEF_REPLAY_NAMESPACE,
+  REEF_REPLAY_TTL_MS,
   REEF_REGISTRATION_IDENTITY_KEY,
   REEF_REGISTRATION_MAX_ENTRIES,
   REEF_REGISTRATION_NAMESPACE,
@@ -600,6 +602,7 @@ describe("Reef doctor contract", () => {
       namespace: REEF_REPLAY_NAMESPACE,
       maxEntries: REEF_REPLAY_MAX_ENTRIES,
       overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_REPLAY_TTL_MS,
     });
     await partiallyImportedReplay.register(reefReplayStoreKey("alice", replayId), {
       peer: "alice",
@@ -634,6 +637,7 @@ describe("Reef doctor contract", () => {
       namespace: REEF_REPLAY_NAMESPACE,
       maxEntries: REEF_REPLAY_MAX_ENTRIES,
       overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_REPLAY_TTL_MS,
     });
     await expect(replayStore.lookup(reefReplayStoreKey("alice", replayId))).resolves.toMatchObject({
       state: "consumed",
@@ -657,9 +661,58 @@ describe("Reef doctor contract", () => {
     const deliveredStore = context.openPluginStateKeyedStore<{ id: string }>({
       namespace: REEF_DELIVERED_NAMESPACE,
       maxEntries: REEF_DELIVERED_MAX_ENTRIES,
-      overflowPolicy: "evict-oldest",
+      overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_DELIVERED_TTL_MS,
     });
     await expect(deliveredStore.lookup(replayId)).resolves.toEqual({ id: replayId });
+  });
+
+  it("leaves oversized replay and delivered sources blocked and unarchived", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const replayPath = path.join(legacyDir, "replay.jsonl");
+    const deliveredPath = path.join(legacyDir, "delivered.json");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const replayIds = Array.from(
+      { length: REEF_REPLAY_MAX_ENTRIES + 1 },
+      (_, index) => `replay-${index}`,
+    );
+    fs.writeFileSync(
+      replayPath,
+      `${replayIds
+        .map((id) => JSON.stringify({ op: "claim", peer: "alice", id, envelopeHash: id }))
+        .join("\n")}\n`,
+    );
+    fs.writeFileSync(
+      deliveredPath,
+      JSON.stringify(
+        Array.from({ length: REEF_DELIVERED_MAX_ENTRIES + 1 }, (_, index) => `delivered-${index}`),
+      ),
+    );
+    const migration = migrationById("reef-runtime-files-to-plugin-state");
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        `${REEF_REPLAY_MAX_ENTRIES + 1} replay bindings exceed plugin-state capacity`,
+      ),
+      expect.stringContaining(
+        `${REEF_DELIVERED_MAX_ENTRIES + 1} delivered markers exceed plugin-state capacity`,
+      ),
+      expect.stringContaining("Reef durable state migration is incomplete"),
+    ]);
+    for (const filePath of [replayPath, deliveredPath]) {
+      expect(fs.existsSync(filePath)).toBe(true);
+      expect(fs.existsSync(`${filePath}.migrated`)).toBe(false);
+    }
   });
 
   it("imports config-backed trust into scoped plugin state without overwriting canonical rows", async () => {

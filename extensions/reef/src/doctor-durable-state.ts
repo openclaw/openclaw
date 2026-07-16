@@ -30,11 +30,13 @@ import {
   REEF_AUDIT_STORE_MAX_ENTRIES,
   REEF_DELIVERED_MAX_ENTRIES,
   REEF_DELIVERED_NAMESPACE,
+  REEF_DELIVERED_TTL_MS,
   REEF_DURABLE_MIGRATION_KEY,
   REEF_DURABLE_MIGRATION_MAX_ENTRIES,
   REEF_DURABLE_MIGRATION_NAMESPACE,
   REEF_REPLAY_MAX_ENTRIES,
   REEF_REPLAY_NAMESPACE,
+  REEF_REPLAY_TTL_MS,
   REEF_REVIEWS_MAX_ENTRIES,
   REEF_REVIEWS_NAMESPACE,
   parseReefAuditHead,
@@ -485,27 +487,30 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
     if (await legacyReefFileExists(replayPath)) {
       try {
         const legacy = await readLegacyReefReplay(replayPath);
-        const retained = legacy.slice(-REEF_REPLAY_MAX_ENTRIES);
         const store = params.context.openPluginStateKeyedStore<ReefReplayRecord>({
           namespace: REEF_REPLAY_NAMESPACE,
           maxEntries: REEF_REPLAY_MAX_ENTRIES,
           overflowPolicy: "reject-new",
+          defaultTtlMs: REEF_REPLAY_TTL_MS,
         });
         const canonicalEntries = await store.entries();
         const canonical = new Map(canonicalEntries.map((entry) => [entry.key, entry.value]));
-        for (const record of retained) {
+        for (const record of legacy) {
           const key = reefReplayStoreKey(record.peer, record.id);
           const existing = canonical.get(key);
           if (existing && JSON.stringify(existing) !== JSON.stringify(record)) {
             throw new Error(`canonical replay state ${key} differs`);
           }
         }
-        const missing = retained.filter(
+        const missing = legacy.filter(
           (record) => !canonical.has(reefReplayStoreKey(record.peer, record.id)),
         );
-        const available = Math.max(0, REEF_REPLAY_MAX_ENTRIES - canonical.size);
-        const imported = available > 0 ? missing.slice(-available) : [];
-        for (const record of imported) {
+        if (canonical.size + missing.length > REEF_REPLAY_MAX_ENTRIES) {
+          throw new Error(
+            `${canonical.size + missing.length} replay bindings exceed plugin-state capacity`,
+          );
+        }
+        for (const record of missing) {
           await store.registerIfAbsent(reefReplayStoreKey(record.peer, record.id), record);
         }
         for (const entry of canonicalEntries) {
@@ -513,7 +518,7 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
             throw new Error(`canonical replay state ${entry.key} changed during import`);
           }
         }
-        for (const record of imported) {
+        for (const record of missing) {
           if (
             JSON.stringify(await store.lookup(reefReplayStoreKey(record.peer, record.id))) !==
             JSON.stringify(record)
@@ -521,10 +526,7 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
             throw new Error("persisted replay state differs");
           }
         }
-        const retainedCount = retained.length - missing.length + imported.length;
-        changes.push(
-          `Migrated ${retainedCount} of ${legacy.length} Reef replay bindings -> plugin state`,
-        );
+        changes.push(`Migrated ${legacy.length} Reef replay bindings -> plugin state`);
         await archiveLegacyStateSource({
           filePath: replayPath,
           label: "Reef replay state",
@@ -584,24 +586,27 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
     if (await legacyReefFileExists(deliveredPath)) {
       try {
         const legacy = await readLegacyReefDelivered(deliveredPath);
-        const retained = legacy.slice(-REEF_DELIVERED_MAX_ENTRIES);
         const store = params.context.openPluginStateKeyedStore<{ id: string }>({
           namespace: REEF_DELIVERED_NAMESPACE,
           maxEntries: REEF_DELIVERED_MAX_ENTRIES,
-          overflowPolicy: "evict-oldest",
+          overflowPolicy: "reject-new",
+          defaultTtlMs: REEF_DELIVERED_TTL_MS,
         });
         const canonicalEntries = await store.entries();
         const canonical = new Map(canonicalEntries.map((entry) => [entry.key, entry.value]));
-        for (const id of retained) {
+        for (const id of legacy) {
           const existing = canonical.get(id);
           if (existing && existing.id !== id) {
             throw new Error(`canonical delivered marker ${id} differs`);
           }
         }
-        const missing = retained.filter((id) => !canonical.has(id));
-        const available = Math.max(0, REEF_DELIVERED_MAX_ENTRIES - canonical.size);
-        const imported = available > 0 ? missing.slice(-available) : [];
-        for (const id of imported) {
+        const missing = legacy.filter((id) => !canonical.has(id));
+        if (canonical.size + missing.length > REEF_DELIVERED_MAX_ENTRIES) {
+          throw new Error(
+            `${canonical.size + missing.length} delivered markers exceed plugin-state capacity`,
+          );
+        }
+        for (const id of missing) {
           await store.registerIfAbsent(id, { id });
         }
         for (const entry of canonicalEntries) {
@@ -609,15 +614,12 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
             throw new Error(`canonical delivered marker ${entry.key} changed during import`);
           }
         }
-        for (const id of imported) {
+        for (const id of missing) {
           if ((await store.lookup(id))?.id !== id) {
             throw new Error(`persisted delivered marker ${id} differs`);
           }
         }
-        const retainedCount = retained.length - missing.length + imported.length;
-        changes.push(
-          `Migrated ${retainedCount} of ${legacy.length} Reef delivered markers -> plugin state`,
-        );
+        changes.push(`Migrated ${legacy.length} Reef delivered markers -> plugin state`);
         await archiveLegacyStateSource({
           filePath: deliveredPath,
           label: "Reef delivered markers",

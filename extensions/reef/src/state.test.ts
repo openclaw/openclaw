@@ -29,6 +29,7 @@ import {
   openStores,
   finalizeReefIdentityBinding,
   REEF_DELIVERED_NAMESPACE,
+  REEF_REPLAY_TTL_MS,
   REEF_REVIEWS_NAMESPACE,
   releaseReefIdentityReservation,
   reserveReefIdentityBinding,
@@ -419,6 +420,7 @@ describe("Reef SQLite state", () => {
       namespace: "replay",
       maxEntries: 3_000,
       overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_REPLAY_TTL_MS,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
     expect(JSON.stringify(raw.entries())).not.toContain(body.text);
@@ -439,6 +441,7 @@ describe("Reef SQLite state", () => {
       namespace: "replay",
       maxEntries: 3_000,
       overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_REPLAY_TTL_MS,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
     const key = reefReplayStoreKey("alice", receiptId);
@@ -506,6 +509,24 @@ describe("Reef SQLite state", () => {
     await expect(openStores(createRuntime(stateDir), keys).delivered.has(receiptId)).resolves.toBe(
       true,
     );
+  });
+
+  it("fails closed instead of evicting live replay and delivered state", async () => {
+    const identity = generateIdentity();
+    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const stores = openStores(createRuntime(stateDir), keys, {
+      replayMaxEntries: 1,
+      deliveredMaxEntries: 1,
+    });
+
+    await expect(stores.replay.claim("alice", "first", "a".repeat(64))).resolves.toBe("new");
+    await stores.replay.consume("alice", "first");
+    await expect(stores.replay.claim("alice", "second", "b".repeat(64))).rejects.toThrow();
+    await expect(stores.replay.claim("alice", "first", "a".repeat(64))).resolves.toBe("duplicate");
+
+    await stores.delivered.add("first");
+    await expect(stores.delivered.add("second")).rejects.toThrow();
+    await expect(stores.delivered.has("first")).resolves.toBe(true);
   });
 
   it("fails when a pending review claim does not persist", async () => {

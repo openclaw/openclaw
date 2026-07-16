@@ -11,6 +11,7 @@ import {
   fromBase64,
   fromBase64url,
   generateIdentity,
+  REEF_ENVELOPE_MAX_AGE_SECONDS,
   validateMessageBody,
   type CompletedReplay,
   type MessageBody,
@@ -38,10 +39,12 @@ export const REEF_DURABLE_MIGRATION_KEY = "legacy-files";
 export const REEF_DURABLE_MIGRATION_MAX_ENTRIES = 1;
 export const REEF_REPLAY_NAMESPACE = "replay";
 export const REEF_REPLAY_MAX_ENTRIES = 3_000;
+export const REEF_REPLAY_TTL_MS = (REEF_ENVELOPE_MAX_AGE_SECONDS + 24 * 60 * 60) * 1_000;
 export const REEF_REVIEWS_NAMESPACE = "reviews";
 export const REEF_REVIEWS_MAX_ENTRIES = 2_000;
 export const REEF_DELIVERED_NAMESPACE = "delivered";
 export const REEF_DELIVERED_MAX_ENTRIES = 5_000;
+export const REEF_DELIVERED_TTL_MS = REEF_REPLAY_TTL_MS;
 
 export type ReefReplayRecord = {
   peer: string;
@@ -217,6 +220,7 @@ class ReefSqliteReplayStore implements ReplayStore {
     runtime: PluginRuntime,
     bodyKey: Uint8Array,
     rng: (length: number) => Uint8Array = randomBytes,
+    maxEntries = REEF_REPLAY_MAX_ENTRIES,
   ) {
     if (bodyKey.length !== 32) {
       throw new Error("replay body key must be 32 bytes");
@@ -225,38 +229,12 @@ class ReefSqliteReplayStore implements ReplayStore {
     this.#rng = rng;
     this.#store = runtime.state.openSyncKeyedStore<ReefReplayRecord>({
       namespace: REEF_REPLAY_NAMESPACE,
-      maxEntries: REEF_REPLAY_MAX_ENTRIES,
+      maxEntries,
       overflowPolicy: "reject-new",
+      // Once this expires, the protocol rejects the original envelope by age.
+      // The margin covers clock skew and delayed local processing.
+      defaultTtlMs: REEF_REPLAY_TTL_MS,
     });
-  }
-
-  #makeRoomForNewBinding(key: string): void {
-    const entries = this.#store.entries();
-    if (entries.length < REEF_REPLAY_MAX_ENTRIES) {
-      return;
-    }
-    const deleteIf = this.#store.deleteIf;
-    if (!deleteIf) {
-      throw new Error("Reef replay retention requires atomic plugin-state deleteIf");
-    }
-    const candidate = entries
-      .filter(
-        (entry) =>
-          entry.key !== key &&
-          (entry.value.state !== "in_flight" || (entry.value.claimExpiresAt ?? 0) <= Date.now()),
-      )
-      .toSorted((left, right) => left.createdAt - right.createdAt)[0];
-    if (
-      !candidate ||
-      !deleteIf(
-        candidate.key,
-        (current) =>
-          (current.state !== "in_flight" || (current.claimExpiresAt ?? 0) <= Date.now()) &&
-          JSON.stringify(current) === JSON.stringify(candidate.value),
-      )
-    ) {
-      throw new Error("Reef replay binding capacity is exhausted by in-flight claims");
-    }
   }
 
   #update(
@@ -275,9 +253,6 @@ class ReefSqliteReplayStore implements ReplayStore {
 
   async claim(peer: string, id: string, envelopeHash: string): Promise<ReplayClaim> {
     const key = reefReplayStoreKey(peer, id);
-    if (!this.#store.lookup(key)) {
-      this.#makeRoomForNewBinding(key);
-    }
     let result: ReplayClaim = "new";
     const owner = randomUUID();
     const claimExpiresAt = Date.now() + REEF_REPLAY_CLAIM_LEASE_MS;
@@ -505,13 +480,14 @@ export class ReviewApprovalStore {
 export class ReefDeliveredStore {
   readonly #store: PluginStateSyncKeyedStore<{ id: string }>;
 
-  constructor(runtime: PluginRuntime) {
+  constructor(runtime: PluginRuntime, maxEntries = REEF_DELIVERED_MAX_ENTRIES) {
     this.#store = runtime.state.openSyncKeyedStore<{ id: string }>({
       namespace: REEF_DELIVERED_NAMESPACE,
-      maxEntries: REEF_DELIVERED_MAX_ENTRIES,
-      // Plugin state performs eviction and insertion in one SQLite write
-      // transaction while protecting the just-registered key.
-      overflowPolicy: "evict-oldest",
+      maxEntries,
+      overflowPolicy: "reject-new",
+      // Relay redelivery is bounded by the same envelope-age contract as replay.
+      // Keep markers longer than that window and fail closed at live capacity.
+      defaultTtlMs: REEF_DELIVERED_TTL_MS,
     });
   }
 
@@ -532,13 +508,22 @@ export class ReefDeliveredStore {
 export function openStores(
   runtime: PluginRuntime,
   keys: ReefKeys,
-  options: { auditMaxEntries?: number } = {},
+  options: {
+    auditMaxEntries?: number;
+    replayMaxEntries?: number;
+    deliveredMaxEntries?: number;
+  } = {},
 ) {
   assertReefIdentityMigrationComplete(runtime);
   return {
     audit: openReefAuditStore(runtime, fromBase64url(keys.auditKey), options.auditMaxEntries),
-    replay: new ReefSqliteReplayStore(runtime, fromBase64url(keys.replayKey)),
+    replay: new ReefSqliteReplayStore(
+      runtime,
+      fromBase64url(keys.replayKey),
+      randomBytes,
+      options.replayMaxEntries,
+    ),
     reviews: new ReviewApprovalStore(runtime),
-    delivered: new ReefDeliveredStore(runtime),
+    delivered: new ReefDeliveredStore(runtime, options.deliveredMaxEntries),
   };
 }

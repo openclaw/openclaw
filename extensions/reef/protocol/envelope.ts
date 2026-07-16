@@ -139,6 +139,7 @@ export type ClaimedOpenResult =
 const MAX_PLAINTEXT = 32 * 1024;
 const MAX_CIPHERTEXT_BASE64 = 44_752;
 const MAX_ENVELOPE_BYTES = 48 * 1024;
+export const REEF_ENVELOPE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const HKDF_INFO = utf8("reef-v1");
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
@@ -239,7 +240,7 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
   }
   try {
     const now = options.now ?? Math.floor(Date.now() / 1000);
-    const maxAge = options.maxAgeSeconds ?? 2_592_000;
+    const maxAge = options.maxAgeSeconds ?? REEF_ENVELOPE_MAX_AGE_SECONDS;
     const maxFutureSkew = options.maxFutureSkewSeconds ?? 300;
     if (envelope.ts > now + maxFutureSkew || envelope.ts < now - maxAge) {
       throw new ExpiredError();
