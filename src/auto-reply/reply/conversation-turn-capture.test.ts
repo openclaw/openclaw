@@ -352,6 +352,53 @@ describe("conversation turn capture", () => {
     ).toEqual([]);
   });
 
+  it("consumes duplicate replies that promoted an unthreaded message into a thread", async () => {
+    const setup = await setupReefConversation();
+    const operationId = "turn-promoted-thread";
+    const outboundMessageId = "reef-promoted-root";
+    persistSentOperation({
+      scope: setup.scope,
+      operationId,
+      conversationRef: setup.conversationRef,
+      outboundMessageId,
+    });
+    const pending = registerPendingConversationTurn({
+      id: operationId,
+      conversationRef: setup.conversationRef,
+      sessionId: setup.sessionId,
+      timeoutMs: 5_000,
+    });
+    pending.setOutboundMessageId(outboundMessageId);
+    pending.markReady();
+    const inboundContext = {
+      AgentId: "main",
+      SessionKey: setup.sessionKey,
+      ChatType: "direct",
+      Provider: "reef",
+      InboundAccessAuthorized: true,
+      OriginatingChannel: "reef",
+      OriginatingTo: "reef:peer-agent",
+      NativeDirectUserId: "peer-agent",
+      MessageThreadId: outboundMessageId,
+      MessageSidFull: "reef-promoted-reply",
+      ReplyToIdFull: outboundMessageId,
+      RawBody: "thread-promoted reply",
+      BodyForAgent: "thread-promoted reply",
+    } as FinalizedMsgContext;
+
+    await expect(
+      capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
+    ).resolves.toBe(true);
+    await expect(pending.wait()).resolves.toMatchObject({
+      messageId: "reef-promoted-reply",
+      replyToId: outboundMessageId,
+      threadId: outboundMessageId,
+    });
+    await expect(
+      capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),
+    ).resolves.toBe(true);
+  });
+
   it("captures a threaded reply only for the exact conversation and message", async () => {
     const stateDir = tempDirs.make("openclaw-conversation-capture-");
     const storePath = path.join(stateDir, "sessions.json");

@@ -105,6 +105,15 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     return false;
   }
   const timestamp = normalizeTimestamp(params.ctx.Timestamp);
+  const parentConversationRef = threadId
+    ? (conversation.parentConversationRef ??
+      buildConversationRef({
+        channel: conversation.channel,
+        accountId: conversation.accountId,
+        kind: conversation.kind,
+        peerId: conversation.peerId,
+      }))
+    : undefined;
   const input: UserTurnInput = {
     // This is the model-facing reply returned by the tool, so its durable copy
     // must pass through the same write hook and redaction policy as transcripts.
@@ -130,18 +139,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   };
   const claim = await claimPendingConversationTurnReply({
     conversationRef: conversation.conversationRef,
-    ...(threadId
-      ? {
-          parentConversationRef:
-            conversation.parentConversationRef ??
-            buildConversationRef({
-              channel: conversation.channel,
-              accountId: conversation.accountId,
-              kind: conversation.kind,
-              peerId: conversation.peerId,
-            }),
-        }
-      : {}),
+    ...(parentConversationRef ? { parentConversationRef } : {}),
     sessionId: sessionEntry.sessionId,
     messageId,
     replyToId,
@@ -151,10 +149,17 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   });
   if (!claim) {
     if (replyToId) {
-      const operation = findConversationDeliveryByReplyTarget(
-        { agentId, storePath },
-        { conversationRef: conversation.conversationRef, replyToId },
-      );
+      const operation =
+        findConversationDeliveryByReplyTarget(
+          { agentId, storePath },
+          { conversationRef: conversation.conversationRef, replyToId },
+        ) ??
+        (parentConversationRef && parentConversationRef !== conversation.conversationRef
+          ? findConversationDeliveryByReplyTarget(
+              { agentId, storePath },
+              { conversationRef: parentConversationRef, replyToId },
+            )
+          : undefined);
       if (operation?.status === "replied" && operation.reply?.messageId === messageId) {
         // A transport retry of the already-captured message remains consumed;
         // starting an ordinary turn would surface the same peer reply twice.

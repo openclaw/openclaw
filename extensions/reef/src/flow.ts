@@ -129,6 +129,7 @@ export class ReefMessageFlow {
       expectedRecipient?: ReefPeerIdentity;
       resendDisabled?: true;
       messageId?: string;
+      onPlatformSendDispatch?: () => Promise<void>;
     } = {},
   ): Promise<string> {
     const friend = this.options.trust.get(peer);
@@ -174,6 +175,9 @@ export class ReefMessageFlow {
       },
       context.resendDisabled ? { resendDisabled: true } : {},
     );
+    // Guard/review/encryption are local and may reject safely. Mark ambiguity
+    // only at the relay boundary so recovery never treats those failures as sent.
+    await context.onPlatformSendDispatch?.();
     await this.options.transport.sendEnvelope(peer, result.envelope);
     return id;
   }

@@ -1,3 +1,4 @@
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
@@ -10,10 +11,17 @@ describe("reefOutboundAdapter", () => {
 
   it("normalizes the SDK target and delegates only message content/context to the guarded flow", async () => {
     const order: string[] = [];
-    const send = vi.fn(async () => {
-      order.push("send");
-      return "01JZ0000000000000000000200";
-    });
+    const send = vi.fn(
+      async (
+        _peer: string,
+        _text: string,
+        context: { onPlatformSendDispatch?: () => Promise<void> },
+      ) => {
+        await context.onPlatformSendDispatch?.();
+        order.push("send");
+        return "01JZ0000000000000000000200";
+      },
+    );
     const onPlatformSendDispatch = vi.fn(async () => {
       order.push("dispatch");
     });
@@ -41,15 +49,23 @@ describe("reefOutboundAdapter", () => {
       thread: "42",
       replyTo: "01JZ0000000000000000000199",
       messageId: "01JZ0000000000000000000200",
+      onPlatformSendDispatch: expect.any(Function),
     });
   });
 
   it("marks message-adapter dispatch before encrypted transport I/O", async () => {
     const order: string[] = [];
-    const send = vi.fn(async () => {
-      order.push("send");
-      return "01JZ0000000000000000000200";
-    });
+    const send = vi.fn(
+      async (
+        _peer: string,
+        _text: string,
+        context: { onPlatformSendDispatch?: () => Promise<void> },
+      ) => {
+        await context.onPlatformSendDispatch?.();
+        order.push("send");
+        return "01JZ0000000000000000000200";
+      },
+    );
     setActiveReef({ flow: { send }, friends: {}, reviews: {} } as never);
 
     await reefMessageAdapter.send.text({
@@ -62,6 +78,53 @@ describe("reefOutboundAdapter", () => {
     });
 
     expect(order).toEqual(["dispatch", "send"]);
+  });
+
+  it("proves local flow failures happened before platform dispatch", async () => {
+    const cause = new Error("guard denied");
+    const send = vi.fn(async () => {
+      throw cause;
+    });
+    setActiveReef({ flow: { send }, friends: {}, reviews: {} } as never);
+
+    const error = await reefMessageAdapter.send
+      .text({
+        cfg: {},
+        to: "reef:Alice",
+        text: "hello",
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({ cause });
+  });
+
+  it("keeps relay failures ambiguous after platform dispatch starts", async () => {
+    const cause = new Error("relay outcome unknown");
+    const send = vi.fn(
+      async (
+        _peer: string,
+        _text: string,
+        context: { onPlatformSendDispatch?: () => Promise<void> },
+      ) => {
+        await context.onPlatformSendDispatch?.();
+        throw cause;
+      },
+    );
+    const onPlatformSendDispatch = vi.fn(async () => undefined);
+    setActiveReef({ flow: { send }, friends: {}, reviews: {} } as never);
+
+    const error = await reefMessageAdapter.send
+      .text({
+        cfg: {},
+        to: "reef:Alice",
+        text: "hello",
+        onPlatformSendDispatch,
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(error).toBe(cause);
   });
 
   it("prepares a protocol-valid id without requiring an active Gateway runtime", () => {
@@ -79,6 +142,16 @@ describe("reefOutboundAdapter", () => {
     expect(first).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/u);
     expect(second).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/u);
     expect(second > first).toBe(true);
+  });
+
+  it("rejects oversized correlated text during pre-queue id preparation", () => {
+    expect(() =>
+      reefOutboundAdapter.prepareConversationTurnMessageId!({
+        cfg: {},
+        to: "reef:alice",
+        text: "x".repeat(32 * 1024),
+      }),
+    ).toThrow("atomic message limit");
   });
 
   it("rejects oversized final correlated text before the encrypted flow", async () => {

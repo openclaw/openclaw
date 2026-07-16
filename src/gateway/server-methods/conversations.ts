@@ -47,7 +47,7 @@ function bindConversationTurnIdentity(
   }
   const prior = context.dedupe.get(identityKey);
   if (prior) {
-    if (prior.ok !== true || prior.requestIdentity !== identity) {
+    if (!prior.ok || prior.requestIdentity !== identity) {
       return null;
     }
     context.dedupe.set(identityKey, { ...prior, ts: Date.now() });

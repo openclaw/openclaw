@@ -271,8 +271,21 @@ describe("ReefMessageFlow outbound", () => {
       onOwnerNotice: async () => {},
     });
     const reservedId = "01JZ0000000000000000000201";
+    const order: string[] = [];
+    relay.sendEnvelope.mockImplementationOnce(async (_peer, envelope) => {
+      order.push("relay");
+      return { id: envelope.id, status: "queued" };
+    });
 
-    await expect(flow.send("bob", "hello", { messageId: reservedId })).resolves.toBe(reservedId);
+    await expect(
+      flow.send("bob", "hello", {
+        messageId: reservedId,
+        onPlatformSendDispatch: async () => {
+          order.push("dispatch");
+        },
+      }),
+    ).resolves.toBe(reservedId);
+    expect(order).toEqual(["dispatch", "relay"]);
     const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
     expect(sent.id).toBe(reservedId);
   });
@@ -361,11 +374,19 @@ describe("ReefMessageFlow outbound", () => {
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
+    const onPlatformSendDispatch = vi.fn(async () => undefined);
 
     await expect(flow.send("bob", "ordinary text")).rejects.toMatchObject({
       stage: "guard",
       message: expect.stringContaining("Do not retry or rephrase it automatically"),
     });
+    await expect(
+      flow.send("bob", "ordinary text", { onPlatformSendDispatch }),
+    ).rejects.toMatchObject({
+      stage: "guard",
+      message: expect.stringContaining("Do not retry or rephrase it automatically"),
+    });
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
     expect(relay.sendEnvelope).not.toHaveBeenCalled();
   });
 });

@@ -260,6 +260,37 @@ describe("runGatewayConversationTurn", () => {
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
+  it("rejects channel preflight before creating a durable operation", async () => {
+    const deps = createDeps();
+    deps.resolveOutboundChannelPlugin.mockReturnValueOnce({
+      outbound: {
+        prepareConversationTurnMessageId: () => {
+          throw new Error("atomic message limit");
+        },
+      },
+    } as never);
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          turnId: "turn-preflight-rejected",
+          conversationRef: conversation.conversationRef,
+          message: "oversized",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).rejects.toMatchObject({
+      name: "ConversationTurnInputError",
+      message: "atomic message limit",
+    });
+    expect(deps.beginOperation).not.toHaveBeenCalled();
+    expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
   it("disables inline correlation when delivery changes the reserved id", async () => {
     const deps = createDeps();
     deps.runMessageAction = vi.fn(async (input: Record<string, unknown>) => {

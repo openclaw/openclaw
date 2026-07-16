@@ -6,12 +6,29 @@ import type {
   ChannelOutboundAdapter,
   OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
 import { normalizeReefTarget } from "./config-schema.js";
 import { prepareReefMessageId } from "./flow.js";
 import { getActiveReef } from "./runtime.js";
 
 const MAX_REEF_BODY_ID = "0".repeat(26);
+
+function assertAtomicReefMessageFits(params: {
+  text: string;
+  threadId?: string | number | null;
+  replyToId?: string | null;
+}): void {
+  if (
+    canonicalBytes({
+      text: params.text,
+      ...(params.threadId != null ? { thread: String(params.threadId) } : {}),
+      ...(params.replyToId ? { replyTo: params.replyToId } : {}),
+    }).length > REEF_MAX_PLAINTEXT_BYTES
+  ) {
+    throw new Error("Reef conversation turn exceeds the 32 KiB atomic message limit");
+  }
+}
 
 function reefChunkFits(text: string, maxBytes: number): boolean {
   // Reserve both optional ids so the same chunk is valid with replies and threads.
@@ -76,25 +93,33 @@ async function send(
   if (!peer) {
     throw new Error("Reef target must be a handle");
   }
-  if (
-    preparedMessageId &&
-    canonicalBytes({
-      text,
+  let platformDispatchMarked = false;
+  let id: string;
+  try {
+    if (preparedMessageId) {
+      // Correlated turns cannot be split after reserving one transport id. Check
+      // here so response prefixes and other send-time transforms are included.
+      assertAtomicReefMessageFits({ text, threadId, replyToId });
+    }
+    const flow = getActiveReef().flow;
+    id = await flow.send(peer, text, {
       ...(threadId != null ? { thread: String(threadId) } : {}),
       ...(replyToId ? { replyTo: replyToId } : {}),
-    }).length > REEF_MAX_PLAINTEXT_BYTES
-  ) {
-    // Correlated turns cannot be split after reserving one transport id. Check
-    // here so response prefixes and other send-time transforms are included.
-    throw new Error("Reef conversation turn exceeds the 32 KiB atomic message limit");
+      ...(preparedMessageId ? { messageId: preparedMessageId } : {}),
+      onPlatformSendDispatch: async () => {
+        await onPlatformSendDispatch?.();
+        platformDispatchMarked = true;
+      },
+    });
+  } catch (cause) {
+    if (!platformDispatchMarked) {
+      throw new PlatformMessageNotDispatchedError(
+        cause instanceof Error ? cause.message : String(cause),
+        { cause },
+      );
+    }
+    throw cause;
   }
-  const flow = getActiveReef().flow;
-  await onPlatformSendDispatch?.();
-  const id = await flow.send(peer, text, {
-    ...(threadId != null ? { thread: String(threadId) } : {}),
-    ...(replyToId ? { replyTo: replyToId } : {}),
-    ...(preparedMessageId ? { messageId: preparedMessageId } : {}),
-  });
   return { channel: "reef", messageId: id, chatId: peer, toJid: `reef:${peer}` };
 }
 
@@ -103,7 +128,11 @@ export const reefOutboundAdapter: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
   textChunkLimit: REEF_MAX_PLAINTEXT_BYTES,
   chunker: chunkReefText,
-  prepareConversationTurnMessageId: () => prepareReefMessageId(),
+  prepareConversationTurnMessageId: ({ text, threadId }) => {
+    // Runs in Gateway correlation setup before the operation and queue row exist.
+    assertAtomicReefMessageFits({ text, threadId });
+    return prepareReefMessageId();
+  },
   deliveryCapabilities: { durableFinal: { text: true, replyTo: true, thread: true } },
   resolveTarget: ({ to }) => {
     const peer = normalizeReefTarget(to ?? "");

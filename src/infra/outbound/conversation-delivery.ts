@@ -105,6 +105,7 @@ function resultFromExistingOperation(
     case "created":
       return undefined;
   }
+  return operation.status satisfies never;
 }
 
 /**

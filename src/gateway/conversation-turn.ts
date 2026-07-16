@@ -115,6 +115,7 @@ function resultForCompletedOperation(params: {
         error: "A reply was recorded, but its durable reply payload is incomplete.",
       };
   }
+  return operation.status satisfies never;
 }
 
 function prepareConversationMessageId(params: {
