@@ -445,6 +445,21 @@ describe("CodexAppServerClient", () => {
     );
   });
 
+  it("keeps bounded stderr tails on UTF-16 boundaries", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const pending = harness.client.request("test/method");
+
+    harness.process.stderr.write(`🎉${"x".repeat(1_999)}`);
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      `codex app-server exited: code=1 signal=null stderr=${JSON.stringify(
+        `${"x".repeat(500)}...`,
+      )}`,
+    );
+  });
+
   it("does not write to stdin after the child process exits", () => {
     const harness = createClientHarness();
     clients.push(harness.client);
