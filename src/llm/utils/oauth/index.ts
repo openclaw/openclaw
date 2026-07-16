@@ -92,7 +92,7 @@ export class OAuthProviderRegistry {
 /**
  * Get a built-in OAuth provider by ID.
  */
-export function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | undefined {
+function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | undefined {
   return BUILT_IN_OAUTH_PROVIDERS.find((provider) => provider.id === id);
 }
 
