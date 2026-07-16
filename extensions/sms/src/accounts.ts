@@ -2,6 +2,7 @@
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   DEFAULT_ACCOUNT_ID,
+  hasConfiguredAccountValue,
   listCombinedAccountIds,
   resolveAccountEntry,
   resolveListedDefaultAccountId,
@@ -51,25 +52,19 @@ function firstNonBlankEnv(...values: Array<string | undefined>): string | undefi
   return values.find((value) => value?.trim());
 }
 
-function hasNonBlankString(...values: Array<string | undefined>): boolean {
-  return values.some((value) => Boolean(value?.trim()));
-}
-
 function hasBaseAccount(channelCfg: SmsChannelConfig | undefined): boolean {
-  return Boolean(
-    hasNonBlankString(
+  return (
+    [
       channelCfg?.accountSid,
       channelCfg?.fromNumber,
       channelCfg?.messagingServiceSid,
-    ) ||
-    hasConfiguredSecretInput(channelCfg?.authToken) ||
-    firstNonBlankEnv(
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_AUTH_TOKEN,
       process.env.TWILIO_PHONE_NUMBER,
       process.env.TWILIO_SMS_FROM,
       process.env.TWILIO_MESSAGING_SERVICE_SID,
-    ),
+    ].some((value) => hasConfiguredAccountValue(value)) ||
+    hasConfiguredSecretInput(channelCfg?.authToken)
   );
 }
 

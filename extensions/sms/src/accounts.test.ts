@@ -232,7 +232,7 @@ describe("SMS account config", () => {
     });
   });
 
-  it("does not discover blank env values as the implicit default account", () => {
+  it("does not discover blank credential strings as the implicit default account", () => {
     process.env.TWILIO_ACCOUNT_SID = " ";
     process.env.TWILIO_AUTH_TOKEN = "\t";
     process.env.TWILIO_PHONE_NUMBER = " ";
@@ -240,6 +240,18 @@ describe("SMS account config", () => {
     process.env.TWILIO_MESSAGING_SERVICE_SID = " ";
 
     expect(listSmsAccountIds({})).toEqual([]);
+    expect(
+      listSmsAccountIds({
+        channels: {
+          sms: {
+            accountSid: " ",
+            authToken: "\t",
+            fromNumber: "\n",
+            messagingServiceSid: " ",
+          },
+        },
+      }),
+    ).toEqual([]);
     expect(
       listSmsAccountIds({
         channels: {
