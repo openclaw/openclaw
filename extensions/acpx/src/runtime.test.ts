@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
   type AcpRuntime,
+  type AcpRuntimeCapabilities,
   type AcpRuntimeEvent,
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
@@ -40,6 +41,7 @@ function makeRuntime(
     ensureSession: AcpRuntime["ensureSession"];
     startTurn: NonNullable<AcpRuntime["startTurn"]>;
     runTurn: AcpRuntime["runTurn"];
+    getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
     isHealthy(): boolean;
@@ -83,6 +85,7 @@ function makeRuntime(
           ensureSession: AcpRuntime["ensureSession"];
           startTurn: NonNullable<AcpRuntime["startTurn"]>;
           runTurn: AcpRuntime["runTurn"];
+          getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
           isHealthy(): boolean;
@@ -1002,9 +1005,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:codex:acp:test",
       agent: "codex",
       mode: "persistent",
-      model: "gpt-5.4/xhigh",
+      model: "gpt-5.4",
       thinking: "x-high",
-      sessionOptions: { model: "gpt-5.4/xhigh" },
+      sessionOptions: { model: "gpt-5.4" },
     });
   });
 
@@ -1074,7 +1077,41 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("normalizes Codex ACP thinking config controls to reasoning effort", async () => {
+  it("forwards getCapabilities input handles to the ACPX delegate", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const delegateCapabilities: AcpRuntimeCapabilities = {
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["reasoning_effort", "model"],
+    };
+    const getCapabilities = vi
+      .spyOn(delegate, "getCapabilities")
+      .mockResolvedValue(delegateCapabilities);
+
+    const handle: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+    const input = { handle };
+
+    const result = await runtime.getCapabilities?.(input);
+
+    expect(getCapabilities).toHaveBeenCalledWith(input);
+    expect(result).toBe(delegateCapabilities);
+  });
+
+  it.each([
+    { key: "thinking", value: "minimal", expected: "low" },
+    { key: "reasoning_effort", value: "x-high", expected: "xhigh" },
+  ])("normalizes Codex ACP $key=$value to reasoning effort", async ({ key, value, expected }) => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:codex:acp:test",
@@ -1093,14 +1130,52 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     await runtime.setConfigOption({
       handle,
-      key: "thinking",
-      value: "minimal",
+      key,
+      value,
     });
 
     expect(setConfigOption).toHaveBeenCalledWith({
       handle,
       key: "reasoning_effort",
-      value: "low",
+      value: expected,
+    });
+  });
+
+  it("forwards unsupported thinking config rejection for non-Codex ACP sessions", async () => {
+    const unsupportedThinkingError = new AcpRuntimeError(
+      "ACP_BACKEND_UNSUPPORTED_CONTROL",
+      "unsupported thinking",
+    );
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:gemini:acp:test",
+        agentCommand: "gemini --experimental-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi
+      .spyOn(delegate, "setConfigOption")
+      .mockRejectedValue(unsupportedThinkingError);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:gemini:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:gemini:acp:test",
+      acpxRecordId: "agent:gemini:acp:test",
+    };
+
+    await expect(
+      runtime.setConfigOption({
+        handle,
+        key: "thinking",
+        value: "high",
+      }),
+    ).rejects.toBe(unsupportedThinkingError);
+
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "thinking",
+      value: "high",
     });
   });
 

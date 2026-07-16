@@ -142,13 +142,15 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-config-primitives": 2,
   "command-auth": 81,
   // +2: group scope encoder/key builder mirrored by deprecated compat.
-  compat: 162,
+  // +5: shared channel setup, policy, and config schema helpers.
+  compat: 167,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
   mattermost: 7,
   matrix: 1,
-  "channel-config-schema-legacy": 22,
+  // +3: shared multi-account and group-entry schema builders.
+  "channel-config-schema-legacy": 25,
   "channel-actions": 2,
   "channel-envelope": 3,
   "channel-inbound": 21,
@@ -238,7 +240,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // proxy stream API and codex marker/scaffold pins retained.
       // +2: generic channel retry runner and Retry-After parser.
       // +1: shared speech-provider API key resolver.
-      7952,
+      // +32: shared channel setup, config-schema, policy, and status helpers.
+      7984,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -257,7 +260,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Used-union narrowing of the 31 wildcard barrels.
       // +2: generic channel retry runner and Retry-After parser.
       // +1: shared speech-provider API key resolver.
-      4440,
+      // +24: shared channel setup, config-schema, policy, and status helpers.
+      4464,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -271,7 +275,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +8: channel-outbound plan pins mirrored through deprecated barrels.
       // Used-union narrowing drops inherited deprecated exports.
       // +1: Telegram runner alias retained for plugin SDK compatibility.
-      2978,
+      // +8: shared channel helpers mirrored by deprecated barrels.
+      2986,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

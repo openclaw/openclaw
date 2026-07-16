@@ -26947,7 +26947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 130,
+      "line": 217,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.",
       "surface": "apple",
@@ -26955,7 +26955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 282,
+      "line": 907,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Replace the older OpenClaw in Applications?",
       "surface": "apple",
@@ -26963,7 +26963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 283,
+      "line": 908,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Install OpenClaw in Applications?",
       "surface": "apple",
@@ -26971,7 +26971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 285,
+      "line": 910,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "This copy is newer than the installed app. OpenClaw will replace it and reopen from Applications.",
       "surface": "apple",
@@ -26979,7 +26979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 286,
+      "line": 911,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw will copy itself to Applications and reopen there so updates and launch at login stay reliable.",
       "surface": "apple",
@@ -26987,7 +26987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 288,
+      "line": 913,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Install and Relaunch",
       "surface": "apple",
@@ -26995,7 +26995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 288,
+      "line": 913,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Replace and Relaunch",
       "surface": "apple",
@@ -27003,7 +27003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 312,
+      "line": 938,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.",
       "surface": "apple",

@@ -22,13 +22,6 @@ const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
 // This cold gateway graph can stall after warming Vitest's module cache; its
 // retry completes in seconds, so do not spend the global five-minute timeout.
-// The agents-core module graph can stall emitting nothing after warming
-// Vitest's module cache (observed: cli-runner stripe silent for a full 300s
-// watchdog window, retry green in seconds). A short no-output timeout turns
-// that stall from +5min into +1min on the affected bin.
-const AGENTS_CORE_RUNTIME_ENV = {
-  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
-};
 const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
 };
@@ -484,7 +477,6 @@ function createAgentCoreSplitShards() {
         return createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES).map(
           (batch, index) => ({
             configs: ["test/vitest/vitest.agents-core.config.ts"],
-            env: AGENTS_CORE_RUNTIME_ENV,
             includePatterns: batch,
             requiresDist: false,
             shardName: `${shardName}-${index + 1}`,
@@ -494,7 +486,6 @@ function createAgentCoreSplitShards() {
       return [
         {
           configs: ["test/vitest/vitest.agents-core.config.ts"],
-          env: AGENTS_CORE_RUNTIME_ENV,
           includePatterns,
           requiresDist: false,
           shardName,
