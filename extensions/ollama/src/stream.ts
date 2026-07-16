@@ -488,9 +488,6 @@ export function createConfiguredOllamaCompatStreamWrapper(
   return streamFn;
 }
 
-/** @deprecated Use createConfiguredOllamaCompatStreamWrapper. */
-export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
-
 export function buildOllamaChatRequest(params: {
   modelId: string;
   providerId?: string;
@@ -1466,3 +1463,4 @@ export function createConfiguredOllamaStreamFn(params: {
     resolveOllamaModelHeaders(params.model),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

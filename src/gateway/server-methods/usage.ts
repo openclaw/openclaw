@@ -1,6 +1,7 @@
 // Usage gateway methods aggregate provider and session cost/token metrics from
 // caches, logs, session stores, and discovered transcript files.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -83,7 +84,7 @@ async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[
   return result.results;
 }
 
-type DateRange = { startMs: number; endMs: number };
+type DateRange = { startMs: number; endMs: number; includeUntimestamped?: boolean };
 // Keep validation and parsed timestamps in one result so handlers cannot forward
 // an invalid or backwards window to the usage loaders.
 type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: string };
@@ -487,7 +488,10 @@ const resolveDateRange = (
 
   const rangeDays = resolveRangeDays(params.range);
   if (rangeDays === "all") {
-    return { ok: true, value: { startMs: 0, endMs: todayEndMs } };
+    return {
+      ok: true,
+      value: { startMs: 0, endMs: todayEndMs, includeUntimestamped: true },
+    };
   }
   if (rangeDays !== undefined) {
     return resolveTrailingDays(todayDateParts, rangeDays, interpretation);
@@ -1145,7 +1149,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
     const config = context.getRuntimeConfig();
-    const { startMs, endMs } = dateRange.value;
+    const { startMs, endMs, includeUntimestamped } = dateRange.value;
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
@@ -1414,6 +1418,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           startMs,
           endMs,
+          includeUntimestamped,
           dayBucket,
         }),
       })),
@@ -1424,8 +1429,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         if (!summary) {
           continue;
         }
-        const session = agentSessions[index];
-        const merged = mergedEntries[session.entryIndex];
+        const session = expectDefined(agentSessions[index], "agent sessions entry at index");
+        const merged = expectDefined(
+          mergedEntries[session.entryIndex],
+          "merged entries entry at session.entry index",
+        );
         const usage = usageByEntryIndex[session.entryIndex] ?? createEmptySessionCostSummary();
         usage.sessionId = merged.sessionId;
         usage.sessionFile = merged.sessionFile;
@@ -1441,7 +1449,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
-      const usage = usageByEntryIndex[entryIndex];
+      // A cold or stale cache intentionally yields null until its background refresh completes.
+      const usage = usageByEntryIndex[entryIndex] ?? null;
 
       if (usage) {
         addCostUsageTotals(aggregateTotals, usage);
@@ -1716,3 +1725,4 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, { logs: logs ?? [] }, undefined);
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

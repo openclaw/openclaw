@@ -3,13 +3,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -206,7 +207,7 @@ async function runSendWithClient(
   client?: { connect?: { scopes?: string[] } } | null,
 ) {
   const respond = vi.fn();
-  await sendHandlers.send({
+  await expectDefined(sendHandlers.send, "sendHandlers.send test invariant").call(sendHandlers, {
     params: params as never,
     respond,
     context: makeContext(),
@@ -226,7 +227,7 @@ async function runPollWithClient(
   client?: { connect?: { scopes?: string[] } } | null,
 ) {
   const respond = vi.fn();
-  await sendHandlers.poll({
+  await expectDefined(sendHandlers.poll, "sendHandlers.poll test invariant").call(sendHandlers, {
     params: params as never,
     respond,
     context: makeContext(),
@@ -308,7 +309,10 @@ async function runMessageActionRequest(
           },
         }
       : client;
-  await sendHandlers["message.action"]({
+  await expectDefined(
+    sendHandlers["message.action"],
+    'sendHandlers["message.action"] test invariant',
+  )({
     params: params as never,
     respond,
     context: makeContext(),
@@ -510,7 +514,10 @@ describe("gateway send mirroring", () => {
       getRuntimeConfig: () => sourceConfig,
     } as unknown as GatewayRequestContext;
     const respond = vi.fn();
-    await sendHandlers["message.action"]({
+    await expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         channel: "discord",
         action: "channel-info",
@@ -596,7 +603,10 @@ describe("gateway send mirroring", () => {
       getRuntimeConfig: () => sourceConfig,
     } as unknown as GatewayRequestContext;
     const respond = vi.fn();
-    await sendHandlers["message.action"]({
+    await expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         channel: "discord",
         action: "channel-info",
@@ -684,7 +694,10 @@ describe("gateway send mirroring", () => {
       ...makeContext(),
       getRuntimeConfig: () => sourceConfig,
     } as unknown as GatewayRequestContext;
-    await sendHandlers["message.action"]({
+    await expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         channel: "discord",
         action: "channel-info",
@@ -722,7 +735,10 @@ describe("gateway send mirroring", () => {
     const actionDeferred = createDeferred<{ details: { action: string } }>();
     mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
 
-    const firstRequest = sendHandlers["message.action"]({
+    const firstRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         channel: "slack",
         action: "poll",
@@ -736,7 +752,10 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    const secondRequest = sendHandlers["message.action"]({
+    const secondRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         channel: "slack",
         action: "poll",
@@ -789,7 +808,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-action-mixed-authority",
     };
 
-    const directRequest = sendHandlers["message.action"]({
+    const directRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         ...params,
         conversationReadOrigin: "direct-operator",
@@ -800,7 +822,10 @@ describe("gateway send mirroring", () => {
       client: null as never,
       isWebchatConnect: () => false,
     });
-    const delegatedRequest = sendHandlers["message.action"]({
+    const delegatedRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: params as never,
       respond: delegatedRespond,
       context,
@@ -865,7 +890,10 @@ describe("gateway send mirroring", () => {
     const deliveryDeferred = createDeferred<Array<{ messageId: string; channel: string }>>();
     mocks.deliverOutboundPayloads.mockReturnValueOnce(deliveryDeferred.promise);
 
-    const firstRequest = sendHandlers.send({
+    const firstRequest = expectDefined(
+      sendHandlers.send,
+      "sendHandlers.send test invariant",
+    )({
       params: {
         to: "channel:C1",
         message: "hi",
@@ -879,7 +907,10 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    const secondRequest = sendHandlers.send({
+    const secondRequest = expectDefined(
+      sendHandlers.send,
+      "sendHandlers.send test invariant",
+    )({
       params: {
         to: "channel:C1",
         message: "hi",
@@ -926,7 +957,10 @@ describe("gateway send mirroring", () => {
     const pollDeferred = createDeferred<{ messageId: string; pollId: string }>();
     mocks.sendPoll.mockReturnValueOnce(pollDeferred.promise);
 
-    const firstRequest = sendHandlers.poll({
+    const firstRequest = expectDefined(
+      sendHandlers.poll,
+      "sendHandlers.poll test invariant",
+    )({
       params: {
         to: "channel:C1",
         question: "Q?",
@@ -941,7 +975,10 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    const secondRequest = sendHandlers.poll({
+    const secondRequest = expectDefined(
+      sendHandlers.poll,
+      "sendHandlers.poll test invariant",
+    )({
       params: {
         to: "channel:C1",
         question: "Q?",
@@ -2438,7 +2475,10 @@ describe("gateway send mirroring", () => {
     mocks.appendAssistantMessageToSessionTranscript.mockReturnValueOnce(mirrorDeferred.promise);
 
     const respond = vi.fn();
-    const request = sendHandlers["message.action"]({
+    const request = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         channel: "telegram",
         action: "send",
@@ -2509,7 +2549,10 @@ describe("gateway send mirroring", () => {
 
     const firstRespond = vi.fn();
     const secondRespond = vi.fn();
-    const first = sendHandlers["message.action"]({
+    const first = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         channel: "telegram",
         action: "send",
@@ -2534,7 +2577,10 @@ describe("gateway send mirroring", () => {
     await vi.waitFor(() => {
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
     });
-    const second = sendHandlers["message.action"]({
+    const second = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
       params: {
         channel: "telegram",
         action: "send",
@@ -2986,3 +3032,4 @@ describe("gateway send mirroring", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

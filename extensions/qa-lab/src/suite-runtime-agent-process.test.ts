@@ -27,7 +27,6 @@ vi.mock("./suite-runtime-gateway.js", () => ({
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import {
   findManagedDreamingCronJob,
-  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
@@ -35,7 +34,6 @@ import {
   startAgentRun,
   waitForAgentRun,
   waitForAgentHistoryReply,
-  waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
 type MockEmitter = {
@@ -259,7 +257,7 @@ describe("qa suite runtime agent process helpers", () => {
         alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
-      ["crestodian", "-m", "overview"],
+      ["openclaw", "-m", "overview"],
       {
         env: {
           OPENCLAW_STATE_DIR: "/tmp/isolated-state",
@@ -277,7 +275,7 @@ describe("qa suite runtime agent process helpers", () => {
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([
       path.join("/repo", "dist", "index.js"),
-      "crestodian",
+      "openclaw",
       "-m",
       "overview",
     ]);
@@ -630,6 +628,42 @@ describe("qa suite runtime agent process helpers", () => {
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
   });
 
+  it("starts an interactive run without CLI task tracking", async () => {
+    const gatewayCall = vi.fn(async () => ({ runId: "run-chat", status: "started" }));
+    const buildAgentDelivery = vi.fn(() => ({
+      channel: "qa-channel",
+      replyChannel: "qa-channel",
+      replyTo: "dm:qa-operator",
+    }));
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery,
+      },
+    } as never;
+
+    await expect(
+      startAgentRun(env, {
+        sessionKey: "agent:qa:main",
+        message: "hello",
+        taskTracking: false,
+      }),
+    ).resolves.toEqual({ runId: "run-chat", status: "started" });
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "chat.send",
+      {
+        idempotencyKey: expect.any(String),
+        sessionKey: "agent:qa:main",
+        message: "hello",
+        deliver: true,
+        originatingChannel: "qa-channel",
+        originatingTo: "dm:qa-operator",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(buildAgentDelivery).toHaveBeenCalledWith({ target: "dm:qa-operator" });
+  });
+
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
     const legacy = {
       id: "legacy",
@@ -651,8 +685,7 @@ describe("qa suite runtime agent process helpers", () => {
       delivery: { mode: "none" },
     };
 
-    expect(isManagedDreamingCronJob(legacy)).toBe(true);
-    expect(isManagedDreamingCronJob(current)).toBe(true);
+    expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, legacy])).toBe(legacy);
     expect(findManagedDreamingCronJob([{ id: "other", name: "Other" }, current])).toBe(current);
   });
 
@@ -820,27 +853,5 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(readDoctorMemoryStatus(env)).resolves.toEqual({
       dreaming: { enabled: true, shortTermCount: 3 },
     });
-  });
-
-  it("polls memory search results until the expected needle appears", async () => {
-    const search = vi
-      .fn()
-      .mockResolvedValueOnce({
-        results: [{ path: "memory/2020-01-01.md", text: "ORBIT-9" }],
-      })
-      .mockResolvedValueOnce({
-        results: [{ path: "memory/2020-01-01.md", text: "ORBIT-10" }],
-      });
-
-    await expect(
-      waitForMemorySearchMatch({
-        search,
-        expectedNeedle: "ORBIT-10",
-        timeoutMs: 2_000,
-      }),
-    ).resolves.toEqual({
-      results: [{ path: "memory/2020-01-01.md", text: "ORBIT-10" }],
-    });
-    expect(search).toHaveBeenCalledTimes(2);
   });
 });

@@ -4,20 +4,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionEntry,
+  readTranscriptStatsSync,
+  upsertSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { replaceSqliteTranscriptEvents } from "../../config/sessions/session-accessor.sqlite.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+} from "../../plugins/memory-state.test-fixtures.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  runMemoryFlushIfNeeded,
-  runPreflightCompactionIfNeeded,
-  setAgentRunnerMemoryTestDeps,
-} from "./agent-runner-memory.js";
+import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -57,6 +61,7 @@ function createReplyOperation(): TestReplyOperation {
     hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
+    updateSessionKey: vi.fn<ReplyOperation["updateSessionKey"]>(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
     freezeAbort: vi.fn(),
@@ -71,7 +76,17 @@ function createReplyOperation(): TestReplyOperation {
     abortForRestart: vi.fn(() => true),
     markTerminalRecovery: vi.fn(),
     markAcceptedSteeredInboundAudio: vi.fn(),
+    markWaitingForDeferredMaintenance: vi.fn(),
+    markDeferredMaintenanceWaitEnded: vi.fn(),
   };
+}
+
+function loadMainSessionEntry(storePath: string): SessionEntry {
+  const entry = loadSessionEntry({ storePath, sessionKey: "main" });
+  if (!entry) {
+    throw new Error("expected persisted main session entry");
+  }
+  return entry;
 }
 
 type RefreshQueuedFollowupSessionParams = {
@@ -120,6 +135,7 @@ type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
   agentHarnessId?: string;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
   contextTokenBudget?: number;
   sessionKey?: string;
   sandboxSessionKey?: string;
@@ -322,13 +338,11 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshCall.nextSessionId).toBe("session-rotated");
     expect(refreshCall.nextSessionFile).toContain("session-rotated.jsonl");
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      main: SessionEntry;
-    };
-    expect(persisted.main.sessionId).toBe("session-rotated");
-    expect(persisted.main.compactionCount).toBe(2);
-    expect(persisted.main.memoryFlushCompactionCount).toBe(1);
-    expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
+    const persisted = loadMainSessionEntry(storePath);
+    expect(persisted.sessionId).toBe("session-rotated");
+    expect(persisted.compactionCount).toBe(2);
+    expect(persisted.memoryFlushCompactionCount).toBe(1);
+    expect(persisted.memoryFlushAt).toBe(1_700_000_000_000);
   });
 
   it("revalidates immutable Ultra for each memory-flush fallback candidate", async () => {
@@ -505,11 +519,11 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.outcome).toBe("failed");
     expect(result.sessionEntry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
-    expect(persisted.main.sessionId).toBe("session-rotated");
-    expect(persisted.main.compactionCount).toBe(2);
-    expect(persisted.main.memoryFlushFailureCount).toBe(1);
-    expect(persisted.main.memoryFlushAt).toBeUndefined();
+    const persisted = loadMainSessionEntry(storePath);
+    expect(persisted.sessionId).toBe("session-rotated");
+    expect(persisted.compactionCount).toBe(2);
+    expect(persisted.memoryFlushFailureCount).toBe(1);
+    expect(persisted.memoryFlushAt).toBeUndefined();
   });
 
   it("reports restricted memory-flush write failures for visible delivery", async () => {
@@ -685,11 +699,11 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("failed");
-    expect(persisted.main.memoryFlushFailureCount).toBe(1);
-    expect(persisted.main.memoryFlushLastFailedAt).toBe(1_700_000_000_000);
-    expect(persisted.main.memoryFlushLastFailureError).toBe(`${"a".repeat(198)}…`);
+    expect(persisted.memoryFlushFailureCount).toBe(1);
+    expect(persisted.memoryFlushLastFailedAt).toBe(1_700_000_000_000);
+    expect(persisted.memoryFlushLastFailureError).toBe(`${"a".repeat(198)}…`);
     expect(emitAgentEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "lifecycle",
@@ -731,11 +745,11 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("failed");
-    expect(persisted.main.memoryFlushFailureCount).toBe(0);
-    expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
-    expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
+    expect(persisted.memoryFlushFailureCount).toBe(0);
+    expect(persisted.memoryFlushLastFailedAt).toBeUndefined();
+    expect(persisted.memoryFlushLastFailureError).toBeUndefined();
   });
 
   it("clears failure counters on successful flush", async () => {
@@ -766,11 +780,11 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("completed");
-    expect(persisted.main.memoryFlushFailureCount).toBe(0);
-    expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
-    expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
+    expect(persisted.memoryFlushFailureCount).toBe(0);
+    expect(persisted.memoryFlushLastFailedAt).toBeUndefined();
+    expect(persisted.memoryFlushLastFailureError).toBeUndefined();
   });
 
   it("marks flush as completed after MAX_FLUSH_FAILURES to break retry loop", async () => {
@@ -804,10 +818,10 @@ describe("runMemoryFlushIfNeeded", () => {
       },
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("exhausted");
-    expect(persisted.main.memoryFlushCompactionCount).toBe(1);
-    expect(persisted.main.memoryFlushFailureCount).toBe(TEST_MAX_FLUSH_FAILURES);
+    expect(persisted.memoryFlushCompactionCount).toBe(1);
+    expect(persisted.memoryFlushFailureCount).toBe(TEST_MAX_FLUSH_FAILURES);
     expect(emitAgentEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "lifecycle",
@@ -857,8 +871,8 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
-    expect(persisted.main.memoryFlushFailureCount).toBe(2);
+    const persisted = loadMainSessionEntry(storePath);
+    expect(persisted.memoryFlushFailureCount).toBe(2);
   });
 
   it("next message retries flush after failure", async () => {
@@ -1514,36 +1528,43 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
 
-  it("passes resolved context budget and auth profile to preflight compaction", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 245_000,
-      totalTokensFresh: true,
-      compactionCount: 0,
-    };
+  it.each(["user", "auto"] as const)(
+    "passes resolved context budget and $authProfileIdSource auth profile to preflight compaction",
+    async (authProfileIdSource) => {
+      const sessionFile = path.join(rootDir, "budget-session.jsonl");
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        sessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 245_000,
+        totalTokensFresh: true,
+        compactionCount: 0,
+      };
 
-    await runPreflightCompactionIfNeeded({
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun({
-        authProfileId: "anthropic:claude@martian.engineering",
-        provider: "anthropic",
-        model: "claude-opus-4-6",
+      await runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          authProfileId: "anthropic:claude@martian.engineering",
+          authProfileIdSource,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          sessionKey: "agent:main:main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 258_000,
+        sessionEntry,
+        sessionStore: { "agent:main:main": sessionEntry },
         sessionKey: "agent:main:main",
-      }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 258_000,
-      sessionEntry,
-      sessionStore: { "agent:main:main": sessionEntry },
-      sessionKey: "agent:main:main",
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
 
-    const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
-    expect(compactCall.contextTokenBudget).toBe(258_000);
-  });
+      const compactCall = requireCompactEmbeddedAgentSessionCall();
+      expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
+      expect(compactCall.authProfileIdSource).toBe(authProfileIdSource);
+      expect(compactCall.contextTokenBudget).toBe(258_000);
+    },
+  );
   it("preflight compacts a fresh session when the current prompt estimate pushes the next request over budget", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 0,
@@ -1553,8 +1574,15 @@ describe("runMemoryFlushIfNeeded", () => {
       systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
       relativePath: "memory/2023-11-14.md",
     }));
+    const storePath = path.join(rootDir, "preflight-fresh-sessions.json");
+    const sessionKey = "agent:main:main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "session",
+        storePath,
+      }),
       updatedAt: Date.now(),
       totalTokens: 985,
       totalTokensFresh: true,
@@ -1566,14 +1594,15 @@ describe("runMemoryFlushIfNeeded", () => {
       followupRun: createTestFollowupRun({
         provider: "anthropic",
         model: "claude",
-        sessionKey: "agent:main:main",
+        sessionKey,
       }),
       promptForEstimate: "Please summarize the entire design discussion above. ".repeat(8),
       defaultModel: "anthropic/claude",
       agentCfgContextTokens: 1000,
       sessionEntry,
-      sessionStore: { "agent:main:main": sessionEntry },
-      sessionKey: "agent:main:main",
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
       isHeartbeat: false,
       replyOperation: createReplyOperation(),
     });
@@ -1794,6 +1823,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
+      sessionFile: path.join(rootDir, "required-preflight-session.jsonl"),
       updatedAt: Date.now(),
       totalTokens: 180_499,
       totalTokensFresh: true,
@@ -2021,7 +2051,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
-  it("uses the active run sessionFile when the session entry has no transcript path", async () => {
+  it("does not use the active run sessionFile when the session entry has no transcript path", async () => {
     const sessionFile = path.join(rootDir, "active-run-session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -2065,10 +2095,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
-    const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.sessionId).toBe("session");
-    expect(compactCall.sessionFile).toContain("active-run-session.jsonl");
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("does not treat unavailable Anthropic context as transcript prompt usage", async () => {
@@ -2430,6 +2457,111 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
   });
 
+  it("triggers preflight compaction when a SQLite-backed transcript exceeds the configured byte threshold", async () => {
+    const storePath = path.join(rootDir, "sqlite-large-session.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "session",
+        storePath,
+      }),
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const replyOperation = createReplyOperation();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry?.compactionCount).toBe(1);
+    const compactCall = requireCompactEmbeddedAgentSessionCall();
+    expect(compactCall.trigger).toBe("budget");
+    expect(compactCall.preflightCompactionTrigger).toBe("transcript_bytes");
+  });
+
+  it("forces memory flush when a SQLite-backed transcript exceeds the byte threshold", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 10,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const storePath = path.join(rootDir, "sqlite-force-flush-session.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "session",
+        storePath,
+      }),
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const replyOperation = createReplyOperation();
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(replyOperation.setPhase).toHaveBeenCalledWith("memory_flushing");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("emits preflight compaction notices around a successful budget compaction", async () => {
     const sessionFile = path.join(rootDir, "notify-session.jsonl");
     await fs.writeFile(
@@ -2635,3 +2767,4 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

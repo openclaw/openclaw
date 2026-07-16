@@ -93,22 +93,29 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   health: 1,
-  lmstudio: 1,
+  "command-gating": 5,
+  lmstudio: 37,
+  "lmstudio-runtime": 27,
   "provider-setup": 1,
   "self-hosted-provider-setup": 14,
   routing: 1,
   runtime: 3,
   "runtime-logger": 3,
   "runtime-secret-resolution": 5,
+  "secret-provider-integration": 4,
   "setup-adapter-runtime": 1,
-  "channel-streaming": 49,
-  "approval-reply-runtime": 1,
+  "skills-runtime": 5,
+  "channel-streaming": 55,
+  "approval-gateway-runtime": 1,
+  "approval-handler-runtime": 1,
+  "approval-reply-runtime": 3,
+  "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 424,
+  "config-types": 425,
   "config-schema": 3,
   "reply-dedupe": 1,
-  "inbound-reply-dispatch": 33,
+  "inbound-reply-dispatch": 26,
   "channel-reply-pipeline": 12,
   "channel-reply-options-runtime": 2,
   "channel-runtime": 144,
@@ -116,11 +123,12 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 590,
+  "infra-runtime": 595,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
   "text-runtime": 191,
+  "agent-core": 1,
   "agent-runtime": 7,
   "plugin-runtime": 13,
   "channel-secret-runtime": 23,
@@ -131,7 +139,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
-  compat: 152,
+  // +2: group scope encoder/key builder mirrored by deprecated compat.
+  compat: 162,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
@@ -146,13 +155,19 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-location": 4,
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
-  "channel-ingress": 8,
-  "channel-message": 231,
-  "channel-message-runtime": 228,
+  // Registry sweep: 77 packages, zero fetch failures; channel-ingress and dead aliases
+  // had zero consumers.
+  "channel-message": 230,
+  "channel-message-runtime": 227,
   "channel-pairing-paths": 1,
-  "channel-policy": 8,
+  // Deprecated pairing/conversation exports from the SQLite pairing migration
+  // landed on main (#105802) without entrypoint pins; not touched by this PR.
+  "channel-pairing": 1,
+  "conversation-runtime": 4,
+  "channel-send-result": 1,
+  "channel-policy": 15,
   "channel-route": 5,
-  "session-store-runtime": 1,
+  "session-store-runtime": 4,
   "session-transcript-runtime": 2,
   "group-access": 13,
   "media-generation-runtime-shared": 3,
@@ -190,27 +205,56 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      324,
+      // Registry sweep: 77 packages, zero fetch failures; retired dead channel-ingress facade.
+      328,
       env,
     ),
+    // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
+    // Its flat channel-groups builder adds one function, also mirrored by compat.
+    // Its case-insensitive scope-key resolver adds one function, also mirrored by compat.
+    // Its length-prefixed segment encoder and scope-key builder add two functions, also mirrored.
+    // The focused HTML entity runtime and quote-aware HTML tokenizer add one public function each.
+    // Plugin service Gateway event scope and emitter types add four facade exports.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10526,
+      // +4: registerMcpServerConnectionResolver context/result/resolver/registration types (#106229).
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
+      // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
+      // Harvest: retired qa-live-transport-scenarios subpath -6.
+      // +12: typed plan step/status and checklist formatter across channel barrels.
+      // +8: plan-step ingress union and normalizer across channel barrels.
+      // +4: dual-field plan payload builder for the steps deprecation window.
+      10630,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5246,
+      // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
+      // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
+      // Harvest: retired qa-live-transport-scenarios subpath -3.
+      // +4: shared plan checklist formatter across channel barrels.
+      // +4: plan-step normalizer across channel barrels.
+      // +4: dual-field plan payload builder for the steps deprecation window.
+      5353,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3274,
+      // +2: group scope encoder/key builder mirrored by deprecated compat.
+      // Harvest: channel-ingress -8; dead channel-message dispatch aliases -23.
+      // +77: five zero-consumer subpaths enter their removal window.
+      // +9: typed plan exports and formatter through deprecated channel barrels.
+      // +6: plan-step ingress union and normalizer through deprecated channel barrels.
+      // +3: dual-field plan payload builder through deprecated channel barrels.
+      3357,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      211,
+      209,
       env,
     ),
   };
@@ -242,20 +286,9 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
-function isGeneratedPackageDeclaration(declaration) {
-  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
-  const relativePath = relative.split(path.sep).join(path.posix.sep);
-  // Package builds can make workspace package reexports look newly callable.
-  // Source-surface counts must stay independent of generated dist state.
-  return /^packages\/[^/]+\/dist\//u.test(relativePath);
-}
-
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
-  if (isGeneratedPackageDeclaration(declaration)) {
-    return false;
-  }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
   return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
 }
@@ -284,13 +317,20 @@ let exportStatsProgram;
 function collectExportStats(entrypoints) {
   // CLI validation and help do not need the compiler's startup cost.
   ts ??= require("typescript");
+  const configPath = path.join(repoRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (config.error) {
+    throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
+  }
   exportStatsProgram ??= ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
     allowJs: false,
+    baseUrl: repoRoot,
     declaration: true,
     emitDeclarationOnly: true,
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     noEmit: true,
+    paths: config.config.compilerOptions?.paths,
     skipLibCheck: true,
     strict: false,
     target: ts.ScriptTarget.ES2022,

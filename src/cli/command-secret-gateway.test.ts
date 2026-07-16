@@ -11,10 +11,8 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
 } from "../test-utils/talk-test-provider.js";
-import {
-  testing as commandSecretGatewayTesting,
-  resolveCommandSecretRefsViaGateway,
-} from "./command-secret-gateway.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
+import { testing as commandSecretGatewayTesting } from "./command-secret-gateway.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -1342,6 +1340,52 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
+  it("preserves gateway assignments while resolving only missing paths locally", async () => {
+    const localEnvKey = "TALK_API_KEY_PARTIAL_LOCAL";
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: "talk.providers.gateway.apiKey",
+          pathSegments: ["talk", "providers", "gateway", "apiKey"],
+          value: "gateway-owned-key",
+        },
+      ],
+      diagnostics: [],
+    });
+    await withEnvAsync({ [localEnvKey]: "local-fallback-key" }, async () => {
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          talk: {
+            providers: {
+              gateway: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "GATEWAY_ONLY_TALK_KEY",
+                },
+              },
+              local: {
+                apiKey: { source: "env", provider: "default", id: localEnvKey },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        commandName: "reply",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      });
+
+      expect(result.resolvedConfig.talk?.providers?.gateway?.apiKey).toBe("gateway-owned-key");
+      expect(result.resolvedConfig.talk?.providers?.local?.apiKey).toBe("local-fallback-key");
+      expect(result.targetStatesByPath).toMatchObject({
+        "talk.providers.gateway.apiKey": "resolved_gateway",
+        "talk.providers.local.apiKey": "resolved_local",
+      });
+      expect(
+        result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
+      ).toBe(false);
+    });
+  });
+
   it("limits local fallback to targeted refs in read-only modes", async () => {
     const talkEnvKey = "TALK_API_KEY_TARGET_ONLY";
     const gatewayEnvKey = "GATEWAY_PASSWORD_UNRELATED";
@@ -1397,3 +1441,4 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

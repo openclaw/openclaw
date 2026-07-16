@@ -1,7 +1,7 @@
 // Qa Lab tests cover scenario catalog plugin behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
+import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import {
   listQaScenarioYamlPaths,
   readQaBootstrapScenarioCatalog,
@@ -128,7 +128,9 @@ describe("qa scenario catalog", () => {
     const scenarioIds = catalog.scenarios.map((scenario) => scenario.id);
     expect(scenarioIds).toContain("subagent-fanout-synthesis");
     expect(
-      QA_AGENTIC_PARITY_SCENARIO_IDS.filter((scenarioId) => !scenarioIds.includes(scenarioId)),
+      resolveQaParityPackScenarioIds({ parityPack: "agentic" }).filter(
+        (scenarioId) => !scenarioIds.includes(scenarioId),
+      ),
     ).toStrictEqual([]);
   });
 
@@ -197,7 +199,6 @@ describe("qa scenario catalog", () => {
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
-      "matrix-restart-replay-dedupe",
       "matrix-restart-resume",
       "slack-restart-resume",
       "subagent-stale-child-links",
@@ -209,6 +210,15 @@ describe("qa scenario catalog", () => {
         .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
         .map((scenario) => scenario.id),
     ).toEqual([]);
+  });
+
+  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
+      false,
+    );
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
@@ -424,6 +434,21 @@ describe("qa scenario catalog", () => {
     expect(config?.unavailableNeedles).toContain("not in my available tool surface");
   });
 
+  it("loads Matrix flow provider overrides", () => {
+    expect(readQaScenarioById("matrix-room-block-streaming").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "mock-openai",
+      retryCount: 0,
+      timeoutMs: 75_000,
+    });
+    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "live-frontier",
+      retryCount: 0,
+      timeoutMs: 180_000,
+    });
+  });
+
   it("loads live gateway sentinel scenarios for harness self-health", () => {
     const scenarioIds = [
       "plugin-hook-health-sentinel",
@@ -431,6 +456,7 @@ describe("qa scenario catalog", () => {
       "webchat-direct-reply-routing",
       "long-context-progress-watchdog",
       "gateway-restart-inflight-run",
+      "gateway-restart-multi-live",
       "streaming-final-integrity",
     ];
 
@@ -447,21 +473,35 @@ describe("qa scenario catalog", () => {
       "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
     const gatewayRestartFlow = readQaScenarioById("gateway-restart-inflight-run").execution.flow;
-    const interruptedStatusAssertion = gatewayRestartFlow?.steps
-      .flatMap((step) => step.actions)
-      .find((action) =>
-        JSON.stringify(action).includes("interrupted agent run ended with unexpected status"),
-      );
-    expect(interruptedStatusAssertion).toBeDefined();
-    const interruptedStatusContract = JSON.stringify(interruptedStatusAssertion);
-    expect(interruptedStatusContract).toContain("waited.stopReason === 'restart'");
-    expect(interruptedStatusContract).toContain(
-      "env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === 'codex' && waited.stopReason === 'aborted'",
+    const gatewayRestartContract = JSON.stringify(gatewayRestartFlow);
+    expect(
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch),
+    ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
+    expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
+    expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
+    expect(gatewayRestartContract).toContain('"taskTracking":false');
+    expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
+    expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
+    expect(gatewayRestartContract).toContain("restartNotices.length === 0");
+    expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
+    expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
+    expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
+    const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
+    expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
+      '"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]',
     );
-    expect(interruptedStatusContract).toContain("EmbeddedAttemptSessionTakeoverError");
-    expect(interruptedStatusContract).toContain("AbortError");
-    expect(interruptedStatusContract).toContain("This operation was aborted");
-    expect(JSON.stringify(gatewayRestartFlow)).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(liveMultiRestartContract).toContain("assistantToolCallCounts.exec");
+    expect(liveMultiRestartContract).toContain("checkpoint");
+    expect(liveMultiRestartContract).toContain("restarts=3");
+    expect(liveMultiRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(liveMultiRestartContract).toContain("dispatching restart-safe recovery");
+    expect(readQaScenarioExecutionConfig("gateway-restart-multi-live")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      requiredProvider: "openai",
+      requiredModel: "gpt-5.4",
+    });
     const longContextFlow = JSON.stringify(
       readQaScenarioById("long-context-progress-watchdog").execution.flow,
     );
@@ -583,7 +623,7 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("luna-thinking-visibility-switch");
     const config = readQaScenarioExecutionConfig("luna-thinking-visibility-switch") as
       | {
-          requiredProvider?: string;
+          liveProvider?: string;
           requiredModel?: string;
           offDirective?: string;
           maxDirective?: string;
@@ -592,7 +632,7 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/models/luna-thinking-visibility-switch.yaml");
-    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.liveProvider).toBe("openai");
     expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.offDirective).toBe("/think off");
     expect(config?.maxDirective).toBe("/think medium");
@@ -691,7 +731,7 @@ describe("qa scenario catalog", () => {
 
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
     const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
-      | { requiredChannelDriver?: string; requiredProviderMode?: string }
+      | { requiredProviderMode?: string }
       | undefined;
     const retryFailureConfig = readQaScenarioExecutionConfig(
       "message-tool-stranded-final-retry-failure",
@@ -794,7 +834,6 @@ describe("qa scenario catalog", () => {
       | {
           workspaceFiles?: Record<string, string>;
           prompt?: string;
-          requiredChannelDriver?: string;
           expectedReplyAll?: string[];
           expectedArtifactAll?: string[];
           expectedArtifactAny?: string[];
@@ -807,7 +846,7 @@ describe("qa scenario catalog", () => {
       "Mission: prove you followed the repo contract.",
     );
     expect(config?.prompt).toContain("Repo contract followthrough check.");
-    expect(config?.requiredChannelDriver).toBe("qa-channel");
+    expect(scenario.execution.driver).toBe("qa-channel");
     expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
     expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
     expect(config?.expectedArtifactAny).toContain("evidence path");
@@ -839,46 +878,39 @@ describe("qa scenario catalog", () => {
     ];
 
     for (const scenarioId of scenarioIds) {
-      const config = readQaScenarioExecutionConfig(scenarioId) as
-        | { requiredChannelDriver?: string }
-        | undefined;
-      expect(config?.requiredChannelDriver, scenarioId).toBe("qa-channel");
+      expect(readQaScenarioById(scenarioId).execution.driver, scenarioId).toBe("qa-channel");
     }
   });
 
-  it("routes canonical thread relation flows through Crabline Matrix", () => {
+  it("keeps portable thread relation flows free of a channel requirement", () => {
     for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
       const scenario = readQaScenarioById(scenarioId);
-      const config = readQaScenarioExecutionConfig(scenarioId) as
-        | { requiredChannelDriver?: string }
-        | undefined;
 
-      expect(scenario.execution.channel, scenarioId).toBe("matrix");
-      expect(config?.requiredChannelDriver, scenarioId).toBeUndefined();
+      expect(scenario.execution.channel, scenarioId).toBeUndefined();
+      expect(scenario.execution.driver, scenarioId).toBeUndefined();
+      expect(Object.keys(scenario.execution.profiles ?? {}), scenarioId).toEqual(
+        expect.arrayContaining(["matrix:adapter", "slack:adapter"]),
+      );
     }
   });
 
   it("keeps Matrix subagent thread spawn explicitly selectable", () => {
     const scenario = readQaScenarioById("subagent-thread-spawn");
-    const config = readQaScenarioExecutionConfig("subagent-thread-spawn") as
-      | { requiredChannelDriver?: string }
-      | undefined;
 
     expect(scenario.execution.channel).toBe("matrix");
-    expect(config?.requiredChannelDriver).toBe("live");
+    expect(scenario.execution.driver).toBe("live");
   });
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
       | {
-          requiredChannelDriver?: string;
           requiredProviderMode?: string;
         }
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
-    expect(config?.requiredChannelDriver).toBeUndefined();
+    expect(scenario.execution.driver).toBeUndefined();
     expect(config?.requiredProviderMode).toBe("mock-openai");
   });
 
@@ -895,10 +927,7 @@ describe("qa scenario catalog", () => {
     ];
 
     for (const scenarioId of liveScenarioIds) {
-      const config = readQaScenarioExecutionConfig(scenarioId) as
-        | { requiredChannelDriver?: string }
-        | undefined;
-      expect(config?.requiredChannelDriver, scenarioId).toBe("live");
+      expect(readQaScenarioById(scenarioId).execution.driver, scenarioId).toBe("live");
     }
   });
 
@@ -908,6 +937,19 @@ describe("qa scenario catalog", () => {
 
     expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
+  });
+
+  it("settles subagent completions before reading the SQLite session store", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
+    const flow = JSON.stringify(scenario.execution.flow);
+    const completionWaits = [...flow.matchAll(/expectedChildCompletionMarkers/gu)].map(
+      (match) => match.index,
+    );
+    const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
+
+    expect(completionWaits).toHaveLength(2);
+    expect(storeReads).toHaveLength(2);
+    expect(completionWaits.every((wait, index) => wait < (storeReads[index] ?? -1))).toBe(true);
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

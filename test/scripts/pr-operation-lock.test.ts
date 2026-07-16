@@ -11,15 +11,19 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -32,6 +36,7 @@ const worktreeScript = join(repoRoot, "scripts/pr-lib/worktree.sh");
 const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
 const goneProcessGroups = new Set<number>();
+let templateRepo = "";
 
 // Direct preload affects only the supervisor; operation fixtures keep real clocks.
 // The source assertions below pin the production safety durations being accelerated.
@@ -61,18 +66,33 @@ function spawnDetached(command: string, args: readonly string[], options: SpawnO
   return child;
 }
 
-function createRepo(nestedName?: string) {
-  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
-  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
-  if (nestedName) {
-    mkdirSync(dir);
-  }
+function createTemplateRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-operation-lock-template-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   execFileSync("git", ["config", "user.name", "OpenClaw Test"], { cwd: dir });
   execFileSync("git", ["config", "user.email", "test@openclaw.invalid"], { cwd: dir });
   writeFileSync(join(dir, "base.txt"), "base\n");
   execFileSync("git", ["add", "base.txt"], { cwd: dir });
   execFileSync("git", ["commit", "-qm", "base"], { cwd: dir });
+  return dir;
+}
+
+beforeAll(() => {
+  templateRepo = createTemplateRepo();
+});
+
+afterAll(() => {
+  rmSync(templateRepo, { force: true, recursive: true });
+});
+
+function createRepo(nestedName?: string) {
+  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
+  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
+  if (nestedName) {
+    mkdirSync(dir);
+  }
+  // Preserve per-test Git isolation without paying five setup processes per fixture.
+  cpSync(templateRepo, dir, { recursive: true });
   return dir;
 }
 
@@ -269,7 +289,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
     if (predicate()) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   return false;
 }
@@ -497,6 +517,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
   it("serializes the same PR and releases the waiter after SIGTERM", async () => {
     const repoDir = createRepo();
     const held = join(repoDir, "held");
+    const blocked = join(repoDir, "blocked");
     const acquired = join(repoDir, "acquired");
     const holder = spawnHolder(repoDir, held);
     let waiter: ChildProcess | undefined;
@@ -509,6 +530,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
           "-c",
           [
             ...bashSource(repoDir),
+            `sleep() { printf 'blocked\\n' >'${blocked}'; command sleep 0.01; }`,
             "acquire_pr_operation_lock 42",
             `printf 'acquired\\n' >'${acquired}'`,
             "release_pr_operation_lock",
@@ -516,7 +538,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         ],
         { cwd: repoDir, stdio: "ignore" },
       );
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(await waitFor(() => existsSync(blocked))).toBe(true);
       expect(existsSync(acquired)).toBe(false);
 
       await stopChild(holder, "SIGTERM");
@@ -803,8 +825,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ]);
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      const [blockedLine] = result.stdout.trim().split("\n");
-      const [, ownerOid] = blockedLine.split("\t");
+      const blockedLine = expectDefined(
+        result.stdout.trim().split("\n")[0],
+        "blocked PR operation lock output",
+      );
+      const ownerOid = expectDefined(blockedLine.split("\t")[1], "blocked PR operation owner oid");
       expect(blockedLine).toMatch(/^2\t[0-9a-f]{40}$/u);
       expect(result.stderr).toContain("operation lock is orphaned");
       expect(result.stderr).toContain(

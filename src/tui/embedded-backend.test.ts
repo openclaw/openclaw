@@ -837,6 +837,7 @@ describe("EmbeddedTuiBackend", () => {
       sessionKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       objective: "Ship Goal",
+      actor: { type: "human" },
       fallbackEntry: {
         sessionId: expect.any(String),
         updatedAt: expect.any(Number),
@@ -2519,3 +2520,4 @@ describe("EmbeddedTuiBackend", () => {
     expect(defaultRuntime.error).toBe(originalRuntimeError);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -181,8 +181,6 @@ struct OpenClawMascotPose: Equatable {
     var effect: OpenClawMascotEffect = .none
     var effectPhase: CGFloat = 0
 
-    static let still = OpenClawMascotPose()
-
     /// Motionless expression per mood for Reduce Motion users.
     static func staticPose(for mood: OpenClawMascotMood) -> OpenClawMascotPose {
         var pose = OpenClawMascotPose()
@@ -545,7 +543,10 @@ struct OpenClawMascotCanvas: View {
                     y: 24 - 20 * phase)
                 var text = context.resolve(
                     Text("z")
-                        .font(.system(size: 6 + 4 * phase, weight: .bold, design: .rounded)))
+                        .font(OpenClawChatTypography.display(
+                            size: 6 + 4 * phase,
+                            weight: .bold,
+                            relativeTo: .caption2)))
                 text.shading = .color(self.eyeGlowColor)
                 var zContext = context
                 zContext.opacity = Double(alpha * 0.9)

@@ -5,17 +5,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import * as Logger from "../../logger.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
+import { loadSqliteMarkedSessionFile } from "./session-manager-file.js";
 import {
   CURRENT_SESSION_VERSION,
   findMostRecentSession,
   loadEntriesFromFile,
   parseSessionEntries,
   SessionManager,
+  type FileEntry,
   type SessionEntry,
 } from "./session-manager.js";
 
@@ -32,6 +41,426 @@ describe("SessionManager.open", () => {
     await Promise.all(
       tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-session";
+    const sessionKey = "agent:main:dashboard:sqlite";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        cwd: dir,
+        message: { role: "user", content: "question" },
+      },
+    );
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    expect(sessionManager.buildSessionContext().messages).toEqual([
+      expect.objectContaining({ content: "question", role: "user" }),
+    ]);
+
+    const assistantId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "answer" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+    const thinkingChangeId = sessionManager.appendThinkingLevelChange("high");
+    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
+    const compactionId = sessionManager.appendCompaction("summary", "assistant-1", 42);
+
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }),
+    ).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "question", role: "user" }),
+        type: "message",
+      }),
+      expect.objectContaining({
+        id: assistantId,
+        parentId: expect.any(String),
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "answer" }],
+          role: "assistant",
+        }),
+        type: "message",
+      }),
+      expect.objectContaining({
+        id: thinkingChangeId,
+        thinkingLevel: "high",
+        type: "thinking_level_change",
+      }),
+      expect.objectContaining({
+        id: modelChangeId,
+        modelId: "gpt-5.5",
+        provider: "openai",
+        type: "model_change",
+      }),
+      expect.objectContaining({
+        firstKeptEntryId: "assistant-1",
+        id: compactionId,
+        summary: "summary",
+        type: "compaction",
+      }),
+    ]);
+    const reopened = SessionManager.open(marker, dir, dir);
+    expect(reopened.getEntries()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: thinkingChangeId, type: "thinking_level_change" }),
+        expect.objectContaining({ id: modelChangeId, type: "model_change" }),
+        expect.objectContaining({ id: compactionId, type: "compaction" }),
+      ]),
+    );
+  });
+
+  it("ignores opaque SQLite rows while resolving the session cwd", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-opaque-header";
+    const sessionKey = "agent:main:dashboard:sqlite-opaque-header";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+
+    const loaded = loadSqliteMarkedSessionFile(marker, () => [
+      null as unknown as FileEntry,
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: sessionId,
+        timestamp: "2026-07-14T00:00:00.000Z",
+        cwd: dir,
+      },
+    ]);
+
+    expect(loaded?.cwd).toBe(dir);
+  });
+
+  it("persists prompt-released leaf controls through SQLite markers", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-prompt-release";
+    const sessionKey = "agent:main:dashboard:sqlite-prompt-release";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question" },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base-answer",
+      message: buildAssistantMessage("base answer"),
+      parentId: user.messageId,
+    });
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const sideEntry = {
+      type: "message" as const,
+      id: "side-delivery",
+      parentId: assistant.messageId,
+      timestamp: "2026-06-15T00:00:03.000Z",
+      message: buildAssistantMessage("side delivery"),
+    };
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: sideEntry.id,
+      message: sideEntry.message,
+      parentId: sideEntry.parentId,
+    });
+
+    const mergeResult = sessionManager.mergePromptReleasedSessionEntries([sideEntry], {
+      persistLeaf: true,
+    });
+
+    expect(mergeResult?.publishedEntries).toEqual([{ kind: "id", id: expect.any(String) }]);
+    const records = await loadTranscriptEvents(scope);
+    expect(records.at(-1)).toMatchObject({
+      type: "leaf",
+      parentId: sideEntry.id,
+      targetId: assistant.messageId,
+      appendParentId: sideEntry.id,
+      appendMode: "side",
+    });
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-marker-reload";
+    const sessionKey = "agent:main:dashboard:sqlite-marker-reload";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question before reload" },
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    sessionManager.setSessionFile(marker);
+    expect(sessionManager.buildSessionContext().messages).toEqual([
+      expect.objectContaining({ content: "question before reload", role: "user" }),
+    ]);
+    sessionManager.appendMessage(buildAssistantMessage("answer after reload"));
+
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "question before reload", role: "user" }),
+        type: "message",
+      }),
+      expect.objectContaining({
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "answer after reload" }],
+          role: "assistant",
+        }),
+        type: "message",
+      }),
+    ]);
+  });
+
+  it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-branch-source";
+    const sessionKey = "agent:main:dashboard:sqlite-branch-source";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        channel: "dashboard",
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question before branch" },
+    });
+    const assistant = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "assistant-message",
+      message: buildAssistantMessage("answer before branch"),
+      parentId: user.messageId,
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const branchedMarker = sessionManager.createBranchedSession(assistant.messageId);
+    const branchedSessionId = sessionManager.getSessionId();
+
+    expect(branchedMarker).toContain(`sqlite:main:${branchedSessionId}:`);
+    expect(branchedSessionId).not.toBe(sessionId);
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      channel: "dashboard",
+      sessionFile: branchedMarker,
+      sessionId: branchedSessionId,
+    });
+    await expect(fs.stat(path.join(process.cwd(), branchedMarker!))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(loadTranscriptEvents({ agentId: "main", sessionId, storePath })).resolves.toEqual([
+      expect.objectContaining({ id: sessionId, type: "session" }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
+    ]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: branchedSessionId,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: branchedSessionId,
+        parentSession: marker,
+        type: "session",
+      }),
+      expect.objectContaining({ id: user.messageId, type: "message" }),
+      expect.objectContaining({ id: assistant.messageId, type: "message" }),
+    ]);
+  });
+
+  it("persists user turns when a SQLite marker has no external recorder", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-direct-user-session";
+    const sessionKey = "agent:main:voice:direct-user";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "voice prompt",
+      timestamp: Date.now(),
+    });
+
+    await expect(
+      loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        id: userId,
+        message: expect.objectContaining({ content: "voice prompt", role: "user" }),
+        type: "message",
+      }),
+    );
+  });
+
+  it("rewrites SQLite transcript rows when removing trailing entries", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-remove-trailing-session";
+    const sessionKey = "agent:main:dashboard:sqlite-remove-trailing";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question" },
+    });
+    const baseAnswer = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base-answer",
+      message: buildAssistantMessage("base answer"),
+      parentId: user.messageId,
+    });
+    const temporaryError = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "temporary-error",
+      message: buildAssistantMessage("temporary error"),
+      parentId: baseAnswer.messageId,
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+
+    expect(
+      sessionManager.removeTrailingEntries((entry) => entry.id === temporaryError.messageId),
+    ).toBe(1);
+    expect(sessionManager.getLeafId()).toBe(baseAnswer.messageId);
+    const replacementId = sessionManager.appendMessage(buildAssistantMessage("replacement answer"));
+
+    const records = await loadTranscriptEvents(scope);
+    expect(
+      records.map((record) =>
+        record && typeof record === "object" && "id" in record ? record.id : undefined,
+      ),
+    ).not.toContain(temporaryError.messageId);
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: replacementId,
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "replacement answer" }],
+            role: "assistant",
+          }),
+          parentId: baseAnswer.messageId,
+          type: "message",
+        }),
+      ]),
+    );
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("recovers a corrupted first-line header without truncating later messages", async () => {
@@ -1824,9 +2253,9 @@ describe("SessionManager.open", () => {
     sessionManager.mergePromptReleasedSessionEntries([deliveryEntry]);
     (
       sessionManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     const sessionFile = sessionManager.getSessionFile();
     expect(sessionFile).toBeDefined();
@@ -2156,9 +2585,9 @@ describe("SessionManager.open", () => {
     sessionManager.mergePromptReleasedSessionEntries([deliveryEntry]);
     (
       sessionManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     const sessionFile = sessionManager.getSessionFile();
     expect(sessionFile).toBeDefined();
@@ -2222,9 +2651,9 @@ describe("SessionManager.open", () => {
     ]);
     (
       sessionManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     const rewritten = (await fs.readFile(sessionFile, "utf-8"))
       .trim()
@@ -2404,9 +2833,9 @@ describe("SessionManager.open", () => {
     ]);
     (
       sessionManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     expect(sessionManager.getLeafId()).toBe(baseAnswerId);
     const sessionFile = sessionManager.getSessionFile();
@@ -2416,6 +2845,22 @@ describe("SessionManager.open", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as { id?: string; parentId?: string | null });
     expect(records.find((entry) => entry.id === "side-delivery")?.parentId).toBe(metadata.id);
+  });
+
+  it("clears label timestamps when starting a replacement session", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const answerId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    sessionManager.appendLabelChange(answerId, "saved");
+    const state = sessionManager as unknown as {
+      labelTimestampsById: Map<string, string>;
+    };
+
+    expect(state.labelTimestampsById.size).toBe(1);
+
+    sessionManager.newSession();
+
+    expect(state.labelTimestampsById.size).toBe(0);
   });
 
   it("removes leaf controls that target regenerated labels when branching", async () => {
@@ -2841,3 +3286,4 @@ function buildMessageEntry(index: number, parentId: string | null): SessionEntry
     message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

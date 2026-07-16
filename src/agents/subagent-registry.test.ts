@@ -3,6 +3,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type {
@@ -22,11 +23,13 @@ import {
   findDetachedTaskRun,
   finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
-import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../tasks/task-runtime.test-helpers.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -116,6 +119,13 @@ const mocks = vi.hoisted(() => ({
     >;
     return store[scope.sessionKey];
   }),
+  listSessionEntries: vi.fn((scope: Omit<SessionAccessScope, "sessionKey">) => {
+    const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+      string,
+      SessionEntry
+    >;
+    return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+  }),
   loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
   patchSessionEntry: vi.fn(
     async (
@@ -175,8 +185,13 @@ const mocks = vi.hoisted(() => ({
     (params: { childSessionKey?: string }, context?: unknown) => Promise<void>
   >(async () => {}),
   runSubagentEnded: vi.fn(async () => {}),
-  removeInternalSessionEffectsTranscript: vi.fn(async () => {}),
+  removeInternalSessionEffectsSession: vi.fn(async () => {}),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
+  getGatewayRecoveryRuntime: vi.fn(() => ({
+    dispatchAgent: vi.fn(),
+    waitForAgent: vi.fn(),
+    sendRecoveryNotice: vi.fn(),
+  })),
   scheduleOrphanRecovery: vi.fn(),
 }));
 
@@ -203,6 +218,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: mocks.listSessionEntries,
   loadSessionEntry: mocks.loadSessionEntry,
   patchSessionEntry: mocks.patchSessionEntry,
 }));
@@ -249,14 +265,14 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
 }));
 
 vi.mock("./internal-session-effects.js", () => ({
-  removeInternalSessionEffectsTranscript: mocks.removeInternalSessionEffectsTranscript,
+  removeInternalSessionEffectsSession: mocks.removeInternalSessionEffectsSession,
 }));
 
 describe("subagent registry seam flow", () => {
-  let mod: typeof import("./subagent-registry.js");
+  let mod: typeof import("./subagent-registry.test-helpers.js");
 
   beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
+    mod = await import("./subagent-registry.test-helpers.js");
   });
 
   beforeEach(() => {
@@ -303,6 +319,7 @@ describe("subagent registry seam flow", () => {
       callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: mocks.cleanupBrowserSessionsForLifecycleEnd,
+      getGatewayRecoveryRuntime: mocks.getGatewayRecoveryRuntime,
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
@@ -599,6 +616,51 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-interrupted-wait");
     expect(run?.endedAt).toBeUndefined();
     expect(run?.outcome).toBeUndefined();
+  });
+
+  it("does not fall back to network recovery without an instance-bound runtime", async () => {
+    mod.testing.setDepsForTest({
+      getGatewayRecoveryRuntime: () => undefined,
+    });
+
+    mod.scheduleSubagentOrphanRecovery({ delayMs: 1 });
+    await Promise.resolve();
+
+    expect(mocks.scheduleOrphanRecovery).not.toHaveBeenCalled();
+  });
+
+  it("keeps a debounced recovery bound to the current Gateway runtime", async () => {
+    const originalImplementation = mocks.getGatewayRecoveryRuntime.getMockImplementation();
+    const firstRuntime = {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    };
+    const replacementRuntime = {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    };
+    mocks.getGatewayRecoveryRuntime.mockReturnValue(firstRuntime);
+
+    try {
+      mod.scheduleSubagentOrphanRecovery({ delayMs: 1 });
+      await waitForFast(() => expect(mocks.scheduleOrphanRecovery).toHaveBeenCalledOnce());
+      const scheduled = requireRecord(
+        getMockCallArg(mocks.scheduleOrphanRecovery, 0, 0, "orphan recovery"),
+        "orphan recovery params",
+      );
+      const getGatewayRuntime = scheduled.getGatewayRuntime;
+      expect(typeof getGatewayRuntime).toBe("function");
+
+      mocks.getGatewayRecoveryRuntime.mockReturnValue(replacementRuntime);
+      mod.scheduleSubagentOrphanRecovery({ delayMs: 1 });
+
+      expect(mocks.scheduleOrphanRecovery).toHaveBeenCalledOnce();
+      expect((getGatewayRuntime as () => unknown)()).toBe(replacementRuntime);
+    } finally {
+      mocks.getGatewayRecoveryRuntime.mockImplementation(originalImplementation!);
+    }
   });
 
   it("keeps parent run active when agent.wait times out before child session settles", async () => {
@@ -3750,7 +3812,12 @@ describe("subagent registry seam flow", () => {
     const attachmentsDir = path.join(attachmentsRootDir, "child");
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
-    const oldTranscriptFile = "/tmp/internal-agent-runs/run-old-tombstone.jsonl";
+    const oldTranscriptTarget = {
+      agentId: "main",
+      sessionId: "internal-run-old-tombstone",
+      sessionKey: "agent:main:internal-session-effects:run-old-tombstone",
+      storePath: "/tmp/test-store",
+    };
     mod.addSubagentRunForTests({
       runId: "run-old-tombstone",
       childSessionKey: "agent:main:subagent:reused",
@@ -3776,7 +3843,7 @@ describe("subagent registry seam flow", () => {
         status: "terminal",
         startedAt: oldStartedAt,
         endedAt: oldEndedAt,
-        transcriptFile: oldTranscriptFile,
+        transcriptTarget: oldTranscriptTarget,
       },
     });
     mod.addSubagentRunForTests({
@@ -3805,7 +3872,7 @@ describe("subagent registry seam flow", () => {
         ([params]) => params.childSessionKey === "agent:main:subagent:reused",
       ),
     ).toBe(false);
-    expect(mocks.removeInternalSessionEffectsTranscript).toHaveBeenCalledWith(oldTranscriptFile);
+    expect(mocks.removeInternalSessionEffectsSession).toHaveBeenCalledWith(oldTranscriptTarget);
     await expectPathMissing(attachmentsDir);
     expect(
       mocks.callGateway.mock.calls.some(
@@ -3922,7 +3989,10 @@ describe("subagent registry seam flow", () => {
           string,
           SessionEntry
         >;
-        const current = store[scope.sessionKey];
+        const current = expectDefined(
+          store[scope.sessionKey],
+          "store[scope.sessionKey] test invariant",
+        );
         const patch = await update(current, { existingEntry: { ...current } });
         if (patch) {
           mocks.updateSessionStore(scope.storePath, () => {});
@@ -6052,3 +6122,4 @@ describe("subagent registry seam flow", () => {
     await expect(mod.testing.runSweeperTickForTests()).resolves.toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

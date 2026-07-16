@@ -354,6 +354,7 @@ export function createExecApprovalHandlers(
         record,
         timeoutMs,
         respond,
+        context,
       });
       if (!decisionPromise) {
         return;
@@ -489,6 +490,7 @@ export function createExecApprovalHandlers(
             ? manager.resolveAutoReview(approvalId, resolvedBy)
             : manager.resolve(approvalId, decisionLocal, resolvedBy),
         resolvedEventName: "exec.approval.resolved",
+        approvalKind: "exec",
         buildResolvedEvent: ({
           approvalId,
           decision: decisionLocal,
