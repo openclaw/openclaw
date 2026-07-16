@@ -345,7 +345,9 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
 
       expect(store).toHaveProperty(activeKey);
       expect(store).toHaveProperty("writer");
-      expect(store.removable).toBeUndefined();
+      // Protected entries exceed maxEntries (2 protected vs 1 max), so the
+      // capping pass is skipped — no non-preserved entries are removed.
+      expect(store).toHaveProperty("removable");
     } finally {
       admission.release();
     }
@@ -387,7 +389,9 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
 
       expect(store).toHaveProperty(firstAlias);
       expect(store).toHaveProperty(secondAlias);
-      expect(store.removable).toBeUndefined();
+      // Protected entries exceed maxEntries (2 preserved via session id vs 1 max),
+      // so the capping pass is skipped.
+      expect(store).toHaveProperty("removable");
     } finally {
       admission.release();
     }
@@ -426,7 +430,9 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       });
 
       expect(store).toHaveProperty(rawActiveKey);
-      expect(store.removable).toBeUndefined();
+      // Protected entry (admission identity) already equals maxEntries (1),
+      // so the capping pass is skipped — no non-preserved entries are removed.
+      expect(store).toHaveProperty("removable");
     } finally {
       admission.release();
     }

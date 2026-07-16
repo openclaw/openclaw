@@ -542,7 +542,20 @@ export function capEntryCount(
   const preservedCount = Object.entries(store).filter(([key, entry]) =>
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;
-  const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
+  // When preserved entries already exceed the cap, removing unprotected
+  // entries cannot bring the total below maxEntries.  Evicting them would
+  // silently wipe transient lifecycle state (cron session entries, hook
+  // locks, etc.) while leaving the store over capacity — never useful.
+  if (preservedCount >= maxEntries) {
+    if (opts.log !== false) {
+      log.warn("entry cap already exceeded by preserved entries, skipping capping pass", {
+        preservedCount,
+        maxEntries,
+      });
+    }
+    return 0;
+  }
+  const maxRemovableEntries = maxEntries - preservedCount;
   // Protected entries reduce the removable budget instead of being counted as deletion targets.
   const keys = Object.keys(store).filter(
     (key) =>
