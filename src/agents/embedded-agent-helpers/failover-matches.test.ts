@@ -232,3 +232,71 @@ describe("HTTP 429 overload wording (#98101)", () => {
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 });
+
+describe("Anthropic invalid_request_error classification without leading HTTP status (#99174)", () => {
+  it("classifies Anthropic thinking-block 400 JSON body as 'format'", () => {
+    const body =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
+
+  it("classifies Anthropic request-validation 400 JSON body as 'format'", () => {
+    const body =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Expected value in JSON at position 12 for messages.0.content"}}';
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
+
+  it("does not misclassify non-invalid_request_error JSON as 'format'", () => {
+    const body =
+      '{"type":"error","error":{"type":"authentication_error","message":"invalid api key"}}';
+    expect(classifyFailoverReason(body)).toBe("auth");
+  });
+
+  it("does not override auth error with 'format' (auth takes precedence)", () => {
+    // "invalid api key" is caught by isAuthErrorMessage before invalid_request_error is checked
+    const body =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"invalid api key"}}';
+    expect(classifyFailoverReason(body)).toBe("auth");
+  });
+
+  it("handles OpenAI-compatible error format (no outer type wrapper)", () => {
+    // Some providers return {"error":{"type":"invalid_request_error",...}} without
+    // the outer {"type":"error",...} wrapper that Anthropic uses.
+    // When the message contains model-not-found semantics, isModelNotFoundErrorMessage
+    // takes precedence over isStructuredInvalidRequestError (#101414 review).
+    const body =
+      '{"error":{"type":"invalid_request_error","message":"model not found for inference"}}';
+    expect(classifyFailoverReason(body)).toBe("model_not_found");
+  });
+
+  it("is case-insensitive for error type matching", () => {
+    const body =
+      '{"type":"error","error":{"type":"INVALID_REQUEST_ERROR","message":"bad request"}}';
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
+
+  it("does not crash on incomplete or malformed JSON bodies", () => {
+    expect(() => classifyFailoverReason("{}")).not.toThrow();
+    expect(() => classifyFailoverReason('{"type":"error"}')).not.toThrow();
+    expect(() => classifyFailoverReason('{"error":{}}')).not.toThrow();
+    expect(() => classifyFailoverReason("")).not.toThrow();
+  });
+
+  it("does not misclassify rate_limit or overloaded errors as 'format'", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"rate_limit_error","message":"too fast"}}',
+      ),
+    ).not.toBe("format");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"overloaded_error","message":"server busy"}}',
+      ),
+    ).not.toBe("format");
+  });
+
+  it("maintains format classification with HTTP 400 prefix", () => {
+    const body = `400 {"type":"error","error":{"type":"invalid_request_error","message":"bad payload"}}`;
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
+});

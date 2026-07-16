@@ -590,8 +590,33 @@ function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
 }
 
+/**
+ * Checks if the raw error message is a structured API error JSON body with an
+ * invalid_request error type (e.g. Anthropic-style invalid_request_error).
+ *
+ * These payloads have no leading HTTP status prefix but contain structured
+ * error info that the failover classifier maps to "format", advancing the
+ * configured model fallback chain (#99174).
+ *
+ * This helper is used in two places:
+ * 1. isSchemaErrorMessage — excludes these bodies so internal error formatting
+ *    keeps provider detail instead of collapsing to generic schema copy.
+ * 2. classifyFailoverClassificationFromMessage — classifies as "format" so the
+ *    fallback chain is consulted.
+ */
+function isStructuredInvalidRequestError(raw: string): boolean {
+  const type = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  return Boolean(type && type.includes("invalid_request"));
+}
+
 function isSchemaErrorMessage(raw: string): boolean {
   if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
+    return false;
+  }
+  // Exclude structured API error JSON bodies. Without this exclusion,
+  // isSchemaErrorMessage would match via classifyFailoverReason(raw) === "format"
+  // and classifyProviderRuntimeFailureKind would incorrectly return "schema".
+  if (isStructuredInvalidRequestError(raw)) {
     return false;
   }
   return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
@@ -1003,9 +1028,6 @@ function classifyFailoverClassificationFromMessage(
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
   }
-  if (isModelNotFoundErrorMessage(raw)) {
-    return toReasonClassification("model_not_found");
-  }
   if (isContextOverflowError(raw)) {
     return { kind: "context_overflow" };
   }
@@ -1083,6 +1105,12 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return toReasonClassification("model_not_found");
+  }
+  if (isStructuredInvalidRequestError(raw)) {
+    return toReasonClassification("format");
   }
   // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
   const providerSpecific = classifyProviderSpecificError(
@@ -1271,6 +1299,14 @@ export function classifyProviderRuntimeFailureKind(
   }
   if (message && isReplayInvalidErrorMessage(message)) {
     return "replay_invalid";
+  }
+  // Preserve the "schema" diagnostic for structured invalid_request_error
+  // payloads, which isSchemaErrorMessage intentionally excludes so that
+  // failover classification can classify them as "format" and advance the
+  // fallback chain. This check runs before isSchemaErrorMessage so the
+  // runtime-failure kind stays accurate without changing failover behavior.
+  if (message && isStructuredInvalidRequestError(message)) {
+    return "schema";
   }
   if (message && isSchemaErrorMessage(message)) {
     return "schema";
@@ -1525,7 +1561,12 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
-  if (providerRuntimeFailureKind === "schema") {
+  // For structured invalid_request_error payloads the runtime-failure kind
+  // is "schema" (preserved for lifecycle-log fidelity), but the internal
+  // formatter should still expose detail so downstream consumers (e.g. the
+  // failover result classifier and user-facing formatter) can inspect it.
+  // formatUserFacingAssistantErrorText handles the generic-message sanitization.
+  if (providerRuntimeFailureKind === "schema" && !isStructuredInvalidRequestError(raw)) {
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
 

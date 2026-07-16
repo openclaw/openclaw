@@ -106,6 +106,34 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies structured provider invalid_request_error payloads as format fallback (#99174)", () => {
+    const rawError =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "anthropic-compatible",
+      model: "primary-model",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: rawError,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `anthropic-compatible/primary-model ended with a provider error: ${rawError}`,
+      reason: "format",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
   it("classifies generic external runner failure text as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",

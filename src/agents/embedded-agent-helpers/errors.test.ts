@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
+  classifyProviderRuntimeFailureKind,
   extractFailoverSignalDetails,
   formatAssistantErrorText,
   isLikelyContextOverflowError,
@@ -128,5 +129,27 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("classifyProviderRuntimeFailureKind with structured invalid_request_error", () => {
+  it("preserves schema diagnostic for Anthropic-style invalid_request_error JSON body", () => {
+    // Structured API error bodies with invalid_request_error type must preserve
+    // the "schema" runtime diagnostic so lifecycle logs and observations stay
+    // accurate, while the failover path independently classifies as "format"
+    // to advance the fallback chain (#99174, #101414 review P2).
+    const body =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+    expect(classifyProviderRuntimeFailureKind(body)).toBe("schema");
+  });
+
+  it("preserves model_not_found when message text takes precedence over type", () => {
+    // OpenAI-compatible bodies with "model not found" in the message return
+    // "model_not_found" because isModelNotFoundErrorMessage runs first in the
+    // failover classifier and classifyProviderRuntimeFailureKind returns it
+    // before reaching the isStructuredInvalidRequestError → "schema" guard.
+    const body =
+      '{"error":{"type":"invalid_request_error","message":"model not found for inference"}}';
+    expect(classifyProviderRuntimeFailureKind(body)).toBe("model_not_found");
   });
 });
