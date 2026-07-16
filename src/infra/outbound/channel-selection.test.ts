@@ -199,14 +199,6 @@ describe("resolveMessageChannelSelection", () => {
       },
     },
     {
-      params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "beta" },
-      expected: {
-        channel: "beta",
-        configured: [],
-        source: "tool-context-fallback",
-      },
-    },
-    {
       params: { cfg: {} as never, fallbackChannel: "gamma" },
       expected: {
         channel: "gamma",
@@ -274,6 +266,16 @@ describe("resolveMessageChannelSelection", () => {
       cfg,
       allowBootstrap: true,
     });
+  });
+
+  it("rejects an explicit unknown channel instead of using the tool context", async () => {
+    await expect(
+      expectResolvedSelection({
+        cfg: {} as never,
+        channel: "channel:C123",
+        fallbackChannel: "beta",
+      }),
+    ).rejects.toThrow("Unknown channel: channel:c123");
   });
 
   it.each([

@@ -226,6 +226,9 @@ export async function resolveMessageChannelSelection(params: {
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
+    if (!isKnownChannel(normalized)) {
+      throw new Error(`Unknown channel: ${normalized}`);
+    }
     const availableExplicit = resolveAvailableKnownChannel({
       cfg: params.cfg,
       value: normalized,
@@ -241,9 +244,6 @@ export async function resolveMessageChannelSelection(params: {
           configured: [],
           source: "tool-context-fallback",
         };
-      }
-      if (!isKnownChannel(normalized)) {
-        throw new Error(`Unknown channel: ${normalized}`);
       }
       const repairHint = isConfiguredChannel(params.cfg, normalized)
         ? resolveMissingOfficialExternalChannelPluginRepairHint({

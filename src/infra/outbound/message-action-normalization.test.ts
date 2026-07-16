@@ -302,6 +302,19 @@ describe("normalizeMessageActionInput", () => {
     ).toThrow(/requires a target/);
   });
 
+  it("does not replace read targets with the current conversation", () => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "read",
+        args: { targets: ["C_TARGET"] },
+        toolContext: {
+          currentChannelId: "C_CURRENT",
+          currentChannelProvider: "workspace",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
   it.each([
     { action: "react" as const, args: { channel: "imessage", messageId: "msg_123" } },
     { action: "poll-vote" as const, args: { channel: "imessage", pollId: "poll_123" } },
