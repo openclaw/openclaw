@@ -233,7 +233,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: widget HTML validation helpers and tool input error.
       // Used-union narrowing: 31 wildcard barrels drop to explicit used exports;
       // proxy stream API and codex marker/scaffold pins retained.
-      7945,
+      7948,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
