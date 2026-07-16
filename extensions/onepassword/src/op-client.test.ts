@@ -143,6 +143,7 @@ describe("OpClient", () => {
     ["FIELD_NOT_FOUND", { stderr: `"429 credential" isn't a field in the "Token" item`, code: 1 }],
     ["AUTH_FAILED", { stderr: "unauthorized service account", code: 1 }],
     ["TIMEOUT", { stderr: "", killed: true, signal: "SIGTERM" }],
+    ["TIMEOUT", { stderr: "", timedOut: true }],
     ["OP_ERROR", { stderr: "unexpected failure", code: 1 }],
   ] as const)("maps process failure to %s without retry", async (expectedCode, failure) => {
     const runner = vi.fn<OpProcessRunner>(async () => {

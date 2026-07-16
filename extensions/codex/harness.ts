@@ -15,6 +15,8 @@ import type {
 } from "./src/app-server/models.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 
+// `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
+// New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
@@ -87,6 +89,12 @@ export function createCodexAppServerAgentHarness(options: {
           await import("./src/app-server/runtime-artifact.js");
         return validateCodexAppServerRuntimeArtifact(binding);
       },
+    },
+    fetchUsageSnapshot: async (ctx) => {
+      const { fetchCodexAppServerUsageSnapshot } = await import("./src/app-server/usage.js");
+      return await fetchCodexAppServerUsageSnapshot(ctx, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
     },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();

@@ -596,7 +596,7 @@ function listTopLevelSessionStoreKeys(raw: string): string[] | null {
   return null;
 }
 
-export function sessionStoreTextMayNeedCanonicalization(params: {
+function sessionStoreTextMayNeedCanonicalization(params: {
   raw: string;
   storeAgentIds: Iterable<string>;
   mainKey: string;
@@ -1390,3 +1390,4 @@ export function resolveSessionStoreOwnership(params: {
   const targetStoreAliases = resolveSessionStoreAliasPlan(targetStorePath, candidateStorePaths);
   return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreAliases };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

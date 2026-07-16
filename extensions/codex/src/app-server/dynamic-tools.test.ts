@@ -31,6 +31,7 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
@@ -349,9 +350,9 @@ describe("createCodexDynamicToolBridge", () => {
     // An accepted sessions_spawn launch carries details.status "accepted" with a
     // runId + childSessionKey. The launch succeeded (the child session was
     // accepted), so Codex must see a successful tool call, not an error.
-    // Regression for #96833: "accepted" was missing from the non-error status
-    // allowlist, so the launch was classified as an error and persisted with
-    // isError: true (and reported to Codex as success: false).
+    // Regression for #96833: the former Codex-only success allowlist omitted
+    // "accepted", so the launch was persisted with isError: true and reported
+    // to Codex as success: false.
     const onAgentToolResult = vi.fn();
     const bridge = createBridgeWithToolResult(
       "sessions_spawn",
@@ -407,8 +408,8 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("treats accepted goal tool statuses (created / updated) as successful dynamic tool calls", async () => {
-    // Same classifier-completeness class as the accepted spawn fix: create_goal /
-    // update_goal return details.status "created" / "updated", reach codex agents
+    // Same runtime-parity class as the accepted spawn fix: create_goal /
+    // update_goal return details.status "created" / "updated", reach Codex agents
     // through the dynamic-tool bridge, and must not be classified as errors (#96833).
     const createdBridge = createBridgeWithToolResult(
       "create_goal",
@@ -486,6 +487,52 @@ describe("createCodexDynamicToolBridge", () => {
     );
   });
 
+  it.each(["pending", "applied", "rejected", "quarantined", "stale"] as const)(
+    "treats Skill Workshop lifecycle status %s as a successful dynamic tool call",
+    async (status) => {
+      const onAgentToolResult = vi.fn();
+      const bridge = createBridgeWithToolResult(
+        "skill_workshop",
+        textToolResult(`Proposal is ${status}.`, { status }),
+      );
+
+      const result = await bridge.handleToolCall(
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: `call-${status}`,
+          namespace: null,
+          tool: "skill_workshop",
+          arguments: { action: "inspect" },
+        },
+        { onAgentToolResult },
+      );
+
+      expect(result.success).toBe(true);
+      expect(onAgentToolResult).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: "skill_workshop", isError: false }),
+      );
+    },
+  );
+
+  it("treats arbitrary plugin-owned status metadata as successful by default", async () => {
+    const bridge = createBridgeWithToolResult(
+      "plugin_tool",
+      textToolResult("Plugin action completed.", { status: "plugin-defined-outcome" }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-plugin-defined-outcome",
+      namespace: null,
+      tool: "plugin_tool",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("keeps available and registered schemas paired with their tools", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
@@ -517,6 +564,31 @@ describe("createCodexDynamicToolBridge", () => {
       type: "object",
       properties: { durable: { type: "string" } },
     });
+  });
+
+  it("repairs a null dynamic-tool schema type before Codex registration", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "codex_app__automation_update",
+          parameters: {
+            type: null,
+            properties: {
+              action: { type: "string", description: null },
+            },
+          } as never,
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(flattenSpecsWithNamespace(bridge.specs)[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        action: { type: "string" },
+      },
+    });
+    expect(bridge.telemetry.quarantinedTools).toEqual([]);
   });
 
   it("quarantines dynamic tools with unsupported input schemas", async () => {
@@ -1317,7 +1389,7 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("marks delivered message-tool-only source replies as terminal when final is omitted", async () => {
+  it("keeps omitted source-reply finality non-terminal until a successful attempt settles", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", { messageId: "imessage-6264" }),
@@ -1330,15 +1402,97 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
+    expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).not.toHaveProperty("sourceReplyFinal");
+
+    expect(settleCodexSourceReplyFinality(bridge.telemetry, true)).toBe(true);
+
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
     expect(Object.keys(result)).not.toContain("terminate");
   });
 
-  it("requires explicit final=false to keep a delivered message-tool-only source reply non-terminal", async () => {
+  it("settles omitted source-reply finality as progress when the attempt fails", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      {
+        ...textToolResult("Sent.", { messageId: "imessage-6264" }),
+        terminate: true,
+      },
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+    expect(result.terminate).toBeUndefined();
+    expect(settleCodexSourceReplyFinality(bridge.telemetry, false)).toBe(false);
+
+    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
+      sourceReplyFinal: false,
+    });
+  });
+
+  it("settles only the latest omitted source reply as final after success", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "imessage-6264" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    await handleMessageToolCall(bridge, { action: "send", message: "first update" });
+    await handleMessageToolCall(bridge, { action: "send", message: "second update" });
+    settleCodexSourceReplyFinality(bridge.telemetry, true);
+
+    expect(
+      bridge.telemetry.messagingToolSentTargets.map((target) => target.sourceReplyFinal),
+    ).toEqual([false, true]);
+  });
+
+  it("does not promote an omitted reply past a later explicit progress reply", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "imessage-6264" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    await handleMessageToolCall(bridge, { action: "send", message: "first update" });
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "still working",
+      final: false,
+    });
+    settleCodexSourceReplyFinality(bridge.telemetry, true);
+
+    expect(
+      bridge.telemetry.messagingToolSentTargets.map((target) => target.sourceReplyFinal),
+    ).toEqual([false, false]);
+  });
+
+  it("keeps a later explicit final reply authoritative over an omitted reply", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "imessage-6264" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    await handleMessageToolCall(bridge, { action: "send", message: "first update" });
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "finished",
+      final: true,
+    });
+    settleCodexSourceReplyFinality(bridge.telemetry, true);
+
+    expect(
+      bridge.telemetry.messagingToolSentTargets.map((target) => target.sourceReplyFinal),
+    ).toEqual([false, true]);
+  });
+
+  it("honors explicit finality for delivered message-tool-only source replies", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", { messageId: "imessage-6264" }),
@@ -1403,6 +1557,7 @@ describe("createCodexDynamicToolBridge", () => {
     const result = await handleMessageToolCall(bridge, {
       action: "send",
       message: "visible reply",
+      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1454,6 +1609,7 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "853",
       message: "visible reply",
       buttons: [],
+      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1500,6 +1656,7 @@ describe("createCodexDynamicToolBridge", () => {
       target: "+1 (206) 910-6512",
       messageId: "853",
       message: "visible reply",
+      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1539,6 +1696,7 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "857",
       message: "visible reply",
       buttons: [],
+      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1575,6 +1733,7 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "861",
       message: "visible reply",
       buttons: [],
+      final: true,
     });
 
     expect(result).toEqual(expectInputText(receiptText));
@@ -1655,6 +1814,7 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "863",
       message: "visible reply",
       buttons: [],
+      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1676,6 +1836,7 @@ describe("createCodexDynamicToolBridge", () => {
       messageId: "865",
       message: "visible reply",
       buttons: [],
+      final: true,
     });
 
     expect(result).toEqual(expectInputText("Sent."));
@@ -1684,7 +1845,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(Object.keys(result)).not.toContain("terminate");
   });
 
-  it("records message-tool-owned terminal replies as delivered source replies", async () => {
+  it("defers omitted finality even when the message tool returns legacy termination", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       {
@@ -1704,8 +1865,12 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
+    expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).not.toHaveProperty("sourceReplyFinal");
+
+    settleCodexSourceReplyFinality(bridge.telemetry, true);
+
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
@@ -1779,7 +1944,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { action: "inspect" },
     });
 
-    expect(firstResult.terminate).toBe(true);
+    expect(firstResult.terminate).toBeUndefined();
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
     expect(secondResult).toEqual(expectInputText("No message sent."));
     expect(secondResult.terminate).toBeUndefined();
@@ -2381,7 +2546,7 @@ describe("createCodexDynamicToolBridge", () => {
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
   });
 
-  it("keeps unrecognized non-success statuses fail-closed", async () => {
+  it("keeps shared failure statuses fail-closed", async () => {
     const onAgentToolResult = vi.fn();
     const bridge = createCodexDynamicToolBridge({
       tools: [
@@ -3766,3 +3931,4 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

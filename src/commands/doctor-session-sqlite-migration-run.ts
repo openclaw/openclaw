@@ -39,7 +39,7 @@ type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & 
   validationBeforeArchive: "not_run" | "passed" | "failed";
 };
 
-export type SessionSqliteMigrationManifest = {
+type SessionSqliteMigrationManifest = {
   completedAt?: string;
   failedAt?: string;
   failureReports?: {
@@ -996,3 +996,4 @@ function redactAbsoluteHomePaths(value: string): string {
   }
   return value.split(home).join("~");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

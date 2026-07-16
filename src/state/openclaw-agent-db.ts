@@ -2,7 +2,11 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { migrateMemoryIndexSourcesIdentity } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import {
+  MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+  migrateMemoryIndexSourcesIdentity,
+} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -15,7 +19,10 @@ import {
   type CanonicalSqliteUniqueIndex,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  assertSqliteSchemaContains,
+  type SqliteSchemaCompatibility,
+} from "../infra/sqlite-schema-contract.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -36,6 +43,11 @@ import {
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
 } from "./openclaw-agent-db-session-migrations.js";
+import {
+  addSessionProvenanceColumns,
+  backfillSessionEntryProvenance,
+  backfillTranscriptMutationWatermarks,
+} from "./openclaw-agent-db-session-provenance.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
@@ -57,12 +69,13 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v7 = per-entry lifecycle status projection. v6 added session/transcript hot-path indexes.
+// v8 = per-transcript session provenance. v7 added per-entry lifecycle status projection.
+// v6 added session/transcript hot-path indexes.
 // v5 added transcript mutation watermarks.
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 7;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 8;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -95,6 +108,14 @@ const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
     `,
   },
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
+const OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  optionalCanonicalTriggerGroups: [
+    {
+      tableName: MEMORY_INDEX_SOURCES_TABLE,
+      triggers: MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+    },
+  ],
+} satisfies SqliteSchemaCompatibility;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
@@ -200,28 +221,6 @@ function dropLegacyMemoryIndexSchema(db: DatabaseSync): void {
   `);
 }
 
-function backfillTranscriptMutationWatermarks(db: DatabaseSync): void {
-  const transcriptTable = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get("transcript_events") as { ok?: unknown } | undefined;
-  if (transcriptTable?.ok !== 1) {
-    return;
-  }
-  db.prepare(
-    `
-      UPDATE sessions
-      SET
-        transcript_updated_at = COALESCE(transcript_updated_at, ?),
-        transcript_observed_at = COALESCE(transcript_observed_at, updated_at)
-      WHERE EXISTS (
-          SELECT 1
-          FROM transcript_events
-          WHERE transcript_events.session_id = sessions.session_id
-        )
-    `,
-  ).run(Date.now());
-}
-
 function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
@@ -247,6 +246,7 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   if (columns && !columns.has("transcript_observed_at")) {
     db.exec("ALTER TABLE sessions ADD COLUMN transcript_observed_at INTEGER DEFAULT NULL;");
   }
+  addSessionProvenanceColumns(db, columns);
   if (!columns) {
     return;
   }
@@ -260,6 +260,10 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
     "session_scope",
     "created_at",
     "updated_at",
+    "session_entry_provenance",
+    "acp_owned",
+    "plugin_owner_id",
+    "hook_external_content_source",
     "started_at",
     "ended_at",
     "status",
@@ -280,6 +284,10 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
     migratedSessionColumn(columns, "session_scope", "'conversation'"),
     "created_at",
     "updated_at",
+    migratedSessionColumn(columns, "session_entry_provenance", "0"),
+    migratedSessionColumn(columns, "acp_owned", "0"),
+    migratedSessionColumn(columns, "plugin_owner_id", "NULL"),
+    migratedSessionColumn(columns, "hook_external_content_source", "NULL"),
     migratedSessionColumn(columns, "started_at", "NULL"),
     migratedSessionColumn(columns, "ended_at", "NULL"),
     migratedSessionColumn(columns, "status", "NULL"),
@@ -321,6 +329,10 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
         updated_at INTEGER NOT NULL,
         transcript_updated_at INTEGER DEFAULT NULL,
         transcript_observed_at INTEGER DEFAULT NULL,
+        session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1)),
+        acp_owned INTEGER NOT NULL DEFAULT 0 CHECK (acp_owned IN (0, 1)),
+        plugin_owner_id TEXT,
+        hook_external_content_source TEXT CHECK (hook_external_content_source IS NULL OR hook_external_content_source IN ('gmail', 'webhook')),
         started_at INTEGER,
         ended_at INTEGER,
         status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
@@ -610,7 +622,50 @@ export function assertOpenClawAgentDatabaseForMaintenance(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  assertSqliteSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+  assertSqliteSchemaContains(
+    database,
+    options.pathname,
+    OPENCLAW_AGENT_SCHEMA_SQL,
+    OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY,
+  );
+}
+
+/** Upgrade a supported older owned schema before strict offline maintenance. */
+export function migrateOpenClawAgentDatabaseForMaintenance(options: {
+  agentId: string;
+  pathname: string;
+}): void {
+  const agentId = normalizeAgentId(options.agentId);
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(options.pathname);
+  try {
+    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    const metadata = readExistingSchemaMeta(database);
+    if (!metadata) {
+      return;
+    }
+    assertExistingSchemaOwner(metadata, agentId, options.pathname);
+    assertSupportedAgentSchemaVersion(database, options.pathname);
+    const userVersion = readSqliteUserVersion(database);
+    const metadataVersion = metadata.schemaVersion;
+    const hasSupportedOlderVersion =
+      userVersion >= 1 &&
+      userVersion < OPENCLAW_AGENT_SCHEMA_VERSION &&
+      metadataVersion !== null &&
+      metadataVersion === userVersion &&
+      metadataVersion >= 1 &&
+      metadataVersion < OPENCLAW_AGENT_SCHEMA_VERSION;
+    if (!hasSupportedOlderVersion) {
+      return;
+    }
+    ensureOpenClawAgentDatabaseSchema(database, {
+      agentId,
+      path: options.pathname,
+    });
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(database);
+    database.close();
+  }
 }
 
 function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string): void {
@@ -640,6 +695,7 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES);
       backfillOpenClawAgentSchema(db, previousVersion);
+      backfillSessionEntryProvenance(db, previousVersion);
       const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
       db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
       const now = Date.now();
@@ -1097,3 +1153,4 @@ export function closeOpenClawAgentDatabases(): void {
 
 /** Test alias for closing cached agent database handles from teardown code. */
 export const closeOpenClawAgentDatabasesForTest = closeOpenClawAgentDatabases;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

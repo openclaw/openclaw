@@ -418,7 +418,9 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
+      gatewayRuntime: expect.any(Object),
     });
+    expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
@@ -2173,15 +2175,25 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
   });
 
-  it("starts the worker environment sidecar before releasing startup-gated methods", async () => {
+  it("reconciles worker placement before starting channels and sidecars", async () => {
     let finishReconcile: (() => void) | undefined;
     const reconcileReady = new Promise<void>((resolve) => {
       finishReconcile = resolve;
     });
+    const startupOrder: string[] = [];
     const workerSidecar = { stop: vi.fn() };
     const startWorkerEnvironmentRuntime = vi.fn(async () => {
+      startupOrder.push("worker-reconcile");
       await reconcileReady;
+      startupOrder.push("worker-ready");
       return workerSidecar;
+    });
+    const startGatewaySidecarsValue = vi.fn(async () => {
+      startupOrder.push("gateway-sidecars");
+      return {
+        pluginServices: null,
+        postReadySidecars: [],
+      };
     });
     const onGatewayLifetimeSidecars = vi.fn();
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
@@ -2195,23 +2207,45 @@ describe("startGatewayPostAttachRuntime", () => {
         onGatewayLifetimeSidecars,
       },
       createPostAttachRuntimeDeps({
-        startGatewaySidecars: vi.fn(async () => ({
-          pluginServices: null,
-          postReadySidecars: [],
-        })),
+        startGatewaySidecars: startGatewaySidecarsValue,
       }),
     );
 
     await vi.waitFor(() => {
       expect(startWorkerEnvironmentRuntime).toHaveBeenCalledTimes(1);
     });
+    expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
+    expect(startupOrder).toEqual(["worker-reconcile"]);
     expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
 
     finishReconcile?.();
     await vi.waitFor(() => {
-      expect([...unavailableGatewayMethods]).toEqual([]);
+      expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
     });
+    expect(startupOrder).toEqual(["worker-reconcile", "worker-ready", "gateway-sidecars"]);
+    expect([...unavailableGatewayMethods]).toEqual([]);
     expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(expect.arrayContaining([workerSidecar]));
+  });
+
+  it("stops worker placement runtime when channel and sidecar startup fails", async () => {
+    const workerSidecar = { stop: vi.fn(async () => {}) };
+    const startupError = new Error("sidecar startup failed");
+
+    await expect(
+      startGatewayPostAttachRuntime(
+        {
+          ...createPostAttachParams(),
+          startWorkerEnvironmentRuntime: vi.fn(() => workerSidecar),
+        },
+        createPostAttachRuntimeDeps({
+          startGatewaySidecars: vi.fn(async () => {
+            throw startupError;
+          }),
+        }),
+      ),
+    ).rejects.toBe(startupError);
+
+    expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
   });
 
   it("does not start the worker environment sidecar after close begins", async () => {
@@ -2529,6 +2563,11 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     defaultWorkspaceDir: "/tmp/openclaw-workspace",
     deps: {} as never,
     startChannels: vi.fn(async () => {}),
+    recoveryRuntime: {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    },
     logHooks: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -2543,3 +2582,4 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     ...overrides,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

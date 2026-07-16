@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { OnePasswordError } from "./errors.js";
 
 const MAX_STDOUT_BYTES = 1024 * 1024;
@@ -46,37 +46,17 @@ type OpField = {
   value?: unknown;
 };
 
-function defaultRunner(
+async function defaultRunner(
   file: string,
   args: string[],
   options: OpProcessOptions,
 ): Promise<OpProcessResult> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      file,
-      args,
-      {
-        env: options.env,
-        timeout: options.timeoutMs,
-        maxBuffer: options.maxBufferBytes,
-        encoding: "utf8",
-        windowsHide: true,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(
-            Object.assign(new Error("1Password CLI process failed"), {
-              stderr,
-              code: error.code,
-              killed: error.killed,
-              signal: error.signal,
-            }),
-          );
-          return;
-        }
-        resolve({ stdout, stderr });
-      },
-    );
+  return await runExec(file, args, {
+    baseEnv: {},
+    env: options.env,
+    logOutput: false,
+    maxBuffer: options.maxBufferBytes,
+    timeoutMs: options.timeoutMs,
   });
 }
 
@@ -120,7 +100,12 @@ function classifyOpError(error: unknown): OnePasswordError {
   if (record.code === "ENOENT") {
     return new OnePasswordError("OP_NOT_FOUND", "1Password CLI executable was not found");
   }
-  if (record.killed === true || record.code === "ETIMEDOUT" || record.signal === "SIGTERM") {
+  if (
+    record.killed === true ||
+    record.timedOut === true ||
+    record.code === "ETIMEDOUT" ||
+    record.signal === "SIGTERM"
+  ) {
     return new OnePasswordError("TIMEOUT", "1Password CLI request timed out");
   }
   if (

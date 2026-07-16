@@ -11,7 +11,7 @@ struct IOSGatewayChatTransportTests {
 
         func record(_ request: OpenClawChatGatewayRequest) -> Data {
             self.requests.append(request)
-            return Data(#"{"key":"forked"}"#.utf8)
+            return Data(#"{"key":"forked","entry":{}}"#.utf8)
         }
 
         func all() -> [OpenClawChatGatewayRequest] {

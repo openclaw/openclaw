@@ -20,8 +20,8 @@ scenario:
     channel: slack
     suiteIsolation: isolated
     summary: Exercise normalized restart and continuation delivery.
+    driver: live
     config:
-      requiredChannelDriver: live
       conversationKind: group
       conversationId: C0123456789
       senderId: U0123456789

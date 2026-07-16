@@ -1,5 +1,6 @@
 // Feishu helper module supports config schema behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
@@ -178,7 +179,7 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
-export const FeishuGroupSchema = z
+const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
@@ -351,3 +352,7 @@ export const FeishuConfigSchema = z
       }
     }
   });
+
+export const FeishuChannelConfigSchema = buildChannelConfigSchema(FeishuConfigSchema, {
+  jsonSchemaMode: "input",
+});

@@ -11,10 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
-import {
-  type DoctorStateSqliteCompactReport,
-  runDoctorStateSqliteCompact,
-} from "./doctor-state-sqlite-compact.js";
+import { runDoctorStateSqliteCompact } from "./doctor-state-sqlite-compact.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -22,6 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
+type DoctorStateSqliteCompactReport = Awaited<ReturnType<typeof runDoctorStateSqliteCompact>>;
 type CompletedStateSqliteCompactReport = Extract<
   DoctorStateSqliteCompactReport,
   { skipped: false }

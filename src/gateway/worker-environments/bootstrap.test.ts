@@ -434,7 +434,8 @@ describe("bootstrapWorker", () => {
             await fs.copyFile(artifact.tarballPath, remoteTarball);
             return result();
           }
-          const isPreflight = options.input?.includes("expected_receipt=$2") ?? false;
+          const isPreflight =
+            typeof options.input === "string" && options.input.includes("expected_receipt=$2");
           const scriptArgs = isPreflight
             ? [artifact.bundleHash, receiptJson, "bundle"]
             : [

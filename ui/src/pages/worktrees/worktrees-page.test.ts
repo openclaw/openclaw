@@ -478,10 +478,14 @@ describe("WorktreesPage lifecycle", () => {
     );
     await page.updateComplete;
 
+    // type="text" scopes to the create-draft inputs; the cleanup section's
+    // number inputs have their own disabled lifecycle.
     const draftInputs = Array.from(
-      page.querySelectorAll<HTMLInputElement>(".worktrees-create input"),
+      page.querySelectorAll<HTMLInputElement>('input.settings-input[type="text"]'),
     );
-    const createButton = page.querySelector<HTMLButtonElement>(".worktrees-create button");
+    const createButton = page.querySelector<HTMLButtonElement>(
+      ".settings-group .settings-row button.btn--sm",
+    );
     expect(draftInputs).toHaveLength(3);
     expect(draftInputs.every((input) => input.disabled)).toBe(true);
     expect(createButton?.disabled).toBe(true);
@@ -499,7 +503,7 @@ describe("WorktreesPage lifecycle", () => {
     toggleButton?.click();
     await page.updateComplete;
     const freshInputs = Array.from(
-      page.querySelectorAll<HTMLInputElement>(".worktrees-create input"),
+      page.querySelectorAll<HTMLInputElement>('input.settings-input[type="text"]'),
     );
     expect(freshInputs).toHaveLength(3);
     expect(freshInputs.every((input) => !input.disabled)).toBe(true);
@@ -521,7 +525,7 @@ describe("WorktreesPage lifecycle", () => {
     expect(withConfig.cleanupMaxCount).toBe(25);
     expect(withConfig.cleanupMaxSizeGb).toBe(50);
     const inputs = Array.from(
-      withConfig.querySelectorAll<HTMLInputElement>(".worktrees-cleanup input"),
+      withConfig.querySelectorAll<HTMLInputElement>('input.settings-input[type="number"]'),
     );
     expect(inputs.map((input) => input.value)).toEqual(["25", "50"]);
     expect(inputs.every((input) => !input.disabled)).toBe(true);
@@ -536,7 +540,7 @@ describe("WorktreesPage lifecycle", () => {
     document.body.append(withoutConfig);
     await withoutConfig.updateComplete;
     const inertInputs = Array.from(
-      withoutConfig.querySelectorAll<HTMLInputElement>(".worktrees-cleanup input"),
+      withoutConfig.querySelectorAll<HTMLInputElement>('input.settings-input[type="number"]'),
     );
     expect(inertInputs).toHaveLength(2);
     expect(inertInputs.every((input) => input.disabled)).toBe(true);

@@ -74,6 +74,8 @@ function applyStartupPresentation(settings: ReturnType<typeof loadSettings>): vo
   const resolvedTheme = resolveTheme(settings.theme, settings.themeMode);
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  root.classList.toggle("wa-light", root.dataset.themeMode === "light");
+  root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   syncCustomThemeStyleTag(settings.customTheme);
@@ -290,7 +292,18 @@ export function bootstrapApplication(): ApplicationRuntime {
   const sessions = createSessionCapability(gateway);
   const workboard = createWorkboardCapability();
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const overlays = createApplicationOverlays(gateway);
+  const overlays = createApplicationOverlays(gateway, {
+    drainConfigWrites: () => runtimeConfig.waitForPendingWrites(),
+  });
+  // App-updater interlock: writing config (or restarting the gateway) while
+  // the updater runs can corrupt the install; pause config writes until the
+  // update settles. Wired app-lifetime so page unmounts cannot strand it.
+  const syncConfigWriteSuspension = () => {
+    const update = overlays.snapshot;
+    runtimeConfig.setWritesSuspended(update.updateRunning || update.updateReconciliationPending);
+  };
+  const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
+  syncConfigWriteSuspension();
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
@@ -382,6 +395,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           console.error("[openclaw] route replacement failed", error);
         });
     },
+    revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
   return {
@@ -409,6 +423,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       channels.dispose();
       sessions.dispose();
       workboard.dispose();
+      stopConfigWriteSuspension();
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();

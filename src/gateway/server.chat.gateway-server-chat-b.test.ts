@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
@@ -20,7 +21,6 @@ import {
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
-import { appendSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -228,6 +228,11 @@ function createDirectChatContext(): GatewayRequestContext {
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig: () => ({}),
+    recoveryRuntime: {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    },
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
@@ -957,6 +962,7 @@ describe("gateway server chat", () => {
               id: "gpt-5.5",
               name: "GPT-5.5",
               provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
               contextWindow: 400_000,
               reasoning: false,
               available: true,
@@ -2699,6 +2705,7 @@ describe("gateway server chat", () => {
         expectedSessionId: "sess-main",
         sessionKey: "main",
         storePath,
+        gatewayRuntime: expect.any(Object),
       });
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(loadExactSessionEntry({ sessionKey: "main", storePath })?.entry).toMatchObject({
@@ -4969,6 +4976,57 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history offset pages preserve a hidden heartbeat boundary from overread context", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: HEARTBEAT_PROMPT }],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "heartbeat run output" }],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "newest output" }],
+          },
+        }),
+      ]);
+
+      const page = await rpcReq<{
+        messages?: Array<{
+          content?: Array<{ text?: string }>;
+          __openclaw?: { turnBoundary?: boolean };
+        }>;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1,
+        offset: 1,
+      });
+
+      expect(page.ok).toBe(true);
+      expect(page.payload?.messages).toHaveLength(1);
+      expect(page.payload?.messages?.[0]?.content?.[0]?.text).toBe("heartbeat run output");
+      expect(page.payload?.messages?.[0]?.["__openclaw"]?.turnBoundary).toBe(true);
+    });
+  });
+
   test("chat.send does not force-disable block streaming", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
@@ -5189,6 +5247,47 @@ describe("gateway server chat", () => {
 
         expect(capturedOpts?.requestedSessionId).toBe("sess-main");
         expect(capturedOpts?.resumeRequestedSession).toBe(true);
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
+  });
+
+  test("chat.send forwards one-turn queue mode overrides internally", async () => {
+    await withGatewayChatHarness(
+      async ({ ws, createSessionDir }) => {
+        const spy = getReplyFromConfig;
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        await createSessionDir();
+        await writeMainSessionStore();
+        let capturedOpts: InternalGetReplyOptions | undefined;
+        mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+          capturedOpts = opts;
+          return undefined;
+        });
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "steer this turn",
+          queueMode: "steer",
+          idempotencyKey: "idem-queue-mode-override",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(() => {
+          expect(spy.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
+
+        expect(capturedOpts).toMatchObject({ queueModeOverride: "steer" });
       },
       {
         headers: { origin: `http://127.0.0.1:${harness.port}` },
@@ -6142,43 +6241,36 @@ describe("gateway server chat", () => {
       if (!storePath) {
         throw new Error("session store path was not initialized");
       }
-      await appendSqliteTranscriptEvents(
-        {
-          agentId: "main",
-          sessionId: "sess-before-reset",
-          sessionKey: "agent:main:main",
-          storePath,
+      const archivedScope = {
+        agentId: "main",
+        sessionId: "sess-before-reset",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-1",
+        parentId: null,
+        message: {
+          role: "user",
+          provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+          content: "before anchor",
+          timestamp: currentSessionStartedAt - 2_000,
         },
-        [
-          {
-            type: "message",
-            id: "archived-1",
-            parentId: null,
-            message: {
-              role: "user",
-              provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-              content: "before anchor",
-              timestamp: currentSessionStartedAt - 2_000,
-            },
-          },
-          {
-            type: "message",
-            id: "archived-2",
-            parentId: "archived-1",
-            message: {
-              role: "assistant",
-              content: "matching anchor",
-              timestamp: currentSessionStartedAt - 1_000,
-            },
-          },
-          {
-            type: "message",
-            id: "archived-3",
-            parentId: "archived-2",
-            message: { role: "user", content: "after anchor" },
-          },
-        ],
-      );
+      });
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-2",
+        parentId: "archived-1",
+        message: {
+          role: "assistant",
+          content: "matching anchor",
+          timestamp: currentSessionStartedAt - 1_000,
+        },
+      });
+      await appendTranscriptMessage(archivedScope, {
+        eventId: "archived-3",
+        parentId: "archived-2",
+        message: { role: "user", content: "after anchor" },
+      });
 
       const history = await rpcReq<{
         messages?: Array<{ content?: string }>;
@@ -6444,3 +6536,4 @@ describe("gateway server chat", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

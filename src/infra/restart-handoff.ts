@@ -15,7 +15,7 @@ import {
 
 // Restart handoff rows let a supervisor explain a recent gateway restart after
 // the old process exits. The row is short-lived, bounded, and replaced on write.
-export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
+const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
 const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY = "current";
 const GATEWAY_RESTART_HANDOFF_TTL_MS = 60_000;
 const GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS = 10 * 60_000;
@@ -26,15 +26,15 @@ const MAX_REASON_LENGTH = 200;
 const handoffLog = createSubsystemLogger("restart-handoff");
 type GatewayRestartHandoffDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_handoff">;
 
-export type GatewayRestartHandoffRestartKind = "full-process" | "update-process";
-export type GatewayRestartHandoffSource =
+type GatewayRestartHandoffRestartKind = "full-process" | "update-process";
+type GatewayRestartHandoffSource =
   | "config-write"
   | "gateway-update"
   | "operator-restart"
   | "plugin-change"
   | "signal"
   | "unknown";
-export type GatewayRestartHandoffSupervisorMode = "launchd" | "systemd" | "schtasks" | "external";
+type GatewayRestartHandoffSupervisorMode = "launchd" | "systemd" | "schtasks" | "external";
 
 export type GatewayRestartHandoff = {
   kind: typeof GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND;

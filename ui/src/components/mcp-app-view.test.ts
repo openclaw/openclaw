@@ -1,10 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import {
-  buildMcpAppHostCapabilities,
-  McpAppView,
-  resolveMcpAppSandboxUrl,
-} from "./mcp-app-view.ts";
+import { McpAppView } from "./mcp-app-view.ts";
 
 const MCP_APP_VIEW_ELEMENT_NAME = `test-mcp-app-view-${crypto.randomUUID()}`;
 
@@ -13,74 +9,6 @@ const MCP_APP_VIEW_ELEMENT_NAME = `test-mcp-app-view-${crypto.randomUUID()}`;
 class TestMcpAppView extends McpAppView {}
 
 customElements.define(MCP_APP_VIEW_ELEMENT_NAME, TestMcpAppView);
-
-describe("mcp-app-view security contract", () => {
-  it("advertises the CSP actually applied to MCP Apps", () => {
-    expect(
-      buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
-    ).toMatchObject({
-      sandbox: { csp: { connectDomains: ["https://api.example.com"] } },
-    });
-    expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
-  });
-
-  it("accepts only the dedicated-origin MCP App sandbox endpoint", () => {
-    expect(
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox?csp=abc",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toBe("https://gateway.example:8444/mcp-app-sandbox?csp=abc");
-    expect(
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        18790,
-        "https://apps.example.com",
-        "wss://gateway.example",
-        "https://gateway.example",
-      ),
-    ).toBe("https://apps.example.com/mcp-app-sandbox");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "https://attacker.example/mcp-app-sandbox",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "data:text/html;base64,cHJveHk=",
-        8444,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        8443,
-        undefined,
-        "wss://gateway.example:8443/openclaw",
-        "https://gateway.example:8443",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-    expect(() =>
-      resolveMcpAppSandboxUrl(
-        "/mcp-app-sandbox",
-        8444,
-        "https://gateway.example:8443",
-        "wss://gateway.example:8443/openclaw",
-        "https://control.example",
-      ),
-    ).toThrow("MCP App sandbox URL is invalid");
-  });
-});
 
 describe("mcp-app-view localization", () => {
   afterEach(async () => {
@@ -106,4 +34,40 @@ describe("mcp-app-view localization", () => {
       .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
       .toBe("Aplicativo MCP indisponível: MCP App gateway unavailable");
   });
+
+  it.each([
+    ["foreign origin", "https://attacker.example/mcp-app-sandbox", 8444, undefined],
+    ["data URL", "data:text/html;base64,cHJveHk=", 8444, undefined],
+    ["same gateway port", "/mcp-app-sandbox", 8443, undefined],
+    ["host origin", "/mcp-app-sandbox", 8444, "host"],
+  ])(
+    "rejects a %s sandbox URL through the mounted view",
+    async (_label, sandboxUrl, sandboxPort, sandboxOrigin) => {
+      const resolvedSandboxOrigin =
+        sandboxOrigin === "host" ? window.location.origin : sandboxOrigin;
+      const request = vi.fn(async () => ({
+        sandboxUrl,
+        sandboxPort,
+        ...(resolvedSandboxOrigin ? { sandboxOrigin: resolvedSandboxOrigin } : {}),
+        html: "<p>unsafe</p>",
+        toolInput: null,
+        toolResult: null,
+      }));
+      const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppView;
+      Reflect.set(view, "context", {
+        gateway: {
+          snapshot: { client: { request } },
+          connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+        },
+      });
+      view.sessionKey = "agent:main:main";
+      view.viewId = crypto.randomUUID();
+      document.body.append(view);
+
+      await expect
+        .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+        .toContain("MCP App sandbox URL is invalid");
+      expect(view.shadowRoot?.querySelector("iframe")).toBeNull();
+    },
+  );
 });

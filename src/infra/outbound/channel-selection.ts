@@ -294,9 +294,3 @@ export async function resolveMessageChannelSelection(params: {
   }
   throw new Error(formatMultipleConfiguredChannelsMessage(configured));
 }
-
-export const testing = {
-  resetLoggedChannelSelectionErrors() {
-    loggedChannelSelectionErrors.clear();
-  },
-};

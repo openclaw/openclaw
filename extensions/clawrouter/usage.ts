@@ -9,7 +9,7 @@ import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
 
 const CLAWROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 
-export type ClawRouterUsageFetchGuard = typeof fetchWithSsrFGuard;
+type ClawRouterUsageFetchGuard = typeof fetchWithSsrFGuard;
 
 type ClawRouterBudget = {
   configured?: unknown;

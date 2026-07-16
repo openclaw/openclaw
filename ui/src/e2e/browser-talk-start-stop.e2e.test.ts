@@ -1,7 +1,7 @@
 // Control UI E2E tests cover browser Talk start and stop through a real page.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Page } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -17,6 +17,8 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 let server: ControlUiE2eServer;
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 
 async function installTalkBrowserFixtures(page: Page) {
   await page.addInitScript(() => {
@@ -59,6 +61,10 @@ async function installTalkBrowserFixtures(page: Page) {
 
       createMediaStreamSource() {
         return { connect() {}, disconnect() {} };
+      }
+
+      createGain() {
+        return { connect() {}, disconnect() {}, gain: { value: 1 } };
       }
 
       createScriptProcessor() {
@@ -118,15 +124,21 @@ async function installBlockedMicrophoneFixture(page: Page) {
 
 describeControlUiE2e("Control UI browser Talk", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await browser?.close();
     await server?.close();
   });
 
   it("starts a provider WebSocket session and stops browser audio resources", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ permissions: ["microphone"] });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -178,7 +190,16 @@ describeControlUiE2e("Control UI browser Talk", () => {
               ).openclawTalkE2eState?.constraints,
           ),
         )
-        .toEqual([{ audio: { deviceId: { exact: "usb" } } }]);
+        .toEqual([
+          {
+            audio: {
+              autoGainControl: true,
+              deviceId: { exact: "usb" },
+              echoCancellation: true,
+              noiseSuppression: true,
+            },
+          },
+        ]);
       await expect
         .poll(async () =>
           (await gateway.getSocketUrls()).filter((url) => url.includes("BidiGenerateContent")),
@@ -293,12 +314,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
         .toBe(true);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("keeps stop-voice and stop-run controls visually distinct while both are active", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ permissions: ["microphone"] });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -413,12 +432,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("renders streamed relay assistant transcript deltas as readable text", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ permissions: ["microphone"] });
     const page = await context.newPage();
     const relaySessionId = "relay-e2e-transcript";
@@ -446,7 +463,24 @@ describeControlUiE2e("Control UI browser Talk", () => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
+      // The request is recorded before its mock response is delivered. Wait for
+      // microphone setup before probing relay readiness below.
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { constraints: unknown[] };
+                }
+              ).openclawTalkE2eState?.constraints.length,
+          ),
+        )
+        .toBe(1);
       await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
+      await expect
+        .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
+        .toBe(1);
       await gateway.emitGatewayEvent("talk.event", {
         relaySessionId,
         type: "transcript",
@@ -454,6 +488,11 @@ describeControlUiE2e("Control UI browser Talk", () => {
         text: "Hey, what model are you using?",
         final: true,
       });
+      await expect
+        .poll(() =>
+          page.locator(".agent-chat__voice-turn--user .agent-chat__voice-turn-text").textContent(),
+        )
+        .toBe("Hey, what model are you using?");
       // Assistant audio transcripts stream as verbatim fragments that can split
       // words ("I","'m"," Chat","G","PT"); regression coverage for #102556 where
       // the merge injected spaces mid-word and the turn collapsed while streaming.
@@ -481,12 +520,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
       expect(turnBounds?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(120);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("keeps blocked microphone guidance readable in a narrow viewport", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext();
     const page = await context.newPage();
     await installMockGateway(page);
@@ -508,7 +545,6 @@ describeControlUiE2e("Control UI browser Talk", () => {
         .toContain("Microphone access is blocked.");
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 });

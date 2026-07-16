@@ -42,6 +42,7 @@ import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import { LIVE_SESSION_LIMITS, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import { createCliOutputFailoverError } from "./output-error.js";
@@ -127,8 +128,6 @@ type ClaudeLiveToolTerminalOutcome =
   | { outcome: "blocked"; deniedReason: string; reason?: string }
   | { outcome: "cancelled" | "failed" | "timed_out" | "unknown" };
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-const CLAUDE_LIVE_MAX_SESSIONS = 16;
-const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, ClaudeLiveSessionCreate>();
@@ -138,7 +137,7 @@ function sha256(value: string): string {
 }
 
 /** Closes all live Claude CLI sessions and clears creation promises for tests. */
-export function resetClaudeLiveSessionsForTest(): void {
+function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
     closeLiveSession(session, "restart");
   }
@@ -202,6 +201,7 @@ export async function rotateClaudeLiveMcpCaptureKeyForContext(
 /** Returns whether a prepared backend context is eligible for Claude live stdio reuse. */
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
   return (
+    context.params.sessionEntry?.execHost !== "node" &&
     context.backendResolved.id === "claude-cli" &&
     context.preparedBackend.backend.liveSession === "claude-stdio" &&
     context.preparedBackend.backend.output === "jsonl" &&
@@ -259,7 +259,7 @@ function stripLiveProcessArgs(
 }
 
 /** Builds Claude CLI args for stream-json live sessions, stripping one-shot session flags. */
-export function buildClaudeLiveArgs(params: {
+function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
   systemPrompt: string;
@@ -291,6 +291,13 @@ export function buildClaudeLiveArgs(params: {
   return params.permissionMode
     ? upsertArgValue(liveArgs, "--permission-mode", params.permissionMode)
     : liveArgs;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.claudeLiveSessionTestApi")] = {
+    buildClaudeLiveArgs,
+    resetClaudeLiveSessionsForTest,
+  };
 }
 
 type ClaudeLiveSessionOwner = {
@@ -863,7 +870,7 @@ function resolveClaudeLiveExecPermission(context: PreparedCliRunContext): Claude
   return {
     security,
     ask,
-    permissionMode: security === "full" && ask === "off" ? "bypassPermissions" : "default",
+    permissionMode: resolveClaudeLiveMode(security, ask, process.getuid?.()),
   };
 }
 
@@ -1180,7 +1187,7 @@ async function createClaudeLiveSession(params: {
       onStderr: (chunk) => {
         if (session) {
           session.stderr += chunk;
-          if (session.stderr.length > CLAUDE_LIVE_MAX_STDERR_CHARS) {
+          if (session.stderr.length > LIVE_SESSION_LIMITS.maxStderrChars) {
             closeLiveSession(
               session,
               "abort",
@@ -1319,7 +1326,7 @@ function ensureLiveSessionCapacity(key: string, context: PreparedCliRunContext):
   if (
     liveSessions.has(key) ||
     liveSessionCreates.has(key) ||
-    liveSessions.size + liveSessionCreates.size < CLAUDE_LIVE_MAX_SESSIONS
+    liveSessions.size + liveSessionCreates.size < LIVE_SESSION_LIMITS.maxSessions
   ) {
     return;
   }
@@ -1646,3 +1653,4 @@ export async function runClaudeLiveSessionTurn(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

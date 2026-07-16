@@ -40,6 +40,8 @@ type TestSessionsPage = HTMLElement & {
   loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
+  stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
+  rememberCustomGroup: (name: string) => Promise<void>;
   openSessionMenu: (
     row: GatewaySessionRow,
     position: { x: number; y: number },
@@ -570,6 +572,57 @@ describe("sessions page lifecycle", () => {
     expect(page.result?.sessions).toEqual([]);
   });
 
+  it("stops an active cloud worker and refreshes the session roster", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
+    const list = vi.fn(async () => ({ count: 0, sessions: [] }) as unknown as SessionsListResult);
+    const sessions = createSessions({ list });
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    const row = {
+      key: "agent:main:cloud",
+      label: "Cloud task",
+      placement: {
+        state: "active",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: "environment-1",
+        activeOwnerEpoch: 1,
+        workerBundleHash: "0".repeat(64),
+        workspaceBaseManifestRef: "base-ref",
+        remoteWorkspaceDir: "/workspace",
+      },
+    } as GatewaySessionRow;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await page.stopCloudWorker(row);
+
+    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "Cloud task"?');
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:cloud", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
+    );
+    expect(list).toHaveBeenCalledOnce();
+    expect(page.sessionMutationPending).toBe(false);
+  });
+
+  it("surfaces a rejected custom-group creation on the Sessions page", async () => {
+    const groupsPut = vi.fn(async () => {
+      throw new Error("group name exceeds 512 characters");
+    });
+    const sessions = createSessions({ groupsPut });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    const name = "X".repeat(513);
+
+    await page.rememberCustomGroup(name);
+
+    expect(groupsPut).toHaveBeenCalledWith([name]);
+    expect(page.error).toBe("Error: group name exceeds 512 characters");
+  });
+
   it("drops stale mutation state, errors, and navigation after disconnect", async () => {
     const deleted = deferred<{
       deleted: string[];
@@ -581,12 +634,14 @@ describe("sessions page lifecycle", () => {
     const branched = deferred<{ key: string }>();
     const restored = deferred<unknown>();
     const captured = deferred<unknown>();
+    const groupsPut = deferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
     const sessions = createSessions({
       deleteMany: vi.fn(() => deleted.promise),
       patch: vi.fn(() => patched.promise as never),
       create: vi.fn(() => forked.promise),
       branchCheckpoint: vi.fn(() => branched.promise as never),
       restoreCheckpoint: vi.fn(() => restored.promise as never),
+      groupsPut: vi.fn(() => groupsPut.promise),
     });
     const request = vi.fn((method: string) => {
       if (method === "chat.history") {
@@ -613,6 +668,7 @@ describe("sessions page lifecycle", () => {
       page.branchCheckpoint("main", "branch-checkpoint"),
       page.restoreCheckpoint("main", "restore-checkpoint"),
       page.addToWorkboard({ key: "main" } as GatewaySessionRow),
+      page.rememberCustomGroup("Stale group"),
     ];
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object)),
@@ -625,6 +681,7 @@ describe("sessions page lifecycle", () => {
     branched.resolve({ key: "branched" });
     restored.reject(new Error("stale restore error"));
     captured.reject(new Error("stale capture error"));
+    groupsPut.reject(new Error("stale group error"));
     await Promise.all(requests);
 
     expect(page.result?.sessions.map((row) => row.key)).toEqual(["main"]);

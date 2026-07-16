@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayActiveWorkInspectors } from "../../infra/gateway-active-work.js";
 import {
   prepareGatewaySuspend,
-  resetGatewaySuspendCoordinatorForTest,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
 } from "../../infra/gateway-suspend-coordinator.js";
 import { dispatchGatewayMethod } from "../../plugin-sdk/gateway-method-runtime.js";
 import type { PluginHttpRouteRegistration } from "../../plugins/registry.js";
@@ -115,13 +115,13 @@ function createUpgradeHandler(routes: PluginHttpRouteRegistration[]) {
 beforeEach(() => {
   rateLimitEpochMs += 60_000;
   vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
-  resetGatewaySuspendCoordinatorForTest();
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resetGatewaySuspendCoordinatorForTest();
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
 });
 
