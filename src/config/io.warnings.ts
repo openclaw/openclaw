@@ -3,7 +3,7 @@ import { VERSION } from "../version.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import {
   loggedConfigWarningFingerprints,
-  setBoundedConfigIoMapEntry,
+  setBoundedConfigIoWarningEntry,
   warnedFutureTouchedVersions,
 } from "./io.state.js";
 import type { OpenClawConfig } from "./types.js";
@@ -41,10 +41,10 @@ export function logConfigWarningsOnce(params: {
     .join("\n");
   const fingerprint = hashConfigRaw(details);
   if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
-    setBoundedConfigIoMapEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
+    setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
     return;
   }
-  setBoundedConfigIoMapEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
+  setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
   params.logger.warn(`Config warnings:\n${details}`);
 }
 

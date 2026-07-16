@@ -25,7 +25,7 @@ import {
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
-import { loggedConfigWarningFingerprints, setBoundedConfigIoMapEntry } from "./io.state.js";
+import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
 import type {
   ConfigWriteOptions,
   InternalConfigWriteResult,
@@ -412,7 +412,7 @@ export async function writeConfigFileFromContext(
               if (previousWarningFingerprint === undefined) {
                 loggedConfigWarningFingerprints.delete(configPath);
               } else {
-                setBoundedConfigIoMapEntry(
+                setBoundedConfigIoWarningEntry(
                   loggedConfigWarningFingerprints,
                   configPath,
                   previousWarningFingerprint,

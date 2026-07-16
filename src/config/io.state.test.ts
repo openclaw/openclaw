@@ -1,9 +1,7 @@
-// Verifies config IO warning and pending-secret caches stay bounded across process lifetime.
+// Verifies config IO warning caches stay bounded across process lifetime.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isInvalidConfigError, throwInvalidConfig } from "./io.invalid-config.js";
-import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
-  autoOwnerDisplaySecretByPath,
   loggedConfigWarningFingerprints,
   loggedInvalidConfigs,
   warnedFutureTouchedVersions,
@@ -16,7 +14,6 @@ beforeEach(() => {
   loggedInvalidConfigs.clear();
   loggedConfigWarningFingerprints.clear();
   warnedFutureTouchedVersions.clear();
-  autoOwnerDisplaySecretByPath.clear();
 });
 
 afterEach(() => {
@@ -94,27 +91,5 @@ describe("config IO state caches", () => {
     warnPath("/config-1.json");
     expect(loggedConfigWarningFingerprints.size).toBe(CACHE_MAX_SIZE);
     expect(warnSpy).toHaveBeenCalledTimes(CACHE_MAX_SIZE + 2);
-  });
-
-  it("retains a hot pending owner value while evicting the cold path", () => {
-    const config = {} as Parameters<typeof retainGeneratedOwnerDisplaySecret>[0]["config"];
-    const retain = (configPath: string, generatedSecret: string) =>
-      retainGeneratedOwnerDisplaySecret({
-        config,
-        configPath,
-        generatedSecret,
-        state: { pendingByPath: autoOwnerDisplaySecretByPath },
-      });
-    for (let i = 0; i < CACHE_MAX_SIZE; i++) {
-      retain(`/config-${i}.json`, `value-${i}`);
-    }
-
-    retain("/config-0.json", "value-0");
-    retain("/overflow.json", "overflow-value");
-
-    expect(autoOwnerDisplaySecretByPath.size).toBe(CACHE_MAX_SIZE);
-    expect(autoOwnerDisplaySecretByPath.get("/config-0.json")).toBe("value-0");
-    expect(autoOwnerDisplaySecretByPath.has("/config-1.json")).toBe(false);
-    expect(autoOwnerDisplaySecretByPath.get("/overflow.json")).toBe("overflow-value");
   });
 });
