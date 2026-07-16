@@ -603,10 +603,7 @@ export async function dispatchWithContext(params: {
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   textLimit?: number;
-  onTurnAdopted?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAdopted"];
-  onTurnDeferred?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnDeferred"];
-  onTurnAbandoned?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAbandoned"];
-  turnAbortSignal?: Parameters<typeof dispatchTelegramMessage>[0]["turnAbortSignal"];
+  turnAdoptionLifecycle?: Parameters<typeof dispatchTelegramMessage>[0]["turnAdoptionLifecycle"];
   runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
 }) {
   const bot = params.bot ?? createBot();
@@ -623,10 +620,7 @@ export async function dispatchWithContext(params: {
     opts: { token: "token" },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
-    onTurnAdopted: params.onTurnAdopted,
-    onTurnDeferred: params.onTurnDeferred,
-    onTurnAbandoned: params.onTurnAbandoned,
-    turnAbortSignal: params.turnAbortSignal,
+    turnAdoptionLifecycle: params.turnAdoptionLifecycle,
   });
 }
 

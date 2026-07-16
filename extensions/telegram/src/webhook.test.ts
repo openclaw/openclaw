@@ -1251,12 +1251,15 @@ describe("startTelegramWebhook", () => {
     });
 
     await vi.waitFor(() =>
-      expect(mockMessages(runtimeLog).join("\n")).toContain("completion retry 1 scheduled"),
+      expect(mockMessages(runtimeLog).join("\n")).toMatch(
+        /completion retry 1 scheduled|tombstone retry 1\//,
+      ),
     );
     await started.stop();
     const attemptsAfterStop = completeAttempts;
     await vi.advanceTimersByTimeAsync(400);
 
+    // Stop must abort in-flight tombstone retries (composed webhookAbortSignal).
     expect(completeAttempts).toBe(attemptsAfterStop);
   });
 
