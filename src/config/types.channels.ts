@@ -8,6 +8,7 @@ import type {
 import type { DiscordConfig } from "./types.discord.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
+import type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 import type { IrcConfig } from "./types.irc.js";
 import type { MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { MSTeamsConfig } from "./types.msteams.js";
@@ -21,15 +22,7 @@ export type {
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
 export type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
-
-export type ChannelImplicitMentionsConfig = {
-  /** Treat replies to the bot's own message as implicit mentions. */
-  replyToBot?: boolean;
-  /** Treat quoted bot messages as implicit mentions. */
-  quotedBot?: boolean;
-  /** Treat follow-ups in threads the bot participated in as implicit mentions. */
-  threadParticipation?: boolean;
-};
+export type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 
 export type ChannelDefaultsConfig = {
   /** Default group-chat admission policy inherited by channels that support groups. */

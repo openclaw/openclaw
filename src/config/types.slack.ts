@@ -16,7 +16,7 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
-import type { ChannelImplicitMentionsConfig } from "./types.channels.js";
+import type { ChannelImplicitMentionsConfig } from "./types.implicit-mentions.js";
 import type {
   DmConfig,
   MentionPatternsPolicyConfig,

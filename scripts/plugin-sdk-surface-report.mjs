@@ -294,7 +294,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
-      106,
+      // Harvest: freeze the compat config-schema barrel to explicit exports -1.
+      105,
       env,
     ),
   };
