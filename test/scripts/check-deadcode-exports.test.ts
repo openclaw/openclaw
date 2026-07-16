@@ -288,6 +288,9 @@ describe("check-deadcode-exports", () => {
 Unused exports (2)
 src/b.ts: beta, alpha
 /tmp/outside.ts: noise
+C:\\tmp\\outside.ts: noise
+C:outside.ts: noise
+\\\\server\\share\\outside.ts: noise
 
 Unused exported types (1)
 extensions/example/src/types.ts: ExampleType

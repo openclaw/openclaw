@@ -100,6 +100,9 @@ describe("check-deadcode-unused-files", () => {
 Unused files (2)
 src/b.ts: src/b.ts
 src/a.ts: src/a.ts
+C:\\tmp\\outside.ts: C:\\tmp\\outside.ts
+C:outside.ts: C:outside.ts
+\\\\server\\share\\outside.ts: \\\\server\\share\\outside.ts
 
 Unused dependencies (1)
 left-pad: package.json

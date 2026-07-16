@@ -25,6 +25,7 @@ export function isLikelyRepoFilePath(value) {
   const normalized = normalizeRepoPath(value);
   return (
     !normalized.startsWith("/") &&
+    !/^[A-Za-z]:/u.test(normalized) &&
     !normalized.startsWith("../") &&
     !normalized.includes("/../") &&
     /\.(?:[cm]?[jt]sx?)$/u.test(normalized)
