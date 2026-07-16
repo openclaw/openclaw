@@ -268,27 +268,25 @@ describe("acp translator stop reason mapping", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
-      const liveText = sessionUpdatePayloads(sessionUpdate, "agent_message_chunk").map((entry) =>
-        entry.update.content.type === "text" ? entry.update.content.text : "",
-      );
-      expect(liveText).toHaveLength(2);
-      expect(liveText.join("")).toContain(
-        "partial response\n\n[OpenClaw interruption] Gateway disconnected",
-      );
+      const liveUpdates = sessionUpdatePayloads(sessionUpdate, "agent_message_chunk");
+      expect(liveUpdates).toHaveLength(2);
+      expect(liveUpdates[0]?.update.content).toEqual({
+        type: "text",
+        text: "partial response",
+      });
+      expect(liveUpdates[1]?.update.content).toEqual({
+        type: "text",
+        text: expect.stringMatching(/^\n\n\[OpenClaw interruption] Gateway disconnected/),
+      });
 
       const replay = await eventLedger.readReplay({
         sessionId,
         sessionKey: "agent:main:main",
       });
-      const replayText = replay.events
+      const replayUpdates = replay.events
         .filter((event) => event.update.sessionUpdate === "agent_message_chunk")
-        .map((event) =>
-          event.update.sessionUpdate === "agent_message_chunk" &&
-          event.update.content.type === "text"
-            ? event.update.content.text
-            : "",
-        );
-      expect(replayText).toEqual(liveText);
+        .map((event) => event.update);
+      expect(replayUpdates).toEqual(liveUpdates.map((entry) => entry.update));
     } finally {
       vi.useRealTimers();
     }
