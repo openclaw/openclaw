@@ -471,6 +471,8 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: strictBundledPluginWorkspace([
       // The plugin-SDK QA Lab facade resolves this CLI surface by basename.
       "cli.ts!",
+      // The debugger UI is a separate browser entrypoint outside src/.
+      "web/src/app.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: strictBundledPluginWorkspace(),
