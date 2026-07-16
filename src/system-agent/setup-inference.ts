@@ -362,7 +362,8 @@ export async function detectSetupInference(
       id: candidate.kind,
       label: candidate.label,
       detail: candidate.detail,
-      reason: "Automatic setup cannot enforce a tool-free Gemini CLI probe.",
+      reason:
+        "Can't be auto-tested safely here. Use 'Gemini CLI OAuth' or a Gemini API key instead.",
     }));
   const antigravity = await (deps.probeLocalCommand ?? probeLocalCommand)("agy");
   if (antigravity.found) {
@@ -370,7 +371,8 @@ export async function detectSetupInference(
       id: "antigravity-cli",
       label: "Antigravity CLI",
       detail: "installed",
-      reason: "Automatic setup cannot enforce a tool-free Antigravity probe.",
+      reason:
+        "Can't be auto-tested safely here. Sign in with a provider or use an API key instead.",
     });
   }
   const raw = detected.filter((candidate) => candidate.kind !== "gemini-cli");
