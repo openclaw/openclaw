@@ -23,7 +23,6 @@ export const SUPERVISOR_HINT_ENV_VARS = [
 
 /** Supported supervisor families that can respawn the gateway after update/restart handoff. */
 export type RespawnSupervisor = "launchd" | "systemd" | "schtasks";
-export type GatewayRespawnSupervisor = RespawnSupervisor | "external";
 
 interface DetectRespawnSupervisorOptions {
   includeLinuxOpenClawGatewayServiceMarker?: boolean;
@@ -87,7 +86,7 @@ export function detectGatewayRespawnSupervisor(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   options: DetectRespawnSupervisorOptions = {},
-): GatewayRespawnSupervisor | null {
+): RespawnSupervisor | "external" | null {
   if (isGatewayExternallySupervised(env)) {
     return "external";
   }

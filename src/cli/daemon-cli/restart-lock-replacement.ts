@@ -5,7 +5,7 @@ import {
 } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 
-export type GatewayLockReplacementWaitResult =
+type GatewayLockReplacementWaitResult =
   | { status: "replacement"; attemptsUsed: number }
   | { status: "timeout" };
 
