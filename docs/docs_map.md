@@ -895,6 +895,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack
   - H2: Events and operational behavior
+  - H3: Presence events
   - H2: Configuration reference
   - H2: Troubleshooting
   - H2: Attachment media reference
