@@ -130,13 +130,16 @@ describe("ReefTrustStore", () => {
     const id = "01JZ0000000000000000000120";
     const bodyHash = "a".repeat(64);
     const recipient = reefPeerIdentity(peerTrust());
-    const binding = { bodyHash, recipient };
+    const binding = { bodyHash, textHash: "b".repeat(64), recipient };
     openReefTrustStore(runtime(), config()).recordOutboundDelivery("clawd", id, binding);
 
     const reopened = openReefTrustStore(runtime(), config());
     expect(reopened.outboundDelivery("clawd", id)).toEqual(binding);
     expect(
       reopened.consumeOutboundDelivery("clawd", id, { ...binding, bodyHash: "b".repeat(64) }),
+    ).toBe(false);
+    expect(
+      reopened.consumeOutboundDelivery("clawd", id, { ...binding, textHash: "c".repeat(64) }),
     ).toBe(false);
     expect(reopened.outboundDelivery("clawd", id)).toEqual(binding);
     expect(reopened.consumeOutboundDelivery("clawd", id, binding)).toBe(true);
@@ -150,7 +153,8 @@ describe("ReefTrustStore", () => {
     const store = openReefTrustStore(runtime(), config());
     const trustedPeer = peerTrust();
     const recipient = reefPeerIdentity(trustedPeer);
-    const binding = { bodyHash, recipient };
+    const textHash = "c".repeat(64);
+    const binding = { bodyHash, textHash, recipient };
     store.set("clawd", trustedPeer);
     store.recordOutboundDelivery("clawd", id, binding);
 
@@ -166,7 +170,7 @@ describe("ReefTrustStore", () => {
 
     const reopened = openReefTrustStore(runtime(), config());
     expect(reopened.pendingOutboundRejections()).toEqual([
-      { id, peer: "clawd", recipient, category: "guard_deny" },
+      { id, peer: "clawd", recipient, textHash, category: "guard_deny" },
     ]);
     expect(reopened.consumeOutboundDelivery("clawd", id, binding)).toBe(false);
     const noticeState = { lastRejectionAt: 10_000, lastResendAt: 10_100 };
@@ -174,7 +178,14 @@ describe("ReefTrustStore", () => {
       kind: "reserved",
     });
     expect(reopened.pendingOutboundRejections()).toEqual([
-      { id, peer: "clawd", recipient, category: "guard_deny", reservedNotice: noticeState },
+      {
+        id,
+        peer: "clawd",
+        recipient,
+        textHash,
+        category: "guard_deny",
+        reservedNotice: noticeState,
+      },
     ]);
     expect(reopened.completeOutboundRejection("clawd", id, noticeState)).toBe(true);
     expect(reopened.pendingOutboundRejections()).toEqual([]);

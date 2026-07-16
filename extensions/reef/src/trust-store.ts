@@ -41,6 +41,7 @@ const ReefOutboundRejectionSchema = z
 const ReefOutboundDeliveryBindingSchema = z
   .object({
     bodyHash: z.string().regex(SHA256_HEX_PATTERN),
+    textHash: z.string().regex(SHA256_HEX_PATTERN).optional(),
     recipient: ReefPeerIdentitySchema,
   })
   .strict();
@@ -434,6 +435,7 @@ export class ReefTrustStore {
             id,
             peer,
             recipient: delivery.recipient,
+            ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
             ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
             ...(delivery.rejection.notice ? { reservedNotice: delivery.rejection.notice } : {}),
           },
@@ -542,6 +544,7 @@ export class ReefTrustStore {
   #parseDeliveryBinding(binding: ReefOutboundDeliveryBinding): ReefOutboundDeliveryBinding {
     return ReefOutboundDeliveryBindingSchema.parse({
       bodyHash: binding.bodyHash,
+      ...(binding.textHash ? { textHash: binding.textHash } : {}),
       recipient: binding.recipient,
     });
   }
@@ -552,6 +555,7 @@ export class ReefTrustStore {
   ): boolean {
     return (
       current.bodyHash === expected.bodyHash &&
+      current.textHash === expected.textHash &&
       sameReefPeerIdentity(current.recipient, expected.recipient)
     );
   }

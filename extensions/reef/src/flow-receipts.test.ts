@@ -521,6 +521,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       peer: "alice",
       messageId: id,
       recipient: reefPeerIdentity(peerTrust(alice)),
+      originalTextHash: receipt.bodyHash,
       allowResend: true,
     });
     expect(trusted.deliveries.has(`alice:${id}`)).toBe(false);
@@ -724,6 +725,7 @@ describe("ReefMessageFlow delivery receipts", () => {
         id,
         peer: "alice",
         recipient: reefPeerIdentity(peerTrust(alice)),
+        textHash: bodyHash,
         category: "guard_deny",
       },
     ]);

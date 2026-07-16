@@ -74,6 +74,7 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
     string,
     {
       bodyHash: string;
+      textHash?: string;
       recipient: ReefPeerIdentity;
       resendDisabled?: true;
       rejection?: {
@@ -92,7 +93,7 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
       recordOutboundDelivery: (
         peer: string,
         id: string,
-        binding: { bodyHash: string; recipient: ReefPeerIdentity },
+        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
         options: { resendDisabled?: true } = {},
       ) => {
         const key = `${peer}:${id}`;
@@ -105,12 +106,13 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
       consumeOutboundDelivery: (
         peer: string,
         id: string,
-        binding: { bodyHash: string; recipient: ReefPeerIdentity },
+        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
       ) => {
         const key = `${peer}:${id}`;
         const current = deliveries.get(key);
         if (
           current?.bodyHash !== binding.bodyHash ||
+          current.textHash !== binding.textHash ||
           !sameReefPeerIdentity(current.recipient, binding.recipient) ||
           current.rejection
         ) {
@@ -121,12 +123,13 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
       discardOutboundDelivery: (
         peer: string,
         id: string,
-        binding: { bodyHash: string; recipient: ReefPeerIdentity },
+        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
       ) => {
         const key = `${peer}:${id}`;
         const current = deliveries.get(key);
         if (
           current?.bodyHash !== binding.bodyHash ||
+          current.textHash !== binding.textHash ||
           !sameReefPeerIdentity(current.recipient, binding.recipient)
         ) {
           return false;
@@ -136,13 +139,14 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
       recordOutboundRejection: (
         peer: string,
         id: string,
-        binding: { bodyHash: string; recipient: ReefPeerIdentity },
+        binding: { bodyHash: string; textHash?: string; recipient: ReefPeerIdentity },
         category?: string,
       ) => {
         const key = `${peer}:${id}`;
         const current = deliveries.get(key);
         if (
           current?.bodyHash !== binding.bodyHash ||
+          current.textHash !== binding.textHash ||
           !sameReefPeerIdentity(current.recipient, binding.recipient)
         ) {
           return false;

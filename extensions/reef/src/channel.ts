@@ -25,6 +25,7 @@ import {
   processReefInboxEntriesInOrder,
   ReefReceiptNotifier,
 } from "./owner-notice.js";
+import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./state.js";
@@ -331,10 +332,13 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           if (dispatchFailure) {
             throw dispatchFailure;
           }
-          if (notice.allowResend && resendText.trim()) {
+          if (notice.allowResend && isRephrasedReefResend(resendText, notice.originalTextHash)) {
+            // A guard-recovery send gets one attempt. Its own rejection must
+            // notify the agent but never open another automatic resend turn.
             await flow.send(notice.peer, resendText, {
               replyTo: notice.messageId,
               expectedRecipient: notice.recipient,
+              resendDisabled: true,
             });
           }
         },

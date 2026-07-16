@@ -17,7 +17,7 @@ const recipient: ReefPeerIdentity = {
 };
 
 function rejection(peer: string, id: string, category = "guard_deny"): ReefDeliveryRejection {
-  return { peer, id, recipient, category };
+  return { peer, id, recipient, textHash: "a".repeat(64), category };
 }
 
 async function consumeNotice(_notice: ReefRejectionNotice): Promise<void> {}
@@ -208,6 +208,21 @@ describe("ReefReceiptNotifier", () => {
     await notifier.notifyRejections([
       rejection("alice", "01JZ0000000000000000000110", "deterministic_deny"),
     ]);
+
+    expect(notify.mock.calls[0]![0]).toMatchObject({
+      text: expect.stringMatching(/Stop automatic retries/),
+      allowResend: false,
+    });
+  });
+
+  it("never grants a resend without a send-time text fingerprint", async () => {
+    const notify = vi.fn(consumeNotice);
+    const notifier = new ReefReceiptNotifier(notify, createNoticeStore().store, {
+      now: () => 10_000,
+    });
+    const pending = rejection("alice", "01JZ0000000000000000000130");
+
+    await notifier.notifyRejections([{ ...pending, textHash: undefined }]);
 
     expect(notify.mock.calls[0]![0]).toMatchObject({
       text: expect.stringMatching(/Stop automatic retries/),

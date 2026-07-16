@@ -59,6 +59,8 @@ export interface ReefDeliveryRejection {
   peer: string;
   /** Recipient identity pinned when the rejected envelope was composed. */
   recipient: ReefPeerIdentity;
+  /** Normalized text fingerprint pinned when the rejected envelope was composed. */
+  textHash?: string;
   category?: string;
   /** Durable pre-notification reservation recovered after an ambiguous restart. */
   reservedNotice?: ReefRejectionNoticeState;

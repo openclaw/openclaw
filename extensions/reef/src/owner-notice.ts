@@ -17,6 +17,7 @@ interface ReefRejectionNotice {
   peer: string;
   messageId: string;
   recipient: ReefDeliveryRejection["recipient"];
+  originalTextHash?: string;
   allowResend: boolean;
 }
 
@@ -188,6 +189,7 @@ export class ReefReceiptNotifier {
     const allowResend =
       !resendBlocked &&
       rejection.category === "guard_deny" &&
+      rejection.textHash !== undefined &&
       !rejectionCooldownActive &&
       !resendCooldownActive;
     return {
@@ -358,6 +360,7 @@ export class ReefReceiptNotifier {
       peer: rejection.peer,
       messageId: rejection.id,
       recipient: rejection.recipient,
+      ...(rejection.textHash ? { originalTextHash: rejection.textHash } : {}),
       allowResend,
     };
   }

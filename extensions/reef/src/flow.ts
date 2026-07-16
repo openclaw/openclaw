@@ -27,6 +27,7 @@ import {
   reefPeerIdentity,
   type ReefPeerIdentity,
 } from "./friend-types.js";
+import { reefMessageTextHash } from "./rejection-resend.js";
 import { ReviewApprovalStore, writePrivateJson } from "./state.js";
 import { ReefTransportClient } from "./transport.js";
 import {
@@ -120,7 +121,12 @@ export class ReefMessageFlow {
   async send(
     peer: string,
     text: string,
-    context: { thread?: string; replyTo?: string; expectedRecipient?: ReefPeerIdentity } = {},
+    context: {
+      thread?: string;
+      replyTo?: string;
+      expectedRecipient?: ReefPeerIdentity;
+      resendDisabled?: true;
+    } = {},
   ): Promise<string> {
     const friend = this.options.trust.get(peer);
     if (
@@ -155,10 +161,16 @@ export class ReefMessageFlow {
     if (!matchesReefPeerIdentity(this.options.trust.get(peer), recipient)) {
       throw new Error(`Reef peer @${peer} changed keys while composing the message`);
     }
-    this.options.trust.recordOutboundDelivery(peer, id, {
-      bodyHash: hashMessageBody(body),
-      recipient,
-    });
+    this.options.trust.recordOutboundDelivery(
+      peer,
+      id,
+      {
+        bodyHash: hashMessageBody(body),
+        textHash: reefMessageTextHash(text),
+        recipient,
+      },
+      context.resendDisabled ? { resendDisabled: true } : {},
+    );
     await this.options.transport.sendEnvelope(peer, result.envelope);
     return id;
   }
@@ -237,6 +249,7 @@ export class ReefMessageFlow {
         id: receipt.id,
         peer: entry.peer,
         recipient: delivery.recipient,
+        ...(delivery.textHash ? { textHash: delivery.textHash } : {}),
         ...(pending.category ? { category: pending.category } : {}),
         ...(pending.notice ? { reservedNotice: pending.notice } : {}),
       };
