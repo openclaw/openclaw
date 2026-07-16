@@ -87,15 +87,10 @@ describe("IMessageRpcClient child stream error handling", () => {
   );
 
   it("clears the stop fallback timer when the child closes first", async () => {
-    const realSetTimeout = globalThis.setTimeout;
     const realClearTimeout = globalThis.clearTimeout;
-    const scheduledTimers: NodeJS.Timeout[] = [];
-    vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler, timeout, ...args) => {
-      const timer = realSetTimeout(handler, timeout, ...args);
-      scheduledTimers.push(timer);
-      return timer;
-    }) as typeof setTimeout);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    let scheduledTimer: NodeJS.Timeout | undefined;
 
     try {
       const { IMessageRpcClient } = await import("./client.js");
@@ -105,12 +100,14 @@ describe("IMessageRpcClient child stream error handling", () => {
 
       await client.stop();
 
-      expect(scheduledTimers).toHaveLength(1);
-      expect(clearTimeoutSpy).toHaveBeenCalledWith(scheduledTimers[0]);
+      expect(setTimeoutSpy).toHaveBeenCalledOnce();
+      scheduledTimer = setTimeoutSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
+      expect(scheduledTimer).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(scheduledTimer);
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
-      for (const timer of scheduledTimers) {
-        realClearTimeout(timer);
+      if (scheduledTimer) {
+        realClearTimeout(scheduledTimer);
       }
       vi.restoreAllMocks();
     }
