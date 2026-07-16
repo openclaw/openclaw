@@ -104,6 +104,10 @@ function resolveObservedTarget(params: {
       : threadId
         ? "thread"
         : "channel";
+  // Auto excludes top-level channels; excluded activity must not consume the bounded target map.
+  if (mode === "auto" && autoEligibleKind === "channel") {
+    return null;
+  }
   const targetSuffix = threadId ? `:thread:${threadId}` : ":top";
   return {
     key: `${channelId}${targetSuffix}`,

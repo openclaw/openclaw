@@ -209,6 +209,32 @@ describe("Slack presence monitor", () => {
     expect(getPresence).not.toHaveBeenCalled();
   });
 
+  it("does not let excluded auto channels evict an eligible direct message", async () => {
+    const getPresence = vi.fn().mockResolvedValue({ presence: "away" });
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "auto" },
+      client: { getPresence } as never,
+      cooldownStore: createCooldownStore(),
+      enqueue: vi.fn(() => true),
+      wake: vi.fn(),
+    });
+    monitor.observe(createPrepared({ userId: "UDIRECT" }));
+    for (let index = 0; index < 2_001; index += 1) {
+      monitor.observe(
+        createPrepared({
+          userId: `UTOP${index}`,
+          channelId: `C${index}`,
+          channelType: "channel",
+        }),
+      );
+    }
+
+    await monitor.pollOnce();
+
+    expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "UDIRECT" });
+  });
+
   it("on includes top-level channels and overrides the auto size cap", async () => {
     const getPresence = vi.fn().mockResolvedValue({ presence: "away" });
     const monitor = createSlackPresenceMonitor({
