@@ -7397,6 +7397,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Narrower approval runtime subpaths
   - H3: Setup subpaths
   - H3: Other narrow channel subpaths
+  - H2: Account-scoped config reloads
   - H2: Inbound mention policy
   - H2: Walkthrough
   - H2: File structure
