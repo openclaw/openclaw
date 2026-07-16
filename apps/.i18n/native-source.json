@@ -11306,7 +11306,7 @@
       "id": "native.android.6f4ef7e03dd153f5"
     },
     {
-      "kind": "ui-named-argument",
+      "kind": "ui-call",
       "line": 262,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "${task.statusLabel} · ${task.runtime}",
@@ -11315,7 +11315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 280,
+      "line": 284,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Prompt",
       "surface": "android",
@@ -11323,7 +11323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 280,
+      "line": 284,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Prompt unavailable",
       "surface": "android",
@@ -11331,7 +11331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 281,
+      "line": 285,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "No output yet",
       "surface": "android",
@@ -11339,7 +11339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 281,
+      "line": 285,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Output",
       "surface": "android",

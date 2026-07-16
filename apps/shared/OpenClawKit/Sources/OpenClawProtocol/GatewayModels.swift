@@ -6194,6 +6194,7 @@ public struct TaskSummary: Codable, Sendable {
     public let progresssummary: String?
     public let terminalsummary: String?
     public let error: String?
+    public let prompt: String?
 
     public init(
         id: String,
@@ -6218,7 +6219,8 @@ public struct TaskSummary: Codable, Sendable {
         lasttoolname: String? = nil,
         progresssummary: String? = nil,
         terminalsummary: String? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        prompt: String? = nil)
     {
         self.id = id
         self.kind = kind
@@ -6243,6 +6245,7 @@ public struct TaskSummary: Codable, Sendable {
         self.progresssummary = progresssummary
         self.terminalsummary = terminalsummary
         self.error = error
+        self.prompt = prompt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6269,6 +6272,7 @@ public struct TaskSummary: Codable, Sendable {
         case progresssummary = "progressSummary"
         case terminalsummary = "terminalSummary"
         case error
+        case prompt
     }
 }
 

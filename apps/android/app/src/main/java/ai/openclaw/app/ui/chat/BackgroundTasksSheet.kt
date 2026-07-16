@@ -259,7 +259,11 @@ private fun BackgroundTaskDetail(
         Column(modifier = Modifier.weight(1f)) {
           Text(task.displayTitle, style = ClawTheme.type.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
           Text(
-            text = "${task.statusLabel} · ${task.runtime}",
+            text = nativeString(
+              "\${task.statusLabel} · \${task.runtime}",
+              task.statusLabel,
+              task.runtime,
+            ),
             style = ClawTheme.type.caption,
             color = ClawTheme.colors.textMuted,
           )
