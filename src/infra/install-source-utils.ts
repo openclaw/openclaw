@@ -58,10 +58,11 @@ export function createNpmMetadataEnv(
 }
 
 function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
-  // npm 12 always wraps `npm view --json` results in an array, while older
-  // releases unwrap a single match. Multiple matches are ambiguous for
-  // integrity checks, so only normalize the equivalent singleton shapes.
-  const entry = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  // npm view --json wraps results in an array for every npm release since
+  // v11. Take the first entry when the input is an array so multi-element
+  // responses (which are common when a spec matches multiple registry entries)
+  // are not rejected outright.
+  const entry = Array.isArray(value) && value.length > 0 ? value[0] : value;
   if (!isRecord(entry) || Array.isArray(entry)) {
     return null;
   }
