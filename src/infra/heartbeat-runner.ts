@@ -1898,10 +1898,15 @@ export async function runHeartbeatOnce(opts: {
       });
 
       const okSent = await maybeSendHeartbeatOk();
+      // Privacy: the suppressed final text must not leak through the heartbeat
+      // event preview either (heartbeat events are stored as lastHeartbeat,
+      // broadcast to gateway subscribers, returned by last-heartbeat, and
+      // rendered in the Debug view). Emit a metadata-only marker instead of the
+      // raw private reply text.
       emitHeartbeatEvent({
         status: "ok-token",
         reason: opts.reason,
-        preview: replyPayload.text?.slice(0, 200) ?? "",
+        preview: "[private heartbeat reply suppressed]",
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,

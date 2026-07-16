@@ -445,6 +445,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       // The private text must not reach the channel; run still completes.
       expect(result.status).toBe("ran");
       expect(sendTelegram).not.toHaveBeenCalled();
+
+      // The suppressed private text must not leak through the heartbeat event
+      // preview either (stored as lastHeartbeat, broadcast to gateway
+      // subscribers, and rendered in the Debug view).
+      const lastEvent = getLastHeartbeatEvent();
+      expect(lastEvent?.preview ?? "").not.toContain("private follow-ups");
+      expect(lastEvent?.preview ?? "").not.toContain("overnight logs");
+      expect(lastEvent?.preview).toBe("[private heartbeat reply suppressed]");
     });
   });
 
