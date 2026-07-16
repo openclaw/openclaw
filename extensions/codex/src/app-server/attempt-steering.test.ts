@@ -70,8 +70,8 @@ describe("Codex app-server steering queue", () => {
       ],
     });
     expect(cancelPendingUserInput).toHaveBeenCalledOnce();
-    expect(request.mock.invocationCallOrder[0]).toBeLessThan(
-      cancelPendingUserInput.mock.invocationCallOrder[0],
+    expect(request.mock.invocationCallOrder[0]!).toBeLessThan(
+      cancelPendingUserInput.mock.invocationCallOrder[0]!,
     );
   });
 
