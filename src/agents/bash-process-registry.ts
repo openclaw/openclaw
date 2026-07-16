@@ -142,7 +142,10 @@ export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
 
-/** Removes visible session records without changing live-process activity. */
+/** Removes session records from the registry. Read-only visibility: process
+ *  termination and stream cleanup belong to the process-tree owner (supervisor
+ *  cancel / killProcessTree) so that the terminal transition and exit callbacks
+ *  fire correctly. */
 export function deleteSession(id: string) {
   runningSessions.delete(id);
   finishedSessions.delete(id);

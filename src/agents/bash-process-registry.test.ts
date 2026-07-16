@@ -245,6 +245,47 @@ describe("bash process registry", () => {
     expect(createSessionSlug()).toBe("amber-atlas");
   });
 
+  it("deleteSession removes registry records without touching the child process", () => {
+    const session = createProcessSessionFixture({
+      id: "visibility-only",
+      command: "sleep 999",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+      child: {
+        pid: 42,
+        kill: vi.fn(),
+        stdin: { destroy: vi.fn() },
+        stdout: { destroy: vi.fn() },
+        stderr: { destroy: vi.fn() },
+        removeAllListeners: vi.fn(),
+      } as unknown as ChildProcessWithoutNullStreams,
+    });
+
+    addSession(session);
+    deleteSession(session.id);
+
+    const child = session.child as unknown as Record<string, unknown>;
+    expect(listRunningSessions()).toHaveLength(0);
+    expect(child).toBeDefined();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when deleteSession targets a finished session without a child", () => {
+    const session = createRegistrySession({
+      id: "no-child-finished",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    markExited(session, 0, null, "completed");
+    deleteSession(session.id);
+
+    expect(listFinishedSessions()).toHaveLength(0);
+  });
+
   it("clears background activity in the test reset", () => {
     const session = createRegistrySession({
       maxOutputChars: 100,
