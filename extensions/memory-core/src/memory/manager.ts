@@ -704,14 +704,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
+  private isOptionalProviderUnavailable(): boolean {
+    return (
+      this.providerInitialized &&
+      !this.provider &&
+      this.providerRequirement.mode === "optional" &&
+      this.providerLifecycle.mode === "fts-only"
+    );
+  }
+
   private canSearchExistingSemanticIndexWithFtsOnly(): boolean {
-    if (
-      this.provider ||
-      this.providerRequirement.mode !== "optional" ||
-      !this.providerUnavailableReason?.startsWith("Optional embedding provider unavailable:") ||
-      !this.fts.enabled ||
-      !this.fts.available
-    ) {
+    if (!this.isOptionalProviderUnavailable() || !this.fts.enabled || !this.fts.available) {
       return false;
     }
     const meta = this.readMeta();

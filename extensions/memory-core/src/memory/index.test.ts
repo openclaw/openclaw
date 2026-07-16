@@ -604,90 +604,119 @@ describe("memory index", () => {
   });
 
   it.each([
-    { label: "missing provider", provider: undefined },
-    { label: "auto provider", provider: "auto" },
-  ])("falls back to FTS-only when optional $label initialization fails", async ({ provider }) => {
-    providerInitError = new Error('No API key found for provider "openai"');
-    const cfg = createCfg({
-      provider,
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const manager = await getFreshManager(cfg);
-    try {
-      await expect(manager.sync({ reason: "test" })).resolves.toBeUndefined();
-
-      expect(providerCalls.map((call) => call.provider)).toContain("openai");
-      expect(manager.status().custom?.providerState).toMatchObject({
-        mode: "fts-only",
-        attemptedProviderId: "openai",
+    {
+      failureMode: "returned provider-null",
+      providerLabel: "missing provider",
+      provider: undefined,
+    },
+    { failureMode: "returned provider-null", providerLabel: "auto provider", provider: "auto" },
+    { failureMode: "thrown error", providerLabel: "missing provider", provider: undefined },
+    { failureMode: "thrown error", providerLabel: "auto provider", provider: "auto" },
+  ])(
+    "falls back to FTS-only for optional $providerLabel after a $failureMode result",
+    async ({ failureMode, provider }) => {
+      if (failureMode === "returned provider-null") {
+        forceNoProvider = true;
+      } else {
+        providerInitError = new Error('No API key found for provider "openai"');
+      }
+      const cfg = createCfg({
+        provider,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       });
+      const manager = await getFreshManager(cfg);
+      try {
+        await expect(manager.sync({ reason: "test" })).resolves.toBeUndefined();
 
-      if (manager.status().fts?.available) {
-        const results = await manager.search("alpha");
+        expect(providerCalls.map((call) => call.provider)).toContain("openai");
+        expect(manager.status().custom?.providerState).toMatchObject({
+          mode: "fts-only",
+          attemptedProviderId: "openai",
+        });
+
+        if (manager.status().fts?.available) {
+          const results = await manager.search("alpha");
+          expect(results.length).toBeGreaterThan(0);
+          expect(results[0]?.path).toContain("memory/2026-01-12.md");
+        }
+      } finally {
+        await manager.close?.();
+      }
+    },
+  );
+
+  it.each(["returned provider-null", "thrown error"])(
+    "uses existing FTS rows when an optional provider becomes unavailable via a %s",
+    async (failureMode) => {
+      const cfg = createCfg({
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const indexedManager = await getFreshManager(cfg);
+      try {
+        await indexedManager.sync({ reason: "test" });
+        if (!indexedManager.status().fts?.available) {
+          return;
+        }
+      } finally {
+        await indexedManager.close?.();
+      }
+
+      providerCalls = [];
+      if (failureMode === "returned provider-null") {
+        forceNoProvider = true;
+      } else {
+        providerInitError = new Error('No API key found for provider "openai"');
+      }
+      const fallbackManager = await getFreshManager(cfg);
+      try {
+        const results = await fallbackManager.search("alpha");
+
+        expect(providerCalls.map((call) => call.provider)).toContain("openai");
         expect(results.length).toBeGreaterThan(0);
         expect(results[0]?.path).toContain("memory/2026-01-12.md");
+        expect(fallbackManager.status().custom?.providerState).toMatchObject({
+          mode: "fts-only",
+          attemptedProviderId: "openai",
+        });
+        expect(fallbackManager.status().custom?.optionalProviderFtsFallback).toMatchObject({
+          enabled: true,
+          mode: "read-only",
+        });
+      } finally {
+        await fallbackManager.close?.();
       }
-    } finally {
-      await manager.close?.();
-    }
-  });
+    },
+  );
 
-  it("uses existing FTS rows when an optional provider becomes unavailable", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const indexedManager = await getFreshManager(cfg);
-    try {
-      await indexedManager.sync({ reason: "test" });
-      if (!indexedManager.status().fts?.available) {
-        return;
+  it.each(["returned provider-null", "thrown error"])(
+    "keeps explicit memory embedding providers fail-closed after a %s",
+    async (failureMode) => {
+      if (failureMode === "returned provider-null") {
+        forceNoProvider = true;
+      } else {
+        providerInitError = new Error('No API key found for provider "openai"');
       }
-    } finally {
-      await indexedManager.close?.();
-    }
-
-    providerCalls = [];
-    providerInitError = new Error('No API key found for provider "openai"');
-    const fallbackManager = await getFreshManager(cfg);
-    try {
-      const results = await fallbackManager.search("alpha");
-
-      expect(providerCalls.map((call) => call.provider)).toContain("openai");
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-      expect(fallbackManager.status().custom?.providerState).toMatchObject({
-        mode: "fts-only",
-        attemptedProviderId: "openai",
+      const cfg = createCfg({
+        provider: "openai",
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       });
-      expect(fallbackManager.status().custom?.optionalProviderFtsFallback).toMatchObject({
-        enabled: true,
-        mode: "read-only",
-      });
-    } finally {
-      await fallbackManager.close?.();
-    }
-  });
-
-  it("keeps explicit memory embedding providers fail-closed when initialization fails", async () => {
-    providerInitError = new Error('No API key found for provider "openai"');
-    const cfg = createCfg({
-      provider: "openai",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const manager = await getFreshManager(cfg);
-    try {
-      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
-        'No API key found for provider "openai"',
-      );
-      expect(providerCalls.map((call) => call.provider)).toContain("openai");
-      expect(manager.status().custom?.providerState).toMatchObject({
-        mode: "pending",
-        requestedProvider: "openai",
-      });
-    } finally {
-      await manager.close?.();
-    }
-  });
+      const manager = await getFreshManager(cfg);
+      try {
+        await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+          failureMode === "returned provider-null"
+            ? 'Memory sync unavailable: embedding provider "openai" is configured but unavailable.'
+            : 'No API key found for provider "openai"',
+        );
+        expect(providerCalls.map((call) => call.provider)).toContain("openai");
+        expect(manager.status().custom?.providerState).toMatchObject({
+          mode: "pending",
+          requestedProvider: "openai",
+        });
+      } finally {
+        await manager.close?.();
+      }
+    },
+  );
 
   it("keeps existing file index rows when chunk publication fails", async () => {
     const cfg = createCfg({});

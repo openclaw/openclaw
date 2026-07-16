@@ -1114,7 +1114,7 @@ describe("memory_search unavailable payloads", () => {
       },
       providerState: {
         mode: "fts-only",
-        reason: 'Optional embedding provider unavailable: No API key found for provider "openai"',
+        reason: 'No API key found for provider "openai"',
       },
       optionalProviderFtsFallback: {
         enabled: true,
@@ -1150,7 +1150,7 @@ describe("memory_search unavailable payloads", () => {
       },
       providerState: {
         mode: "fts-only",
-        reason: 'Optional embedding provider unavailable: No API key found for provider "openai"',
+        reason: 'No API key found for provider "openai"',
       },
       optionalProviderFtsFallback: {
         enabled: true,
