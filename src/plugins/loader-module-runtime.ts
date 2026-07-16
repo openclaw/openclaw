@@ -293,4 +293,3 @@ export function formatBundledChannelWrongLoaderError(kind: unknown): string | nu
 }
 
 export type PluginModuleLoader = ReturnType<typeof createPluginModuleLoader>;
-export type LoadedPluginModule = OpenClawPluginModule | null;

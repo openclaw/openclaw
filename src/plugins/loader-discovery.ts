@@ -21,7 +21,7 @@ import {
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginLogger } from "./types.js";
 
-export type ResolvedPluginLoadDiscovery = {
+type ResolvedPluginLoadDiscovery = {
   discovery: PluginDiscoveryResult;
   manifestRegistry: PluginManifestRegistry;
   orderedCandidates: PluginCandidate[];

@@ -2,10 +2,8 @@ import { pluginLoaderCacheInstances, type CachedPluginState } from "./loader-cac
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
 
-export const {
-  scoped: pluginLoaderCacheState,
-  fullWorkspace: fullWorkspacePluginLoaderCacheState,
-} = pluginLoaderCacheInstances;
+export const pluginLoaderCacheState = pluginLoaderCacheInstances.scoped;
+const fullWorkspacePluginLoaderCacheState = pluginLoaderCacheInstances.fullWorkspace;
 
 function getPluginRegistryCache(onlyPluginIds?: string[]) {
   return onlyPluginIds ? pluginLoaderCacheState : fullWorkspacePluginLoaderCacheState;
