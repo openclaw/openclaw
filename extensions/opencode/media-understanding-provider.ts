@@ -38,9 +38,3 @@ export const opencodeMediaUnderstandingProvider: MediaUnderstandingProvider = {
   describeImages: (request) =>
     describeImagesWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
 };
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  Reflect.set(globalThis, Symbol.for("openclaw.opencodeMediaTestApi"), {
-    stripOpencodeDisabledResponsesReasoningPayload,
-  });
-}

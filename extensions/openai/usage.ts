@@ -413,12 +413,6 @@ async function fetchOpenAIAdminUsage(params: {
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  Reflect.set(globalThis, Symbol.for("openclaw.openaiUsageTestApi"), {
-    fetchOpenAIAdminUsage,
-  });
-}
-
 export async function resolveOpenAIUsageAuth(
   ctx: ProviderResolveUsageAuthContext,
 ): Promise<ProviderResolvedUsageAuth> {

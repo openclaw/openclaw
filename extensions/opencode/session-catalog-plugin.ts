@@ -425,11 +425,3 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
     api.registerNodeInvokePolicy(policy);
   }
 }
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  Reflect.set(globalThis, Symbol.for("openclaw.opencodeSessionCatalogTestApi"), {
-    createOpenCodeSessionNodeHostCommands,
-    createOpenCodeSessionNodeInvokePolicies,
-    isOpenCodeSessionCatalogEnabled,
-  });
-}

@@ -469,20 +469,3 @@ export function createOpenRouterOAuthAuthMethod(
     run: async (ctx) => await loginOpenRouterOAuth(ctx, options),
   };
 }
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  Reflect.set(globalThis, Symbol.for("openclaw.openrouterOAuthTestApi"), {
-    buildOpenRouterOAuthAuthorizeUrl,
-    buildOpenRouterOAuthRedirectUri,
-    exchangeOpenRouterOAuthCode,
-    loginOpenRouterOAuth,
-    OPENROUTER_OAUTH_CALLBACK_PATH,
-    OPENROUTER_OAUTH_CALLBACK_PORT,
-    OPENROUTER_OAUTH_CHOICE_ID,
-    OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
-    OPENROUTER_OAUTH_REDIRECT_URI,
-    OPENROUTER_OAUTH_TOKEN_URL,
-    parseOpenRouterOAuthCallbackInput,
-    waitForOpenRouterOAuthCallback,
-  });
-}
