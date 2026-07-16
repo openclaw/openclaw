@@ -16,6 +16,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { createDedupeCache } from "../dedupe.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
@@ -132,8 +133,11 @@ function formatMultipleConfiguredChannelsMessage(configured: readonly string[]):
 }
 
 const CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT = 1024;
-const loggedChannelSelectionErrors = new Set<string>();
-const channelSelectionErrorOrder: string[] = [];
+// Bound process-lifetime warning state; evicted plugin/account failures may log again.
+const loggedChannelSelectionErrors = createDedupeCache({
+  ttlMs: 0,
+  maxSize: CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT,
+});
 
 function logChannelSelectionError(params: {
   pluginId: string;
@@ -143,17 +147,9 @@ function logChannelSelectionError(params: {
 }) {
   const message = formatErrorMessage(params.error);
   const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
-  if (loggedChannelSelectionErrors.has(key)) {
+  if (loggedChannelSelectionErrors.check(key)) {
     return;
   }
-  if (loggedChannelSelectionErrors.size >= CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT) {
-    const oldest = channelSelectionErrorOrder.shift();
-    if (oldest !== undefined) {
-      loggedChannelSelectionErrors.delete(oldest);
-    }
-  }
-  loggedChannelSelectionErrors.add(key);
-  channelSelectionErrorOrder.push(key);
   defaultRuntime.error?.(
     `[channel-selection] ${params.pluginId}(${params.accountId}) ${params.operation} failed: ${message}`,
   );
@@ -302,33 +298,4 @@ export async function resolveMessageChannelSelection(params: {
     throw new Error(formatNoConfiguredChannelsMessage());
   }
   throw new Error(formatMultipleConfiguredChannelsMessage(configured));
-}
-
-// Test-only access to dedupe state for LRU eviction proof.
-const testing = {
-  getErrorDedupeSize() {
-    return loggedChannelSelectionErrors.size;
-  },
-  getErrorDedupeLimit() {
-    return CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT;
-  },
-  resetErrorDedupeForTest() {
-    loggedChannelSelectionErrors.clear();
-    channelSelectionErrorOrder.length = 0;
-  },
-  fillErrorDedupeForTest(count: number) {
-    for (let i = 0; i < count; i++) {
-      logChannelSelectionError({
-        pluginId: `proof-plugin-${i}`,
-        accountId: "proof",
-        operation: "resolveAccount",
-        error: new Error(`proof-error-${i}`),
-      });
-    }
-  },
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.channelSelectionErrorDedupeTestApi")
-  ] = testing;
 }

@@ -160,6 +160,34 @@ describe("listConfiguredMessageChannels", () => {
     await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(expected);
     expect(errorSpy).toHaveBeenCalledTimes(expectedErrors);
   });
+
+  it("refreshes recent errors and re-logs errors evicted from the bounded dedupe", async () => {
+    const listWithAccounts = async (accountIds: string[]) => {
+      mocks.listChannelPlugins.mockReturnValue([
+        makePlugin({
+          id: "alpha",
+          accountIds,
+          resolveAccount: () => {
+            throw new Error("boom");
+          },
+        }),
+      ]);
+      await listConfiguredMessageChannels({} as never);
+    };
+
+    await listWithAccounts(Array.from({ length: 1024 }, (_, index) => `account-${index}`));
+    expect(errorSpy).toHaveBeenCalledTimes(1024);
+
+    await listWithAccounts(["account-0"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1024);
+
+    await listWithAccounts(["account-overflow"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1025);
+    await listWithAccounts(["account-0"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1025);
+    await listWithAccounts(["account-1"]);
+    expect(errorSpy).toHaveBeenCalledTimes(1026);
+  });
 });
 
 describe("resolveMessageChannelSelection", () => {
@@ -341,57 +369,5 @@ describe("resolveMessageChannelSelection", () => {
   ])("rejects invalid channel selection for %j", async ({ setup, params, expectedMessage }) => {
     setup?.();
     await expect(expectResolvedSelection(params)).rejects.toThrow(expectedMessage);
-  });
-});
-
-describe("channel selection error dedupe LRU eviction", () => {
-  let dedupeApi: {
-    getErrorDedupeSize(): number;
-    getErrorDedupeLimit(): number;
-    resetErrorDedupeForTest(): void;
-    fillErrorDedupeForTest(count: number): void;
-  };
-
-  beforeAll(async () => {
-    // Trigger module load so the test API is registered
-    await import("./channel-selection.js");
-    dedupeApi = (globalThis as Record<PropertyKey, unknown>)[
-      Symbol.for("openclaw.channelSelectionErrorDedupeTestApi")
-    ] as typeof dedupeApi;
-    expect(dedupeApi).toBeDefined();
-  });
-
-  afterEach(() => {
-    dedupeApi.resetErrorDedupeForTest();
-  });
-
-  it("has the expected dedupe limit of 1024", () => {
-    expect(dedupeApi.getErrorDedupeLimit()).toBe(1024);
-  });
-
-  it("grows the dedupe Set for unique error keys", () => {
-    dedupeApi.fillErrorDedupeForTest(100);
-    expect(dedupeApi.getErrorDedupeSize()).toBe(100);
-  });
-
-  it("does not grow past the 1024-entry cap", () => {
-    dedupeApi.fillErrorDedupeForTest(1100);
-    expect(dedupeApi.getErrorDedupeSize()).toBeLessThanOrEqual(1024);
-  });
-
-  it("evicts the oldest entry when the cap is exceeded", () => {
-    dedupeApi.fillErrorDedupeForTest(1024);
-    expect(dedupeApi.getErrorDedupeSize()).toBe(1024);
-    // Adding one more should evict the oldest, keeping size at 1024
-    dedupeApi.fillErrorDedupeForTest(1025);
-    expect(dedupeApi.getErrorDedupeSize()).toBeLessThanOrEqual(1024);
-  });
-
-  it("still deduplicates repeat errors after eviction", () => {
-    dedupeApi.fillErrorDedupeForTest(1025);
-    const sizeBefore = dedupeApi.getErrorDedupeSize();
-    // Re-fill with the same keys — should not grow
-    dedupeApi.fillErrorDedupeForTest(100);
-    expect(dedupeApi.getErrorDedupeSize()).toBe(sizeBefore);
   });
 });
