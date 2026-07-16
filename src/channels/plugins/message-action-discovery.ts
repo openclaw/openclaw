@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeAnyChannelId } from "../registry.js";
@@ -49,7 +50,7 @@ type ChannelMessageToolMediaSourceParamKeyInput = ChannelMessageActionDiscoveryP
   action?: ChannelMessageActionName;
 };
 
-const loggedMessageActionErrors = new Set<string>();
+const loggedMessageActionErrors = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
 
 /**
  * Normalizes a raw channel/provider id before consulting action discovery hooks.
@@ -91,10 +92,9 @@ function logMessageActionError(params: {
   const key = `${params.pluginId}:${params.operation}:${message}`;
   // Discovery runs while building tool schemas, so log each plugin/error pair
   // once and let the agent continue with the remaining channel capabilities.
-  if (loggedMessageActionErrors.has(key)) {
+  if (loggedMessageActionErrors.check(key)) {
     return;
   }
-  loggedMessageActionErrors.add(key);
   const stack = params.error instanceof Error && params.error.stack ? params.error.stack : null;
   defaultRuntime.error?.(
     `[message-action-discovery] ${params.pluginId}.actions.${params.operation} failed: ${stack ?? message}`,
