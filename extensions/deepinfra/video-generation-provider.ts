@@ -8,6 +8,7 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asFiniteNumber,
@@ -257,6 +258,9 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
           },
           provider: "deepinfra",
           capability: "video",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.deepinfra?.request,
+          ),
           transport: "http",
         });
 
