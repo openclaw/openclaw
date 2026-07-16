@@ -987,9 +987,8 @@ describe("Copilot data-residency domain resolution", () => {
       return { ...actual, logWarn };
     });
 
-    const { resetRejectedConfigDomainWarningsForTest, resolveCopilotApiToken } =
-      await import("./provider-auth.js");
-    resetRejectedConfigDomainWarningsForTest();
+    const { testing, resolveCopilotApiToken } = await import("./provider-auth.js");
+    testing.resetRejectedConfigDomainWarningsForTest();
 
     const fetchImpl = vi.fn(
       async () =>
@@ -1026,7 +1025,7 @@ describe("Copilot data-residency domain resolution", () => {
     await resolveWithConfigDomain("tenant-256.ghe.co");
     expect(logWarn).toHaveBeenCalledTimes(257);
 
-    await resolveWithConfigDomain(domains[0]);
+    await resolveWithConfigDomain(domains[0]!);
     expect(logWarn).toHaveBeenCalledTimes(258);
 
     vi.doUnmock("../logger.js");

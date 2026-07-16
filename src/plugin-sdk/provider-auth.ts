@@ -185,10 +185,11 @@ function warnOnceOnRejectedConfigDomain(configured: string): void {
   );
 }
 
-/** Resets the rejected-domain warning cache. Exported for tests only. */
-export function resetRejectedConfigDomainWarningsForTest(): void {
+function resetRejectedConfigDomainWarningsForTest(): void {
   warnedRejectedConfigDomains.clear();
 }
+
+export const testing = { resetRejectedConfigDomainWarningsForTest } as const;
 
 // Provider-internal host resolver (env > explicit caller value > persisted
 // config), always passed through the fail-closed allowlist. Not exported: the
