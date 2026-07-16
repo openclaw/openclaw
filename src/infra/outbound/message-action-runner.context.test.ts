@@ -1,6 +1,7 @@
 // Covers message-action cross-context policy, markers, and presentation
 // decoration behavior.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -8,6 +9,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { runMessageAction } from "./message-action-runner.js";
 import {
   directChatConfig,
   directChatTestPlugin,
@@ -18,6 +20,16 @@ import {
   workspaceConfig,
   workspaceTestPlugin,
 } from "./message-action-runner.test-helpers.js";
+
+const handleWorkspaceAction = vi.fn(async () => jsonResult({ ok: true }));
+
+const readWorkspaceTestPlugin: ChannelPlugin = {
+  ...workspaceTestPlugin,
+  actions: {
+    describeMessageTool: () => ({ actions: ["read"] }),
+    handleAction: handleWorkspaceAction,
+  },
+};
 
 const localChatTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -87,7 +99,7 @@ describe("runMessageAction context isolation", () => {
         {
           pluginId: "workspace",
           source: "test",
-          plugin: workspaceTestPlugin,
+          plugin: readWorkspaceTestPlugin,
         },
         {
           pluginId: "directchat",
@@ -111,6 +123,37 @@ describe("runMessageAction context isolation", () => {
         },
       ]),
     );
+    handleWorkspaceAction.mockClear();
+  });
+
+  it.each([
+    {
+      name: "a channel id passed as channel",
+      actionParams: { channel: "C_TARGET" },
+      expectedError: "Unknown channel: c_target",
+    },
+    {
+      name: "targets passed instead of target",
+      actionParams: { targets: ["C_TARGET"] },
+      expectedError: "Action read requires a target.",
+    },
+  ])("rejects read with $name before plugin dispatch", async ({ actionParams, expectedError }) => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "read",
+        params: actionParams,
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "C_CURRENT",
+          currentChannelProvider: "workspace",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(expectedError);
+    expect(handleWorkspaceAction).not.toHaveBeenCalled();
   });
 
   afterEach(() => {

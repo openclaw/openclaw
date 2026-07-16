@@ -199,6 +199,14 @@ describe("resolveMessageChannelSelection", () => {
       },
     },
     {
+      params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "beta" },
+      expected: {
+        channel: "beta",
+        configured: [],
+        source: "tool-context-fallback",
+      },
+    },
+    {
       params: { cfg: {} as never, fallbackChannel: "gamma" },
       expected: {
         channel: "gamma",
@@ -274,6 +282,7 @@ describe("resolveMessageChannelSelection", () => {
         cfg: {} as never,
         channel: "channel:C123",
         fallbackChannel: "beta",
+        rejectUnknownExplicitChannel: true,
       }),
     ).rejects.toThrow("Unknown channel: channel:c123");
   });
