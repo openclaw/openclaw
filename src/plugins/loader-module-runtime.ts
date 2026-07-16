@@ -16,7 +16,7 @@ import {
   type PluginSdkResolutionPreference,
   resolvePluginRuntimeModulePathWithDiagnostics,
 } from "./sdk-alias.js";
-import type { OpenClawPluginApi, OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
+import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
