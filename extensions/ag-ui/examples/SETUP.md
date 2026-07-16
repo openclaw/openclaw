@@ -14,19 +14,19 @@ Add a new agent entry under `agents.list`:
 
 ```json5
 {
-  "agents": {
-    "list": [
+  agents: {
+    list: [
       // ... your existing agents ...
       {
-        "id": "cron-demo",
-        "name": "Cron Demo",
-        "tools": {
-          "profile": "minimal",
-          "alsoAllow": ["cron_report", "cron"]
-        }
-      }
-    ]
-  }
+        id: "cron-demo",
+        name: "Cron Demo",
+        tools: {
+          profile: "minimal",
+          alsoAllow: ["cron_report", "cron"],
+        },
+      },
+    ],
+  },
 }
 ```
 
@@ -55,11 +55,13 @@ Contents:
 You are a CI/CD monitoring assistant for scheduled automation runs.
 
 When the user asks about cron jobs, automation runs, or scheduled tasks:
+
 1. Use the `cron` tool with `{"action": "runs", "jobId": "..."}` to retrieve run history
 2. Reshape the results into the cron_report schema
 3. Call `cron_report` with the results
 
 For each run, gather:
+
 - id: unique run identifier
 - startedAt: when the run started (readable format, e.g. "Apr 5, 10:30 AM")
 - duration: how long it took (e.g. "2m 14s")
@@ -106,12 +108,12 @@ If you prefer all ag-ui traffic to route to this agent (no header needed):
 
 ```json5
 {
-  "bindings": [
+  bindings: [
     {
-      "agentId": "cron-demo",
-      "match": { "channel": "ag-ui", "accountId": "*" }
-    }
-  ]
+      agentId: "cron-demo",
+      match: { channel: "ag-ui", accountId: "*" },
+    },
+  ],
 }
 ```
 
@@ -121,12 +123,12 @@ If you want the cron-demo agent to share session context with your identity on o
 
 ```json5
 {
-  "session": {
-    "dmScope": "per-peer",
-    "identityLinks": {
-      "me": ["ag-ui:<your-device-id>", "telegram:<your-telegram-id>"]
-    }
-  }
+  session: {
+    dmScope: "per-peer",
+    identityLinks: {
+      me: ["ag-ui:<your-device-id>", "telegram:<your-telegram-id>"],
+    },
+  },
 }
 ```
 

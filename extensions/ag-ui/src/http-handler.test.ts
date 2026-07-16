@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { EventType } from "@ag-ui/core";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -19,10 +19,6 @@ vi.mock("@ag-ui/encoder", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk", () => ({
-  emptyPluginConfigSchema: () => ({}),
-}));
-
 // The handler ensures a SQLite session entry exists before runEmbeddedAgent.
 // Mock the session store so unit tests don't touch a real store; getSessionEntry
 // returns undefined (cold turn -> upsert runs, then no-op).
@@ -32,195 +28,19 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
 }));
 
 import { createAguiHttpHandler } from "./http-handler.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function createReq(
-  overrides: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: unknown;
-  } = {},
-): IncomingMessage & EventEmitter {
-  const emitter = new EventEmitter() as IncomingMessage & EventEmitter;
-  Object.assign(emitter, {
-    method: overrides.method ?? "POST",
-    url: "/v1/ag-ui",
-    headers: {
-      accept: "text/event-stream",
-      "content-type": "application/json",
-      ...overrides.headers,
-    },
-    destroy: vi.fn(),
-  });
-
-  // Simulate body streaming
-  const bodyStr =
-    overrides.body !== undefined ? JSON.stringify(overrides.body) : undefined;
-  if (bodyStr !== undefined) {
-    process.nextTick(() => {
-      emitter.emit("data", Buffer.from(bodyStr));
-      emitter.emit("end");
-    });
-  }
-
-  return emitter as IncomingMessage & EventEmitter;
-}
-
-function createRes(): ServerResponse & {
-  _chunks: string[];
-  _headers: Record<string, string>;
-  _ended: boolean;
-} {
-  const res = {
-    statusCode: 200,
-    _chunks: [] as string[],
-    _headers: {} as Record<string, string>,
-    _ended: false,
-    setHeader(name: string, value: string) {
-      res._headers[name.toLowerCase()] = value;
-    },
-    flushHeaders() {},
-    write(chunk: string) {
-      res._chunks.push(chunk);
-      return true;
-    },
-    end(chunk?: string) {
-      if (chunk) {
-        res._chunks.push(chunk);
-      }
-      res._ended = true;
-    },
-  };
-  return res as unknown as ServerResponse & {
-    _chunks: string[];
-    _headers: Record<string, string>;
-    _ended: boolean;
-  };
-}
-
-function parseEvents(
-  chunks: string[],
-): Array<{ type: string; [key: string]: unknown }> {
-  const events: Array<{ type: string; [key: string]: unknown }> = [];
-  for (const chunk of chunks) {
-    for (const line of chunk.split("\n")) {
-      const match = line.match(/^data:\s*(.+)$/);
-      if (match?.[1]) {
-        try {
-          events.push(JSON.parse(match[1]));
-        } catch {
-          /* skip */
-        }
-      }
-    }
-  }
-  return events;
-}
-
-// ---------------------------------------------------------------------------
-// HMAC token utilities (duplicated from http-handler for testing)
-// ---------------------------------------------------------------------------
-
-import { createHmac } from "node:crypto";
-
-function createDeviceToken(secret: string, deviceId: string): string {
-  const encodedId = Buffer.from(deviceId).toString("base64url");
-  const signature = createHmac("sha256", secret).update(deviceId).digest("hex").slice(0, 32);
-  return `${encodedId}.${signature}`;
-}
-
-// ---------------------------------------------------------------------------
-// Fake plugin API + runtime
-// ---------------------------------------------------------------------------
-
-function createFakeApi(
-  approvedDevices: string[] = [],
-  options: { pairingCode?: string } = {},
-) {
-  const { pairingCode = "TEST1234" } = options;
-
-  const dispatchReplyFromConfig = vi.fn().mockResolvedValue({
-    queuedFinal: true,
-    counts: { tool: 0, block: 0, final: 1 },
-  });
-
-  // The single run path for EVERY turn now goes through
-  // runtime.agent.runEmbeddedAgent (see http-handler.ts `runViaEmbeddedAgent`).
-  // Tests drive assistant text / reasoning by `.mockImplementation`-ing this and
-  // invoking the callbacks it receives (onPartialReply / onReasoningStream /
-  // onReasoningEnd), then returning a result of shape
-  // `{ meta: { stopReason, pendingToolCalls }, payloads: [{ text }] }`.
-  const runEmbeddedAgent = vi.fn().mockResolvedValue({
-    meta: { stopReason: "stop", pendingToolCalls: [] },
-    payloads: [],
-  });
-
-  const upsertPairingRequest = vi.fn().mockResolvedValue({
-    code: pairingCode,
-  });
-
-  const readAllowFromStore = vi.fn().mockResolvedValue(approvedDevices);
-
-  return {
-    config: { gateway: { auth: { token: "test-gateway-secret" } } },
-    runtime: {
-      config: {
-        loadConfig: () => ({
-          session: { store: "/tmp/test-sessions" },
-        }),
-      },
-      agent: {
-        resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/ws"),
-        resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent"),
-        resolveAgentTimeoutMs: vi.fn().mockReturnValue(30000),
-        ensureAgentWorkspace: vi.fn().mockResolvedValue(undefined),
-        runEmbeddedAgent,
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute: vi.fn().mockReturnValue({
-            sessionKey: "agui:test-session",
-            agentId: "main",
-            accountId: "default",
-          }),
-        },
-        // Retained for the handful of passing tests that still reference these
-        // mocks; the refactored handler no longer calls the reply pipeline or
-        // session helpers — every turn runs through runtime.agent.runEmbeddedAgent.
-        session: {
-          resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store"),
-          readSessionUpdatedAt: vi.fn().mockReturnValue(undefined),
-          recordInboundSession: vi.fn().mockResolvedValue(undefined),
-        },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn().mockReturnValue({}),
-          formatAgentEnvelope: vi
-            .fn()
-            .mockImplementation(({ body }: { body: string }) => body),
-          finalizeInboundContext: vi
-            .fn()
-            .mockImplementation((ctx: Record<string, unknown>) => ctx),
-          dispatchReplyFromConfig,
-        },
-        pairing: {
-          upsertPairingRequest,
-          readAllowFromStore,
-        },
-      },
-    },
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  } as unknown;
-}
+import {
+  createReq,
+  createRes,
+  parseEvents,
+  createDeviceToken,
+  createFakeApi,
+  GATEWAY_SECRET,
+  APPROVED_DEVICE_ID,
+} from "./http-handler.test-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-const GATEWAY_SECRET = "test-gateway-secret";
-const APPROVED_DEVICE_ID = "12345678-1234-1234-1234-123456789abc";
 
 describe("AG-UI HTTP handler", () => {
   let fakeApi: ReturnType<typeof createFakeApi>;
@@ -269,11 +89,8 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
     expect(res.statusCode).toBe(200);
-    const events = parseEvents(res._chunks);
-    expect(events.map((e) => e.type)).toEqual([
-      EventType.RUN_STARTED,
-      EventType.RUN_FINISHED,
-    ]);
+    const events = parseEvents(res.chunks);
+    expect(events.map((e) => e.type)).toEqual([EventType.RUN_STARTED, EventType.RUN_FINISHED]);
   });
 
   it("returns empty run for empty messages array (AG-UI session init)", async () => {
@@ -289,11 +106,8 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
     expect(res.statusCode).toBe(200);
-    const events = parseEvents(res._chunks);
-    expect(events.map((e) => e.type)).toEqual([
-      EventType.RUN_STARTED,
-      EventType.RUN_FINISHED,
-    ]);
+    const events = parseEvents(res.chunks);
+    expect(events.map((e) => e.type)).toEqual([EventType.RUN_STARTED, EventType.RUN_FINISHED]);
     expect(events[0]!.threadId).toBe("t-empty");
     expect(events[0]!.runId).toBe("r-empty");
   });
@@ -305,16 +119,14 @@ describe("AG-UI HTTP handler", () => {
       body: {
         threadId: "t-tool-only",
         runId: "r-tool-only",
-        messages: [
-          { role: "tool", toolCallId: "tc-1", content: "72°F sunny" },
-        ],
+        messages: [{ role: "tool", toolCallId: "tc-1", content: "72°F sunny" }],
       },
     });
     const res = createRes();
     await handler(req, res);
 
     // Should proceed with normal SSE flow
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
     expect(types[0]).toBe(EventType.RUN_STARTED);
     expect(types).toContain(EventType.RUN_FINISHED);
@@ -333,7 +145,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events[0]?.type).toBe(EventType.RUN_STARTED);
     expect(events[0]?.threadId).toBe("t1");
@@ -353,10 +165,10 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
     expect(types).toContain(EventType.RUN_FINISHED);
-    expect(res._ended).toBe(true);
+    expect(res.ended).toBe(true);
   });
 
   it("calls runEmbeddedAgent with correct sessionKey and runId", async () => {
@@ -401,13 +213,11 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
     expect(types).toContain(EventType.TEXT_MESSAGE_START);
     expect(types).toContain(EventType.TEXT_MESSAGE_CONTENT);
-    const contentEvt = events.find(
-      (e) => e.type === EventType.TEXT_MESSAGE_CONTENT,
-    );
+    const contentEvt = events.find((e) => e.type === EventType.TEXT_MESSAGE_CONTENT);
     expect(contentEvt?.delta).toBe("Hello from agent");
   });
 
@@ -436,7 +246,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const deltas = events
       .filter((e) => e.type === EventType.REASONING_MESSAGE_CONTENT)
       .map((e) => e.delta);
@@ -471,10 +281,10 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
     expect(types).toContain(EventType.RUN_FINISHED);
-    expect(res._ended).toBe(true);
+    expect(res.ended).toBe(true);
   });
 
   it("emits RUN_ERROR on run failure", async () => {
@@ -493,12 +303,12 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
     expect(types).toContain(EventType.RUN_ERROR);
     const errEvt = events.find((e) => e.type === EventType.RUN_ERROR);
     expect(errEvt?.message).toContain("agent failed");
-    expect(res._ended).toBe(true);
+    expect(res.ended).toBe(true);
   });
 
   it("suppresses text output when client tool was called", async () => {
@@ -527,7 +337,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
     // Should NOT contain text message events
     expect(types).not.toContain(EventType.TEXT_MESSAGE_START);
@@ -556,7 +366,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
 
     // Exactly one RUN_STARTED and one RUN_FINISHED — no splitting
     const runStarted = events.filter((e) => e.type === EventType.RUN_STARTED);
@@ -610,7 +420,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
 
     // Reasoning events should appear
@@ -673,7 +483,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
 
     expect(types).not.toContain(EventType.REASONING_START);
@@ -702,7 +512,7 @@ describe("AG-UI HTTP handler", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
 
     // Reasoning should be properly closed even without explicit onReasoningEnd
@@ -741,7 +551,7 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     // Should proceed with normal SSE flow (has user message + tool context)
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     const types = events.map((e) => e.type);
     expect(types[0]).toBe(EventType.RUN_STARTED);
     expect(types).toContain(EventType.RUN_FINISHED);
@@ -874,9 +684,7 @@ describe("AG-UI HTTP handler", () => {
 
     const rt = (fakeApi as any).runtime;
     const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
-    expect(call.sessionKey).toBe(
-      "agui:test-session:user:alice@example.com:thread:t-user",
-    );
+    expect(call.sessionKey).toBe("agui:test-session:user:alice@example.com:thread:t-user");
   });
 
   it("composes user and thread suffixes together in order", async () => {
@@ -965,7 +773,7 @@ describe("AG-UI HTTP handler", () => {
       await handler(req, res);
 
       expect(res.statusCode).toBe(400);
-      const body = JSON.parse(res._chunks.join(""));
+      const body = JSON.parse(res.chunks.join(""));
       expect(body.error.type).toBe("invalid_request_error");
     },
   );
@@ -987,7 +795,7 @@ describe("AG-UI HTTP handler", () => {
     await handler(req, res);
 
     expect(res.statusCode).toBe(400);
-    const body = JSON.parse(res._chunks.join(""));
+    const body = JSON.parse(res.chunks.join(""));
     expect(body.error.type).toBe("invalid_request_error");
   });
 
@@ -995,27 +803,24 @@ describe("AG-UI HTTP handler", () => {
     ["whitespace", "alice space"],
     ["exclamation", "alice!"],
     ["hash", "alice#b"],
-  ])(
-    "rejects X-OpenClaw-Session-Key with disallowed character (%s)",
-    async (_label, value) => {
-      const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-      const req = createReq({
-        headers: {
-          authorization: `Bearer ${token}`,
-          "x-openclaw-session-key": value,
-        },
-        body: {
-          threadId: "t",
-          runId: "r",
-          messages: [{ role: "user", content: "Hello" }],
-        },
-      });
-      const res = createRes();
-      await handler(req, res);
+  ])("rejects X-OpenClaw-Session-Key with disallowed character (%s)", async (_label, value) => {
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const req = createReq({
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-openclaw-session-key": value,
+      },
+      body: {
+        threadId: "t",
+        runId: "r",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+    const res = createRes();
+    await handler(req, res);
 
-      expect(res.statusCode).toBe(400);
-    },
-  );
+    expect(res.statusCode).toBe(400);
+  });
 
   it.each([
     ["email", "alice@example.com"],
@@ -1043,9 +848,7 @@ describe("AG-UI HTTP handler", () => {
       expect(res.statusCode).toBe(200);
       const rt = (fakeApi as any).runtime;
       const call = rt.agent.runEmbeddedAgent.mock.calls[0][0];
-      expect(call.sessionKey).toBe(
-        `agui:test-session:user:${value}:thread:t-ok`,
-      );
+      expect(call.sessionKey).toBe(`agui:test-session:user:${value}:thread:t-ok`);
     },
   );
 
@@ -1258,7 +1061,7 @@ describe("Device pairing", () => {
     await handler(req, res);
 
     expect(res.statusCode).toBe(403);
-    const body = JSON.parse(res._chunks[0]!);
+    const body = JSON.parse(res.chunks[0]!);
     expect(body.error.type).toBe("pairing_pending");
     expect(body.error.pairing.pairingCode).toBe("TEST1234");
     expect(body.error.pairing.token).toBeDefined();
@@ -1317,7 +1120,7 @@ describe("Device pairing", () => {
     await handler(req, res);
 
     expect(res.statusCode).toBe(403);
-    const body = JSON.parse(res._chunks[0]!);
+    const body = JSON.parse(res.chunks[0]!);
     expect(body.error.type).toBe("pairing_pending");
     expect(body.error.message).toContain("pending approval");
   });
@@ -1335,7 +1138,7 @@ describe("Device pairing", () => {
     const res = createRes();
     await handler(req, res);
 
-    const events = parseEvents(res._chunks);
+    const events = parseEvents(res.chunks);
     expect(events[0]?.type).toBe(EventType.RUN_STARTED);
     expect(events.some((e) => e.type === EventType.RUN_FINISHED)).toBe(true);
   });
@@ -1353,7 +1156,7 @@ describe("Device pairing", () => {
     await handler(req, res);
 
     expect(res.statusCode).toBe(429);
-    const body = JSON.parse(res._chunks[0]!);
+    const body = JSON.parse(res.chunks[0]!);
     expect(body.error.type).toBe("rate_limit");
     expect(body.error.message).toContain("Too many pending pairing requests");
   });

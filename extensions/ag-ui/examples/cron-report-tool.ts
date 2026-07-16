@@ -102,7 +102,9 @@ interface CronRun {
  * request), or `null` otherwise.
  */
 export function cronReportToolFactory(ctx: { sessionKey?: string }) {
-  if (!ctx.sessionKey) return null;
+  if (!ctx.sessionKey) {
+    return null;
+  }
 
   return {
     name: "cron_report",
@@ -110,7 +112,7 @@ export function cronReportToolFactory(ctx: { sessionKey?: string }) {
     description:
       "Display cron job run results as rich visual cards. Call this tool with an array of " +
       "cron run objects. Each run must have: id (unique string), startedAt (readable date/time), " +
-      "duration (e.g. \"2m 14s\"), model (LLM model name), tokensUsed (formatted number string), " +
+      'duration (e.g. "2m 14s"), model (LLM model name), tokensUsed (formatted number string), ' +
       "and summary (free-text description of what the run did and its status).",
     parameters: {
       type: "object" as const,
@@ -121,11 +123,26 @@ export function cronReportToolFactory(ctx: { sessionKey?: string }) {
             type: "object" as const,
             properties: {
               id: { type: "string" as const, description: "Unique run identifier" },
-              startedAt: { type: "string" as const, description: "When the run started, e.g. 'Apr 5, 10:30 AM'" },
-              duration: { type: "string" as const, description: "How long the run took, e.g. '2m 14s'" },
-              model: { type: "string" as const, description: "LLM model used, e.g. 'claude-sonnet-4-6'" },
-              tokensUsed: { type: "string" as const, description: "Total tokens consumed, e.g. '12,847'" },
-              summary: { type: "string" as const, description: "Free-text summary of what the job did and its outcome" },
+              startedAt: {
+                type: "string" as const,
+                description: "When the run started, e.g. 'Apr 5, 10:30 AM'",
+              },
+              duration: {
+                type: "string" as const,
+                description: "How long the run took, e.g. '2m 14s'",
+              },
+              model: {
+                type: "string" as const,
+                description: "LLM model used, e.g. 'claude-sonnet-4-6'",
+              },
+              tokensUsed: {
+                type: "string" as const,
+                description: "Total tokens consumed, e.g. '12,847'",
+              },
+              summary: {
+                type: "string" as const,
+                description: "Free-text summary of what the job did and its outcome",
+              },
             },
             required: ["id", "startedAt", "duration", "model", "tokensUsed", "summary"],
           },

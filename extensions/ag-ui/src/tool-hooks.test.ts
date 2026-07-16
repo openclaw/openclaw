@@ -1,20 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventType } from "@ag-ui/core";
-
-vi.mock("openclaw/plugin-sdk", () => ({
-  emptyPluginConfigSchema: () => ({}),
-}));
-
-import {
-  setWriter,
-  clearWriter,
-  markClientToolNames,
-  clearClientToolNames,
-} from "./tool-store.js";
-import {
-  handleBeforeToolCall,
-  handleToolResultPersist,
-} from "./hooks.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { handleBeforeToolCall, handleToolResultPersist } from "./hooks.js";
+import { setWriter, clearWriter, markClientToolNames, clearClientToolNames } from "./tool-store.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,8 +10,8 @@ import {
 const SESSION_KEY = "hook-test-session";
 
 function createMockWriter() {
-  const events: Array<{ type: string } & Record<string, unknown>> = [];
-  const writer = (event: { type: string } & Record<string, unknown>) => {
+  const events: Array<{ type: EventType } & Record<string, unknown>> = [];
+  const writer = (event: { type: EventType } & Record<string, unknown>) => {
     events.push(event);
   };
   return { events, writer };
@@ -71,19 +58,13 @@ describe("Tool event hooks", () => {
     });
 
     it("emits nothing even when params are empty", () => {
-      handleBeforeToolCall(
-        { toolName: "get_weather", params: {} },
-        { sessionKey: SESSION_KEY },
-      );
+      handleBeforeToolCall({ toolName: "get_weather", params: {} }, { sessionKey: SESSION_KEY });
 
       expect(mock.events).toHaveLength(0);
     });
 
     it("pushes no pending id, so a later tool_result_persist is a no-op", () => {
-      handleBeforeToolCall(
-        { toolName: "get_weather" },
-        { sessionKey: SESSION_KEY },
-      );
+      handleBeforeToolCall({ toolName: "get_weather" }, { sessionKey: SESSION_KEY });
       handleToolResultPersist({}, { sessionKey: SESSION_KEY });
 
       expect(mock.events).toHaveLength(0);
@@ -108,7 +89,7 @@ describe("Tool event hooks", () => {
       expect(mock.events[1]!.type).toBe(EventType.TOOL_CALL_ARGS);
       expect(mock.events[1]!.delta).toBe(JSON.stringify({ query: "test" }));
 
-      const toolCallId = mock.events[0]!.toolCallId;
+      const toolCallId = mock.events[0]!.toolCallId as string;
 
       // After tool_result_persist: RESULT + END
       handleToolResultPersist({}, { sessionKey: SESSION_KEY });
@@ -140,7 +121,7 @@ describe("Tool event hooks", () => {
         { sessionKey: SESSION_KEY },
       );
 
-      const toolCallId = mock.events[0]!.toolCallId;
+      const toolCallId = mock.events[0]!.toolCallId as string;
 
       const a2uiJson = JSON.stringify({
         a2ui_operations: [
@@ -187,19 +168,14 @@ describe("Tool event hooks", () => {
     });
 
     it("populates TOOL_CALL_RESULT content from event.message", () => {
-      handleBeforeToolCall(
-        { toolName: "my_tool", params: {} },
-        { sessionKey: SESSION_KEY },
-      );
+      handleBeforeToolCall({ toolName: "my_tool", params: {} }, { sessionKey: SESSION_KEY });
 
       handleToolResultPersist(
         { message: { content: [{ type: "text", text: "actual content" }] } },
         { sessionKey: SESSION_KEY },
       );
 
-      const resultEvent = mock.events.find(
-        (e) => e.type === EventType.TOOL_CALL_RESULT,
-      );
+      const resultEvent = mock.events.find((e) => e.type === EventType.TOOL_CALL_RESULT);
       expect(resultEvent?.content).toBe("actual content");
     });
   });
@@ -237,14 +213,8 @@ describe("Tool event hooks", () => {
 
     it("generates unique toolCallIds across calls", () => {
       // Unmarked (backend/server) tools — the hook emits START for each.
-      handleBeforeToolCall(
-        { toolName: "tool_a", params: { x: 1 } },
-        { sessionKey: SESSION_KEY },
-      );
-      handleBeforeToolCall(
-        { toolName: "tool_b", params: { y: 2 } },
-        { sessionKey: SESSION_KEY },
-      );
+      handleBeforeToolCall({ toolName: "tool_a", params: { x: 1 } }, { sessionKey: SESSION_KEY });
+      handleBeforeToolCall({ toolName: "tool_b", params: { y: 2 } }, { sessionKey: SESSION_KEY });
 
       const ids = mock.events
         .filter((e) => e.type === EventType.TOOL_CALL_START)

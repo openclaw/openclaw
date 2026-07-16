@@ -1,4 +1,4 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 
 type ResolvedAguiAccount = {
   accountId: string;
@@ -40,9 +40,7 @@ export const aguiChannelPlugin: ChannelPlugin<ResolvedAguiAccount> = {
     // the gateway aborts on shutdown/reload.
     startAccount: async (ctx) => {
       ctx.setStatus({ accountId: ctx.accountId, running: true });
-      ctx.log?.info?.(
-        `[${ctx.accountId}] AG-UI channel active (HTTP endpoint ready)`,
-      );
+      ctx.log?.info?.(`[${ctx.accountId}] AG-UI channel active (HTTP endpoint ready)`);
       await new Promise<void>((resolve) => {
         if (ctx.abortSignal.aborted) {
           resolve();

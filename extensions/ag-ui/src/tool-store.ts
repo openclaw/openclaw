@@ -1,6 +1,6 @@
 import type { EventType, Tool } from "@ag-ui/core";
 
-export type EventWriter = (event: { type: EventType } & Record<string, unknown>) => void;
+type EventWriter = (event: { type: EventType } & Record<string, unknown>) => void;
 
 /**
  * Per-session store for:
@@ -14,10 +14,6 @@ const writerStore = new Map<string, EventWriter>();
 
 // --- Client tools (for the plugin tool factory) ---
 
-export function stashTools(sessionKey: string, tools: Tool[]): void {
-  toolStore.set(sessionKey, tools);
-}
-
 export function popTools(sessionKey: string): Tool[] {
   const tools = toolStore.get(sessionKey) ?? [];
   toolStore.delete(sessionKey);
@@ -28,11 +24,7 @@ export function popTools(sessionKey: string): Tool[] {
 
 const messageIdStore = new Map<string, string>();
 
-export function setWriter(
-  sessionKey: string,
-  writer: EventWriter,
-  messageId: string,
-): void {
+export function setWriter(sessionKey: string, writer: EventWriter, messageId: string): void {
   writerStore.set(sessionKey, writer);
   messageIdStore.set(sessionKey, messageId);
 }
@@ -79,42 +71,16 @@ export function popToolCallId(sessionKey: string): string | undefined {
 
 const clientToolNames = new Map<string, Set<string>>();
 
-export function markClientToolNames(
-  sessionKey: string,
-  names: string[],
-): void {
+export function markClientToolNames(sessionKey: string, names: string[]): void {
   clientToolNames.set(sessionKey, new Set(names));
 }
 
-export function isClientTool(
-  sessionKey: string,
-  toolName: string,
-): boolean {
+export function isClientTool(sessionKey: string, toolName: string): boolean {
   return clientToolNames.get(sessionKey)?.has(toolName) ?? false;
 }
 
 export function clearClientToolNames(sessionKey: string): void {
   clientToolNames.delete(sessionKey);
-}
-
-// --- Tool-fired-in-run flag ---
-// Tracks whether any tool call (server or client) was emitted in the current
-// run. When a text message is about to be emitted and this flag is set, the
-// http-handler splits into a new run so tool events and text events live in
-// separate runs (per AG-UI protocol best practice).
-
-const toolFiredInRunFlags = new Map<string, boolean>();
-
-export function setToolFiredInRun(sessionKey: string): void {
-  toolFiredInRunFlags.set(sessionKey, true);
-}
-
-export function wasToolFiredInRun(sessionKey: string): boolean {
-  return toolFiredInRunFlags.get(sessionKey) ?? false;
-}
-
-export function clearToolFiredInRun(sessionKey: string): void {
-  toolFiredInRunFlags.delete(sessionKey);
 }
 
 // --- Client-tool-called flag ---

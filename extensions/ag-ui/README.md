@@ -36,10 +36,10 @@ On startup you'll see `ag-ui` in the loaded channel list and
 `AG-UI channel active (HTTP endpoint ready)` in the logs. Two routes are now
 served (replace `http://localhost:8000` with your gateway's host/port):
 
-| Route | Auth | Use it for |
-|---|---|---|
+| Route                     | Auth                                                             | Use it for                                                                                              |
+| ------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `POST /v1/ag-ui/operator` | Gateway token (`Authorization: Bearer <OPENCLAW_GATEWAY_TOKEN>`) | Trusted, server-side integrations where the token stays on a server you control (behind your own auth). |
-| `POST /v1/ag-ui` | Device pairing (per-client token) | Untrusted / external AG-UI clients that pair once and get their own token. |
+| `POST /v1/ag-ui`          | Device pairing (per-client token)                                | Untrusted / external AG-UI clients that pair once and get their own token.                              |
 
 **3. Say hi.** With the operator route and your gateway token:
 
@@ -81,7 +81,7 @@ When an AG-UI client POSTs a `RunAgentInput` payload, the channel:
 
 1. **Authenticates** the request — a gateway token on `/v1/ag-ui/operator`, or a
    paired device token on `/v1/ag-ui` (see [Authentication](#authentication)).
-2. **Parses** the AG-UI messages into a prompt, sending only the *delta* since
+2. **Parses** the AG-UI messages into a prompt, sending only the _delta_ since
    the last assistant turn (a stable per-conversation session supplies the rest
    of the history).
 3. **Routes** to the target agent via the gateway's standard routing.
@@ -212,18 +212,18 @@ curl -N http://localhost:8000/v1/ag-ui \
 
 ### CLI commands
 
-| Command | Description |
-|---------|-------------|
-| `openclaw ag-ui devices` | List approved devices |
-| `openclaw pairing list ag-ui` | List pending pairing requests awaiting approval |
-| `openclaw pairing approve ag-ui <code>` | Approve a device by its pairing code |
+| Command                                 | Description                                     |
+| --------------------------------------- | ----------------------------------------------- |
+| `openclaw ag-ui devices`                | List approved devices                           |
+| `openclaw pairing list ag-ui`           | List pending pairing requests awaiting approval |
+| `openclaw pairing approve ag-ui <code>` | Approve a device by its pairing code            |
 
 ### Auth errors
 
-| Status | Type | Meaning |
-|--------|------|---------|
-| 401 | `unauthorized` | Invalid device or gateway token |
-| 403 | `pairing_pending` | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved |
+| Status | Type              | Meaning                                                                                     |
+| ------ | ----------------- | ------------------------------------------------------------------------------------------- |
+| 401    | `unauthorized`    | Invalid device or gateway token                                                             |
+| 403    | `pairing_pending` | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved |
 
 > **Note on the gateway token.** The device route `/v1/ag-ui` does **not** accept
 > the raw gateway/master token — it requires pairing. If you have a trusted
@@ -264,13 +264,13 @@ gateway token instead — from server-side code only.
 
 POST a JSON body matching the AG-UI `RunAgentInput` schema:
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `threadId` | string | no | Conversation thread ID. Auto-generated if omitted. |
-| `runId` | string | no | Unique run ID. Auto-generated if omitted. |
-| `messages` | Message[] | yes | Array of messages. May be empty (returns an empty run). For agent execution, include at least one `user` or `tool` message. |
-| `tools` | Tool[] | no | Client-side tool definitions the agent may invoke; see [Tool call events](#tool-call-events). |
-| `state` | object | no | Client state (reserved for future use). |
+| Field      | Type      | Required | Description                                                                                                                 |
+| ---------- | --------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `threadId` | string    | no       | Conversation thread ID. Auto-generated if omitted.                                                                          |
+| `runId`    | string    | no       | Unique run ID. Auto-generated if omitted.                                                                                   |
+| `messages` | Message[] | yes      | Array of messages. May be empty (returns an empty run). For agent execution, include at least one `user` or `tool` message. |
+| `tools`    | Tool[]    | no       | Client-side tool definitions the agent may invoke; see [Tool call events](#tool-call-events).                               |
+| `state`    | object    | no       | Client state (reserved for future use).                                                                                     |
 
 ### Message format
 
@@ -287,20 +287,20 @@ Supported roles: `user`, `assistant`, `system`, `tool`.
 The response is an SSE stream. Each event is a `data:` line containing a JSON
 object with a `type` from the AG-UI `EventType` enum:
 
-| Event | When |
-|---|---|
-| `RUN_STARTED` | Immediately after validation |
-| `TEXT_MESSAGE_START` | First assistant text chunk |
-| `TEXT_MESSAGE_CONTENT` | Each streamed text delta |
-| `TEXT_MESSAGE_END` | After the last text chunk |
+| Event                                           | When                                                                                       |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `RUN_STARTED`                                   | Immediately after validation                                                               |
+| `TEXT_MESSAGE_START`                            | First assistant text chunk                                                                 |
+| `TEXT_MESSAGE_CONTENT`                          | Each streamed text delta                                                                   |
+| `TEXT_MESSAGE_END`                              | After the last text chunk                                                                  |
 | `REASONING_MESSAGE_START` / `_CONTENT` / `_END` | Streamed model reasoning summary (when the model emits one and `reasoningDefault` streams) |
-| `TOOL_CALL_START` | Agent invokes a tool |
-| `TOOL_CALL_ARGS` | Tool call arguments (JSON delta) |
-| `TOOL_CALL_RESULT` | Server-side tool execution result |
-| `TOOL_CALL_END` | Tool call complete |
-| `ACTIVITY_SNAPSHOT` | An A2UI generative-UI surface produced by a tool result |
-| `RUN_FINISHED` | Agent run complete |
-| `RUN_ERROR` | On failure (stream then closes) |
+| `TOOL_CALL_START`                               | Agent invokes a tool                                                                       |
+| `TOOL_CALL_ARGS`                                | Tool call arguments (JSON delta)                                                           |
+| `TOOL_CALL_RESULT`                              | Server-side tool execution result                                                          |
+| `TOOL_CALL_END`                                 | Tool call complete                                                                         |
+| `ACTIVITY_SNAPSHOT`                             | An A2UI generative-UI surface produced by a tool result                                    |
+| `RUN_FINISHED`                                  | Agent run complete                                                                         |
+| `RUN_ERROR`                                     | On failure (stream then closes)                                                            |
 
 ### Tool call events
 
@@ -356,7 +356,7 @@ curl -N http://localhost:8000/v1/ag-ui/operator \
 Useful when:
 
 - Multiple authenticated users share one AG-UI client (e.g. a web app with auth).
-- You want to key sessions by user identity *in addition to* thread ID.
+- You want to key sessions by user identity _in addition to_ thread ID.
 - The AG-UI client manages `threadId` internally.
 
 ### How the final session key is composed
@@ -398,12 +398,12 @@ The header value must match these rules; invalid values return
 
 Non-streaming errors return JSON:
 
-| Status | Type | Meaning |
-|---|---|---|
-| 400 | `invalid_request_error` | Invalid request (missing messages, bad JSON, bad session-key header) |
-| 401 | `unauthorized` | Invalid device or gateway token |
-| 403 | `pairing_pending` | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved |
-| 405 | — | Method not allowed (only POST accepted) |
+| Status | Type                    | Meaning                                                                                     |
+| ------ | ----------------------- | ------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request_error` | Invalid request (missing messages, bad JSON, bad session-key header)                        |
+| 401    | `unauthorized`          | Invalid device or gateway token                                                             |
+| 403    | `pairing_pending`       | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved |
+| 405    | —                       | Method not allowed (only POST accepted)                                                     |
 
 Errors that happen mid-stream emit a `RUN_ERROR` event and close the connection.
 

@@ -9,12 +9,7 @@
 export const A2UI_OPERATIONS_KEY = "a2ui_operations";
 
 /** v0.9 operation keys that identify an A2UI operation object. */
-const V09_KEYS = [
-  "createSurface",
-  "updateComponents",
-  "updateDataModel",
-  "deleteSurface",
-] as const;
+const V09_KEYS = ["createSurface", "updateComponents", "updateDataModel", "deleteSurface"] as const;
 
 /**
  * Extract concatenated text from a `tool_result_persist` event's
@@ -25,7 +20,9 @@ const V09_KEYS = [
  * for text blocks and join them.
  */
 export function extractToolResultText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
+  if (!Array.isArray(content)) {
+    return "";
+  }
   const texts: string[] = [];
   for (const block of content) {
     if (
@@ -46,10 +43,10 @@ export function extractToolResultText(content: unknown): string {
  * Supports the v0.9 wrapper format: `{ "a2ui_operations": [...] }`
  * Returns the operations array, or `null` if not valid A2UI JSON.
  */
-export function tryParseA2UIOperations(
-  text: string,
-): Array<Record<string, unknown>> | null {
-  if (!text) return null;
+export function tryParseA2UIOperations(text: string): Array<Record<string, unknown>> | null {
+  if (!text) {
+    return null;
+  }
 
   let parsed: unknown;
   try {
@@ -64,14 +61,20 @@ export function tryParseA2UIOperations(
 
   const wrapper = parsed as Record<string, unknown>;
   const ops = wrapper[A2UI_OPERATIONS_KEY];
-  if (!Array.isArray(ops) || ops.length === 0) return null;
+  if (!Array.isArray(ops) || ops.length === 0) {
+    return null;
+  }
 
   // Validate that at least the first item looks like an A2UI operation
   const first = ops[0];
-  if (typeof first !== "object" || first === null) return null;
+  if (typeof first !== "object" || first === null) {
+    return null;
+  }
   const hasVersionKey = "version" in first;
   const hasOpKey = V09_KEYS.some((k) => k in first);
-  if (!hasVersionKey && !hasOpKey) return null;
+  if (!hasVersionKey && !hasOpKey) {
+    return null;
+  }
 
   return ops as Array<Record<string, unknown>>;
 }
@@ -79,9 +82,7 @@ export function tryParseA2UIOperations(
 /**
  * Extract `surfaceId` from a single A2UI v0.9 operation.
  */
-export function getOperationSurfaceId(
-  op: Record<string, unknown>,
-): string | null {
+function getOperationSurfaceId(op: Record<string, unknown>): string | null {
   for (const key of V09_KEYS) {
     const inner = op[key];
     if (

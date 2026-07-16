@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { Command } from "commander";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
 /**
  * Registers the `openclaw ag-ui` CLI command group (device management).
@@ -8,16 +8,17 @@ import type { Command } from "commander";
 export function registerAguiCli(api: OpenClawPluginApi): void {
   api.registerCli(
     ({ program }: { program: Command }) => {
-      const agui = program
-        .command("ag-ui")
-        .description("AG-UI channel commands");
+      const agui = program.command("ag-ui").description("AG-UI channel commands");
 
       agui
         .command("devices")
         .description("List approved devices")
         .action(async () => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK types lag behind runtime
-          const devices = await (api.runtime.channel.pairing.readAllowFromStore as (arg: any) => Promise<string[]>)({ channel: "ag-ui" });
+          const devices = await (
+            api.runtime.channel.pairing.readAllowFromStore as unknown as (arg: {
+              channel: string;
+            }) => Promise<string[]>
+          )({ channel: "ag-ui" });
           if (devices.length === 0) {
             console.log("No approved devices.");
             return;

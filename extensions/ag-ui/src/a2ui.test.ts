@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
-import {
-  extractToolResultText,
-  tryParseA2UIOperations,
-  getOperationSurfaceId,
-  groupBySurface,
-} from "./a2ui.js";
+import { extractToolResultText, tryParseA2UIOperations, groupBySurface } from "./a2ui.js";
+
+// Surface-id extraction is internal to a2ui.ts; exercise it through the public
+// `groupBySurface`, whose grouping key is the operation's resolved surfaceId
+// (or "default" when none is present).
+function surfaceIdOf(op: Record<string, unknown>): string {
+  // groupBySurface always yields at least one group (falling back to "default").
+  return [...groupBySurface([op]).keys()][0]!;
+}
 
 describe("extractToolResultText", () => {
   it("joins text blocks", () => {
@@ -75,33 +78,31 @@ describe("tryParseA2UIOperations", () => {
   });
 });
 
-describe("getOperationSurfaceId", () => {
+describe("surface-id grouping", () => {
   it("extracts surfaceId from createSurface", () => {
-    expect(
-      getOperationSurfaceId({ version: "v0.9", createSurface: { surfaceId: "my-surface" } }),
-    ).toBe("my-surface");
+    expect(surfaceIdOf({ version: "v0.9", createSurface: { surfaceId: "my-surface" } })).toBe(
+      "my-surface",
+    );
   });
 
   it("extracts surfaceId from updateComponents", () => {
     expect(
-      getOperationSurfaceId({ version: "v0.9", updateComponents: { surfaceId: "s2", components: [] } }),
+      surfaceIdOf({ version: "v0.9", updateComponents: { surfaceId: "s2", components: [] } }),
     ).toBe("s2");
   });
 
   it("extracts surfaceId from updateDataModel", () => {
     expect(
-      getOperationSurfaceId({ version: "v0.9", updateDataModel: { surfaceId: "s3", path: "/", value: {} } }),
+      surfaceIdOf({ version: "v0.9", updateDataModel: { surfaceId: "s3", path: "/", value: {} } }),
     ).toBe("s3");
   });
 
   it("extracts surfaceId from deleteSurface", () => {
-    expect(
-      getOperationSurfaceId({ version: "v0.9", deleteSurface: { surfaceId: "s4" } }),
-    ).toBe("s4");
+    expect(surfaceIdOf({ version: "v0.9", deleteSurface: { surfaceId: "s4" } })).toBe("s4");
   });
 
-  it("returns null when no surfaceId present", () => {
-    expect(getOperationSurfaceId({ version: "v0.9" })).toBeNull();
+  it('falls back to "default" when no surfaceId present', () => {
+    expect(surfaceIdOf({ version: "v0.9" })).toBe("default");
   });
 });
 

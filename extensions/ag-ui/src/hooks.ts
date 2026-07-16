@@ -1,18 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { EventType } from "@ag-ui/core";
 import {
-  getWriter,
-  getMessageId,
-  pushToolCallId,
-  popToolCallId,
-  isClientTool,
-} from "./tool-store.js";
-import {
   extractToolResultText,
   tryParseA2UIOperations,
   groupBySurface,
   A2UI_OPERATIONS_KEY,
 } from "./a2ui.js";
+import {
+  getWriter,
+  getMessageId,
+  pushToolCallId,
+  popToolCallId,
+  isClientTool,
+  setClientToolCalled,
+} from "./tool-store.js";
 
 // ---------------------------------------------------------------------------
 // before_tool_call / tool_result_persist hooks
@@ -22,12 +23,12 @@ import {
 // (index.ts) and exercised directly by tool-hooks.test.ts.
 // ---------------------------------------------------------------------------
 
-export interface BeforeToolCallEvent {
+interface BeforeToolCallEvent {
   toolName: string;
   params?: Record<string, unknown>;
 }
 
-export interface ToolCallContext {
+interface ToolCallContext {
   sessionKey?: string;
 }
 
@@ -35,10 +36,7 @@ export interface ToolCallContext {
  * Handles the `before_tool_call` OpenClaw hook.
  * Emits TOOL_CALL_START + TOOL_CALL_ARGS (and TOOL_CALL_END for client tools).
  */
-export function handleBeforeToolCall(
-  event: BeforeToolCallEvent,
-  ctx: ToolCallContext,
-): void {
+export function handleBeforeToolCall(event: BeforeToolCallEvent, ctx: ToolCallContext): void {
   const sk = ctx.sessionKey;
   if (!sk) {
     return;
@@ -54,6 +52,11 @@ export function handleBeforeToolCall(
   // tools — so skip the marked names here to avoid a duplicate TOOL_CALL_*
   // sequence for the same call.
   if (isClientTool(sk, event.toolName)) {
+    // Client/frontend tool: the HTTP handler emits its TOOL_CALL_* events via
+    // the pendingToolCalls path. Record that a client tool fired so the handler
+    // suppresses any trailing assistant text and ends the run for the browser
+    // to execute the tool.
+    setClientToolCalled(sk);
     return;
   }
   // Server (backend) tool: emit START + ARGS and push the id so
@@ -92,12 +95,8 @@ export function handleToolResultPersist(
   const messageId = getMessageId(sk);
   if (writer && toolCallId && messageId) {
     // Extract actual tool result text from event.message.content
-    const msg = (event as Record<string, unknown>).message as
-      | { content?: unknown }
-      | undefined;
-    const resultText = msg?.content
-      ? extractToolResultText(msg.content)
-      : "";
+    const msg = (event as Record<string, unknown>).message as { content?: unknown } | undefined;
+    const resultText = msg?.content ? extractToolResultText(msg.content) : "";
 
     // Use a dedicated messageId for the tool result so it doesn't collide
     // with the text message messageId. Tool events are linked via toolCallId.

@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 // AG-UI channel plugin entrypoint.
 //
 // Registers the bundled AG-UI channel (an HTTP/SSE endpoint that speaks the
@@ -11,26 +12,20 @@ import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { cronReportToolFactory } from "./examples/cron-report-tool.js";
+import type { registerAguiCli } from "./src/cli.js";
 // Type-only imports (erased at runtime — no eager module load) so the lazily
 // loaded runtime exports are strongly typed at their use sites.
 import type { aguiToolFactory } from "./src/client-tools.js";
-import type {
-  handleBeforeToolCall,
-  handleToolResultPersist,
-} from "./src/hooks.js";
-import type { registerAguiCli } from "./src/cli.js";
-import type { cronReportToolFactory } from "./examples/cron-report-tool.js";
+import type { handleBeforeToolCall, handleToolResultPersist } from "./src/hooks.js";
 
-type HttpHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-) => Promise<void> | void;
+type HttpHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void> | void;
 type HttpHandlerFactory = (api: OpenClawPluginApi) => HttpHandler;
 
 // Lazily load runtime pieces from the `./api.js` surface so discovery/config
 // passes never pull the HTTP handler, tool, or hook code into memory.
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T lets each call site name the artifact type it loads
 function loadApi<T>(exportName: string): T {
   return loadBundledEntryExportSync<T>(import.meta.url, {
     specifier: "./api.js",
@@ -50,9 +45,7 @@ export default defineBundledChannelEntry({
   registerFull(api: OpenClawPluginApi) {
     // Device-token + pairing route (the plugin performs its own HMAC/pairing
     // auth; auth: "plugin").
-    const createAguiHttpHandler = loadApi<HttpHandlerFactory>(
-      "createAguiHttpHandler",
-    );
+    const createAguiHttpHandler = loadApi<HttpHandlerFactory>("createAguiHttpHandler");
     api.registerHttpRoute({
       path: "/v1/ag-ui",
       auth: "plugin",
@@ -81,16 +74,13 @@ export default defineBundledChannelEntry({
 
     // Example server-side tool demonstrating A2UI operations (declared in
     // openclaw.plugin.json contracts.tools). Optional so it never blocks a turn.
-    api.registerTool(
-      loadApi<typeof cronReportToolFactory>("cronReportToolFactory"),
-      { name: "cron_report", optional: true },
-    );
+    api.registerTool(loadApi<typeof cronReportToolFactory>("cronReportToolFactory"), {
+      name: "cron_report",
+      optional: true,
+    });
 
     // Map the OpenClaw server-side tool lifecycle onto AG-UI TOOL_CALL_* events.
-    api.on(
-      "before_tool_call",
-      loadApi<typeof handleBeforeToolCall>("handleBeforeToolCall"),
-    );
+    api.on("before_tool_call", loadApi<typeof handleBeforeToolCall>("handleBeforeToolCall"));
     api.on(
       "tool_result_persist",
       loadApi<typeof handleToolResultPersist>("handleToolResultPersist"),

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { EventType } from "@ag-ui/core";
+import { describe, it, expect, beforeAll } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Skip the entire suite unless OPENCLAW_SERVER_URL is set
@@ -17,18 +17,14 @@ const approvedDeviceId = process.env.AG_UI_DEVICE_ID ?? "";
 
 function buildDeviceToken(secret: string, deviceId: string): string {
   const encodedId = Buffer.from(deviceId).toString("base64url");
-  const signature = createHmac("sha256", secret)
-    .update(deviceId)
-    .digest("hex")
-    .slice(0, 32);
+  const signature = createHmac("sha256", secret).update(deviceId).digest("hex").slice(0, 32);
   return `${encodedId}.${signature}`;
 }
 
 // Resolve the token: explicit device token > auto-generated from gateway secret + device ID
-const token = deviceToken
-  || (gatewayToken && approvedDeviceId
-    ? buildDeviceToken(gatewayToken, approvedDeviceId)
-    : "");
+const token =
+  deviceToken ||
+  (gatewayToken && approvedDeviceId ? buildDeviceToken(gatewayToken, approvedDeviceId) : "");
 
 const describeIntegration = serverUrl ? describe : describe.skip;
 
@@ -37,7 +33,7 @@ const describeIntegration = serverUrl ? describe : describe.skip;
 // ---------------------------------------------------------------------------
 
 interface SSEEvent {
-  type: string;
+  type: EventType;
   [key: string]: unknown;
 }
 
@@ -215,9 +211,7 @@ describeIntegration("ag-ui integration", () => {
       expect(types).toContain(EventType.TEXT_MESSAGE_CONTENT);
       expect(types).toContain(EventType.TEXT_MESSAGE_END);
 
-      const contentEvents = events.filter(
-        (e) => e.type === EventType.TEXT_MESSAGE_CONTENT,
-      );
+      const contentEvents = events.filter((e) => e.type === EventType.TEXT_MESSAGE_CONTENT);
       const fullText = contentEvents.map((e) => e.delta).join("");
       expect(fullText.length).toBeGreaterThan(0);
     }
@@ -258,20 +252,14 @@ describeIntegration("ag-ui integration", () => {
     const types = events.map((e) => e.type);
 
     // If tool calls were emitted, verify structure
-    const toolStarts = events.filter(
-      (e) => e.type === EventType.TOOL_CALL_START,
-    );
-    const toolEnds = events.filter(
-      (e) => e.type === EventType.TOOL_CALL_END,
-    );
+    const toolStarts = events.filter((e) => e.type === EventType.TOOL_CALL_START);
+    const toolEnds = events.filter((e) => e.type === EventType.TOOL_CALL_END);
     // Every start must have a matching end
     expect(toolStarts.length).toBe(toolEnds.length);
     for (const start of toolStarts) {
       expect(start.toolCallId).toBeDefined();
       expect(typeof start.toolCallId).toBe("string");
-      const matchingEnd = toolEnds.find(
-        (e) => e.toolCallId === start.toolCallId,
-      );
+      const matchingEnd = toolEnds.find((e) => e.toolCallId === start.toolCallId);
       expect(matchingEnd).toBeDefined();
     }
 
@@ -316,19 +304,13 @@ describeIntegration("ag-ui integration", () => {
     expect(types).toContain(EventType.RUN_FINISHED);
 
     // If the agent called the tool, verify START/ARGS/END sequence
-    const toolStarts = events.filter(
-      (e) => e.type === EventType.TOOL_CALL_START,
-    );
+    const toolStarts = events.filter((e) => e.type === EventType.TOOL_CALL_START);
     if (toolStarts.length > 0) {
-      const toolEnds = events.filter(
-        (e) => e.type === EventType.TOOL_CALL_END,
-      );
+      const toolEnds = events.filter((e) => e.type === EventType.TOOL_CALL_END);
       expect(toolStarts.length).toBe(toolEnds.length);
       for (const start of toolStarts) {
         expect(start.toolCallId).toBeDefined();
-        const matchingEnd = toolEnds.find(
-          (e) => e.toolCallId === start.toolCallId,
-        );
+        const matchingEnd = toolEnds.find((e) => e.toolCallId === start.toolCallId);
         expect(matchingEnd).toBeDefined();
       }
       // Client tools should NOT have TOOL_CALL_RESULT (no server-side result)
