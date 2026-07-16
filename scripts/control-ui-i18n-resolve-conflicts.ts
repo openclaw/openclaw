@@ -214,7 +214,8 @@ function main(): void {
     resolveGeneratedConflict(root, filePath);
   }
 
-  runPnpm(root, ["ui:i18n:baseline"]);
+  // Sync first so removed English keys are pruned from generated locales before
+  // baseline validation; otherwise stale replayed locale keys block regeneration.
   runInherited(root, process.execPath, [
     "--import",
     "tsx",
@@ -222,6 +223,7 @@ function main(): void {
     "sync",
     "--write",
   ]);
+  runPnpm(root, ["ui:i18n:baseline"]);
   assertNoRecordedFallbacks(root);
   runPnpm(root, ["ui:i18n:check"]);
   runInherited(root, "git", [
@@ -232,8 +234,7 @@ function main(): void {
     "ui/src/i18n/.i18n/raw-copy-baseline.json",
     ":(glob)ui/src/i18n/.i18n/*.meta.json",
     ":(glob)ui/src/i18n/.i18n/*.tm.jsonl",
-    ":(glob)ui/src/i18n/locales/*.ts",
-    ":(exclude)ui/src/i18n/locales/en.ts",
+    ...GENERATED_LOCALE_PATHS,
   ]);
 
   const remaining = listUnmerged(root);
