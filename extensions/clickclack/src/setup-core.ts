@@ -11,7 +11,6 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
 import { resolveClickClackAccountConfig } from "./accounts.js";
-import { claimClickClackSetupCode, ClickClackSetupCodeClaimError } from "./setup-claim.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "clickclack" as const;
@@ -111,13 +110,14 @@ export function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: 
 }
 
 function formatClickClackSetupCodeClaimError(error: unknown): Error {
-  if (error instanceof ClickClackSetupCodeClaimError) {
-    if (error.status === 404) {
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    if (status === 404) {
       return new Error(
         "ClickClack setup code is invalid, expired, or already used. Generate a new code and try again.",
       );
     }
-    if (error.status === 429) {
+    if (status === 429) {
       return new Error("Too many ClickClack setup code attempts. Wait and try again.");
     }
   }
@@ -254,6 +254,7 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
     });
     let claim;
     try {
+      const { claimClickClackSetupCode } = await import("./setup-claim.js");
       claim = await claimClickClackSetupCode(setup);
     } catch (error) {
       throw formatClickClackSetupCodeClaimError(error);
