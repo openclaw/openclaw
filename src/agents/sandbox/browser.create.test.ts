@@ -772,6 +772,48 @@ describe("ensureSandboxBrowser create args", () => {
     );
   });
 
+  it("keeps a stalled CDP request inside the browser startup deadline", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    let requestTimeoutMs: number | undefined;
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          requestTimeoutMs = setTimeoutSpy.mock.calls.at(-1)?.[1];
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("expected a CDP request abort signal"));
+            return;
+          }
+          observedSignal = signal;
+          signal.addEventListener("abort", () => reject(new Error("CDP request aborted")), {
+            once: true,
+          });
+        }),
+    );
+    bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+      await params.onEnsureAttachTarget?.({});
+      throw new Error("expected CDP startup to time out before bridge creation");
+    });
+
+    const cfg = buildConfig(false);
+    cfg.browser.autoStartTimeoutMs = 25;
+
+    await expect(
+      ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      }),
+    ).rejects.toThrow("hung container has been forcefully removed");
+
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal?.aborted).toBe(true);
+    expect(requestTimeoutMs).toBeGreaterThanOrEqual(1);
+    expect(requestTimeoutMs).toBeLessThanOrEqual(cfg.browser.autoStartTimeoutMs);
+  });
+
   it("requires auth for the sandbox CDP relay without auto-derived source ranges", async () => {
     await ensureTestSandboxBrowser({
       scopeKey: "session:test",
