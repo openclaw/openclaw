@@ -312,6 +312,43 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+  it("times out when an OpenRouter catalog response body stalls after headers", async () => {
+    await withOpenRouterStateDir(async () => {
+      vi.useFakeTimers();
+      try {
+        const cancel = vi.fn(async () => undefined);
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"data":['));
+            // Leave the stream open so the idle timer is the only exit.
+          },
+          cancel,
+        });
+        const fetchSpy = vi.fn(
+          async () =>
+            new Response(stream, {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchSpy);
+
+        const module = await importOpenRouterModelCapabilities("stalled-catalog-body");
+        const loadPromise = module.loadOpenRouterModelCapabilities("acme/missing-model");
+        // Catalog failures are swallowed by doFetch; advance past the idle bound
+        // and assert the load settles without caching a poisoned entry.
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(loadPromise).resolves.toBeUndefined();
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("bounds an oversized streamed OpenRouter catalog instead of buffering it whole", async () => {
     await withOpenRouterStateDir(async () => {
       // First pull emits a chunk larger than the cap; a well-behaved bounded read
