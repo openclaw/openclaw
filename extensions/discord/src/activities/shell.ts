@@ -17,6 +17,7 @@ h1{font-size:18px;margin:0 0 8px;color:#f2f3f5}p{margin:0;color:#b5bac1;line-hei
 export const DISCORD_ACTIVITY_SHELL_JS = `import { DiscordSDK } from "./vendor/embedded-app-sdk.mjs";
 
 const app = document.querySelector("#app");
+const ACTIVITY_API_TIMEOUT_MS = 15_000;
 function show(message, detail) {
   app.className = "";
   app.innerHTML = "";
@@ -40,14 +41,36 @@ function proxiedDocUrl(value) {
   }
   return url.pathname + url.search;
 }
-async function readJson(response) {
-  const body = await response.json().catch(() => ({}));
+async function readJson(response, signal) {
+  let body;
+  try {
+    body = await response.json();
+  } catch (error) {
+    // A successful response needs a usable body, and an aborted error body still
+    // belongs to the request deadline. Only malformed HTTP error bodies may be empty.
+    if (response.ok || signal.aborted) {
+      throw error;
+    }
+    body = {};
+  }
   if (!response.ok) {
     const error = new Error(typeof body.error === "string" ? body.error : "request failed");
     error.status = response.status;
     throw error;
   }
   return body;
+}
+async function fetchActivityJson(input, init) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ACTIVITY_API_TIMEOUT_MS);
+  try {
+    return await readJson(
+      await fetch(input, { ...init, signal: controller.signal }),
+      controller.signal,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 async function run() {
   const match = window.location.hostname.match(/^(\\d+)\\.discordsays\\.com$/i);
@@ -65,19 +88,19 @@ async function run() {
     prompt: "none",
     scope: ["identify"],
   });
-  const auth = await readJson(await fetch("./api/token", {
+  const auth = await fetchActivityJson("./api/token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code }),
-  }));
+  });
   await sdk.commands.authenticate({ access_token: auth.access_token });
   const query = new URLSearchParams({
     custom_id: sdk.customId ?? "",
     instance_id: sdk.instanceId,
   });
-  const widget = await readJson(await fetch("./api/widget?" + query, {
+  const widget = await fetchActivityJson("./api/widget?" + query, {
     headers: { Authorization: "Bearer " + auth.session_token },
-  }));
+  });
   app.className = "widget";
   app.innerHTML = "";
   const bar = document.createElement("div");
