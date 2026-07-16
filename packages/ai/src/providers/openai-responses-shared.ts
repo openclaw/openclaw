@@ -785,9 +785,12 @@ export async function processResponsesStream<TApi extends Api>(
     if (outputIndex !== undefined) {
       const indexed = toolCallsByOutputIndex.get(outputIndex);
       if (indexed) {
-        return !identitiesConflict(indexed, identity)
-          ? adoptToolCallIdentity(indexed, identity)
-          : undefined;
+        if (indexed.callId && identity.callId && indexed.callId !== identity.callId) {
+          return undefined;
+        }
+        // output_index owns routing once registered, but call_id stays stable;
+        // compatible providers may rotate item_id for the same output item.
+        return adoptToolCallIdentity(indexed, identity);
       }
       // A compatibility stream may add calls without indices, then start
       // including them. Bind only the one identity-matched (or sole) candidate.

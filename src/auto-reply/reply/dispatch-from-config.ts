@@ -172,6 +172,7 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
@@ -179,6 +180,11 @@ import {
   isUnauthorizedTextSlashCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
+import {
+  buildChannelSourceTurnId,
+  readChannelSourceTurnId,
+  setChannelSourceTurnId,
+} from "./source-turn-id.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -973,6 +979,30 @@ async function dispatchReplyFromConfigInner(
     !suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
     (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
+
+  const durableSourceTurnId =
+    readChannelSourceTurnId(ctx) ??
+    buildChannelSourceTurnId({
+      provider: resolveOriginMessageProvider({
+        originatingChannel: replyRoute.channel,
+        provider: ctx.Provider ?? ctx.Surface,
+      }),
+      accountId: replyRoute.accountId,
+      conversationId: replyRoute.to,
+      messageId:
+        normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
+    });
+  // Compute once before hooks. The prepared agent turn reuses this exact route-scoped id.
+  setChannelSourceTurnId(ctx, durableSourceTurnId);
+  if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
+    // Process-local inbound dedupe cannot see provider redelivery after restart.
+    // Drop durable duplicates before any plugin dispatch hook can repeat effects.
+    recordProcessed("skipped", { reason: "duplicate" });
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  }
 
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
