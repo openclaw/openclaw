@@ -287,9 +287,23 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
     turnStart -= 1;
   }
 
+  const tailMessage = sanitizedMessages.at(-1);
+  const endsWithTerminalAssistantText =
+    tailMessage?.role === "assistant" &&
+    Boolean(extractMessageText(tailMessage).trim()) &&
+    (!Array.isArray(tailMessage.content) ||
+      !tailMessage.content.some((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const type = (block as { type?: unknown }).type;
+        return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
+      }));
+
   // A completed sessions_send target run is already delivered to its caller.
-  // Drop only that active tail; historical inter-session decisions remain summary input.
+  // Require terminal text so compaction after tool output can still recover unfinished work.
   if (
+    endsWithTerminalAssistantText &&
     turnStart < sanitizedMessages.length &&
     turnStart > 0 &&
     isReplayUnsafeInterSessionInput(sanitizedMessages[turnStart - 1])
