@@ -19,8 +19,13 @@ let failed = 0;
 
 function assert(description: string, fn: () => boolean) {
   try {
-    if (fn()) { passed++; console.log("  ok: %s", description); }
-    else { failed++; console.log("  FAIL: %s", description); }
+    if (fn()) {
+      passed++;
+      console.log("  ok: %s", description);
+    } else {
+      failed++;
+      console.log("  FAIL: %s", description);
+    }
   } catch (err) {
     failed++;
     console.log("  FAIL: %s — %s", description, (err as Error).message);
@@ -44,7 +49,10 @@ async function closeServer(server: Server | http.Server): Promise<void> {
   server.closeAllConnections?.();
   await new Promise<void>((resolve) => {
     const t = setTimeout(resolve, 500);
-    server.close(() => { clearTimeout(t); resolve(); });
+    server.close(() => {
+      clearTimeout(t);
+      resolve();
+    });
   });
 }
 
@@ -70,17 +78,15 @@ console.log("[case 1] positive control - stalled WebSocket handshake errors with
   const port = await listenLoopback(stalledServer);
 
   const startedAt = Date.now();
-  const result = await containerCheck(
-    `http://127.0.0.1:${port}`,
-    PROBE_TIMEOUT_MS,
-    "+14259798283",
-  );
+  const result = await containerCheck(`http://127.0.0.1:${port}`, PROBE_TIMEOUT_MS, "+14259798283");
   const elapsedMs = Date.now() - startedAt;
 
   assert("returns ok:false for stalled handshake", () => result.ok === false);
-  assert("error message includes WebSocket or timeout", () =>
-    result.error != null &&
-    (result.error.includes("WebSocket") || result.error.includes("timeout")),
+  assert(
+    "error message includes WebSocket or timeout",
+    () =>
+      result.error != null &&
+      (result.error.includes("WebSocket") || result.error.includes("timeout")),
   );
   assert(
     `resolved within ~${PROBE_TIMEOUT_MS}ms (got ${elapsedMs}ms)`,
@@ -147,11 +153,7 @@ console.log("\n[case 3] valid response - containerCheck succeeds with real WebSo
   const port = await listenLoopback(httpServer);
 
   const startedAt = Date.now();
-  const result = await containerCheck(
-    `http://127.0.0.1:${port}`,
-    3000,
-    "+14259798283",
-  );
+  const result = await containerCheck(`http://127.0.0.1:${port}`, 3000, "+14259798283");
   const elapsedMs = Date.now() - startedAt;
 
   assert("returns ok:true with real WebSocket server", () => result.ok === true);
