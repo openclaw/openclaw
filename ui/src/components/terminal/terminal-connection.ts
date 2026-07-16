@@ -46,6 +46,7 @@ export type TerminalSessionInfo = {
   cwd: string;
   confined: boolean;
   attached: boolean;
+  owner?: "conn" | `agent:${string}`;
   createdAtMs: number;
 };
 

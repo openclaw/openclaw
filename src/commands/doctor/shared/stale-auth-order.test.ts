@@ -17,7 +17,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../../../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
-import { resetProviderAuthAliasMapCacheForTest } from "../../../agents/provider-auth-aliases.js";
+import { resetProviderAuthAliasMapCacheForTest } from "../../../agents/provider-auth-aliases.test-support.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -27,8 +27,8 @@ import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state
 import {
   collectStaleConfiguredAuthOrderWarnings,
   maybeRepairStaleConfiguredAuthOrders,
-  repairStaleConfiguredAuthOrders,
 } from "./stale-auth-order.js";
+import { repairStaleConfiguredAuthOrders } from "./stale-auth-order.test-support.js";
 
 const pluginMetadataMocks = vi.hoisted(() => {
   const snapshot = {

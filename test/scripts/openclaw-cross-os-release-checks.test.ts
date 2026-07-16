@@ -33,6 +33,7 @@ import {
   buildNpmGlobalInstallArgs,
   appendLatestNpmDebugLogTail,
   buildGatewayStatusArgsFromHelpText,
+  buildInstallerSmokeScript,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
@@ -56,6 +57,7 @@ import {
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
   looksLikeReleaseVersionRef,
+  managedGatewayRestartCommandTimeoutMs,
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
@@ -119,7 +121,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
     if (existsSync(filePath)) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error(`timeout waiting for ${filePath}`);
 }
@@ -130,7 +132,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -159,6 +161,42 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
     expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
     expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("bounds public installer fetches on Windows and POSIX", () => {
+    const windowsScript = buildInstallerSmokeScript({
+      installerUrl: "https://openclaw.ai/install.ps1",
+      installTarget: "2026.7.1",
+      platform: "win32",
+    });
+    const posixScript = buildInstallerSmokeScript({
+      installerUrl: "https://openclaw.ai/install.sh",
+      installTarget: "2026.7.1",
+      platform: "linux",
+    });
+
+    expect(windowsScript).toContain(
+      "curl.exe -fsSL --connect-timeout 10 --max-time 120 -o $installerPath 'https://openclaw.ai/install.ps1'",
+    );
+    expect(windowsScript).toContain("openclaw-installer-");
+    expect(windowsScript).toContain("if ($LASTEXITCODE -ne 0)");
+    expect(windowsScript).toContain(
+      "[System.IO.File]::ReadAllText($installerPath, [System.Text.Encoding]::UTF8)",
+    );
+    expect(windowsScript).toContain(
+      "Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue",
+    );
+    expect(windowsScript).not.toContain("Invoke-WebRequest");
+    expect(posixScript).toContain(
+      'installer_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer-XXXXXX")"',
+    );
+    expect(posixScript).toContain("trap 'rm -f \"$installer_path\"' EXIT");
+    expect(posixScript).toContain(
+      "curl -fsSL --connect-timeout 10 --max-time 120 -o \"$installer_path\" 'https://openclaw.ai/install.sh'",
+    );
+    expect(posixScript).toContain("bash -- \"$installer_path\" --version '2026.7.1' --no-onboard");
+    expect(posixScript).not.toContain("| bash");
+    expect(posixScript).toContain("set -euo pipefail");
   });
 
   it("bounds cross-OS fetched response bodies", async () => {
@@ -238,6 +276,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+    expect(managedGatewayRestartCommandTimeoutMs("win32")).toBeGreaterThan(
+      CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
+    );
+    expect(managedGatewayRestartCommandTimeoutMs("linux")).toBeGreaterThan(
+      CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
+    );
   });
 
   it("keeps gateway status RPC probing when help probing is unavailable", () => {
@@ -1068,13 +1112,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       socket.write(`GET ${url.pathname} HTTP/1.1\r\nHost: ${url.host}\r\n\r\n`);
       await Promise.race([
         server.close(),
-        delay(1_000).then(() => {
+        delay(1_000, undefined, { ref: false }).then(() => {
           throw new Error("close timed out");
         }),
       ]);
       await Promise.race([
         socketClosePromise,
-        delay(1_000).then(() => {
+        delay(1_000, undefined, { ref: false }).then(() => {
           throw new Error("socket close timed out");
         }),
       ]);
@@ -1704,11 +1748,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     await new Promise<void>((resolvePromise) => {
       server.close(() => resolvePromise());
     });
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    // Preserve the 500 ms close budget while detecting port release sooner.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       if (!(await canConnectToLoopbackPort(port, 100))) {
         return;
       }
-      await delay(25);
+      await delay(5);
     }
     expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
   });

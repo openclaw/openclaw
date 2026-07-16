@@ -223,6 +223,7 @@ two-party event loops that do not go through the shared inbound reply runner.
       purpose: "my-plugin.summary",
       maxTokens: 512,
       temperature: 0.2,
+      reasoning: "high",
     });
     ```
 
@@ -264,6 +265,12 @@ two-party event loops that do not go through the shared inbound reply runner.
     active session's agent and do not silently fall back to the default agent. The
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
+
+    Set `reasoning` to request a reasoning effort for the selected model. The
+    host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
+    `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
+    provider and model before dispatching the completion. `adaptive` becomes
+    `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
 
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
@@ -727,7 +734,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     | `text` | Chunking (`chunkText`, `chunkMarkdownText`, `resolveChunkMode`), control-command detection, Markdown table conversion. |
     | `reply` | Buffered-block reply dispatch, envelope formatting, effective messages/human-delay config resolution. |
     | `routing` | `buildAgentSessionKey`, `resolveAgentRoute`. |
-    | `pairing` | `buildPairingReply`, allowlist reads, pairing-request upserts. |
+    | `pairing` | `buildPairingReply`, allowlist reads/removals, pairing-request upserts, and request-derived approval entries. |
     | `media` | Remote media download/save (see below). |
     | `activity` | Record/read last channel activity. |
     | `session` | Session metadata from inbound events, last-route updates. |

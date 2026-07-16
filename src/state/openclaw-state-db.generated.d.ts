@@ -68,12 +68,18 @@ export interface AndroidNotificationRecentPackages {
   updated_at_ms: number;
 }
 
+export interface ApnsRegistrationTombstones {
+  deleted_at_ms: number;
+  node_id: string;
+}
+
 export interface ApnsRegistrations {
   distribution: string | null;
   environment: string;
   installation_id: string | null;
   node_id: string;
   relay_handle: string | null;
+  relay_origin: string | null;
   send_grant: string | null;
   token: string | null;
   token_debug_suffix: string | null;
@@ -715,6 +721,7 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
   gateway_tls: number | null;
@@ -1192,6 +1199,31 @@ export interface WorkerTranscriptCommits {
   updated_at_ms: number;
 }
 
+export interface WorkerWorkspacePendingResults {
+  claim_id: string;
+  created_at_ms: number;
+  environment_id: string;
+  gateway_instance_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  recovery_requested_at_ms: number | null;
+  run_id: string;
+  session_id: string;
+  workspace_accepted_at_ms: number | null;
+}
+
+export interface WorkerWorkspaceReconciliations {
+  base_manifest_ref: string;
+  base_pack: Uint8Array;
+  created_at_ms: number;
+  current_manifest_ref: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  plan_json: string;
+  session_id: string;
+}
+
 export interface WorkspaceSetupState {
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
@@ -1199,6 +1231,13 @@ export interface WorkspaceSetupState {
   version: number;
   workspace_key: string;
   workspace_path: string;
+}
+
+export interface WorktreeProvisionedFileChunks {
+  chunk_index: number;
+  data: Uint8Array;
+  path: string;
+  worktree_id: string;
 }
 
 export interface Worktrees {
@@ -1210,6 +1249,7 @@ export interface Worktrees {
   owner_id: string | null;
   owner_kind: string;
   path: string;
+  provisioned_paths_json: string | null;
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;
@@ -1223,6 +1263,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
+  apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
@@ -1300,6 +1341,9 @@ export interface DB {
   worker_session_placements: WorkerSessionPlacements;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
+  worker_workspace_pending_results: WorkerWorkspacePendingResults;
+  worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_setup_state: WorkspaceSetupState;
+  worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
   worktrees: Worktrees;
 }
