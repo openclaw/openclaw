@@ -17,6 +17,12 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
 import {
+  collectKnownSessionRows,
+  fetchChildSessionRows,
+  fetchSessionLineage,
+  mergeChildSessionRows,
+} from "./app-sidebar-child-session-data.ts";
+import {
   mergeCatalogSessionRows,
   mergeSessionCatalogPage,
   preserveExpandedCatalogHost,
@@ -582,39 +588,15 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     const generation = this.childSessionGeneration;
     this.loadingChildSessionKeys = new Set([...this.loadingChildSessionKeys, parentKey]);
     try {
-      const rows: GatewaySessionRow[] = [];
-      const seenOffsets = new Set<number>();
-      let offset = 0;
-      while (!seenOffsets.has(offset)) {
-        seenOffsets.add(offset);
-        const result = await sessions.list({
-          spawnedBy: parentKey,
-          ...(offset > 0 ? { offset } : {}),
-          limit: 20,
-          includeGlobal: false,
-          includeUnknown: false,
-          configuredAgentsOnly: true,
-        });
-        if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {
-          return;
-        }
-        if (!result) {
-          break;
-        }
-        const runtimeSampledAt = Date.now();
-        for (const row of result.sessions) {
-          if (!rows.some((candidate) => candidate.key === row.key)) {
-            rows.push({ ...row, runtimeSampledAt });
-          }
-        }
-        const hasMore =
-          result.hasMore ??
-          (typeof result.totalCount === "number" && rows.length < result.totalCount);
-        const nextOffset = result.nextOffset ?? rows.length;
-        if (!hasMore || nextOffset <= offset) {
-          break;
-        }
-        offset = nextOffset;
+      const isCurrent = () =>
+        generation === this.childSessionGeneration && sessions === this.context?.sessions;
+      const rows = await fetchChildSessionRows({
+        sessions,
+        parentKey,
+        isCurrent,
+      });
+      if (!rows || !isCurrent()) {
+        return;
       }
       for (const existing of this.childSessionRowsByParent[parentKey] ?? []) {
         if (!rows.some((row) => row.key === existing.key)) {
@@ -677,88 +659,30 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     const generation = this.childSessionGeneration;
     const token = Symbol(normalizedKey);
     this.activeSessionLineageRequestToken = token;
-    const lineageRowsByParent: Record<string, GatewaySessionRow[]> = {};
-    const knownRows = new Map<string, GatewaySessionRow>();
-    for (const row of this.sessionsResult?.sessions ?? []) {
-      knownRows.set(row.key, row);
-    }
-    for (const rows of Object.values(this.childSessionRowsByParent)) {
-      for (const row of rows) {
-        knownRows.set(row.key, row);
-      }
-    }
-
-    let currentKey = normalizedKey;
-    let topmostRow: GatewaySessionRow | null = null;
-    let lookupFailed = false;
-    const visited = new Set<string>();
-    try {
-      // Session ancestry is untrusted persisted state. Bound traversal so a
-      // malformed cycle cannot leave direct child routes spinning forever.
-      for (let depth = 0; depth < 16 && !visited.has(currentKey); depth += 1) {
-        visited.add(currentKey);
-        let row = knownRows.get(currentKey);
-        if (!row) {
-          const described = await client.request<{ session?: GatewaySessionRow | null }>(
-            "sessions.describe",
-            { key: currentKey },
-          );
-          if (
-            generation !== this.childSessionGeneration ||
-            token !== this.activeSessionLineageRequestToken ||
-            gateway !== this.context?.gateway ||
-            client !== gateway.snapshot.client
-          ) {
-            return;
-          }
-          row = described?.session
-            ? { ...described.session, runtimeSampledAt: Date.now() }
-            : undefined;
-          if (!row) {
-            break;
-          }
-          knownRows.set(row.key, row);
-        }
-        topmostRow = row;
-
-        const parentKey = (row.spawnedBy ?? row.parentSessionKey)?.trim();
-        if (!parentKey) {
-          break;
-        }
-        const siblings = lineageRowsByParent[parentKey] ?? [];
-        lineageRowsByParent[parentKey] = [
-          ...siblings.filter((candidate) => candidate.key !== row.key),
-          row,
-        ];
-        currentKey = parentKey;
-      }
-    } catch {
-      lookupFailed = true;
-    }
-
-    if (
-      generation !== this.childSessionGeneration ||
-      token !== this.activeSessionLineageRequestToken ||
-      gateway !== this.context?.gateway ||
-      client !== gateway.snapshot.client
-    ) {
+    const isCurrent = () =>
+      generation === this.childSessionGeneration &&
+      token === this.activeSessionLineageRequestToken &&
+      gateway === this.context?.gateway &&
+      client === gateway.snapshot.client;
+    const lineage = await fetchSessionLineage({
+      client,
+      sessionKey: normalizedKey,
+      knownRows: collectKnownSessionRows(
+        this.sessionsResult?.sessions ?? [],
+        this.childSessionRowsByParent,
+      ),
+      isCurrent,
+    });
+    if (!lineage || !isCurrent()) {
       return;
     }
-    const mergedRowsByParent = { ...this.childSessionRowsByParent };
-    for (const [parentKey, lineageRows] of Object.entries(lineageRowsByParent)) {
-      const mergedRows = [...(mergedRowsByParent[parentKey] ?? [])];
-      for (const row of lineageRows) {
-        const index = mergedRows.findIndex((candidate) => candidate.key === row.key);
-        if (index === -1) {
-          mergedRows.push(row);
-        }
-      }
-      mergedRowsByParent[parentKey] = mergedRows;
-    }
-    this.childSessionRowsByParent = mergedRowsByParent;
-    this.activeSessionLineageRoot = topmostRow;
+    this.childSessionRowsByParent = mergeChildSessionRows(
+      this.childSessionRowsByParent,
+      lineage.rowsByParent,
+    );
+    this.activeSessionLineageRoot = lineage.topmostRow;
     this.activeSessionLineageRequestToken = null;
-    if (lookupFailed) {
+    if (lineage.lookupFailed) {
       this.activeSessionLineageRetryTimer = globalThis.setTimeout(() => {
         this.activeSessionLineageRetryTimer = null;
         if (this.activeSessionLineageRouteKey === normalizedKey) {
