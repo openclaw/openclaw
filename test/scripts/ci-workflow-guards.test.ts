@@ -380,6 +380,15 @@ function readWorkflow(path: string) {
   return parse(readFileSync(path, "utf8"));
 }
 
+const PULL_REQUEST_EDIT_FIELDS = ["title", "body", "base"] as const;
+
+function readPullRequestEditFields(condition: unknown) {
+  const expression = typeof condition === "string" ? condition : "";
+  return PULL_REQUEST_EDIT_FIELDS.filter((field) =>
+    expression.includes(`github.event.changes.${field}`),
+  );
+}
+
 function readTrackedText(relativePath: string): string {
   if (existsSync(relativePath)) {
     return readFileSync(relativePath, "utf8");
@@ -675,38 +684,42 @@ describe("ci workflow guards", () => {
     const labeler = readWorkflow(".github/workflows/labeler.yml");
     const realBehaviorProof = readWorkflow(".github/workflows/real-behavior-proof.yml");
 
-    expect(autoResponse.on.pull_request_target.types).toContain("edited");
-    expect(autoResponse.jobs["auto-response"].if).toContain("github.event.changes.title");
-    expect(autoResponse.jobs["auto-response"].if).toContain("github.event.changes.body");
-    expect(autoResponse.jobs["auto-response"].if).toContain("github.event.changes.base");
+    for (const workflow of [autoResponse, clawsweeperDispatch, labeler, realBehaviorProof]) {
+      expect(workflow.on.pull_request_target.types).toContain("edited");
+    }
 
-    expect(clawsweeperDispatch.on.pull_request_target.types).toContain("edited");
-    expect(clawsweeperDispatch.jobs.dispatch.if).toContain("github.event.changes.title");
-    expect(clawsweeperDispatch.jobs.dispatch.if).toContain("github.event.changes.body");
-    expect(clawsweeperDispatch.jobs.dispatch.if).toContain("github.event.changes.base");
-
-    expect(realBehaviorProof.on.pull_request_target.types).toContain("edited");
-    expect(realBehaviorProof.jobs["real-behavior-proof"].if).toContain("github.event.changes.body");
-    expect(realBehaviorProof.jobs["real-behavior-proof"].if).toContain("github.event.changes.base");
-    expect(realBehaviorProof.jobs["real-behavior-proof"].if).not.toContain(
-      "github.event.changes.title",
-    );
-
-    expect(labeler.on.pull_request_target.types).toContain("edited");
-    expect(labeler.jobs.label.if).toContain("github.event.changes.title");
-    expect(labeler.jobs.label.if).toContain("github.event.changes.base");
-    expect(labeler.jobs.label.if).not.toContain("github.event.changes.body");
+    expect({
+      autoResponse: readPullRequestEditFields(autoResponse.jobs["auto-response"].if),
+      clawsweeperDispatch: readPullRequestEditFields(clawsweeperDispatch.jobs.dispatch.if),
+      labeler: readPullRequestEditFields(labeler.jobs.label.if),
+      realBehaviorProof: readPullRequestEditFields(
+        realBehaviorProof.jobs["real-behavior-proof"].if,
+      ),
+    }).toEqual({
+      autoResponse: [],
+      clawsweeperDispatch: [],
+      labeler: ["title", "base"],
+      realBehaviorProof: ["body", "base"],
+    });
 
     const labelerSteps = labeler.jobs.label.steps;
-    expect(labelerSteps.find((step) => step.uses?.startsWith("actions/labeler@"))?.if).toBe(
-      "${{ github.event.action != 'edited' || github.event.changes.base }}",
-    );
-    expect(labelerSteps.find((step) => step.name === "Apply PR size label")?.if).toBe(
-      "${{ github.event.action != 'edited' || github.event.changes.base }}",
-    );
-    expect(labelerSteps.find((step) => step.name === "Apply beta-blocker title label")?.if).toBe(
-      "${{ github.event.action != 'edited' || github.event.changes.title }}",
-    );
+    const changedFieldsForStep = (matcher: (step: WorkflowStep) => boolean) =>
+      readPullRequestEditFields(labelerSteps.find(matcher)?.if);
+    expect({
+      pathLabels: changedFieldsForStep((step) => step.uses?.startsWith("actions/labeler@")),
+      size: changedFieldsForStep((step) => step.name === "Apply PR size label"),
+      contributor: changedFieldsForStep(
+        (step) => step.name === "Apply maintainer or trusted-contributor label",
+      ),
+      betaBlocker: changedFieldsForStep((step) => step.name === "Apply beta-blocker title label"),
+      activePrLimit: changedFieldsForStep((step) => step.name === "Apply too-many-prs label"),
+    }).toEqual({
+      pathLabels: ["base"],
+      size: ["base"],
+      contributor: [],
+      betaBlocker: ["title"],
+      activePrLimit: [],
+    });
   });
 
   it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
