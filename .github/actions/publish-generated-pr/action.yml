@@ -367,18 +367,26 @@ runs:
             >> "${GITHUB_STEP_SUMMARY}"
         }
         disable_existing_auto_merge() {
-          local auto_merge_enabled current_pr_head current_pr_record current_pr_url
+          local attempt auto_merge_enabled current_pr_head current_pr_record current_pr_url
           local existing_pr_head existing_pr_record existing_pr_url fetched_head
           local expected_head="$1"
-          existing_pr_record="$(find_open_pr)"
-          existing_pr_url="${existing_pr_record%%$'\t'*}"
-          if [[ -z "${existing_pr_url}" ]]; then
-            return 0
-          fi
-          existing_pr_head="${existing_pr_record#*$'\t'}"
-          if [[ "${existing_pr_head}" != "${expected_head}" ]]; then
-            return 0
-          fi
+          for attempt in 1 2 3; do
+            existing_pr_record="$(find_open_pr)"
+            existing_pr_url="${existing_pr_record%%$'\t'*}"
+            if [[ -z "${existing_pr_url}" ]]; then
+              return 0
+            fi
+            existing_pr_head="${existing_pr_record#*$'\t'}"
+            if [[ "${existing_pr_head}" = "${expected_head}" ]]; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::error::Generated pull request head did not converge before publication."
+              return 1
+            fi
+            echo "::notice::Generated pull request head has not converged yet; rechecking."
+            sleep "${attempt}"
+          done
           auto_merge_enabled="$(
             timeout --signal=TERM --kill-after=10s 60s \
               gh pr view "${existing_pr_url}" --repo "${GITHUB_REPOSITORY}" \

@@ -1376,6 +1376,25 @@ describe("ci workflow guards", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "waits for a stale pull request head before clearing inherited auto-merge",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: false,
+        existingAutoMerge: true,
+        existingPr: true,
+        stalePrHeadOnce: true,
+      });
+      const mergeCalls = result.mergeCalls.trim().split("\n");
+
+      expect(mergeCalls).toHaveLength(1);
+      expect(mergeCalls[0]).toContain("--disable-auto");
+      expect(result.publishOutput).toContain(
+        "Generated pull request head has not converged yet; rechecking",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "leaves the stale previous head disabled when generated publication fails",
     () => {
       const result = runGeneratedPublisherScenario(null, {
