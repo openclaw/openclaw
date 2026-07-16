@@ -2046,19 +2046,58 @@ describe("short read resilience", () => {
     storePath = nextStorePath;
   });
 
-  function installShortReadProxy(maxPerCall = 16) {
+  function installAsyncShortReadProxy(maxPerCall = 16) {
     const realOpen = fs.promises.open.bind(fs.promises);
-    return vi.spyOn(fs.promises, "open").mockImplementation(async (...args: unknown[]) => {
+    let shortReadCalls = 0;
+    vi.spyOn(fs.promises, "open").mockImplementation(async (...args: unknown[]) => {
       const handle = await realOpen(...(args as Parameters<typeof realOpen>));
       const realRead = handle.read.bind(handle);
       return new Proxy(handle, {
         get(target, prop, receiver) {
-          if (prop !== "read") return Reflect.get(target, prop, receiver);
-          return (buf: Buffer, offset: number, length: number, position: number | null) =>
-            realRead(buf, offset, Math.min(length, maxPerCall), position);
+          if (prop !== "read") {
+            return Reflect.get(target, prop, receiver);
+          }
+          return (buf: Buffer, offset: number, length: number, position: number | null) => {
+            const cappedLength = position !== null && position > 0 ? maxPerCall : length;
+            if (cappedLength < length) {
+              shortReadCalls += 1;
+            }
+            return realRead(buf, offset, Math.min(length, cappedLength), position);
+          };
         },
       });
     });
+    return () => shortReadCalls;
+  }
+
+  function installSyncShortReadProxy(maxPerCall = 16) {
+    const realReadSync = fs.readSync.bind(fs);
+    let shortReadCalls = 0;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ) => {
+      const cappedLength = typeof position === "number" && position > 0 ? maxPerCall : length;
+      if (cappedLength < length) {
+        shortReadCalls += 1;
+      }
+      return realReadSync(fd, buffer, offset, Math.min(length, cappedLength), position);
+    }) as typeof fs.readSync);
+    return { readSpy, getShortReadCalls: () => shortReadCalls };
+  }
+
+  function buildLargeTitleTranscript(sessionId: string) {
+    return [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "head title" } },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        message: { role: "assistant", content: `filler ${index} ${"x".repeat(512)}` },
+      })),
+      { message: { role: "assistant", content: "tail preview" } },
+    ];
   }
 
   test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () => {
@@ -2068,23 +2107,24 @@ describe("short read resilience", () => {
       ...Array.from({ length: 30 }, (_, i) => ({
         message: {
           role: i % 2 ? "assistant" : "user",
-          content: `message ${i}: ${"data ".repeat(40)}`,
+          content: `message ${i}: ${"data ".repeat(80)}`,
         },
       })),
     ];
     writeTranscript(tmpDir, sessionId, lines);
 
-    installShortReadProxy(16);
+    const expected = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 20,
+      maxBytes: 8192,
+    });
+    const getShortReadCalls = installAsyncShortReadProxy(16);
     try {
-      const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      const actual = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
         maxMessages: 20,
         maxBytes: 8192,
       });
-      expect(result.length).toBeGreaterThanOrEqual(5);
-      for (const msg of result) {
-        const content = (msg as Record<string, unknown>).content as string;
-        expect(content).toBeTruthy();
-      }
+      expect(actual).toEqual(expected);
+      expect(getShortReadCalls()).toBeGreaterThan(1);
     } finally {
       vi.restoreAllMocks();
     }
@@ -2108,15 +2148,50 @@ describe("short read resilience", () => {
       maxBytes: 4096,
     });
 
-    installShortReadProxy(64);
+    const getShortReadCalls = installAsyncShortReadProxy(64);
     try {
       const short = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
         maxMessages: 20,
         maxBytes: 4096,
       });
-      expect(Math.abs(short.length - normal.length)).toBeLessThanOrEqual(1);
+      expect(short).toEqual(normal);
+      expect(getShortReadCalls()).toBeGreaterThan(1);
     } finally {
       vi.restoreAllMocks();
+    }
+  });
+
+  test("reads async title fields across short positional tail reads", async () => {
+    const sessionId = "test-short-read-title-async";
+    writeTranscript(tmpDir, sessionId, buildLargeTitleTranscript(sessionId));
+
+    const getShortReadCalls = installAsyncShortReadProxy(16);
+    try {
+      await expect(
+        readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
+      ).resolves.toEqual({
+        firstUserMessage: "head title",
+        lastMessagePreview: "tail preview",
+      });
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("reads sync title fields across short positional tail reads", () => {
+    const sessionId = "test-short-read-title-sync";
+    writeTranscript(tmpDir, sessionId, buildLargeTitleTranscript(sessionId));
+
+    const { readSpy, getShortReadCalls } = installSyncShortReadProxy(16);
+    try {
+      expect(readSessionTitleFieldsFromTranscript(sessionId, storePath)).toEqual({
+        firstUserMessage: "head title",
+        lastMessagePreview: "tail preview",
+      });
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      readSpy.mockRestore();
     }
   });
 });
