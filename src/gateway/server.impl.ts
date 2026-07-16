@@ -690,6 +690,7 @@ export async function startGatewayServer(
             "token",
             "password",
             "allowTailscale",
+            "requireTailscaleSharedSecret",
             "rateLimit",
             "trustedProxy",
           ] as const satisfies readonly (keyof GatewayAuthConfig)[]

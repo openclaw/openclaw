@@ -285,21 +285,12 @@ export function registerAuthModesSuite(): void {
 
     test("requires the shared token when layered tailscale auth is enabled", async () => {
       await server.close();
-      const { replaceConfigFile } = await import("../config/config.js");
-      await replaceConfigFile({
-        nextConfig: {
-          gateway: {
-            auth: {
-              mode: "token",
-              token: "secret",
-              allowTailscale: true,
-              requireTailscaleSharedSecret: true,
-            },
-            controlUi: testState.gatewayControlUi,
-          },
-        },
-        afterWrite: { mode: "auto" },
-      });
+      testState.gatewayAuth = {
+        mode: "token",
+        token: "secret",
+        allowTailscale: true,
+        requireTailscaleSharedSecret: true,
+      };
       port = await getFreePort();
       server = await startGatewayServer(port);
 
