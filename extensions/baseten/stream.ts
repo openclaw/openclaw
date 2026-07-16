@@ -46,9 +46,10 @@ export function createBasetenThinkingWrapper(
     if (model.provider !== "baseten" || model.api !== "openai-completions") {
       return;
     }
-    const thinkingEnabled = isThinkingEnabled(ctx.thinkingLevel);
     if (isBasetenDeepSeekV4ModelId(model.id)) {
-      patchBasetenDeepSeekV4Replay(payload, thinkingEnabled);
+      // DeepSeek reasoning defaults on when no level is supplied. Only an
+      // explicit `off` may remove its required replay metadata.
+      patchBasetenDeepSeekV4Replay(payload, ctx.thinkingLevel !== "off");
     }
     if (!usesBasetenChatTemplateThinking(model.id)) {
       return;
@@ -61,7 +62,7 @@ export function createBasetenThinkingWrapper(
         : {};
     payload.chat_template_args = {
       ...existing,
-      enable_thinking: thinkingEnabled,
+      enable_thinking: isThinkingEnabled(ctx.thinkingLevel),
     };
   });
 }

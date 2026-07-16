@@ -61,7 +61,7 @@ function captureThinkingPayload(modelId: string, thinkingLevel: "off" | "high" |
   return captured;
 }
 
-function captureDeepSeekReplayPayload(thinkingLevel: "off" | "high") {
+function captureDeepSeekReplayPayload(thinkingLevel: "off" | "high" | undefined) {
   let captured: Record<string, unknown> | undefined;
   const streamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]> = (
     model,
@@ -69,7 +69,9 @@ function captureDeepSeekReplayPayload(thinkingLevel: "off" | "high") {
     options,
   ) => {
     const payload: Record<string, unknown> = {
-      reasoning_effort: thinkingLevel === "off" ? "none" : "high",
+      ...(thinkingLevel === undefined
+        ? {}
+        : { reasoning_effort: thinkingLevel === "off" ? "none" : "high" }),
       messages: [
         {
           role: "assistant",
@@ -201,6 +203,23 @@ describe("Baseten provider registration", () => {
   });
 
   it("normalizes DeepSeek V4 replay while preserving Baseten reasoning effort", () => {
+    expect(captureDeepSeekReplayPayload(undefined)).toEqual({
+      messages: [
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "read", arguments: "{}" },
+            },
+          ],
+          reasoning_content: "",
+        },
+        { role: "assistant", content: "done", reasoning_content: "preserve me" },
+        { role: "tool", tool_call_id: "call_1", content: "ok" },
+      ],
+    });
     expect(captureDeepSeekReplayPayload("high")).toEqual({
       reasoning_effort: "high",
       messages: [
