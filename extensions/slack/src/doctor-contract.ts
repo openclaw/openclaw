@@ -196,13 +196,13 @@ export function normalizeCompatibilityConfig({
       if (!account) {
         continue;
       }
-      const normalizedThreadPolicy = normalizeSlackThreadMentionPolicy({
+      const normalizedAccountThreadPolicy = normalizeSlackThreadMentionPolicy({
         value: account,
         pathPrefix: `channels.slack.accounts.${accountId}`,
         changes,
       });
-      if (normalizedThreadPolicy.changed) {
-        account = normalizedThreadPolicy.value;
+      if (normalizedAccountThreadPolicy.changed) {
+        account = normalizedAccountThreadPolicy.value;
         nextAccounts[accountId] = account;
         accountsChanged = true;
       }

@@ -67,14 +67,6 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: 
   return call;
 }
 
-function mockCallArg(
-  mock: { mock: { calls: unknown[][] } },
-  index: number,
-  label: string,
-): unknown {
-  return mockCall(mock, index, label)[0];
-}
-
 describe("resolveMattermostReplyRootId with block streaming payloads", () => {
   it("uses threadRootId for block-streamed payloads with replyToId", () => {
     // When block streaming sends a payload with replyToId from the threading
