@@ -214,6 +214,10 @@ function createContext(controlUiBasePath?: string) {
   return {
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
+    approvalEvents: {
+      publishRequested: vi.fn(() => 0),
+      publishResolved: vi.fn(),
+    },
     getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),
     getRuntimeConfig: () => ({ gateway: { controlUi: { basePath: controlUiBasePath } } }),
     logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
@@ -826,6 +830,7 @@ describe("unified approval handlers", () => {
     });
     const context = createContext();
     const handlePluginApprovalResolved = vi.fn(async () => {});
+    const handlePluginIosPushResolved = vi.fn(async () => {});
     const forwarder = {
       handleRequested: vi.fn(async () => false),
       handleResolved: vi.fn(async () => {}),
@@ -837,6 +842,7 @@ describe("unified approval handlers", () => {
       execApprovalManager: managers.exec,
       pluginApprovalManager: managers.plugin,
       forwarder,
+      pluginIosPushDelivery: { handleResolved: handlePluginIosPushResolved },
       databaseOptions,
     });
 
@@ -874,11 +880,23 @@ describe("unified approval handlers", () => {
       new Set(["approval-client"]),
       { dropIfSlow: true },
     );
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "plugin",
+      expect.objectContaining({
+        id: pending.record.id,
+        decision: "deny",
+        resolvedBy: "Approval Test",
+      }),
+    );
     expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
       kind: "device",
       id: "phone-device",
     });
     expect(handlePluginApprovalResolved).toHaveBeenCalledTimes(1);
+    expect(handlePluginIosPushResolved).toHaveBeenCalledTimes(1);
+    expect(handlePluginIosPushResolved).toHaveBeenCalledWith(
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
+    );
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
@@ -965,6 +983,10 @@ describe("unified approval handlers", () => {
     );
     expect(context.logGateway.error).toHaveBeenCalledWith(
       expect.stringContaining("exec approvals: unified resolve forwarder failed"),
+    );
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "exec",
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
     );
   });
 

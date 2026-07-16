@@ -397,7 +397,11 @@ The branch already has a real shared SQLite base:
   tables are rebuilt under their canonical names.
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
-  `subagents/runs.json` file is doctor migration input only.
+  `subagents/runs.json` file is Doctor cleanup input only. Its run entries are
+  transient recovery state, so Doctor records the retirement receipt and
+  discards the file without importing it. Because a file cannot prove whether
+  its entries are live or stale after SQLite rows have been pruned, operators
+  must let file-era active runs settle before upgrading across this boundary.
 - Current conversation bindings now live in typed shared
   `current_conversation_bindings` rows keyed by normalized conversation id, with
   target agent/session columns, conversation kind, status, expiry, and metadata
@@ -416,6 +420,10 @@ The branch already has a real shared SQLite base:
   excludes heartbeat sessions. `openclaw doctor --fix` strictly validates the
   old TUI JSON file, keeps newer SQLite rows, verifies the canonical result,
   and removes the unchanged legacy file instead of leaving an archive.
+- Discord command deployment hashes now live in the shared plugin-state SQLite
+  store. Runtime reads and writes exact application-scoped keys only. Doctor
+  deletes the rebuildable legacy `discord/command-deploy-cache.json` file
+  without importing it, so the next startup performs one canonical reconcile.
 - Default TTS prefs now live in shared plugin-state SQLite rows keyed under the
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
   input only; runtime no longer reads or writes TTS prefs JSON files, and the
@@ -510,13 +518,20 @@ The branch already has a real shared SQLite base:
 - Web push, APNs, Voice Wake, update checks, and config health now use typed shared SQLite
   tables for subscriptions, VAPID keys, node registrations, trigger rows,
   routing rows, update-notification state, and config health entries instead of
-  whole opaque JSON blobs. Web push and APNs snapshot writes now reconcile
-  subscriptions/registrations by primary key instead of clearing their tables;
-  config health does the same by config path.
-  Their runtime modules keep SQLite snapshot readers/writers separate from
-  doctor-only legacy JSON import helpers.
-- Node-host config now uses a typed singleton row in the shared SQLite database;
-  doctor imports the old `node.json` file before normal runtime use.
+  whole opaque JSON blobs. Web Push and APNs writes upsert only the affected
+  primary-key row; config health reconciles by config path. Their runtime
+  modules remain separate from Doctor-only legacy JSON import helpers.
+- APNs runtime reads and writes only `apns_registrations`. Explicit
+  `openclaw doctor --fix` strictly imports the retired
+  `push/apns-registrations.json`, preserves existing canonical rows, verifies
+  the transaction, records a receipt, and removes the secret-bearing JSON.
+  Receipt-backed retries perform cleanup only, while
+  `apns_registration_tombstones` cover invalidations before first repair, so
+  stale relay grants or device tokens cannot resurrect.
+- Node-host config now uses a typed singleton row in the shared SQLite database.
+  Runtime fails closed while the old `node.json` file or an interrupted claim
+  remains; explicit `openclaw doctor --fix` strictly imports and removes it
+  before normal runtime use.
 - Device/node pairing, channel pairing, channel allowlists, and bootstrap state
   now use typed SQLite rows instead of whole opaque JSON blobs. Plugin binding
   approvals and cron job state follow the same split: runtime modules expose
@@ -1099,6 +1114,16 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the complete legacy `commitments.json`, keeps newer SQLite rows, verifies the
   result, and only then removes the unchanged source. Runtime never reads or
   writes the retired file.
+- Web Push subscriptions and the generated VAPID identity now use typed shared
+  `web_push_subscriptions` and `web_push_vapid_keys` rows. Runtime registration,
+  expiry cleanup, and first-use key generation use row-level SQLite
+  transactions. Explicit Doctor repair validates both retired JSON stores,
+  claims them before the SQLite write, imports them atomically, rejects
+  conflicting VAPID identities, verifies the result, and only then removes the
+  claims. Doctor holds the state-directory maintenance lock for the complete
+  import so an older Gateway cannot recreate the retired files. Registration,
+  delivery, deletion, and key resolution fail closed until Doctor resolves
+  pending legacy sources or interrupted claims.
 - Cron job definitions, schedule state, and run history no longer have runtime
   JSON writers or readers. Runtime uses `cron_jobs` rows with typed schedule,
   payload, delivery, failure-alert, session, status, and runtime-state columns plus
@@ -1121,8 +1146,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   without rewriting replay JSON. The full JSON payload remains only as the
   replay/debug blob for message bodies and other cold replay data.
 - Managed outgoing image records now use typed shared
-  `managed_outgoing_image_records` rows with media bytes still stored in
-  `media_blobs`. The JSON record remains only as a replay/debug copy.
+  `managed_outgoing_image_records` rows. Runtime reads typed columns only; the
+  JSON column is a replay/debug copy. Original image bytes remain named
+  attachment artifacts in the managed media directory.
 - Discord model-picker preferences, command-deploy hashes, and thread bindings
   now use shared SQLite plugin state. Their legacy JSON import plans live in the
   Discord plugin setup/doctor migration surface, not in core migration code.
@@ -1183,10 +1209,12 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   files. Install, doctor, update, and release smoke paths use generated
   completion output or profile sourcing instead of durable completion cache
   files.
-- Gateway skill-upload staging now uses shared `skill_uploads` rows. Upload
-  metadata, idempotency keys, and archive bytes live in SQLite; the installer
-  only receives a temporary materialized archive path while an install is
-  running.
+- Gateway skill-upload staging now uses shared `skill_uploads` and
+  `skill_upload_chunks` rows. Chunks stay individually transactional during
+  upload, then commit assembles one verified archive BLOB and removes the chunk
+  rows. The installer only receives a temporary materialized archive path while
+  an install is running. Doctor discards the retired one-hour filesystem
+  staging tree instead of importing transient uploads.
 - Subagent inline attachments no longer materialize under workspace
   `.openclaw/attachments/*`. The spawn path prepares SQLite VFS seed entries,
   inline runs seed those entries into the per-agent runtime scratch namespace,
@@ -1348,8 +1376,11 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   OpenClaw temp root. They are recreated as needed and are not backup or
   migration inputs.
 - Subagent run registry persistence uses typed shared `subagent_runs` rows. The
-  old `subagents/runs.json` path is now only a doctor migration input, and
-  runtime helper names no longer describe the state layer as disk-backed.
+  old `subagents/runs.json` path is now only a Doctor cleanup input. Doctor
+  claims it under the state maintenance lock, records the discard decision in
+  SQLite, and removes it without importing transient run state. No runtime JSON
+  reader, writer, cache, or fallback remains; cross-version recovery of file-only
+  in-flight runs is intentionally unsupported at this retirement boundary.
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
@@ -1461,10 +1492,12 @@ plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, ex
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
 skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
+skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
 web_push_vapid_keys(key_id, public_key, private_key, subject, updated_at_ms)
-apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, topic, environment, distribution, token_debug_suffix, updated_at_ms)
-node_host_config(config_key, version, node_id, token, display_name, gateway_host, gateway_port, gateway_tls, gateway_tls_fingerprint, updated_at_ms)
+apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, relay_origin, topic, environment, distribution, token_debug_suffix, updated_at_ms)
+apns_registration_tombstones(node_id, deleted_at_ms)
+node_host_config(config_key, version, node_id, token, display_name, gateway_host, gateway_port, gateway_tls, gateway_tls_fingerprint, gateway_context_path, updated_at_ms)
 device_identities(identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms)
 device_auth_tokens(device_id, role, token, scopes_json, updated_at_ms)
 macos_port_guardian_records(pid, port, command, mode, timestamp)
@@ -1472,7 +1505,7 @@ workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_a
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
 model_capability_cache(provider_id, model_id, name, input_text, input_image, reasoning, supports_tools, context_window, max_tokens, cost_input, cost_output, cost_cache_read, cost_cache_write, updated_at_ms)
 agent_model_catalogs(catalog_key, agent_dir, raw_json, updated_at)
-managed_outgoing_image_records(attachment_id, session_key, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json)
+managed_outgoing_image_records(attachment_id, session_key, agent_id, message_id, created_at, updated_at, retention_class, alt, original_media_id, original_media_subdir, original_content_type, original_width, original_height, original_size_bytes, original_filename, record_json, cleanup_pending)
 gateway_restart_sentinel(sentinel_key, version, kind, status, ts, session_key, thread_id, delivery_channel, delivery_to, delivery_account_id, message, continuation_json, doctor_hint, stats_json, payload_json, updated_at_ms)
 channel_pairing_requests(channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json)
 channel_pairing_allow_entries(channel_key, account_id, entry, sort_order, updated_at)
@@ -2173,9 +2206,9 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into paired device records at gateway startup)
 - `identity/device.json`
 - `identity/device-auth.json`
-- `push/web-push-subscriptions.json`
-- `push/vapid-keys.json`
-- `push/apns-registrations.json`
+- `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
+- `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
+- `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)
 - `process-leases.json`
 - `gateway-instance-id`
 - `session-toggles.json`

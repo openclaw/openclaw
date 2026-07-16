@@ -214,7 +214,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -298,6 +298,34 @@ describe("Parallels smoke model selection", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("run-tests --app-option");
+  });
+
+  it("bounds Windows prerequisite metadata downloads", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"; curl() { printf "%s\\n" "$@"; }; fetch_host_metadata "https://example.test/metadata"',
+        "bash",
+        WINDOWS_PREPARE_WRAPPER,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "-fsSL",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "120",
+      "--retry",
+      "2",
+      "https://example.test/metadata",
+    ]);
+
+    const controller = readFileSync(WINDOWS_PREPARE_WRAPPER, "utf8");
+    expect(controller.match(/\bcurl -fsSL\b/g)).toHaveLength(1);
+    expect(controller.match(/\bfetch_host_metadata\b/g)).toHaveLength(5);
   });
 
   it("accepts leading package-manager separators and still honors later terminators", () => {
@@ -421,7 +449,16 @@ describe("Parallels smoke model selection", () => {
 
     expect(common).toContain('export * from "./host-command.ts"');
     expect(common).toContain('export * from "./lane-runner.ts"');
-    expect(common).toContain('export * from "./package-artifact.ts"');
+    const packageArtifactExports = new Set(
+      (common.match(/export \{([^}]*)\} from "\.\/package-artifact\.ts";/)?.[1] ?? "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean),
+    );
+    expect(packageArtifactExports).toContain("packOpenClaw");
+    expect(packageArtifactExports).toContain("packageVersionFromTgz");
+    expect(packageArtifactExports).toContain("resolveOpenClawRegistryVersion");
+    expect(common).not.toContain('export * from "./package-artifact.ts"');
     expect(common).toContain('export * from "./parallels-vm.ts"');
     expect(common).toContain('export * from "./snapshots.ts"');
     expect(hostCommand).toContain("export function shellQuote");

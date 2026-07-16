@@ -32,6 +32,10 @@ export type ExecApprovalIosPushDelivery = {
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
 };
 
+export type PluginApprovalIosPushDelivery = {
+  handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+};
+
 function broadcastResolvedEvent(params: {
   context: GatewayRequestContext;
   eventName: "exec.approval.resolved" | "plugin.approval.resolved" | "openclaw.approval.resolved";
@@ -76,12 +80,27 @@ async function runSideEffect(params: {
   }
 }
 
+function runSynchronousSideEffect(params: {
+  context: GatewayRequestContext;
+  approvalKind: "exec" | "plugin";
+  run: () => void;
+}): void {
+  try {
+    params.run();
+  } catch (error) {
+    params.context.logGateway?.error?.(
+      `${params.approvalKind} approvals: unified resolve internal-subscriber failed: ${String(error)}`,
+    );
+  }
+}
+
 export async function publishAppliedApprovalResolution(params: {
   record: OperatorApprovalRecord;
   liveRecord: ExecApprovalRecord<ApprovalRequest>;
   context: GatewayRequestContext;
   forwarder?: ExecApprovalForwarder;
   iosPushDelivery?: ExecApprovalIosPushDelivery;
+  pluginIosPushDelivery?: PluginApprovalIosPushDelivery;
 }): Promise<void> {
   const decision = params.record.decision ?? "deny";
   const resolvedBy = params.liveRecord.resolvedBy ?? null;
@@ -111,6 +130,16 @@ export async function publishAppliedApprovalResolution(params: {
         liveRecord: params.liveRecord,
       }),
   });
+  const nativeApprovalKind = params.record.kind;
+  if (nativeApprovalKind === "exec" || nativeApprovalKind === "plugin") {
+    // Native approval routes are instance-local, so publish the canonical CAS
+    // winner directly instead of reconnecting to the Gateway over WebSocket.
+    runSynchronousSideEffect({
+      context: params.context,
+      approvalKind: nativeApprovalKind,
+      run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
+    });
+  }
   if (params.record.kind === "exec" && params.forwarder) {
     await runSideEffect({
       context: params.context,
@@ -133,6 +162,14 @@ export async function publishAppliedApprovalResolution(params: {
       approvalKind: "plugin",
       effect: "forwarder",
       run: () => params.forwarder!.handlePluginApprovalResolved!(event as PluginApprovalResolved),
+    });
+  }
+  if (params.record.kind === "plugin" && params.pluginIosPushDelivery?.handleResolved) {
+    await runSideEffect({
+      context: params.context,
+      approvalKind: "plugin",
+      effect: "ios-push",
+      run: () => params.pluginIosPushDelivery!.handleResolved!(event as PluginApprovalResolved),
     });
   }
 }

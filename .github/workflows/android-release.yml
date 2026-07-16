@@ -197,7 +197,7 @@ jobs:
           URL="https://dl.google.com/android/repository/${ARCHIVE}"
           if [[ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]]; then
             mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
-            curl -fsSL "${URL}" -o "${RUNNER_TEMP}/${ARCHIVE}"
+            curl -fsSL --connect-timeout 10 --max-time 300 "${URL}" -o "${RUNNER_TEMP}/${ARCHIVE}"
             rm -rf "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
             unzip -q "${RUNNER_TEMP}/${ARCHIVE}" -d "${ANDROID_SDK_ROOT}/cmdline-tools"
             mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"

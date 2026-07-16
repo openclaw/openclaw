@@ -485,6 +485,7 @@ export type GatewaySessionRow = {
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   displayName?: string;
+  derivedTitle?: string;
   channel?: string;
   surface?: string;
   subject?: string;
@@ -860,6 +861,7 @@ export type ModelCatalogEntry = {
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
+  agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
   apiKeySupported?: boolean;
 };

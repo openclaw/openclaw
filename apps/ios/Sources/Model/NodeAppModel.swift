@@ -3412,7 +3412,7 @@ extension NodeAppModel {
             nodeOptions: connectOptions)
         let previousGatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
-        let preserveGatewayProblem = previousGatewayStableID.map {
+        let isSameGatewayTarget = previousGatewayStableID.map {
             !$0.isEmpty && GatewayStableIdentifier.matches($0, effectiveStableID)
         } ?? false
         let targetChanged = previousGatewayStableID.map {
@@ -3449,7 +3449,8 @@ extension NodeAppModel {
         self.activeGatewayConnectConfig = nextConfig
         prepareForGatewayConnect(
             stableID: effectiveStableID,
-            preservingGatewayProblem: preserveGatewayProblem)
+            preservingGatewayProblem: isSameGatewayTarget,
+            preservingFocusedChatSession: isSameGatewayTarget)
         if operatorLoopRequired {
             startOperatorGatewayLoop(
                 url: url,
@@ -3693,7 +3694,8 @@ extension NodeAppModel {
 
     private func prepareForGatewayConnect(
         stableID: String,
-        preservingGatewayProblem: Bool = false)
+        preservingGatewayProblem: Bool = false,
+        preservingFocusedChatSession: Bool = false)
     {
         self.invalidateNodePushToTalkRoute()
         self.operatorTalkConnectionGeneration &+= 1
@@ -3730,7 +3732,11 @@ extension NodeAppModel {
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
-        self.focusedChatSessionKey = nil
+        // Session keys are gateway-owned: transport reconnects keep the active chat,
+        // while initial connects and target changes must not inherit another route.
+        if !preservingFocusedChatSession {
+            self.focusedChatSessionKey = nil
+        }
         self.synchronizeTalkSessionKey()
         self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil

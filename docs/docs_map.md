@@ -335,6 +335,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Discord opens a blank page or reports blocked:csp
   - H3: “Not authorized”
   - H3: “Widget unavailable”
+  - H3: “You cannot launch Activities in this channel”
 
 ## channels/discord.md
 
@@ -895,6 +896,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack
   - H2: Events and operational behavior
+  - H3: Presence events
   - H2: Configuration reference
   - H2: Troubleshooting
   - H2: Attachment media reference
@@ -2820,7 +2822,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Discord Mantis scenarios
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
-  - H2: Live transport coverage
+  - H2: Canonical scenario coverage
   - H2: Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
   - H3: Telegram QA
@@ -7281,6 +7283,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
+  - H3: Terminal tool outcomes
   - H2: Current limitations
   - H2: Related
 

@@ -33,7 +33,7 @@ let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
 let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.test-support.js").resetRecentMediaGenerationDuplicateGuardsForTests;
 let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
-let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
+let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.test-support.js").resolveImageGenerationModelConfigForTool;
 
 const GENERATION_PROVIDER_ENV_VARS = [
   "BYTEPLUS_API_KEY",
@@ -337,8 +337,9 @@ describe("createImageGenerateTool", () => {
     webMedia = await import("../../media/web-media.js");
     ({ resetRecentMediaGenerationDuplicateGuardsForTests } =
       await import("../media-generation-task-status-shared.test-support.js"));
-    ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
-      await import("./image-generate-tool.js"));
+    ({ createImageGenerateTool } = await import("./image-generate-tool.js"));
+    ({ resolveImageGenerationModelConfigForTool } =
+      await import("./image-generate-tool.test-support.js"));
   });
 
   beforeEach(() => {

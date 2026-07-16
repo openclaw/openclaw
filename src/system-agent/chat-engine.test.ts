@@ -12,7 +12,7 @@ import {
 import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { runSystemAgentTurnWithDeps } from "./agent-turn.js";
+import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { classifySystemAgentApprovalText } from "./approval-intent.js";
 import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,

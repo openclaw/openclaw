@@ -66,7 +66,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
     if (fs.existsSync(filePath)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for ${filePath}`);
 }
@@ -77,7 +77,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -88,7 +88,7 @@ async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> 
     if (!isProcessAlive(pid) || isProcessZombie(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still running: ${pid}`);
 }

@@ -1727,20 +1727,22 @@ export function addClientToolsToCodeModeCatalog(params: {
 }
 
 /** Test-only hooks and state accessors for Code Mode worker orchestration. */
-export const testing = {
+const testing = {
   activeRuns,
   resumingRunIds,
-  codeModeWorkerUrl,
   createHeadlessAbortScope,
   normalizeCodeModeWorkerResult,
   runCodeModeWorker,
   resolveCodeModeHeadlessConfig,
   resolveCodeModeWorkerUrl,
-  resolveCodeModeConfig,
   getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
     typescriptRuntimeLoader.peek() ?? null,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codeModeTestApi")] = testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

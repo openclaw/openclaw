@@ -658,6 +658,8 @@ export const ru: TranslationMap = {
     archiveSession: "Архивировать сеанс",
     archiveSessionCount: "Архивировать {count}",
     restoreSession: "Восстановить сеанс",
+    stopCloudWorker: "Остановить облачный воркер…",
+    stopCloudWorkerConfirm: "Остановить облачный воркер для «{session}»?",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Удалить {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
