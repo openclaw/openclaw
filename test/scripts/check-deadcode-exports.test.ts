@@ -40,56 +40,46 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.workspaces["."].entry).toContain("src/mcp/openclaw-tools-serve.ts!");
   });
 
-  it.each([
-    "acpx",
-    "amazon-bedrock-mantle",
-    "azure-speech",
-    "cloudflare-ai-gateway",
-    "cohere",
-    "deepgram",
-    "elevenlabs",
-    "featherless",
-    "fireworks",
-    "google",
-    "huggingface",
-    "kilocode",
-    "kimi-coding",
-    "lmstudio",
-    "microsoft",
-    "minimax",
-    "mistral",
-    "moonshot",
-    "nvidia",
-    "pixverse",
-    "qianfan",
-    "qwen",
-    "senseaudio",
-    "tavily",
-    "tencent",
-    "vllm",
-    "xiaomi",
-    "xai",
-  ])("removes the bundled-plugin root catch-all from migrated %s workspace", (pluginId) => {
-    const workspace = (
-      knipConfig.workspaces as Record<string, { readonly entry: readonly string[] }>
-    )[`extensions/${pluginId}`];
-    if (!workspace) {
-      throw new Error(`missing Knip workspace for ${pluginId}`);
+  it("keeps every migrated bundled-plugin workspace strict", () => {
+    const extensionWorkspaces = Object.entries(knipConfig.workspaces).filter(
+      ([workspace]) =>
+        workspace.startsWith("extensions/") &&
+        !["extensions/*", "extensions/llama-cpp", "extensions/reef"].includes(workspace),
+    );
+    expect(extensionWorkspaces.length).toBeGreaterThan(1);
+    for (const [workspace, settings] of extensionWorkspaces) {
+      expect(settings.entry, workspace).not.toContain("*.ts!");
+      expect(settings.project, workspace).toContain("*.ts!");
+      expect(settings.entry, workspace).toEqual(
+        expect.arrayContaining([
+          "index.ts!",
+          "setup-entry.ts!",
+          "*-api.ts!",
+          "cli-metadata.ts!",
+          "channel-entry.ts!",
+          "provider-discovery.ts!",
+          "{web-search,web-fetch}-provider.ts!",
+        ]),
+      );
     }
-    const entries = workspace.entry;
-    expect(entries).not.toContain("*.ts!");
-    expect(entries).toEqual(
+    expect(knipConfig.workspaces["extensions/*"].entry).toContain("*.ts!");
+    expect(knipConfig.workspaces["extensions/*"].project).toContain("*.ts!");
+    expect(knipConfig.workspaces["extensions/llama-cpp"].entry).toContain("*.ts!");
+    expect(knipConfig.workspaces["extensions/reef"].entry).toContain("*.ts!");
+  });
+
+  it("models the Browser facades loaded by basename", () => {
+    const workspace = knipConfig.workspaces["extensions/browser"];
+    expect(workspace.entry).toEqual(
       expect.arrayContaining([
-        "index.ts!",
-        "setup-entry.ts!",
-        "*-api.ts!",
-        "cli-metadata.ts!",
-        "channel-entry.ts!",
-        "provider-discovery.ts!",
-        "{web-search,web-fetch}-provider.ts!",
+        "browser-control-auth.ts!",
+        "browser-config.ts!",
+        "browser-doctor.ts!",
+        "browser-host-inspection.ts!",
+        "browser-maintenance.ts!",
+        "browser-profiles.ts!",
       ]),
     );
-    expect(knipConfig.workspaces["extensions/*"].entry).toContain("*.ts!");
   });
 
   it.each([

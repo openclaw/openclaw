@@ -113,9 +113,9 @@ const rootBundledPluginRuntimeDependencies = [
   "tokenjuice",
 ] as const;
 
-function strictBundledPluginWorkspace() {
+function strictBundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
-    entry: strictBundledPluginEntries,
+    entry: [...strictBundledPluginEntries, ...extraEntries],
     project: ["*.ts!", "src/**/*.{js,mjs,ts}!"],
     ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
   } as const;
@@ -373,19 +373,41 @@ const config = {
       project: ["index.js!", "scripts/**/*.js!"],
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: strictBundledPluginWorkspace([
+      // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
+      "browser-control-auth.ts!",
+      "browser-config.ts!",
+      "browser-doctor.ts!",
+      "browser-host-inspection.ts!",
+      "browser-maintenance.ts!",
+      "browser-profiles.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/chutes`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/elevenlabs`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/featherless`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/fal`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/fireworks`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/google`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/huggingface`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft-foundry`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-claude`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-hermes`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/minimax`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/mistral`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/moonshot`]: strictBundledPluginWorkspace(),
@@ -393,15 +415,17 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/pixverse`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/voyage`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xiaomi`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
-      project: ["index.ts!", "src/**/*.{js,mjs,ts}!"],
+      project: ["*.ts!", "src/**/*.{js,mjs,ts}!"],
       ignoreDependencies: [
         // The provider resolves node-llama-cpp from its own package at runtime
         // so local embeddings use the plugin-owned native dependency.
@@ -416,14 +440,14 @@ const config = {
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
       entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
-      project: ["index.ts!", "src/**/*.{js,mjs,ts}!", "protocol/**/*.ts!"],
+      project: ["*.ts!", "src/**/*.{js,mjs,ts}!", "protocol/**/*.ts!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.
       entry: bundledPluginEntries,
-      project: ["index.ts!", "src/**/*.{js,mjs,ts}!"],
+      project: ["*.ts!", "src/**/*.{js,mjs,ts}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
   },
