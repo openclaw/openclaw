@@ -1,7 +1,11 @@
 /** Finalizes cron task rows and active markers after timer outcome persistence. */
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
-import { releaseQueuedCronRun } from "./run-admission.js";
+import {
+  isQueuedCronRunReservationMarkerCurrent,
+  releaseQueuedCronRun,
+  restoreQueuedCronRunReservationLastError,
+} from "./run-admission.js";
 import type { CronServiceState } from "./state.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 
@@ -59,12 +63,12 @@ export function finishRetiredCronTaskRuns<T extends CronTaskRunFinalizationOutco
   }
 }
 
-export function releaseUnstartedStartupCatchupReservations(
+export function clearUnstartedStartupCatchupReservationMarkers(
   state: CronServiceState,
   plan: StartupCatchupReservationPlan,
   outcomes: readonly CronTaskRunFinalizationOutcome[],
-): boolean {
-  let changed = false;
+): Array<{ jobId: string; reservationIdentity: object }> {
+  const pendingReleases: Array<{ jobId: string; reservationIdentity: object }> = [];
   const startedJobIds = new Set(outcomes.map((outcome) => outcome.jobId));
   for (const candidate of plan.candidates) {
     if (startedJobIds.has(candidate.jobId)) {
@@ -72,13 +76,25 @@ export function releaseUnstartedStartupCatchupReservations(
     }
     const job = state.store?.jobs.find((entry) => entry.id === candidate.jobId);
     if (
-      releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity) &&
-      job?.state &&
-      job.state.runningAtMs === candidate.reservedAtMs
+      typeof job?.state.runningAtMs === "number" &&
+      isQueuedCronRunReservationMarkerCurrent(
+        state,
+        candidate.jobId,
+        candidate.reservationIdentity,
+        job.state.runningAtMs,
+      )
     ) {
+      restoreQueuedCronRunReservationLastError(
+        state,
+        candidate.jobId,
+        candidate.reservationIdentity,
+        job.state,
+      );
       delete job.state.runningAtMs;
-      changed = true;
+      pendingReleases.push(candidate);
+    } else {
+      releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
     }
   }
-  return changed;
+  return pendingReleases;
 }

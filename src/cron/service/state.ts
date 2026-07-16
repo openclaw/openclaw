@@ -206,8 +206,9 @@ export type CronRunAdmission = {
 
 export type QueuedCronRunReservation = {
   identity: object;
-  reservedAtMs: number;
+  markerAtMs: number;
   preserveWhenDisabled: boolean;
+  activationPreviousLastError?: { value: string | undefined };
 };
 
 /** Mutable cron service state shared across store, job, timer, and ops helpers. */

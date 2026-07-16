@@ -71,7 +71,7 @@ export function reserveQueuedCronRun(
   const identity = {};
   state.queuedRunReservationsByJobId.set(jobId, {
     identity,
-    reservedAtMs: reservationAt,
+    markerAtMs: reservationAt,
     preserveWhenDisabled: opts?.preserveWhenDisabled === true,
   });
   return identity;
@@ -98,13 +98,51 @@ export function isQueuedCronRunReservationCurrent(
   return state.queuedRunReservationsByJobId.get(jobId)?.identity === identity;
 }
 
+export function updateQueuedCronRunReservationMarker(
+  state: CronServiceState,
+  jobId: string,
+  identity: object,
+  runningAtMs: number,
+  previousLastError: string | undefined,
+): boolean {
+  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  if (reservation?.identity !== identity) {
+    return false;
+  }
+  reservation.markerAtMs = runningAtMs;
+  reservation.activationPreviousLastError = { value: previousLastError };
+  return true;
+}
+
+export function restoreQueuedCronRunReservationLastError(
+  state: CronServiceState,
+  jobId: string,
+  identity: object,
+  jobState: { lastError?: string },
+): void {
+  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  if (reservation?.identity === identity && reservation.activationPreviousLastError) {
+    jobState.lastError = reservation.activationPreviousLastError.value;
+  }
+}
+
+export function isQueuedCronRunReservationMarkerCurrent(
+  state: CronServiceState,
+  jobId: string,
+  identity: object,
+  runningAtMs: number,
+): boolean {
+  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  return reservation?.identity === identity && reservation.markerAtMs === runningAtMs;
+}
+
 /** A matching process-local record means this durable marker is queued, not stuck. */
 export function isQueuedCronRun(
   state: CronServiceState,
   jobId: string,
   runningAtMs: number,
 ): boolean {
-  return state.queuedRunReservationsByJobId.get(jobId)?.reservedAtMs === runningAtMs;
+  return state.queuedRunReservationsByJobId.get(jobId)?.markerAtMs === runningAtMs;
 }
 
 /** A disabled job can retain only a force reservation that predated the disabled state. */
@@ -114,7 +152,7 @@ export function isQueuedForceCronRun(
   runningAtMs: number,
 ): boolean {
   const reservation = state.queuedRunReservationsByJobId.get(jobId);
-  return reservation?.reservedAtMs === runningAtMs && reservation.preserveWhenDisabled;
+  return reservation?.markerAtMs === runningAtMs && reservation.preserveWhenDisabled;
 }
 
 /**

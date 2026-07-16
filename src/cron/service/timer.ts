@@ -83,11 +83,14 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import {
+  isQueuedCronRunReservationMarkerCurrent,
   isQueuedCronRunReservationCurrent,
   releaseQueuedCronRun,
   resolveRunConcurrency,
   reserveQueuedCronRun,
+  restoreQueuedCronRunReservationLastError,
   runWithCronAdmission,
+  updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
 import { emit, type CronServiceState, type CronSystemEventEnqueueResult } from "./state.js";
 import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
@@ -103,7 +106,7 @@ import {
   filterCurrentCronRunOutcomes,
   finishPersistedQuietCronTaskRuns,
   finishRetiredCronTaskRuns,
-  releaseUnstartedStartupCatchupReservations,
+  clearUnstartedStartupCatchupReservationMarkers,
 } from "./timer-outcome-finalization.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
@@ -1354,14 +1357,56 @@ async function onAdmittedTimer(state: CronServiceState) {
         reservationIdentity: reserveQueuedCronRun(state, job.id, now),
       }));
       if (state.stopped) {
-        for (const candidate of reservedDue) {
-          if (!releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity)) {
-            continue;
+        const cleanup = async () => {
+          const rollbackSnapshot = snapshotStoreForRollback(state);
+          const pendingReleases: typeof reservedDue = [];
+          for (const candidate of reservedDue) {
+            if (
+              !isQueuedCronRunReservationCurrent(state, candidate.id, candidate.reservationIdentity)
+            ) {
+              continue;
+            }
+            const persistedJob = state.store?.jobs.find((entry) => entry.id === candidate.id);
+            if (
+              typeof persistedJob?.state.runningAtMs === "number" &&
+              isQueuedCronRunReservationMarkerCurrent(
+                state,
+                candidate.id,
+                candidate.reservationIdentity,
+                persistedJob.state.runningAtMs,
+              )
+            ) {
+              restoreQueuedCronRunReservationLastError(
+                state,
+                candidate.id,
+                candidate.reservationIdentity,
+                persistedJob.state,
+              );
+              delete persistedJob.state.runningAtMs;
+              pendingReleases.push(candidate);
+            } else {
+              releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity);
+            }
           }
-          delete candidate.job.state.runningAtMs;
+          recomputeNextRunsForMaintenance(state);
+          await persistOrRestore(state, rollbackSnapshot);
+          for (const candidate of pendingReleases) {
+            releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity);
+          }
+        };
+        try {
+          await cleanup();
+        } catch {
+          try {
+            await cleanup();
+          } catch (error) {
+            // The stopped scheduler has no later cleanup pass.
+            for (const candidate of reservedDue) {
+              releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity);
+            }
+            throw error;
+          }
         }
-        recomputeNextRunsForMaintenance(state);
-        await persist(state);
         return [];
       }
 
@@ -1496,25 +1541,61 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
       await locked(state, async () => {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        const rollbackSnapshot = snapshotStoreForRollback(state);
+        const pendingReleases: typeof dueJobs = [];
         for (const [index, due] of dueJobs.entries()) {
           if (claimedIndexes.has(index)) {
             continue;
           }
           const job = state.store?.jobs.find((entry) => entry.id === due.id);
           if (
-            releaseQueuedCronRun(state, due.id, due.reservationIdentity) &&
-            job?.state &&
-            job.state.runningAtMs === due.reservedAtMs
+            typeof job?.state.runningAtMs === "number" &&
+            isQueuedCronRunReservationMarkerCurrent(
+              state,
+              due.id,
+              due.reservationIdentity,
+              job.state.runningAtMs,
+            )
           ) {
+            restoreQueuedCronRunReservationLastError(
+              state,
+              due.id,
+              due.reservationIdentity,
+              job.state,
+            );
             delete job.state.runningAtMs;
+            pendingReleases.push(due);
+          } else {
+            releaseQueuedCronRun(state, due.id, due.reservationIdentity);
           }
         }
         recomputeNextRunsForMaintenance(state);
-        await persist(state);
+        await persistOrRestore(state, rollbackSnapshot);
+        for (const due of pendingReleases) {
+          releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+        }
       });
     };
+    const releaseUnclaimedDueJobReservationsWithRetry = async () => {
+      try {
+        await releaseUnclaimedDueJobReservations();
+      } catch {
+        try {
+          await releaseUnclaimedDueJobReservations();
+        } catch (error) {
+          // No timer task owns another retry. Drop only these process claims so
+          // durable stuck-marker recovery remains able to repair them.
+          for (const [index, due] of dueJobs.entries()) {
+            if (!claimedIndexes.has(index)) {
+              releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+            }
+          }
+          throw error;
+        }
+      }
+    };
     if (state.stopped) {
-      await releaseUnclaimedDueJobReservations();
+      await releaseUnclaimedDueJobReservationsWithRetry();
       return;
     }
     // Skipped mappers must not claim reservations: recovery releases those rows,
@@ -1550,12 +1631,10 @@ async function onAdmittedTimer(state: CronServiceState) {
                 !isJobEnabled(job) ||
                 !isRunnableJob({ state, job: dueProbe, nowMs: state.deps.nowMs() })
               ) {
+                const rollbackSnapshot = snapshotStoreForRollback(state);
                 delete job.state.runningAtMs;
-                try {
-                  await persist(state);
-                } finally {
-                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
-                }
+                await persistOrRestore(state, rollbackSnapshot);
+                releaseQueuedCronRun(state, due.id, due.reservationIdentity);
                 return undefined;
               }
               const startedAt = state.deps.nowMs();
@@ -1569,15 +1648,20 @@ async function onAdmittedTimer(state: CronServiceState) {
                 job.state.lastError = previousLastError;
                 throw error;
               }
+              updateQueuedCronRunReservationMarker(
+                state,
+                due.id,
+                due.reservationIdentity,
+                startedAt,
+                previousLastError,
+              );
               if (state.stopped || state.restartRecoveryPending) {
                 stopAdmittingDueJobs = true;
-                delete job.state.runningAtMs;
                 job.state.lastError = previousLastError;
-                try {
-                  await persist(state);
-                } finally {
-                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
-                }
+                const rollbackSnapshot = snapshotStoreForRollback(state);
+                delete job.state.runningAtMs;
+                await persistOrRestore(state, rollbackSnapshot);
+                releaseQueuedCronRun(state, due.id, due.reservationIdentity);
                 return undefined;
               }
               releaseQueuedCronRun(state, due.id, due.reservationIdentity);
@@ -1606,7 +1690,7 @@ async function onAdmittedTimer(state: CronServiceState) {
               setupTimeoutNotified = true;
               stopAdmittingDueJobs = true;
               try {
-                await releaseUnclaimedDueJobReservations();
+                await releaseUnclaimedDueJobReservationsWithRetry();
               } catch (err) {
                 reservationReleaseError = err;
               }
@@ -1623,7 +1707,7 @@ async function onAdmittedTimer(state: CronServiceState) {
         { concurrency, stopOnError: true },
       );
     } catch (error) {
-      await releaseUnclaimedDueJobReservations();
+      await releaseUnclaimedDueJobReservationsWithRetry();
       throw error;
     }
     if (reservationReleaseError) {
@@ -1632,7 +1716,7 @@ async function onAdmittedTimer(state: CronServiceState) {
         : new Error(formatErrorMessage(reservationReleaseError));
     }
     if (stopAdmittingDueJobs) {
-      await releaseUnclaimedDueJobReservations();
+      await releaseUnclaimedDueJobReservationsWithRetry();
     }
 
     if (completedResults.length > 0) {
@@ -1840,20 +1924,33 @@ async function releaseStartupCatchupReservationsAfterFailure(
   plan: StartupCatchupPlan,
   outcomes: readonly TimedCronRunOutcome[],
 ): Promise<void> {
-  try {
+  const attempt = async () => {
     await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      const released = releaseUnstartedStartupCatchupReservations(state, plan, outcomes);
-      if (!released) {
+      const rollbackSnapshot = snapshotStoreForRollback(state);
+      const pendingReleases = clearUnstartedStartupCatchupReservationMarkers(state, plan, outcomes);
+      if (pendingReleases.length === 0) {
         return;
       }
       recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-      await persist(state);
+      await persistOrRestore(state, rollbackSnapshot);
+      for (const pending of pendingReleases) {
+        releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
+      }
     });
-  } finally {
-    // A failed store cleanup must not retain process-local reservations forever.
-    for (const candidate of plan.candidates) {
-      releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
+  };
+  try {
+    await attempt();
+  } catch {
+    try {
+      await attempt();
+    } catch (error) {
+      // The failed execution has no remaining cleanup owner. Release process
+      // claims so durable stuck-marker recovery can eventually repair them.
+      for (const candidate of plan.candidates) {
+        releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
+      }
+      throw error;
     }
   }
 }
@@ -1877,6 +1974,14 @@ export async function runMissedJobs(
     finalizedOutcomes = await applyStartupCatchupOutcomes(state, plan, execution.outcomes);
   } catch (finalizationError) {
     if (execution.ok) {
+      try {
+        await releaseStartupCatchupReservationsAfterFailure(state, plan, execution.outcomes);
+      } catch (cleanupError) {
+        state.deps.log.warn(
+          { err: String(cleanupError) },
+          "cron: failed to release startup catch-up reservations after finalization error",
+        );
+      }
       throw finalizationError;
     }
     try {
@@ -2031,13 +2136,11 @@ async function executeStartupCatchupPlan(
               allowCronMissedRunByLastRun: true,
             })
           ) {
+            const rollbackSnapshot = snapshotStoreForRollback(state);
             delete job.state.runningAtMs;
             recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-            try {
-              await persist(state);
-            } finally {
-              releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
-            }
+            await persistOrRestore(state, rollbackSnapshot);
+            releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
             return undefined;
           }
           const startedAt = state.deps.nowMs();
@@ -2051,14 +2154,19 @@ async function executeStartupCatchupPlan(
             job.state.lastError = previousLastError;
             throw error;
           }
+          updateQueuedCronRunReservationMarker(
+            state,
+            candidate.jobId,
+            candidate.reservationIdentity,
+            startedAt,
+            previousLastError,
+          );
           if (state.stopped || state.restartRecoveryPending) {
-            delete job.state.runningAtMs;
             job.state.lastError = previousLastError;
-            try {
-              await persist(state);
-            } finally {
-              releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
-            }
+            const rollbackSnapshot = snapshotStoreForRollback(state);
+            delete job.state.runningAtMs;
+            await persistOrRestore(state, rollbackSnapshot);
+            releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
             return undefined;
           }
           releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
@@ -2169,14 +2277,17 @@ async function applyStartupCatchupOutcomes(
       if (state.stopped) {
         const rollbackSnapshot = snapshotStoreForRollback(state);
         finishRetiredCronTaskRuns(state, outcomes, []);
-        const releasedReservations = releaseUnstartedStartupCatchupReservations(
+        const pendingReleases = clearUnstartedStartupCatchupReservationMarkers(
           state,
           plan,
           outcomes,
         );
-        if (releasedReservations) {
+        if (pendingReleases.length > 0) {
           recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
           await persistOrRestore(state, rollbackSnapshot);
+          for (const pending of pendingReleases) {
+            releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
+          }
         }
         return;
       }
@@ -2184,11 +2295,7 @@ async function applyStartupCatchupOutcomes(
       finalizedOutcomes = filterCurrentCronRunOutcomes(currentOutcomes);
       finishRetiredCronTaskRuns(state, outcomes, finalizedOutcomes);
       const rollbackSnapshot = snapshotStoreForRollback(state);
-      const releasedReservations = releaseUnstartedStartupCatchupReservations(
-        state,
-        plan,
-        outcomes,
-      );
+      const pendingReleases = clearUnstartedStartupCatchupReservationMarkers(state, plan, outcomes);
       const removedJobs: CronJob[] = [];
       for (const result of finalizedOutcomes) {
         const removedJob = applyOutcomeToStoredJob(state, result);
@@ -2197,9 +2304,12 @@ async function applyStartupCatchupOutcomes(
         }
       }
       if (finalizedOutcomes.length === 0 && plan.deferredJobs.length === 0) {
-        if (releasedReservations) {
+        if (pendingReleases.length > 0) {
           recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
           await persistOrRestore(state, rollbackSnapshot);
+          for (const pending of pendingReleases) {
+            releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
+          }
         }
         return;
       }
@@ -2231,6 +2341,9 @@ async function applyStartupCatchupOutcomes(
       // startup overflow deferrals survive until their staggered catch-up tick.
       recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
       await persistOrRestore(state, rollbackSnapshot);
+      for (const pending of pendingReleases) {
+        releaseQueuedCronRun(state, pending.jobId, pending.reservationIdentity);
+      }
       finishPersistedQuietCronTaskRuns(state, finalizedOutcomes);
       for (const removedJob of removedJobs) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
