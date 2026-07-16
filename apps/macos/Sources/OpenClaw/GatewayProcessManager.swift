@@ -6,6 +6,11 @@ import Observation
 final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
 
+    private struct LaunchAgentEnableRequest: Equatable {
+        let bundlePath: String
+        let port: Int
+    }
+
     enum Status: Equatable {
         case stopped
         case starting
@@ -43,6 +48,8 @@ final class GatewayProcessManager {
     private var lastEnvironmentRefresh: Date?
     private var logRefreshTask: Task<Void, Never>?
     private var launchAgentEnableTask: Task<String?, Never>?
+    private var launchAgentEnableCurrentRequest: LaunchAgentEnableRequest?
+    private var launchAgentEnablePendingRequest: LaunchAgentEnableRequest?
     #if DEBUG
     private var testingConnection: GatewayConnection?
     private var testingSkipControlChannelRefresh = false
@@ -95,28 +102,52 @@ final class GatewayProcessManager {
     }
 
     private func enableLaunchAgentIfNeeded(bundlePath: String, port: Int) async -> String? {
+        let request = LaunchAgentEnableRequest(bundlePath: bundlePath, port: port)
         if let task = self.launchAgentEnableTask {
+            if self.launchAgentEnableCurrentRequest == request {
+                // The in-flight request already represents the newest configuration. Drop an
+                // older queued change so A -> B -> A cannot finish on B.
+                self.launchAgentEnablePendingRequest = nil
+            } else {
+                self.launchAgentEnablePendingRequest = request
+            }
             return await task.value
         }
 
-        // App startup and onboarding can request persistence together. Share one check/install task;
-        // a second forced install would kill the first Gateway during startup migrations.
+        self.launchAgentEnablePendingRequest = request
         let task = Task { @MainActor in
-            if await GatewayLaunchAgentManager.canReuseLoadedGateway(port: port) {
-                return nil as String?
-            }
-            self.appendLog("[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
-            return await GatewayLaunchAgentManager.set(
-                enabled: true,
-                bundlePath: bundlePath,
-                port: port)
+            await self.drainLaunchAgentEnableRequests()
         }
         self.launchAgentEnableTask = task
-        let result = await task.value
-        // Only the creator reaches cleanup; joiners return above. Keeping that split prevents a
-        // stale waiter from clearing a newer enable task after this one completes.
+        return await task.value
+    }
+
+    private func drainLaunchAgentEnableRequests() async -> String? {
+        var result: String?
+        while let request = self.launchAgentEnablePendingRequest {
+            self.launchAgentEnablePendingRequest = nil
+            self.launchAgentEnableCurrentRequest = request
+            result = await self.performLaunchAgentEnable(request)
+            self.launchAgentEnableCurrentRequest = nil
+        }
+        // Clear the task before returning. A later caller then starts a fresh drain instead of
+        // joining a completed task after the final pending-request check.
         self.launchAgentEnableTask = nil
         return result
+    }
+
+    private func performLaunchAgentEnable(_ request: LaunchAgentEnableRequest) async -> String? {
+        // App startup and onboarding can request persistence together. One drain owns all installs;
+        // a second forced install would kill the first Gateway during startup migrations.
+        if await GatewayLaunchAgentManager.canReuseLoadedGateway(port: request.port) {
+            return nil
+        }
+        self.appendLog(
+            "[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(request.port)\n")
+        return await GatewayLaunchAgentManager.set(
+            enabled: true,
+            bundlePath: request.bundlePath,
+            port: request.port)
     }
 
     func startIfNeeded() {
@@ -463,6 +494,10 @@ extension GatewayProcessManager {
 
     func _testAttachExistingGatewayIfAvailable() async -> Bool {
         await self.attachExistingGatewayIfAvailable()
+    }
+
+    func _testEnableLaunchAgentIfNeeded(bundlePath: String, port: Int) async -> String? {
+        await self.enableLaunchAgentIfNeeded(bundlePath: bundlePath, port: port)
     }
 }
 #endif

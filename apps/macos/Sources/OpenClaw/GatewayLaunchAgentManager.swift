@@ -230,6 +230,9 @@ extension GatewayLaunchAgentManager {
         #if DEBUG
         if self.testingInterceptDaemonCommands {
             self.testingDaemonCommandCalls.append(args)
+            if self.testingDaemonCommandDelayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: self.testingDaemonCommandDelayNanoseconds)
+            }
             let payload = if args.first == "status" {
                 self.testingDaemonStatusPayload ?? "{\"ok\":true}"
             } else {
@@ -290,6 +293,7 @@ extension GatewayLaunchAgentManager {
     private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
     private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
     private nonisolated(unsafe) static var testingDaemonStatusPayload: String?
+    private nonisolated(unsafe) static var testingDaemonCommandDelayNanoseconds: UInt64 = 0
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
         self.testingDisableLaunchAgentMarkerURL = url
@@ -301,6 +305,10 @@ extension GatewayLaunchAgentManager {
 
     static func setTestingDaemonStatusPayload(_ payload: String?) {
         self.testingDaemonStatusPayload = payload
+    }
+
+    static func setTestingDaemonCommandDelayNanoseconds(_ nanoseconds: UInt64) {
+        self.testingDaemonCommandDelayNanoseconds = nanoseconds
     }
 
     static func clearTestingDaemonCommandCalls() {

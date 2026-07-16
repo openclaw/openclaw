@@ -39,6 +39,106 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `queues a changed launch agent request behind an in-flight request`() async throws {
+        let firstPort = 19091
+        let secondPort = 19092
+        let configPath = TestIsolation.tempConfigPath()
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"ok":true,"service":{"loaded":false}}"#)
+            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let manager = GatewayProcessManager.shared
+            let first = Task { @MainActor in
+                await manager._testEnableLaunchAgentIfNeeded(
+                    bundlePath: "/Applications/OpenClaw.app",
+                    port: firstPort)
+            }
+            for _ in 0..<100 {
+                if !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+
+            let second = Task { @MainActor in
+                await manager._testEnableLaunchAgentIfNeeded(
+                    bundlePath: "/Applications/OpenClaw.app",
+                    port: secondPort)
+            }
+            #expect(await first.value == nil)
+            #expect(await second.value == nil)
+
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            let installPorts = calls.compactMap { arguments -> String? in
+                guard arguments.first == "install",
+                      let portIndex = arguments.firstIndex(of: "--port"),
+                      arguments.indices.contains(portIndex + 1)
+                else {
+                    return nil
+                }
+                return arguments[portIndex + 1]
+            }
+            #expect(installPorts == [String(firstPort), String(secondPort)])
+
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            let newestPort = 19093
+            let stalePort = 19094
+            let current = Task { @MainActor in
+                await manager._testEnableLaunchAgentIfNeeded(
+                    bundlePath: "/Applications/OpenClaw.app",
+                    port: newestPort)
+            }
+            for _ in 0..<100 {
+                if !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            let stale = Task { @MainActor in
+                await manager._testEnableLaunchAgentIfNeeded(
+                    bundlePath: "/Applications/OpenClaw.app",
+                    port: stalePort)
+            }
+            await Task.yield()
+            let newest = Task { @MainActor in
+                await manager._testEnableLaunchAgentIfNeeded(
+                    bundlePath: "/Applications/OpenClaw.app",
+                    port: newestPort)
+            }
+            #expect(await current.value == nil)
+            #expect(await stale.value == nil)
+            #expect(await newest.value == nil)
+
+            let finalInstallPorts = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .compactMap { arguments -> String? in
+                    guard arguments.first == "install",
+                          let portIndex = arguments.firstIndex(of: "--port"),
+                          arguments.indices.contains(portIndex + 1)
+                    else {
+                        return nil
+                    }
+                    return arguments[portIndex + 1]
+                }
+            #expect(finalInstallPorts == [String(newestPort)])
+        }
+    }
+
     @Test func `keeps a reusable launch agent running`() async throws {
         let port = 19082
         let configPath = TestIsolation.tempConfigPath()
