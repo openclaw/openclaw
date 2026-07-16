@@ -194,10 +194,8 @@ export interface CaptureSessions {
 }
 
 export interface ChannelHealthEscalations {
-  escalation_count: number;
+  escalated_at_ms: number;
   escalation_key: string;
-  updated_at_ms: number;
-  window_started_at_ms: number;
 }
 
 export interface ChannelIngressEvents {

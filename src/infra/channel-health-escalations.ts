@@ -11,6 +11,10 @@ import {
 
 const escalationLog = createSubsystemLogger("gateway/health-escalations");
 
+// Rows older than the largest window any caller uses are dead weight; retention
+// only needs to comfortably exceed the one-hour budget window.
+const CHANNEL_HEALTH_ESCALATION_RETENTION_MS = 24 * 60 * 60_000;
+
 type ChannelHealthEscalationsDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "channel_health_escalations"
@@ -19,12 +23,15 @@ type ChannelHealthEscalationsDatabase = Pick<
 export type ChannelHealthEscalationBudget = {
   allowed: boolean;
   usedInWindow: number;
+  /** True when the state database could not arbitrate; callers must not restart. */
+  unavailable?: boolean;
 };
 
 /**
- * Consumes one escalation from the rolling per-key window, resetting the
- * window when it has fully elapsed. Fails open: an unavailable state database
- * must not block the recovery restart it is budgeting.
+ * Consumes one escalation from the rolling per-key window (row per escalation,
+ * counted over the trailing windowMs). Fails closed: a gateway process restart
+ * interrupts every channel, so an unavailable state database means manual
+ * recovery instead of an unbounded restart loop.
  */
 export function takeChannelHealthEscalationBudgetSync(opts: {
   escalationKey: string;
@@ -36,41 +43,35 @@ export function takeChannelHealthEscalationBudgetSync(opts: {
   const env = opts.env ?? process.env;
   const nowMs = opts.nowMs ?? Date.now();
   try {
-    let budget: ChannelHealthEscalationBudget = { allowed: true, usedInWindow: 1 };
+    let budget: ChannelHealthEscalationBudget = { allowed: false, usedInWindow: 0 };
     runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<ChannelHealthEscalationsDatabase>(db);
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .deleteFrom("channel_health_escalations")
+            .where("escalated_at_ms", "<", nowMs - CHANNEL_HEALTH_ESCALATION_RETENTION_MS),
+        );
         const row = executeSqliteQueryTakeFirstSync(
           db,
           kysely
             .selectFrom("channel_health_escalations")
-            .select(["window_started_at_ms", "escalation_count"])
-            .where("escalation_key", "=", opts.escalationKey),
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("escalation_key", "=", opts.escalationKey)
+            .where("escalated_at_ms", ">", nowMs - opts.windowMs),
         );
-        const windowActive = row !== undefined && nowMs - row.window_started_at_ms < opts.windowMs;
-        const usedBefore = windowActive ? row.escalation_count : 0;
+        const usedBefore = row?.count ?? 0;
         if (usedBefore >= opts.maxPerWindow) {
           budget = { allowed: false, usedInWindow: usedBefore };
           return;
         }
-        const windowStartedAtMs = windowActive ? row.window_started_at_ms : nowMs;
         executeSqliteQuerySync(
           db,
-          kysely
-            .insertInto("channel_health_escalations")
-            .values({
-              escalation_key: opts.escalationKey,
-              window_started_at_ms: windowStartedAtMs,
-              escalation_count: usedBefore + 1,
-              updated_at_ms: nowMs,
-            })
-            .onConflict((conflict) =>
-              conflict.column("escalation_key").doUpdateSet({
-                window_started_at_ms: windowStartedAtMs,
-                escalation_count: usedBefore + 1,
-                updated_at_ms: nowMs,
-              }),
-            ),
+          kysely.insertInto("channel_health_escalations").values({
+            escalation_key: opts.escalationKey,
+            escalated_at_ms: nowMs,
+          }),
         );
         budget = { allowed: true, usedInWindow: usedBefore + 1 };
       },
@@ -78,7 +79,9 @@ export function takeChannelHealthEscalationBudgetSync(opts: {
     );
     return budget;
   } catch (err) {
-    escalationLog.warn(`escalation budget state unavailable; fail-open: ${String(err)}`);
-    return { allowed: true, usedInWindow: 0 };
+    escalationLog.warn(
+      `escalation budget state unavailable; failing closed to manual recovery: ${String(err)}`,
+    );
+    return { allowed: false, usedInWindow: 0, unavailable: true };
   }
 }

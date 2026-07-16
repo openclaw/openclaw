@@ -198,9 +198,15 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
               nowMs: now,
             });
             if (!budget.allowed) {
-              log.warn?.(
-                `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit (persisted), skipping gateway restart escalation`,
-              );
+              if (budget.unavailable) {
+                log.error?.(
+                  `[${channelId}:${accountId}] health-monitor: escalation budget state is unavailable, refusing an unarbitrated gateway restart; restart the gateway manually and check the state database`,
+                );
+              } else {
+                log.warn?.(
+                  `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit (persisted), skipping gateway restart escalation`,
+                );
+              }
               continue;
             }
             log.warn?.(

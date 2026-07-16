@@ -874,11 +874,12 @@ CREATE INDEX IF NOT EXISTS idx_gateway_boot_lifecycle_started
   ON gateway_boot_lifecycle(started_at_ms);
 
 CREATE TABLE IF NOT EXISTS channel_health_escalations (
-  escalation_key TEXT NOT NULL PRIMARY KEY,
-  window_started_at_ms INTEGER NOT NULL,
-  escalation_count INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
+  escalation_key TEXT NOT NULL,
+  escalated_at_ms INTEGER NOT NULL
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_channel_health_escalations_key_time
+  ON channel_health_escalations(escalation_key, escalated_at_ms);
 
 CREATE TABLE IF NOT EXISTS acp_sessions (
   session_key TEXT NOT NULL PRIMARY KEY,
