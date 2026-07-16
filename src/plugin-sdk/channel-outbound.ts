@@ -69,7 +69,9 @@ export {
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
   isPotentialTruncatedFinal,
+  formatPlanChecklistLines,
   mergeChannelProgressDraftLine,
+  normalizeAgentPlanSteps,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftConfig,
@@ -89,6 +91,8 @@ export {
   selectLongerFinalText,
 } from "../channels/streaming.js";
 export type {
+  AgentPlanStep,
+  AgentPlanStepStatus,
   ChannelDeliveryStreamingConfig,
   ChannelPreviewStreamingConfig,
   ChannelProgressDraftLine,
