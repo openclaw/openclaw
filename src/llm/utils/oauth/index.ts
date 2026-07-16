@@ -67,6 +67,8 @@ export function getOAuthProviders(): OAuthProviderInterface[] {
 // High-level API (uses provider registry)
 // ============================================================================
 
+import { hasUsableOAuthCredential } from "../../plugin-sdk/provider-auth.js";
+
 /**
  * Get API key for a provider from OAuth credentials.
  * Automatically refreshes expired tokens.
@@ -77,7 +79,7 @@ export function getOAuthProviders(): OAuthProviderInterface[] {
 export async function getOAuthApiKey(
   providerId: OAuthProviderId,
   credentials: Record<string, OAuthCredentials>,
-): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
+): Promise<{ newCredentials: OAuthCredentials; apiKey: *** } | null> {
   const provider = getOAuthProvider(providerId);
   if (!provider) {
     throw new Error(`Unknown OAuth provider: ${providerId}`);
@@ -88,8 +90,12 @@ export async function getOAuthApiKey(
     return null;
   }
 
-  // Refresh if expired
-  if (Date.now() >= creds.expires) {
+  // Refresh when the credential is not usable within the standard refresh
+  // margin, matching the manager gate (hasUsableOAuthCredential). The raw
+  // expiry check here previously skipped refresh during the margin window,
+  // so a caller that decided to refresh (under the margin) would silently
+  // receive the unchanged credential. See issue #103846.
+  if (!hasUsableOAuthCredential(creds)) {
     try {
       creds = await provider.refreshToken(creds);
     } catch (error) {
