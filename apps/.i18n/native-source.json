@@ -1859,7 +1859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 41,
+      "line": 42,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/node/DebugHandler.kt",
       "source": "${signature.take(20)}... (OK)",
       "surface": "android",
@@ -1867,7 +1867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 41,
+      "line": 42,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/node/DebugHandler.kt",
       "source": "NULL (FAILED)",
       "surface": "android",
