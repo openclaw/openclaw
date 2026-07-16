@@ -649,7 +649,7 @@ function extractViewerArtifactId(viewerPath: string): string {
 }
 
 function extractViewerArtifactToken(viewerPath: string): string {
-  const token = viewerPath.split("/").filter(Boolean).at(-1);
+  const token = viewerPath.split("/").findLast((segment) => segment.length > 0);
   if (!token) {
     throw new Error("expected viewer artifact token");
   }

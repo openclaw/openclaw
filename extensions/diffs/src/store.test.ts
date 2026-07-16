@@ -97,7 +97,9 @@ describe("DiffArtifactStore", () => {
       inputKind: "patch",
       fileCount: 1,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     ({ store, blobStore } = reopenStore());
 
