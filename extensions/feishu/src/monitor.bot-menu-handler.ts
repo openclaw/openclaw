@@ -142,10 +142,8 @@ export function createFeishuBotMenuHandler(params: {
             if (claim.kind === "claimed") {
               claim.handle.release({ error: err });
             }
-          } else {
-            if (claim.kind === "claimed") {
-              await claim.handle.commit();
-            }
+          } else if (claim.kind === "claimed") {
+            await claim.handle.commit();
           }
           throw err;
         });
