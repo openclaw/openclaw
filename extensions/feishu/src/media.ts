@@ -20,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -253,9 +252,8 @@ async function saveFeishuResponseMedia(params: {
   maxBytes: number;
   contentType?: string;
   fileName?: string;
-  chunkTimeoutMs?: number;
 }): Promise<SavedMedia> {
-  const { response, maxBytes, contentType, fileName, chunkTimeoutMs } = params;
+  const { response, maxBytes, contentType, fileName } = params;
   if (Buffer.isBuffer(response)) {
     return saveMediaBuffer(response, contentType, "inbound", maxBytes, fileName);
   }
@@ -293,7 +291,7 @@ async function saveFeishuResponseMedia(params: {
     );
   }
   const save = (stream: AsyncIterable<unknown>, ct = contentType, mb = maxBytes, fn = fileName) =>
-    saveMediaStreamWithIdleTimeout(stream, ct, mb, fn, chunkTimeoutMs);
+    saveMediaStreamWithIdleTimeout(stream, ct, mb, fn, FEISHU_MEDIA_HTTP_TIMEOUT_MS);
   if (typeof response.getReadableStream === "function") {
     return save(response.getReadableStream());
   }
@@ -325,7 +323,6 @@ async function saveMessageResourceWithType(params: {
   type: FeishuMessageResourceDownloadType;
   maxBytes: number;
   originalFilename?: string;
-  chunkTimeoutMs?: number;
 }): Promise<SaveMessageResourceResult> {
   const response = await params.client.im.messageResource.get({
     path: { message_id: params.messageId, file_key: params.fileKey },
@@ -343,7 +340,6 @@ async function saveMessageResourceWithType(params: {
       (params.originalFilename
         ? recoverUtf8FileNameFromLatin1Header(params.originalFilename)
         : undefined),
-    chunkTimeoutMs: params.chunkTimeoutMs,
   });
   return { saved, ...meta };
 }
@@ -362,8 +358,7 @@ export async function saveMessageResourceFeishu(params: {
   if (!normalizedFileKey) {
     throw new Error("Feishu message resource download failed: invalid file_key");
   }
-  const { account, client } = createConfiguredFeishuMediaClient({ cfg, accountId });
-  const chunkTimeoutMs = resolveConfiguredHttpTimeoutMs({ config: account.config });
+  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   try {
     return await saveMessageResourceWithType({
@@ -373,7 +368,6 @@ export async function saveMessageResourceFeishu(params: {
       type,
       maxBytes,
       originalFilename,
-      chunkTimeoutMs,
     });
   } catch (err) {
     if (type !== "file" || !isHttpStatusError(err, 502)) {
@@ -387,7 +381,6 @@ export async function saveMessageResourceFeishu(params: {
         type: "media",
         maxBytes,
         originalFilename,
-        chunkTimeoutMs,
       });
     } catch {
       throw err;

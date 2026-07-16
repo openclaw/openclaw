@@ -1,12 +1,5 @@
-// Feishu inbound media chunk-idle timeout helpers.
+// Feishu inbound media chunk-idle timeout helper.
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
-
-/**
- * Default per-chunk idle timeout for Feishu inbound media streams.
- * Matches Telegram `TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000` so a stalled
- * Lark SDK body cannot block inbound dispatch indefinitely after headers/start.
- */
-const FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
 
 class FeishuInboundMediaTimeoutError extends Error {
   readonly chunkTimeoutMs: number;
@@ -18,22 +11,15 @@ class FeishuInboundMediaTimeoutError extends Error {
 }
 
 function destroySource(source: unknown) {
-  const s = source as { destroy?: (err?: Error) => void };
+  const s = source as { destroy?: () => void };
   if (typeof s.destroy === "function") {
-    s.destroy(new FeishuInboundMediaTimeoutError(0));
+    s.destroy();
   }
 }
 
 // Bound each AsyncIterable `next()` so a stalled Lark download cannot hang
-// inbound dispatch. On timeout, destroy the source (if it supports destroy) so
-// the underlying Readable/HTTP resource closes, then call `return()` without
-// awaiting. Silence the losing `nextPromise` to avoid unhandledRejection.
-//
-// IMPORTANT: do NOT `await` iterator.return() in the finally block. Node
-// Readable async-iterator `return()` hangs when the underlying source is
-// stalled (the iterator waits for a `readable` event that never fires). The
-// source is explicitly destroyed before reaching the finally block so the
-// underlying resource is released regardless.
+// inbound dispatch. Destroying the source on timeout releases the SDK's
+// underlying Node Readable and HTTP connection.
 function withChunkIdleTimeout<T>(
   source: AsyncIterable<T>,
   chunkTimeoutMs: number,
@@ -41,40 +27,35 @@ function withChunkIdleTimeout<T>(
   return {
     async *[Symbol.asyncIterator]() {
       const iterator = source[Symbol.asyncIterator]();
+      let exhausted = false;
       try {
         while (true) {
           const nextPromise = iterator.next();
           let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
           const timeoutPromise = new Promise<never>((_, reject) => {
-            timeoutHandle = setTimeout(
-              () => reject(new FeishuInboundMediaTimeoutError(chunkTimeoutMs)),
-              chunkTimeoutMs,
-            );
+            timeoutHandle = setTimeout(() => {
+              destroySource(source);
+              reject(new FeishuInboundMediaTimeoutError(chunkTimeoutMs));
+            }, chunkTimeoutMs);
           });
           let result: IteratorResult<T>;
           try {
             result = await Promise.race([nextPromise, timeoutPromise]);
-          } catch (err) {
-            // Destroy the source so the underlying Readable resource closes;
-            // then silence the pending next() to avoid unhandledRejection.
-            destroySource(source);
-            nextPromise.then(
-              () => undefined,
-              () => undefined,
-            );
-            throw err;
           } finally {
             if (timeoutHandle !== undefined) {
               clearTimeout(timeoutHandle);
             }
           }
           if (result.done) {
+            exhausted = true;
             return;
           }
           yield result.value;
         }
       } finally {
-        if (typeof iterator.return === "function") {
+        if (!exhausted && typeof iterator.return === "function") {
+          // A stalled Node Readable can keep return() pending. Source teardown
+          // already owns cleanup, so observe the promise without awaiting it.
           iterator.return().catch(() => undefined);
         }
       }
@@ -86,8 +67,8 @@ export function saveMediaStreamWithIdleTimeout(
   stream: AsyncIterable<unknown>,
   contentType: string | undefined,
   maxBytes: number,
-  fileName?: string,
-  chunkTimeoutMs: number = FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
+  fileName: string | undefined,
+  chunkTimeoutMs: number,
 ): Promise<SavedMedia> {
   return saveMediaStream(
     withChunkIdleTimeout(stream, chunkTimeoutMs),
