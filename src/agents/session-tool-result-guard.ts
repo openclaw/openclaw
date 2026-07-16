@@ -60,6 +60,8 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
 }
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
+type AsyncMessageCallback<T extends AgentMessage> = (message: T) => void | Promise<void>;
 type CompactionAppendValidator = (entryId: string, appendedText: string) => boolean;
 type AppendMessageOptions = Parameters<SessionManager["appendMessage"]>[1];
 
@@ -629,22 +631,20 @@ export function installSessionToolResultGuard(
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
-    onUserMessagePersisted?: (
-      message: Extract<AgentMessage, { role: "user" }>,
-    ) => void | Promise<void>;
-    onUserMessageBlocked?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+    onUserMessagePersisted?: AsyncMessageCallback<UserAgentMessage>;
+    onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
+    onUserMessageBlocked?: (message: UserAgentMessage) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: (
       append: () => string,
       validateAppend: CompactionAppendValidator,
     ) => string;
-    onAssistantErrorMessagePersisted?: (
-      message: Extract<AgentMessage, { role: "assistant" }>,
-    ) => void | Promise<void>;
+    onAssistantErrorMessagePersisted?: AsyncMessageCallback<AssistantAgentMessage>;
   },
 ): {
   flushPendingToolResults: () => void;
   clearPendingToolResults: () => void;
+  clearNextUserMessagePersistenceSuppression: () => void;
   getPendingIds: () => string[];
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
@@ -889,6 +889,7 @@ export function installSessionToolResultGuard(
     }
     if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
       suppressNextUserMessagePersistence = false;
+      void opts?.onUserMessagePersistenceSuppressed?.(finalMessage);
       return undefined;
     }
     const {
@@ -935,6 +936,10 @@ export function installSessionToolResultGuard(
   return {
     flushPendingToolResults,
     clearPendingToolResults,
+    clearNextUserMessagePersistenceSuppression: () => {
+      suppressNextUserMessagePersistence = false;
+    },
     getPendingIds: pendingState.getPendingIds,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

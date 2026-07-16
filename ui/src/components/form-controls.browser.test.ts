@@ -22,6 +22,7 @@ function readUiCss(): string {
     "ui/src/styles/base.css",
     "ui/src/styles/components.css",
     "ui/src/styles/config.css",
+    "ui/src/styles/settings.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
@@ -37,16 +38,12 @@ function controlsHtml() {
       <label class="field"><select><option>field select</option></select></label>
       <label class="field checkbox"><input type="checkbox" /><span>field checkbox</span></label>
       <label class="field checkbox"><input type="radio" /><span>field radio</span></label>
-      <input class="config-search__input" value="search" />
       <input class="settings-sidebar__search-input" value="settings search" />
       <input class="settings-theme-import__input" value="theme" />
       <label class="config-raw-field"><textarea>raw config</textarea></label>
-      <input class="cfg-input" value="config input" />
-      <input class="cfg-input cfg-input--sm" value="small config input" />
-      <textarea class="cfg-textarea">config textarea</textarea>
-      <textarea class="cfg-textarea cfg-textarea--sm">small config textarea</textarea>
-      <label class="cfg-number"><input class="cfg-number__input" value="1" /></label>
-      <select class="cfg-select"><option>config select</option></select>
+      <input class="settings-input" value="config input" />
+      <div class="settings-row__control"><textarea class="settings-input">config textarea</textarea></div>
+      <select class="settings-select"><option>settings select</option></select>
       <input class="usage-date-input" value="2026-05-31" />
       <select class="usage-select"><option>usage select</option></select>
       <input class="usage-query-input" value="usage query" />
@@ -94,16 +91,12 @@ describeBrowserLayout("touch-primary form controls", () => {
           ".field input",
           ".field textarea",
           ".field select",
-          ".config-search__input",
           ".settings-sidebar__search-input",
           ".settings-theme-import__input",
           ".config-raw-field textarea",
-          ".cfg-input",
-          ".cfg-input--sm",
-          ".cfg-textarea",
-          ".cfg-textarea--sm",
-          ".cfg-number__input",
-          ".cfg-select",
+          "input.settings-input",
+          ".settings-row__control > textarea.settings-input",
+          ".settings-select",
           ".usage-date-input",
           ".usage-select",
           ".usage-query-input",
@@ -139,7 +132,7 @@ describeBrowserLayout("touch-primary form controls", () => {
     const fixture = await openMobileFixture();
     const { page } = fixture;
     try {
-      const selects = await page.locator(".cfg-select, .field select").evaluateAll((nodes) =>
+      const selects = await page.locator(".field select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
@@ -150,7 +143,7 @@ describeBrowserLayout("touch-primary form controls", () => {
         }),
       );
 
-      expect(selects).toHaveLength(2);
+      expect(selects).toHaveLength(1);
       for (const select of selects) {
         expect(select.image).not.toBe("none");
         expect(select.paddingRight).toBeGreaterThanOrEqual(32);
@@ -219,6 +212,80 @@ describeBrowserLayout("mount fallback cursor", () => {
         retry: "default",
         wait: "default",
         docs: "pointer",
+      });
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  });
+});
+
+describeBrowserLayout("app chrome interaction styles", () => {
+  it("keeps sidebars compact while preserving normal content scroll and text entry", async () => {
+    const browser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+      await page.setContent(`
+        <!doctype html>
+        <html>
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <aside class="settings-sidebar">
+              <nav class="settings-sidebar__nav">
+                <span class="settings-sidebar__item-label">Settings row</span>
+              </nav>
+              <input class="settings-sidebar__search-input" value="editable settings search" />
+            </aside>
+            <aside class="sidebar">
+              <div class="sidebar-recent-sessions">Recent session</div>
+            </aside>
+            <main class="content" style="height: 100px">
+              <div class="settings-card">App chrome tile</div>
+              <div style="height: 200px"></div>
+            </main>
+            <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+          </body>
+        </html>
+      `);
+
+      const metrics = await page.evaluate(() => {
+        const style = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing interaction fixture ${selector}`);
+          }
+          return getComputedStyle(node);
+        };
+        const scrollbarWidth = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!(node instanceof HTMLElement)) {
+            throw new Error(`Missing scrollbar fixture ${selector}`);
+          }
+          return getComputedStyle(node, "::-webkit-scrollbar").width;
+        };
+        return {
+          chatSelection: style(".chat-thread").userSelect,
+          chromeSelection: style(".settings-card").userSelect,
+          contentScrollbar: scrollbarWidth(".content"),
+          inputSelection: style(".settings-sidebar__search-input").userSelect,
+          regularSidebarScrollbar: scrollbarWidth(".sidebar-recent-sessions"),
+          regularSidebarSelection: style(".sidebar-recent-sessions").userSelect,
+          settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
+          settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
+        };
+      });
+
+      expect(metrics).toEqual({
+        chatSelection: "text",
+        chromeSelection: "none",
+        contentScrollbar: "12px",
+        inputSelection: "text",
+        regularSidebarScrollbar: "6px",
+        regularSidebarSelection: "none",
+        settingsSidebarScrollbar: "6px",
+        settingsSidebarSelection: "none",
       });
     } finally {
       await browser.close().catch(() => {});

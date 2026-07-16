@@ -58,7 +58,6 @@ import {
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { resolveModelRoutes } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -69,6 +68,18 @@ import {
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
+
+// OpenAI-native error codes stay with the OpenAI provider hook.
+function classifyOpenAiFailoverCode(code: string | undefined) {
+  switch (code?.trim().toUpperCase()) {
+    case "SERVER_ERROR":
+      return "server_error" as const;
+    case "INSUFFICIENT_QUOTA":
+      return "billing" as const;
+    default:
+      return undefined;
+  }
+}
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=1.0.0`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
@@ -585,17 +596,11 @@ function resolveAuthoredOpenAICompletionsRoute(params: {
   if (effectiveApi !== "openai-completions") {
     return undefined;
   }
-  const resolution = resolveModelRoutes({
-    provider: params.provider,
-    modelId: params.modelId,
-    ...configuredRoute,
-    env: process.env,
-  });
-  if (resolution.kind !== "routes") {
-    return undefined;
-  }
-  const route = resolution.routes.find((candidate) => candidate.api === "openai-completions");
-  return route ? { api: "openai-completions", baseUrl: route.baseUrl } : undefined;
+  const baseUrl =
+    normalizeOptionalString(configuredRoute.configuredModel?.baseUrl) ??
+    normalizeOptionalString(configuredRoute.configuredProvider.baseUrl) ??
+    resolveOpenAIDefaultBaseUrl(process.env);
+  return { api: "openai-completions", baseUrl };
 }
 
 function isOpenAIProvider(provider: string | undefined): boolean {
@@ -1000,6 +1005,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
+    classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, agentRuntime, compat }) =>
       normalizeProviderId(provider) === PROVIDER_ID
@@ -1073,3 +1079,4 @@ export function buildOpenAIProvider(): ProviderPlugin {
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
   return buildOpenAIProvider();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,14 +4,15 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../infra/clawhub-install-trust.js";
-import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -167,7 +168,9 @@ vi.mock("../infra/update-check.js", () => ({
       return null;
     }
     for (let index = 0; index < a.length; index += 1) {
-      const diff = a[index] - b[index];
+      const diff =
+        expectDefined(a[index], "a[index] test invariant") -
+        expectDefined(b[index], "b[index] test invariant");
       if (diff !== 0) {
         return diff;
       }
@@ -225,6 +228,10 @@ vi.mock("node:child_process", async () => {
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
+  runExec: vi.fn(async () => ({
+    stdout: new Date(Date.now() - 1000).toString(),
+    stderr: "",
+  })),
 }));
 
 vi.mock("../utils.js", async (importOriginal) => {
@@ -416,7 +423,7 @@ const {
 } = await import("../infra/update-check.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
-const { runCommandWithTimeout } = await import("../process/exec.js");
+const { runCommandWithTimeout, runExec } = await import("../process/exec.js");
 const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
@@ -540,11 +547,13 @@ describe("update-cli", () => {
     const [repo] = target.split("#", 1);
     const isGitHubShorthand =
       Boolean(repo) &&
-      !repo.startsWith(".") &&
-      !repo.startsWith("/") &&
-      !repo.startsWith("@") &&
-      repo.split("/").length === 2 &&
-      repo.split("/").every((part) => /^[^\s/:@]+$/u.test(part));
+      !expectDefined(repo, "repo test invariant").startsWith(".") &&
+      !expectDefined(repo, "repo test invariant").startsWith("/") &&
+      !expectDefined(repo, "repo test invariant").startsWith("@") &&
+      expectDefined(repo, "repo test invariant").split("/").length === 2 &&
+      expectDefined(repo, "repo test invariant")
+        .split("/")
+        .every((part) => /^[^\s/:@]+$/u.test(part));
     let isHttpGitUrl;
     try {
       const url = new URL(target);
@@ -696,11 +705,17 @@ describe("update-cli", () => {
     } else {
       expect(packagePackCommandCall()).toBeUndefined();
     }
+    const allowScriptsIdentity = isNpmGitPackageSpec(spec)
+      ? `./${path.basename(installSpec)}`
+      : spec.toLowerCase().startsWith("openclaw@")
+        ? "openclaw"
+        : spec;
     const call = packageInstallCommandCall();
     expect(call?.[0]).toEqual([
       "npm",
       "i",
       "-g",
+      `--allow-scripts=${allowScriptsIdentity}`,
       installSpec,
       "--no-fund",
       "--no-audit",
@@ -985,6 +1000,7 @@ describe("update-cli", () => {
       config: baseConfig,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -2032,6 +2048,7 @@ describe("update-cli", () => {
       config: baseConfig,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [trustWarning],
         errors: [
@@ -2065,6 +2082,7 @@ describe("update-cli", () => {
           config: params.config,
           summary: {
             switchedToBundled: [],
+            switchedToClawHub: [],
             switchedToNpm: [],
             warnings: [trustWarning],
             errors: [
@@ -2150,6 +2168,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -4578,6 +4597,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
+        "--allow-scripts=openclaw",
         "openclaw@latest",
         "--no-fund",
         "--no-audit",
@@ -4588,6 +4608,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
+        "--allow-scripts=openclaw",
         "openclaw@latest",
         "--omit=optional",
         "--no-fund",
@@ -5479,6 +5500,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -5530,6 +5552,7 @@ describe("update-cli", () => {
       },
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -5591,6 +5614,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -5682,6 +5706,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -5769,6 +5794,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -5835,6 +5861,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -5893,6 +5920,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -5903,15 +5931,13 @@ describe("update-cli", () => {
       config,
       outcomes: [],
     }));
-    execFile.mockImplementationOnce((...args: unknown[]) => {
-      const [file, commandArgs] = args;
+    vi.mocked(runExec).mockImplementationOnce(async (file, commandArgs) => {
       expect(file).toBe("powershell.exe");
       expect(commandArgs).toContain("-NonInteractive");
-      const callback = args.at(-1);
-      if (typeof callback === "function") {
-        callback(null, new Date(Date.now() - 1_000).toISOString(), "");
-      }
-      return new EventEmitter();
+      return {
+        stdout: new Date(Date.now() - 1_000).toISOString(),
+        stderr: "",
+      };
     });
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", {
@@ -5974,6 +6000,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -5984,13 +6011,7 @@ describe("update-cli", () => {
       config,
       outcomes: [],
     }));
-    execFile.mockImplementationOnce((...args: unknown[]) => {
-      const callback = args.at(-1);
-      if (typeof callback === "function") {
-        callback(new Error("ps unavailable"), "", "");
-      }
-      return new EventEmitter();
-    });
+    vi.mocked(runExec).mockRejectedValueOnce(new Error("ps unavailable"));
 
     await withEnvAsync(
       {
@@ -6052,6 +6073,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -6124,6 +6146,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -6191,6 +6214,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -6253,6 +6277,7 @@ describe("update-cli", () => {
       config: sourceConfig,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -6513,6 +6538,7 @@ describe("update-cli", () => {
       config,
       summary: {
         switchedToBundled: [],
+        switchedToClawHub: [],
         switchedToNpm: [],
         warnings: [],
         errors: [],
@@ -7493,6 +7519,7 @@ describe("update-cli", () => {
         config: params.config ?? baseConfig,
         summary: {
           switchedToBundled: [],
+          switchedToClawHub: [],
           switchedToNpm: [],
           warnings: [],
           errors: [],
@@ -7806,3 +7833,4 @@ describe("update-cli", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

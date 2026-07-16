@@ -20,7 +20,7 @@ const log = createSubsystemLogger("agents/worktrees");
 
 const RELEASE_MAX_ATTEMPTS = 3;
 
-export type WorktreeRunLease = {
+type WorktreeRunLease = {
   id: string;
   token: string;
   release: () => Promise<void>;
@@ -349,4 +349,8 @@ const testing = {
   },
 };
 
-export { testing as __testing };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.worktreeRunLeaseTestApi")] = {
+    testing,
+  };
+}

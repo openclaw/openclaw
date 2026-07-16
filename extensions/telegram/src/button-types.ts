@@ -114,7 +114,7 @@ function logInlineKeyboardDrops(totalInput: number, totalOutput: number) {
 /**
  * @deprecated Use buildTelegramPresentationButtons with MessagePresentation.
  */
-export function buildTelegramInteractiveButtons(
+function buildTelegramInteractiveButtons(
   interactive?: InteractiveReply,
 ): TelegramInlineButtons | undefined {
   let totalInput = 0;

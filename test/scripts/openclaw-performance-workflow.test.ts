@@ -83,7 +83,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "4dde6b6022d94058abced883343de7ee8ce69917";
+    const kovaRef = "f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
 

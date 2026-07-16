@@ -257,7 +257,7 @@ export type SessionMaintenanceMode = "enforce" | "warn";
 
 /** Session-store cleanup policy for transcript count, age, archives, and disk budget. */
 export type SessionMaintenanceConfig = {
-  /** Whether to enforce maintenance or warn only. Default: "warn". */
+  /** Whether to enforce maintenance or warn only. Default: "enforce". */
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
@@ -265,8 +265,6 @@ export type SessionMaintenanceConfig = {
   pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
-  rotateBytes?: number | string;
   /**
    * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
    * `*.deleted.<timestamp>`). Default and `false`: keep archives until the

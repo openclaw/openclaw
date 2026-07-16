@@ -11,16 +11,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import {
-  clearSessionStoreCacheForTest,
-  drainSessionStoreWriterQueuesForTest,
-} from "../config/sessions/store.js";
 import { callGateway } from "../gateway/call.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { findTaskByRunId } from "../tasks/task-registry.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
+import {
+  createSubagentRegistryTestDeps,
+  readSubagentSessionStore,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   finalizeInterruptedSubagentRun,
@@ -28,12 +33,7 @@ import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
   testing,
-} from "./subagent-registry.js";
-import {
-  createSubagentRegistryTestDeps,
-  readSubagentSessionStore,
-  writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
+} from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../gateway/call.js", () => ({
@@ -84,8 +84,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
   afterEach(async () => {
     testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
-    await drainSessionStoreWriterQueuesForTest();
-    clearSessionStoreCacheForTest();
+    await cleanupSessionStateForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     if (tempStateDir) {
@@ -95,7 +94,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     envSnapshot.restore();
   });
 
-  it("finalizes a stale (>2h) aborted run in the real registry instead of resuming it", async () => {
+  it("finalizes a stale (>2h) aborted run instead of resuming it", async () => {
     const now = Date.now();
     const childSessionKey = "agent:main:subagent:stale-aborted";
     const runId = "run-stale-aborted";
@@ -130,25 +129,11 @@ describe("subagent orphan recovery — faithful restart path", () => {
     ).not.toBeNull();
     addSubagentRunForTests(record);
 
-    const before = getSubagentRunByChildSessionKey(childSessionKey);
-    console.log(
-      `[proof] before recovery: stale run endedAt=${before?.endedAt ?? "undefined"} outcome=${
-        before?.outcome?.status ?? "undefined"
-      }`,
-    );
-
     const result = await recoverOrphanedSubagentSessions({
       getActiveRuns: () => new Map([[runId, record]]),
     });
 
     const after = getSubagentRunByChildSessionKey(childSessionKey);
-    console.log(
-      `[proof] after recovery: result=${JSON.stringify(result)} endedAt=${
-        after?.endedAt ?? "undefined"
-      } outcome=${after?.outcome?.status ?? "undefined"}`,
-    );
-
-    // Stale aborted run was finalized in the real registry, not resumed.
     expect(vi.mocked(callGateway)).not.toHaveBeenCalled();
     expect(after?.endedAt).toBeTypeOf("number");
     expect(after?.outcome?.status).toBe("error");
@@ -159,11 +144,9 @@ describe("subagent orphan recovery — faithful restart path", () => {
       error: expect.stringContaining("stale aborted subagent run not resumed"),
     });
 
-    // The task finalizer and session projection are durable, not only
-    // in-memory side effects of the recovery pass.
     resetTaskRegistryForTests({ persist: false });
     expect(findTaskByRunId(runId)).toMatchObject({ status: "failed" });
-    await drainSessionStoreWriterQueuesForTest();
+    await cleanupSessionStateForTest();
     const persistedSession = (await readSubagentSessionStore(storePath))[childSessionKey];
     expect(persistedSession).toMatchObject({
       status: "failed",
