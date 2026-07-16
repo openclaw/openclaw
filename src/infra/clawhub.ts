@@ -719,8 +719,8 @@ async function buildClawHubError(
 
 function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
   const resetSeconds =
-    parseStrictNonNegativeInteger(headers.get("RateLimit-Reset")) ??
-    parseStrictNonNegativeInteger(headers.get("Retry-After"));
+    parseRateLimitDeltaSeconds(headers.get("RateLimit-Reset")) ??
+    parseRateLimitDeltaSeconds(headers.get("Retry-After"));
   const segments: string[] = [];
   if (resetSeconds !== undefined) {
     segments.push(`(resets in ${resetSeconds}s)`);
@@ -729,6 +729,14 @@ function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
     segments.push("Sign in for higher rate limits.");
   }
   return segments.join(" ");
+}
+
+function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
+  const normalized = normalizeHeaderValue(value);
+  if (!normalized || !/^\d+$/.test(normalized)) {
+    return undefined;
+  }
+  return parseStrictNonNegativeInteger(normalized);
 }
 
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
