@@ -79,6 +79,24 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
   return result;
 }
 
+/**
+ * Strip JSON5-style trailing commas from flow-mapping ({…}) and
+ * flow-sequence ([…]) collections so the YAML parser does not reject
+ * frontmatter blocks that use the common JSON5 convention.
+ * Trailing commas are not valid in YAML 1.2 flow collections.
+ *
+ * This is a best-effort preprocessor: comments and escaped
+ * characters inside the block are not handled, but the regex is
+ * narrow enough that false positives are unlikely in practice.
+ * If the preprocessed block still fails to parse, the original
+ * fallback logic still applies.
+ */
+function stripJson5TrailingCommas(yaml: string): string {
+  // Match a comma that is followed by optional whitespace then
+  // a closing brace `}` or bracket `]`, and remove it.
+  return yaml.replace(/,\s*([}\]])/g, "$1");
+}
+
 function normalizeFreeformDescription(block: string): string {
   const doc = parseDocument(block, { schema: "core", prettyErrors: false });
   if (!isMap(doc.contents)) {
@@ -108,8 +126,9 @@ function parseYamlFrontmatterOnce(
   block: string,
   fallback: ParsedFrontmatter,
 ): ParsedFrontmatterBlockResult {
+  const cleaned = stripJson5TrailingCommas(block);
   try {
-    const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+    const doc = parseDocument(cleaned, { schema: "core", prettyErrors: false });
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
       return {
         frontmatter: fallback,
