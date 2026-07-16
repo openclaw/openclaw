@@ -2,7 +2,6 @@
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { withFileLock } from "./store-fs.js";
 
 type MSTeamsSqliteStateOptions = {
   env?: NodeJS.ProcessEnv;
@@ -62,11 +61,9 @@ async function withProcessMutationLock<T>(lockPath: string, fn: () => Promise<T>
 
 export async function withMSTeamsSqliteMutationLock<T>(
   options: MSTeamsSqliteStateOptions | undefined,
-  lockFilename: string,
+  mutationKey: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const lockPath = path.join(resolveMSTeamsSqliteStateDir(options), lockFilename);
-  return await withProcessMutationLock(lockPath, async () => {
-    return await withFileLock(lockPath, { version: 1 }, fn);
-  });
+  const scopedMutationKey = path.join(resolveMSTeamsSqliteStateDir(options), mutationKey);
+  return await withProcessMutationLock(scopedMutationKey, fn);
 }

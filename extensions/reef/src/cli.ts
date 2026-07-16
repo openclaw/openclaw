@@ -1,8 +1,6 @@
 // Reef plugin module implements headless CLI behavior. Every command is
 // non-interactive so agents can register a claw and manage friendships when
 // asked to by their owner; --json emits machine-readable results.
-import { readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
 import type { Command } from "commander";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
@@ -16,7 +14,16 @@ import {
 import { ReefAutonomySchema } from "./friend-types.js";
 import { ReefFriendManager } from "./friends.js";
 import { getReefRuntime } from "./runtime.js";
-import { generateAndStoreKeys, loadKeys, resolveStateDir, writePrivateJson } from "./state.js";
+import {
+  clearReefSetupSession,
+  generateAndStoreKeys,
+  loadKeys,
+  loadReefIdentityBinding,
+  loadReefSetupSession,
+  resolveStateDir,
+  saveReefIdentityBinding,
+  saveReefSetupSession,
+} from "./state.js";
 import { ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
 import type { ReefKeys } from "./types.js";
@@ -73,15 +80,16 @@ function reefCliAction<TOptions extends { json: boolean }, TArgs extends unknown
   };
 }
 
-async function loadOrCreateKeys(stateDir: string, createMissing: boolean): Promise<ReefKeys> {
+async function loadOrCreateKeys(createMissing: boolean): Promise<ReefKeys> {
+  const runtime = getReefRuntime();
   try {
-    return await loadKeys(stateDir);
+    return await loadKeys(runtime);
   } catch (error) {
     // Only a missing key file may mint a new identity. Replacing keys on
     // corruption or I/O failures would orphan the relay handle and every
     // pinned friendship bound to the old public keys.
     if (createMissing && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      return await generateAndStoreKeys(stateDir);
+      return await generateAndStoreKeys(runtime);
     }
     throw error;
   }
@@ -106,8 +114,7 @@ async function loadConfiguredManager(output: ReefCliOutput): Promise<{
   if (!config?.handle) {
     return await fail(output, "Reef is not configured. Run `openclaw reef register` first.");
   }
-  const stateDir = resolveStateDir(config.stateDir);
-  const keys = await loadOrCreateKeys(stateDir, false);
+  const keys = await loadOrCreateKeys(false);
   const transport = new ReefTransportClient(config.relayUrl, config.handle, keys);
   const runtime = getReefRuntime();
   const pairing = createChannelPairingController({
@@ -161,36 +168,27 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     return await fail(output, "--guard-provider must be one of: anthropic, openai.");
   }
   const relayUrl = parseReefRelayUrl(options.relay);
-  const stateDir = resolveStateDir(options.stateDir);
+  const legacyStateDir = options.stateDir ? resolveStateDir(options.stateDir) : undefined;
   const requestedHandle = options.handle?.toLowerCase();
-  // One state dir is one identity. Reusing existing keys for a different handle
-  // or relay would link supposedly separate identities under a single
-  // fingerprint. The binding is persisted beside the keys so the check holds
-  // even if the channel config was deleted or points elsewhere.
-  const identityPath = join(stateDir, "identity.json");
-  const identity = await readFile(identityPath, "utf8").then(
-    (raw) => JSON.parse(raw) as { handle?: string; relayUrl?: string },
-    () => undefined,
-  );
+  // One plugin-state identity may bind to one handle and relay. This check
+  // survives config deletion and prevents linking peers under reused keys.
+  const runtime = getReefRuntime();
+  const identity = loadReefIdentityBinding(runtime);
   if (identity?.handle && (identity.handle !== requestedHandle || identity.relayUrl !== relayUrl)) {
     return await fail(
       output,
-      `This state dir already holds the identity @${identity.handle} on ${identity.relayUrl}. Re-register the same handle and relay, or pass a fresh --state-dir for a new identity.`,
+      `This OpenClaw state already holds the Reef identity @${identity.handle} on ${identity.relayUrl}. Re-register the same handle and relay.`,
     );
   }
-  const keys = await loadOrCreateKeys(stateDir, true);
+  const keys = await loadOrCreateKeys(true);
 
   const bootstrap = new ReefTransportClient(relayUrl, options.handle ?? "pending", keys);
-  const sessionPath = join(stateDir, "setup-session.json");
-  // A previously exchanged session is reused from the key store so retries
+  // A previously exchanged session is reused from plugin state so retries
   // never need the single-use token again and the credential never appears in
   // command output or automation logs. It is scoped to the relay and email it
   // was minted for, and explicit --session/--token always take precedence, so
   // stale state can never reach another account or origin.
-  const stored = await readFile(sessionPath, "utf8").then(
-    (raw) => JSON.parse(raw) as { session?: string; relayUrl?: string; email?: string },
-    () => undefined,
-  );
+  const stored = loadReefSetupSession(runtime);
   const token = options.token?.trim();
   const storedSession =
     !options.session?.trim() && stored?.relayUrl === relayUrl && stored?.email === options.email
@@ -243,7 +241,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     handle,
     email: options.email,
     requestPolicy: options.policy,
-    stateDir,
+    ...(legacyStateDir ? { stateDir: legacyStateDir } : {}),
     guard,
   };
   ReefChannelConfigSchema.parse(provisional);
@@ -251,7 +249,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   let resolvedSession = session;
   if (!resolvedSession) {
     resolvedSession = (await bootstrap.authComplete(token ?? "")).session;
-    await writePrivateJson(sessionPath, {
+    saveReefSetupSession(runtime, {
       session: resolvedSession,
       relayUrl,
       email: options.email,
@@ -303,11 +301,11 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
       `Handle @${handle} is claimed, but writing the local config failed: ${error instanceof Error ? error.message : String(error)}. Fix the local issue and rerun the exact same command — the retry reuses the stored session and recognizes the existing claim.`,
     );
   }
-  await writePrivateJson(identityPath, { handle, relayUrl });
-  await rm(sessionPath, { force: true });
+  saveReefIdentityBinding(runtime, { handle, relayUrl });
+  clearReefSetupSession(runtime);
 
   const printed = fingerprint(keys.signing.publicKey, keys.encryption.publicKey);
-  emit(output, { status: "registered", handle, relayUrl, stateDir, fingerprint: printed }, [
+  emit(output, { status: "registered", handle, relayUrl, fingerprint: printed }, [
     `Registered @${handle} on ${relayUrl}.`,
     `Safety fingerprint (share out of band): ${printed}`,
     "Restart the gateway to connect: openclaw gateway restart",
@@ -328,7 +326,7 @@ export function registerReefCli({ program }: { program: Command }): void {
     .option("--token <token>", "Magic-link token to exchange for a session")
     .option("--relay <url>", "Relay origin URL", "https://reefwire.ai")
     .option("--policy <policy>", "Inbound friend-request policy", "code-only")
-    .option("--state-dir <dir>", "Local key/state directory")
+    .option("--state-dir <dir>", "Legacy Reef file directory for Doctor import")
     .option("--guard-provider <provider>", "Guard provider (anthropic|openai)", "openai")
     .option("--guard-model <model>", "Immutable guard model id (default depends on provider)")
     .option("--guard-env <name>", "Env var holding the guard API key (default depends on provider)")

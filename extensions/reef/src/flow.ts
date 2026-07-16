@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import {
   appendAudit,
   appendInboxRead,
@@ -28,7 +26,7 @@ import {
   type ReefPeerIdentity,
 } from "./friend-types.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
-import { ReviewApprovalStore, writePrivateJson } from "./state.js";
+import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import { ReefTransportClient } from "./transport.js";
 import {
   REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
@@ -97,8 +95,6 @@ function buildLegacyDeliveryIndex(
 }
 
 export class ReefMessageFlow {
-  private readonly delivered = new Set<string>();
-  private deliveredLoaded = false;
   private legacyDeliveryIndex?: Promise<Map<string, LegacyDeliveryCandidate>>;
   private readonly ulid = createMonotonicUlidFactory();
 
@@ -107,12 +103,12 @@ export class ReefMessageFlow {
       config: ReefChannelConfig;
       trust: ReefTrustStore;
       keys: ReefKeys;
-      stateDir: string;
       transport: ReefTransportClient;
       guard: GuardAdapter;
       audit: AuditStore;
       replay: ReplayStore;
       reviews: ReviewApprovalStore;
+      delivered: ReefDeliveredStore;
       onIngress: (message: ReefIngressMessage) => Promise<void>;
       onOwnerNotice: (text: string) => Promise<void>;
     },
@@ -367,8 +363,7 @@ export class ReefMessageFlow {
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }
-    await this.loadDelivered();
-    if (this.delivered.has(envelope.id)) {
+    if (await this.options.delivered.has(envelope.id)) {
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }
@@ -388,28 +383,8 @@ export class ReefMessageFlow {
         autonomy: friend.autonomy,
       });
     }
-    this.delivered.add(envelope.id);
-    await writePrivateJson(join(this.options.stateDir, "delivered.json"), [...this.delivered]);
+    await this.options.delivered.add(envelope.id);
     await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
-  }
-
-  private async loadDelivered(): Promise<void> {
-    if (this.deliveredLoaded) {
-      return;
-    }
-    try {
-      const ids = JSON.parse(
-        await readFile(join(this.options.stateDir, "delivered.json"), "utf8"),
-      ) as string[];
-      for (const id of ids) {
-        this.delivered.add(id);
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-    this.deliveredLoaded = true;
   }
 
   private requireHandle(): string {

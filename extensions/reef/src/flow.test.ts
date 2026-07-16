@@ -1,6 +1,13 @@
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   generateIdentity,
@@ -22,16 +29,44 @@ import {
   transport,
   trust,
 } from "./flow.test-helpers.js";
-import { ReviewApprovalStore } from "./state.js";
+import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
+
+const stateDirs: string[] = [];
+
+beforeEach(() => {
+  resetPluginStateStoreForTests();
+});
+
+afterEach(() => {
+  resetPluginStateStoreForTests();
+  for (const stateDir of stateDirs.splice(0)) {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+function flowStores() {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-flow-"));
+  stateDirs.push(stateDir);
+  const runtime = createPluginRuntimeMock();
+  runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateSyncKeyedStoreForTests<T>("reef", {
+      ...options,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+  return {
+    reviews: new ReviewApprovalStore(runtime),
+    delivered: new ReefDeliveredStore(runtime),
+  };
+}
 
 describe("ReefMessageFlow inbound", () => {
   it("delivers and persists before ack, then acks duplicate redelivery without delivering twice", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();
     const id = "01JZ0000000000000000000104";
-    const stateDir = `/tmp/reef-flow-${randomUUID()}`;
+    const stores = flowStores();
     const order: string[] = [];
     const onIngress = vi.fn(async () => {
       order.push("ingress");
@@ -39,10 +74,7 @@ describe("ReefMessageFlow inbound", () => {
     const relay = transport();
     const trusted = trust({ alice: peerTrust(alice) });
     relay.acknowledge.mockImplementation(async () => {
-      const delivered = JSON.parse(
-        await readFile(`${stateDir}/delivered.json`, "utf8"),
-      ) as string[];
-      expect(delivered).toContain(id);
+      await expect(stores.delivered.has(id)).resolves.toBe(true);
       order.push("ack");
       return { result: "deleted" };
     });
@@ -50,12 +82,11 @@ describe("ReefMessageFlow inbound", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir,
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(10)),
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...stores,
       onIngress,
       onOwnerNotice: async () => {},
     });
@@ -70,7 +101,7 @@ describe("ReefMessageFlow inbound", () => {
 
     await flow.processEntries([entry]);
     expect(order).toEqual(["ingress", "ack"]);
-    expect(JSON.parse(await readFile(`${stateDir}/delivered.json`, "utf8"))).toContain(id);
+    await expect(stores.delivered.has(id)).resolves.toBe(true);
 
     await flow.processEntries([{ ...entry, seq: 2 }]);
     expect(order).toEqual(["ingress", "ack", "ack"]);
@@ -84,16 +115,16 @@ describe("ReefMessageFlow inbound", () => {
     const relay = transport();
     const trusted = trust({ alice: peerTrust(alice) });
     const ingress = new Map<string, unknown>();
+    const stores = flowStores();
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(4)),
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...stores,
       onIngress: async (message) => {
         ingress.set(message.id, message);
       },
@@ -129,16 +160,16 @@ describe("ReefMessageFlow inbound", () => {
     const onIngress = vi.fn();
     const trusted = trust({ alice: peerTrust(alice) });
     const deny: Verdict = { ...allow, decision: "deny", category: "injection", reason: "Denied." };
+    const stores = flowStores();
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
       guard: guard(deny),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(5)),
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...stores,
       onIngress,
       onOwnerNotice: async () => {},
     });
@@ -169,16 +200,16 @@ describe("ReefMessageFlow inbound", () => {
     const classifier = guard(allow);
     const cfg = config();
     const trusted = trust({ alice: peerTrust(alice) });
+    const stores = flowStores();
     const flow = new ReefMessageFlow({
       config: cfg,
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
       guard: classifier,
       audit: new MemoryAuditStore(new Uint8Array(32).fill(6)),
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -223,16 +254,16 @@ describe("ReefMessageFlow outbound", () => {
     cfg.handle = "alice";
     const trusted = trust({ bob: peerTrust(bob) });
     const relay = transport();
+    const stores = flowStores();
     const flow = new ReefMessageFlow({
       config: cfg,
       trust: trusted.store,
       keys: alice,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -259,7 +290,8 @@ describe("ReefMessageFlow outbound", () => {
     cfg.handle = "alice";
     const trusted = trust({ bob: peerTrust(bob) });
     const relay = transport();
-    const reviews = new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`);
+    const stores = flowStores();
+    const { reviews } = stores;
     const review: Verdict = {
       ...allow,
       decision: "review",
@@ -270,12 +302,11 @@ describe("ReefMessageFlow outbound", () => {
       config: cfg,
       trust: trusted.store,
       keys: alice,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
       guard: guard(review),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(8)),
       replay: new MemoryReplayStore(),
-      reviews,
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -323,16 +354,16 @@ describe("ReefMessageFlow outbound", () => {
       category: "confidential",
       reason: "Denied.",
     };
+    const stores = flowStores();
     const flow = new ReefMessageFlow({
       config: cfg,
       trust: trusted.store,
       keys: alice,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
       guard: guard(deny),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });

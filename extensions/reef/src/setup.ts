@@ -5,7 +5,8 @@ import {
   ReefChannelConfigSchema,
   type ReefChannelConfig,
 } from "./config-schema.js";
-import { generateAndStoreKeys, resolveStateDir } from "./state.js";
+import { getReefRuntime } from "./runtime.js";
+import { generateAndStoreKeys, loadKeys } from "./state.js";
 import { ReefTransportClient } from "./transport.js";
 
 type Prompt = {
@@ -104,13 +105,13 @@ export const reefSetupWizard = {
         },
       ],
     });
-    const stateDir = resolveStateDir(
-      await prompter.text({
-        message: "Local Reef state directory",
-        initialValue: resolveStateDir(),
-      }),
-    );
-    const keys = await generateAndStoreKeys(stateDir);
+    const runtime = getReefRuntime();
+    const keys = await loadKeys(runtime).catch(async (error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+      return await generateAndStoreKeys(runtime);
+    });
     const client = new ReefTransportClient(relayUrl, handle, keys);
     if (!setupSession) {
       const started = await client.authStart(email);
@@ -142,7 +143,6 @@ export const reefSetupWizard = {
       handle,
       email,
       requestPolicy,
-      stateDir,
       guard: { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 },
     });
     await prompter.note(

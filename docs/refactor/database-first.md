@@ -564,9 +564,9 @@ The branch already has a real shared SQLite base:
   an internal `installedPluginIndex.installRecords.*` diff namespace. Runtime
   reload decisions no longer wrap those rows in fake `plugins.installs` config
   objects.
-- Matrix named-account credential upgrade no longer happens during runtime
-  reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
-  rename when a single/default Matrix account can be resolved.
+- Matrix account credentials now live in SQLite plugin state. Runtime reads
+  only that canonical store; Doctor imports, verifies, and archives retired
+  `credentials/matrix/credentials*.json` files when their account can be resolved.
 - Core pairing and cron runtime modules no longer use legacy JSON path builders.
   The deprecated pairing-path SDK helper remains migration-only compatibility;
   doctor state migration owns its file reads and imports. Doctor-owned legacy
