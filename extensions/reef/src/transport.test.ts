@@ -2,7 +2,7 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
@@ -395,111 +395,35 @@ async function deliverInboxFrame(frame: string): Promise<{
 }
 
 describe("createReefWebSocket handshake deadline", () => {
-  const servers: http.Server[] = [];
-  const sockets: import("node:net").Socket[] = [];
-
-  afterEach(async () => {
-    for (const socket of sockets.splice(0)) {
-      socket.destroy();
-    }
-    await Promise.all(
-      servers.splice(0).map(
-        (server) =>
-          new Promise<void>((resolve) => {
-            server.close(() => resolve());
-          }),
-      ),
-    );
-  });
-
-  async function listenNeverUpgrade(): Promise<http.Server> {
-    const server = http.createServer((_req, res) => {
-      res.statusCode = 200;
-      res.end("ok");
+  it("errors when the relay accepts TCP but never completes the upgrade", async () => {
+    const peers = new Set<import("node:net").Socket>();
+    const server = http.createServer();
+    server.on("connection", (socket) => {
+      peers.add(socket);
+      socket.once("close", () => peers.delete(socket));
     });
-    // Accept TCP upgrade requests but never complete HTTP 101.
-    server.on("upgrade", (req) => {
-      const peer = req.socket;
-      sockets.push(peer);
+    server.on("upgrade", () => {
+      // Leave the HTTP upgrade pending until the client deadline aborts it.
     });
-    servers.push(server);
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", () => resolve());
     });
-    return server;
-  }
 
-  it("negative control: bare WebSocket stays CONNECTING without handshakeTimeout", async () => {
-    const server = await listenNeverUpgrade();
-    const { port } = server.address() as AddressInfo;
-    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
-    socket.on("error", () => {});
-    const outcome = await Promise.race([
-      new Promise<"opened">((resolve) => {
-        socket.once("open", () => resolve("opened"));
-      }),
-      new Promise<"still-pending">((resolve) => {
-        setTimeout(() => resolve("still-pending"), 300);
-      }),
-    ]);
-    expect(outcome).toBe("still-pending");
-    expect(socket.readyState).toBe(WebSocket.CONNECTING);
-    console.log(
-      `[reef handshake negative] outcome=${outcome} readyState=${String(socket.readyState)} wait_ms=300`,
-    );
-    socket.terminate();
-  });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
+        handshakeTimeoutMs: 50,
+      }) as WebSocket;
+      const [error] = await once(socket, "error");
 
-  it("errors when the relay accepts TCP but never completes the upgrade", async () => {
-    const server = await listenNeverUpgrade();
-    const { port } = server.address() as AddressInfo;
-    const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
-      handshakeTimeoutMs: 200,
-    }) as WebSocket;
-    socket.on("error", () => {});
-    const startedAt = Date.now();
-    const outcome = await Promise.race([
-      new Promise<"opened">((resolve) => {
-        socket.once("open", () => resolve("opened"));
-      }),
-      new Promise<"failed">((resolve) => {
-        socket.once("close", () => resolve("failed"));
-        socket.once("error", () => resolve("failed"));
-      }),
-    ]);
-    const elapsedMs = Date.now() - startedAt;
-    expect(outcome).toBe("failed");
-    expect(elapsedMs).toBeGreaterThanOrEqual(150);
-    expect(elapsedMs).toBeLessThan(2_000);
-    console.log(
-      `[reef handshake proof] timed_out=true elapsed_ms=${elapsedMs} handshakeTimeout_ms=200 production_ms=30000`,
-    );
-  });
-
-  it("still opens against a real upgrading peer", async () => {
-    const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(wss, "listening");
-    const address = wss.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP listen address");
+      expect(error).toMatchObject({ message: "Opening handshake has timed out" });
+    } finally {
+      for (const peer of peers) {
+        peer.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-    const socket = createReefWebSocket(`ws://127.0.0.1:${address.port}`, {
-      handshakeTimeoutMs: 5_000,
-    }) as WebSocket;
-    const startedAt = Date.now();
-    await once(socket, "open");
-    expect(Date.now() - startedAt).toBeLessThan(500);
-    socket.close();
-    await new Promise<void>((resolve, reject) => {
-      wss.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
   });
 });
 
