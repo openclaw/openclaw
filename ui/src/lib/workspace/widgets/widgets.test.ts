@@ -199,6 +199,21 @@ describe("chart mapping", () => {
       expect(error.querySelector("svg")).toBeNull();
     }
   });
+
+  it("accepts the documented point shapes through the 500-point limit", () => {
+    const wrapped = renderToContainer(
+      renderChart(widget(), { points: [1, { y: 2 }, { value: 3 }] }),
+    );
+    expect(wrapped.querySelector('[data-test-id="workspace-chart"]')).not.toBeNull();
+
+    const capped = renderToContainer(
+      renderChart(
+        widget(),
+        Array.from({ length: 500 }, () => 1),
+      ),
+    );
+    expect(capped.querySelector('[data-test-id="workspace-chart"]')).not.toBeNull();
+  });
 });
 
 describe("iframe-embed render × sandbox mode", () => {
