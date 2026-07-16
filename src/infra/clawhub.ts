@@ -718,12 +718,12 @@ async function buildClawHubError(
 }
 
 function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
-  const reset =
-    normalizeHeaderValue(headers.get("RateLimit-Reset")) ??
-    normalizeHeaderValue(headers.get("Retry-After"));
+  const resetSeconds =
+    parseStrictNonNegativeInteger(headers.get("RateLimit-Reset")) ??
+    parseStrictNonNegativeInteger(headers.get("Retry-After"));
   const segments: string[] = [];
-  if (reset && Number.isFinite(Number(reset))) {
-    segments.push(`(resets in ${reset}s)`);
+  if (resetSeconds !== undefined) {
+    segments.push(`(resets in ${resetSeconds}s)`);
   }
   if (!hasToken) {
     segments.push("Sign in for higher rate limits.");
