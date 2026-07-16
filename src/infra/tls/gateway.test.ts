@@ -3,9 +3,22 @@
 import { X509Certificate } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { normalizeFingerprint } from "./fingerprint.js";
+
+const { resolveSystemBinMock, runExecMock } = vi.hoisted(() => ({
+  resolveSystemBinMock: vi.fn(() => "/usr/bin/openssl"),
+  runExecMock: vi.fn(),
+}));
+
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runExec: runExecMock,
+}));
+
+vi.mock("../resolve-system-bin.js", () => ({ resolveSystemBin: resolveSystemBinMock }));
+
 import { loadGatewayTlsRuntime } from "./gateway.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -63,6 +76,8 @@ r1USnb+wUdA7Zoj/mQ==
 -----END CERTIFICATE-----`;
 
 afterEach(async () => {
+  resolveSystemBinMock.mockClear();
+  runExecMock.mockReset();
   await tempDirs.cleanup();
 });
 
@@ -127,6 +142,28 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.certPath).toBe(certPath);
     expect(result.keyPath).toBe(keyPath);
     expect(result.error).toBe("gateway tls: cert/key missing");
+  });
+
+  it("bounds self-signed certificate generation", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockRejectedValueOnce(new Error("openssl timed out"));
+
+    const result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+
+    expect(runExecMock).toHaveBeenCalledWith(
+      "/usr/bin/openssl",
+      expect.arrayContaining(["req", "-x509", "-keyout", keyPath, "-out", certPath]),
+      { logOutput: false, timeoutMs: 30_000 },
+    );
+    expect(result).toMatchObject({
+      enabled: false,
+      required: true,
+      certPath,
+      keyPath,
+    });
+    expect(result.error).toContain("openssl timed out");
   });
 
   it("reports load failures for invalid pem files", async () => {

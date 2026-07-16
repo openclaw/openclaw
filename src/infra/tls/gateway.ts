@@ -11,6 +11,8 @@ import { pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 
+const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
+
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
 // fingerprint advertised to clients.
 export type GatewayTlsRuntime = {
@@ -61,7 +63,10 @@ async function generateSelfSignedCert(params: {
       "-subj",
       "/CN=openclaw-gateway",
     ],
-    { logOutput: false },
+    {
+      logOutput: false,
+      timeoutMs: GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS,
+    },
   );
   await fs.chmod(params.keyPath, 0o600).catch(() => {});
   await fs.chmod(params.certPath, 0o600).catch(() => {});
