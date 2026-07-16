@@ -2593,6 +2593,11 @@ export async function applyShortTermPromotions(
       const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
       const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
       const memoryDirMode = (await fs.stat(path.dirname(memoryWritePath))).mode & 0o7777;
+      let atomicRenameCommitted = false;
+      const trackedRename: typeof fs.rename = async (source, destination) => {
+        await fs.rename(source, destination);
+        atomicRenameCommitted = true;
+      };
       try {
         await replaceFileAtomic({
           filePath: memoryWritePath,
@@ -2604,12 +2609,28 @@ export async function applyShortTermPromotions(
           syncTempFile: true,
           syncParentDir: true,
           throwOnCleanupError: true,
+          // Stage proof prevents a future post-rename permission error from entering fallback.
+          fileSystem: {
+            promises: {
+              mkdir: fs.mkdir,
+              chmod: fs.chmod,
+              writeFile: fs.writeFile,
+              rename: trackedRename,
+              copyFile: fs.copyFile,
+              unlink: fs.unlink,
+              rm: fs.rm,
+              open: fs.open,
+              stat: fs.stat,
+              lstat: fs.lstat,
+            },
+          },
         });
       } catch (error) {
         // Released promotion writes could update an existing writable MEMORY.md even when
         // directory ACLs blocked rename. Retain that in-place contract only after a real
         // atomic permission failure and a successful writable-file open.
         if (
+          atomicRenameCommitted ||
           !isAtomicReplacePermissionError(error) ||
           !(await writeExistingMemoryInPlace(memoryWritePath, content))
         ) {
