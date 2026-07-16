@@ -113,7 +113,13 @@ export async function discardResponse(response: Response): Promise<void> {
 
 export async function readBoundedResponse(response: Response, maxBytes: number): Promise<Buffer> {
   try {
-    return await readResponseWithLimit(response, maxBytes);
+    // Request-level AbortSignal covers connect/headers; keep an idle bound on the
+    // body so a slow-drip GitHub response cannot hang Control UI previews.
+    return await readResponseWithLimit(response, maxBytes, {
+      chunkTimeoutMs: GITHUB_REQUEST_TIMEOUT_MS,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`GitHub API response stalled: no data received for ${chunkTimeoutMs}ms`),
+    });
   } finally {
     await discardResponse(response);
   }
