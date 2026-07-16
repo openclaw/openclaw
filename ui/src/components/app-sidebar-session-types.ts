@@ -7,7 +7,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import type { CloudPlacementState } from "./session-row-badges.ts";
+import type { SessionPlacementState } from "./session-row-badges.ts";
 
 export type SidebarRecentSession = {
   key: string;
@@ -27,7 +27,7 @@ export type SidebarRecentSession = {
   channelSession?: boolean;
   workSession?: boolean;
   worktreeId?: string;
-  placementState?: CloudPlacementState;
+  placementState?: SessionPlacementState;
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
   unread: boolean;
