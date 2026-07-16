@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawProtocol
 import SwiftUI
 
 struct MobileBackgroundTask: Decodable, Identifiable, Equatable {
