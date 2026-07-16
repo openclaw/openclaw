@@ -88,6 +88,11 @@ private enum IOSDeepLinkAgentPolicy {
     static let maxUnkeyedConfirmChars = 240
 }
 
+private enum TalkCapturePreparationOwner {
+    case remotePushToTalk(epoch: UInt64)
+    case chatDictation(epoch: UInt64)
+}
+
 @MainActor
 @Observable
 // swiftlint:disable type_body_length file_length
@@ -514,6 +519,7 @@ final class NodeAppModel {
     private var pttVoiceWakeLeaseCaptureId: String?
     private var chatDictationCaptureId: String?
     private var talkPttCommandEpoch: UInt64 = 0
+    private var chatDictationCommandEpoch: UInt64 = 0
     private var talkPreparationInFlight = false
     private var auxiliaryAudioCapture: AuxiliaryAudioCapture?
     private var foregroundCaptureCancellations: [UUID: @MainActor () -> Void] = [:]
@@ -1015,10 +1021,11 @@ final class NodeAppModel {
                 // schedule Voice Wake, which the background suspension must catch.
                 self.voiceNoteRecorder.cancel()
             }
-            // Invalidate queued or permission-suspended PTT starts before releasing
-            // Talk. Its capture-end callback can otherwise restart Voice Wake after
-            // the background suspension has already run.
+            // Backgrounding invalidates both remote PTT and local dictation preparation.
+            // Route and PTT events only advance the remote epoch so they cannot cancel
+            // transcription-only permission prompts.
             self.talkPttCommandEpoch &+= 1
+            self.chatDictationCommandEpoch &+= 1
             let shouldKeepTalkActive = keepTalkActive && self.talkMode.canKeepContinuousTalkActiveInBackground
             self.backgroundTalkKeptActive = shouldKeepTalkActive
             self.talkMode.suspendForBackground(keepActive: shouldKeepTalkActive)
@@ -2723,7 +2730,9 @@ final class NodeAppModel {
             let commandEpoch = self.talkPttCommandEpoch
             var reservedCaptureId: String?
             do {
-                let payload = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
+                let payload = try await self.withTalkCapturePreparation(
+                    owner: .remotePushToTalk(epoch: commandEpoch))
+                {
                     try self.rejectTalkCaptureWhileOtherAudioActive()
                     return try await self.talkMode.beginPushToTalk(
                         canStartCapture: {
@@ -2754,7 +2763,9 @@ final class NodeAppModel {
             var reservedCaptureId: String?
             let start: TalkPushToTalkOnceStart
             do {
-                start = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
+                start = try await self.withTalkCapturePreparation(
+                    owner: .remotePushToTalk(epoch: commandEpoch))
+                {
                     try self.rejectTalkCaptureWhileOtherAudioActive()
                     return try await self.talkMode.beginPushToTalkOnce(
                         canStartCapture: {
@@ -2804,17 +2815,19 @@ final class NodeAppModel {
     func transcribeChatDraft() async throws -> String? {
         guard self.chatDictationCaptureId == nil else { return nil }
 
-        let commandEpoch = self.talkPttCommandEpoch
+        let commandEpoch = self.chatDictationCommandEpoch
         var reservedCaptureId: String?
         let start: TalkPushToTalkOnceStart
         do {
-            start = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
+            start = try await self.withTalkCapturePreparation(
+                owner: .chatDictation(epoch: commandEpoch))
+            {
                 try self.rejectTalkCaptureWhileOtherAudioActive()
                 return try await self.talkMode.beginPushToTalkOnce(
                     maxDurationSeconds: 30,
                     transcriptionOnly: true,
                     canStartCapture: {
-                        self.talkPttCommandEpoch == commandEpoch && !self.isBackgrounded
+                        self.chatDictationCommandEpoch == commandEpoch && !self.isBackgrounded
                     },
                     onCaptureReserved: { captureId in
                         reservedCaptureId = captureId
@@ -2964,19 +2977,33 @@ final class NodeAppModel {
     }
 
     private func withTalkCapturePreparation<T>(
-        commandEpoch: UInt64,
+        owner: TalkCapturePreparationOwner,
         operation: () async throws -> T) async throws -> T
     {
         try await self.acquireTalkPreparation()
         defer { self.releaseTalkPreparation() }
-        try self.ensureTalkPttCommandCurrent(commandEpoch)
+        try self.ensureTalkCapturePreparationCurrent(owner)
         #if DEBUG
         if let testTalkCapturePreparationHandler {
             await testTalkCapturePreparationHandler()
         }
         #endif
-        try self.ensureTalkPttCommandCurrent(commandEpoch)
+        try self.ensureTalkCapturePreparationCurrent(owner)
         return try await operation()
+    }
+
+    private func ensureTalkCapturePreparationCurrent(_ owner: TalkCapturePreparationOwner) throws {
+        switch owner {
+        case let .remotePushToTalk(epoch):
+            try self.ensureTalkPttCommandCurrent(epoch)
+        case let .chatDictation(epoch):
+            try Task.checkCancellation()
+            guard self.chatDictationCommandEpoch == epoch, !self.isBackgrounded else {
+                throw NSError(domain: "TalkMode", code: 9, userInfo: [
+                    NSLocalizedDescriptionKey: "DICTATION_CANCELLED: chat dictation start was cancelled",
+                ])
+            }
+        }
     }
 
     private func ensureTalkPttCommandCurrent(_ commandEpoch: UInt64) throws {
