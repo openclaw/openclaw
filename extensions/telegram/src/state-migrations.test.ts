@@ -10,7 +10,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
 import { resolveTelegramMessageCachePath } from "./message-cache.js";
 import {
@@ -523,6 +523,38 @@ describe("telegram state migrations", () => {
         expect(await plan.readEntries()).toStrictEqual([]);
       }
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops sent-message entries at the TTL boundary instead of clamping their TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const storePath = resolveStorePath(undefined, { env });
+    const sentMessagePath = `${storePath}.telegram-sent-messages.json`;
+    try {
+      await mkdir(path.dirname(sentMessagePath), { recursive: true });
+      await writeFile(
+        sentMessagePath,
+        JSON.stringify({ 7: { 42: Date.now() - 24 * 60 * 60 * 1000 } }),
+      );
+
+      const plans = await detectTelegramLegacyStateMigrations({ cfg: {}, env });
+      const plan = plans.find(
+        (candidate) =>
+          candidate.kind === "plugin-state-import" &&
+          candidate.label === "Telegram sent-message cache" &&
+          candidate.sourcePath === sentMessagePath,
+      );
+      if (!plan || plan.kind !== "plugin-state-import") {
+        throw new Error("expected Telegram sent-message cache import plan");
+      }
+
+      expect(await plan.readEntries()).toStrictEqual([]);
+    } finally {
+      vi.useRealTimers();
       await rm(dir, { recursive: true, force: true });
     }
   });
