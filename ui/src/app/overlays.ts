@@ -19,10 +19,10 @@ import {
   dismissExecApprovalPrompt,
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
-  parseExecApprovalRequested,
+  parseApprovalRequestedEvent,
   parseExecApprovalResolved,
-  parsePluginApprovalRequested,
   refreshPendingApprovalQueue,
+  resolveApprovalRequest,
   type ExecApprovalDecision,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
@@ -508,23 +508,17 @@ export function createApplicationOverlays(
       publish();
       return;
     }
-    if (event.event === "exec.approval.requested") {
-      const entry = parseExecApprovalRequested(event.payload);
-      if (entry) {
-        enqueueExecApprovalPrompt(promptState, entry);
-        publish();
-      }
+    const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
+    if (requestedApproval) {
+      enqueueExecApprovalPrompt(promptState, requestedApproval);
+      publish();
       return;
     }
-    if (event.event === "plugin.approval.requested") {
-      const entry = parsePluginApprovalRequested(event.payload);
-      if (entry) {
-        enqueueExecApprovalPrompt(promptState, entry);
-        publish();
-      }
-      return;
-    }
-    if (event.event === "exec.approval.resolved" || event.event === "plugin.approval.resolved") {
+    if (
+      event.event === "exec.approval.resolved" ||
+      event.event === "plugin.approval.resolved" ||
+      event.event === "openclaw.approval.resolved"
+    ) {
       const resolved = parseExecApprovalResolved(event.payload);
       if (resolved) {
         clearResolvedExecApprovalPrompt(promptState, resolved.id);
@@ -648,9 +642,7 @@ export function createApplicationOverlays(
         isCurrentClient(operation.client);
       publish();
       try {
-        const method =
-          active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
-        await client.request(method, { id: active.id, decision });
+        await resolveApprovalRequest(client, active, decision);
         if (!isCurrentOperation()) {
           return;
         }

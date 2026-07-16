@@ -65,6 +65,14 @@
       "destination": "/channels/matrix-migration"
     },
     {
+      "source": "/concepts/qa-matrix",
+      "destination": "/concepts/qa-e2e-automation#matrix-smoke-lanes"
+    },
+    {
+      "source": "/plugins/reference/qa-matrix",
+      "destination": "/plugins/reference/qa-lab"
+    },
+    {
       "source": "/concepts/openclaw-sdk",
       "destination": "/gateway/external-apps"
     },
@@ -1135,6 +1143,7 @@
                 "group": "Mainstream messaging",
                 "pages": [
                   "channels/discord",
+                  "channels/discord-activities",
                   "channels/slack",
                   "channels/telegram",
                   "channels/whatsapp",
@@ -1213,8 +1222,7 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
-                  "concepts/personal-agent-benchmark-pack",
-                  "concepts/qa-matrix"
+                  "concepts/personal-agent-benchmark-pack"
                 ]
               },
               {

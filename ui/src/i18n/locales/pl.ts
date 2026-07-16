@@ -659,6 +659,8 @@ export const pl: TranslationMap = {
     archiveSession: "Zarchiwizuj sesję",
     archiveSessionCount: "Archiwizuj {count}",
     restoreSession: "Przywróć sesję",
+    stopCloudWorker: "Zatrzymaj proces roboczy w chmurze…",
+    stopCloudWorkerConfirm: "Zatrzymać proces roboczy w chmurze dla sesji „{session}”?",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Usuń {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

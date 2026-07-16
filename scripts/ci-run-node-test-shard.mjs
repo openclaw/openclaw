@@ -117,9 +117,19 @@ function relayChildStream(stream, label) {
   };
 }
 
+export function resolveShardChildCommand(args, nodeExecPath = process.execPath) {
+  return {
+    command: nodeExecPath,
+    args: ["scripts/test-projects.mjs", ...args],
+  };
+}
+
 function runChild(args, childEnv, label) {
   return new Promise((resolve) => {
-    const child = spawn("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...args], {
+    // Use Node directly. `pnpm exec node` may reconcile the workspace before
+    // tests, which destroys the sticky dependency fast path.
+    const childCommand = resolveShardChildCommand(args);
+    const child = spawn(childCommand.command, childCommand.args, {
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -178,13 +188,16 @@ export async function runShardPlans(plans, options = {}) {
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plans = resolveShardPlans();
+  // Bins holding spawn/signal-timing suites are marked planConcurrency 1 by
+  // the planner; overlapping them with a sibling Vitest run causes flakes.
+  const planConcurrency = Number(process.env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY) || undefined;
   const releaseLock = acquireLocalHeavyCheckLockSync({
     cwd: process.cwd(),
     env: process.env,
     toolName: "test",
   });
   try {
-    process.exitCode = await runShardPlans(plans);
+    process.exitCode = await runShardPlans(plans, { concurrency: planConcurrency });
   } finally {
     releaseLock();
   }

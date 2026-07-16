@@ -67,6 +67,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.uiDescriptors", scope: "operator.read" },
   { name: "plugins.sessionAction", scope: "dynamic" },
   { name: "openclaw.chat", scope: "operator.admin" },
+  { name: "openclaw.approval.list", scope: "operator.approvals" },
   { name: "openclaw.setup.detect", scope: "operator.admin" },
   // Failed activation candidates are non-mutating probes. Keep this admin-only
   // without the shared three-write budget so the automatic ladder can finish.
@@ -350,6 +351,12 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.search", scope: "operator.read" },
   {
     name: "sessions.dispatch",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
+  {
+    name: "sessions.reclaim",
     scope: "operator.admin",
     startup: true,
     controlPlaneWrite: true,

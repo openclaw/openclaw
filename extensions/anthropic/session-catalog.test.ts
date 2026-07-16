@@ -17,11 +17,30 @@ import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
-  listClaudeSessionCatalog,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
   registerClaudeSessionCatalog,
 } from "./session-catalog.js";
+
+function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider {
+  let provider: SessionCatalogProvider | undefined;
+  const runtimeWithSession = {
+    ...runtime,
+    agent: runtime.agent ?? { session: { listSessionEntries: () => [] } },
+  } as PluginRuntime;
+  registerClaudeSessionCatalog({
+    id: "anthropic",
+    config: {},
+    runtime: runtimeWithSession,
+    registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+      provider = candidate;
+    },
+  } as unknown as OpenClawPluginApi);
+  if (!provider) {
+    throw new Error("expected Anthropic session catalog registration");
+  }
+  return provider;
+}
 
 const homes: string[] = [];
 const originalHome = process.env.HOME;
@@ -33,52 +52,42 @@ const nodeHostMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
-  const resolveWithTestShellPath = (
-    command: string,
-    pathEnv: string,
-    env: NodeJS.ProcessEnv | undefined,
-    options:
-      | {
-          fallbackToLoginShell?: boolean;
-          preferLoginShell?: boolean;
-          withPathEnv?: boolean;
-        }
-      | undefined,
-  ) => {
-    const fallbackPath = options?.fallbackToLoginShell
-      ? nodeHostMocks.userShellPaths.get(command)
-      : undefined;
-    const directResolution = actual.resolveExecutableFromPathEnv(command, pathEnv, env, {
-      withPathEnv: true,
-    });
-    if (directResolution && !options?.preferLoginShell) {
-      return directResolution;
-    }
-    if (!fallbackPath) {
-      return directResolution;
-    }
-    const shellResolution = actual.resolveExecutableFromPathEnv(command, fallbackPath, env, {
-      withPathEnv: true,
-    });
-    return shellResolution ? { ...shellResolution, pathEnv: fallbackPath } : directResolution;
-  };
   return {
     ...actual,
     runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveExecutableFromPathEnv: (
+    resolveNodeHostExecutable: (
       command: string,
-      pathEnv: string,
-      env: NodeJS.ProcessEnv | undefined,
-      options:
-        | {
-            fallbackToLoginShell?: boolean;
-            preferLoginShell?: boolean;
-            withPathEnv?: boolean;
-          }
-        | undefined,
+      options: {
+        env?: NodeJS.ProcessEnv;
+        pathEnv?: string;
+        includeExtensionless?: boolean;
+        strategy: "direct" | "fallback" | "prefer";
+      },
     ) => {
-      const resolution = resolveWithTestShellPath(command, pathEnv, env, options);
-      return options?.withPathEnv ? resolution : resolution?.executable;
+      const env = options.env ?? process.env;
+      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
+      const direct = actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv,
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+      if (direct && options.strategy !== "prefer") {
+        return direct;
+      }
+      const shellPath = nodeHostMocks.userShellPaths.get(command);
+      if (!shellPath) {
+        return direct;
+      }
+      const shellExecutable = actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: shellPath,
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+      return shellExecutable
+        ? { executable: shellExecutable.executable, pathEnv: shellPath }
+        : direct;
     },
   };
 });
@@ -1173,11 +1182,9 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:healthy", "node:failed"] },
-    });
-    expect(result.hosts).toEqual([
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:healthy", "node:failed"] });
+    expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:failed", error: expect.any(Object) }),
       expect.objectContaining({ hostId: "node:healthy", sessions: [] }),
     ]);
@@ -1190,12 +1197,10 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:registry"] },
-    });
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:registry"] });
 
-    expect(result.hosts).toEqual([
+    expect(hosts).toEqual([
       expect.objectContaining({
         hostId: "node:registry",
         error: {
@@ -1236,11 +1241,9 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:malformed"] },
-    });
-    expect(result.hosts).toEqual([
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:malformed"] });
+    expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:malformed", error: expect.any(Object) }),
     ]);
   });

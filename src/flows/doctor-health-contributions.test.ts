@@ -7,11 +7,11 @@ import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import "./doctor-tool-result-cap-advice.js";
+import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorHealthContribution,
-  resolveDoctorContributionHealthChecks,
   resolveDoctorHealthContributions,
-} from "./doctor-health-contributions.js";
+} from "./doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 

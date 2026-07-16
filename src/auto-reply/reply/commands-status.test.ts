@@ -6,13 +6,13 @@ import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.js";
+} from "../../agents/subagent-registry.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   completeTaskRunByRunId,
@@ -20,7 +20,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {

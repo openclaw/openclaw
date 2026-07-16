@@ -5,6 +5,12 @@ import { icons } from "./icons.ts";
 
 export type CloudPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
+export function isStoppableCloudWorkerPlacement(
+  placement: GatewaySessionRow["placement"],
+): boolean {
+  return placement?.state === "active";
+}
+
 export function renderSessionRowBadges(params: {
   worktreeId?: string;
   hasAutomation: boolean;
