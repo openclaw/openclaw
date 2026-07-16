@@ -645,7 +645,7 @@ CREATE INDEX IF NOT EXISTS idx_apns_registrations_updated
 CREATE TABLE IF NOT EXISTS apns_registration_tombstones (
   node_id TEXT NOT NULL PRIMARY KEY,
   deleted_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS node_host_config (
   config_key TEXT NOT NULL PRIMARY KEY,
