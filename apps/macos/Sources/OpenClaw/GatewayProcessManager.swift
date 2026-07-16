@@ -42,6 +42,7 @@ final class GatewayProcessManager {
     private var environmentRefreshTask: Task<Void, Never>?
     private var lastEnvironmentRefresh: Date?
     private var logRefreshTask: Task<Void, Never>?
+    private var launchAgentEnableTask: Task<String?, Never>?
     #if DEBUG
     private var testingConnection: GatewayConnection?
     private var testingSkipControlChannelRefresh = false
@@ -85,15 +86,37 @@ final class GatewayProcessManager {
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
             return
         }
-        let enabled = await GatewayLaunchAgentManager.isLoaded()
-        guard !enabled else { return }
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
-        self.appendLog("[gateway] auto-enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
-        let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
+        let err = await self.enableLaunchAgentIfNeeded(bundlePath: bundlePath, port: port)
         if let err {
             self.appendLog("[gateway] launchd auto-enable failed: \(err)\n")
         }
+    }
+
+    private func enableLaunchAgentIfNeeded(bundlePath: String, port: Int) async -> String? {
+        if let task = self.launchAgentEnableTask {
+            return await task.value
+        }
+
+        // App startup and onboarding can request persistence together. Share one check/install task;
+        // a second forced install would kill the first Gateway during startup migrations.
+        let task = Task { @MainActor in
+            if await GatewayLaunchAgentManager.isLoaded() {
+                return nil as String?
+            }
+            self.appendLog("[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
+            return await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: bundlePath,
+                port: port)
+        }
+        self.launchAgentEnableTask = task
+        let result = await task.value
+        // Only the creator reaches cleanup; joiners return above. Keeping that split prevents a
+        // stale waiter from clearing a newer enable task after this one completes.
+        self.launchAgentEnableTask = nil
+        return result
     }
 
     func startIfNeeded() {
@@ -323,9 +346,8 @@ final class GatewayProcessManager {
 
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
-        self.appendLog("[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
-        self.logger.info("gateway enabling launchd port=\(port)")
-        let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
+        self.logger.info("gateway ensuring launchd port=\(port)")
+        let err = await self.enableLaunchAgentIfNeeded(bundlePath: bundlePath, port: port)
         if let err {
             self.status = .failed(err)
             self.lastFailureReason = err

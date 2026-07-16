@@ -197,9 +197,15 @@ extension GatewayLaunchAgentManager {
         #if DEBUG
         if self.testingInterceptDaemonCommands {
             self.testingDaemonCommandCalls.append(args)
+            let loaded = self.testingDaemonStatusLoaded
+            let payload = if args.first == "status", let loaded {
+                "{\"ok\":true,\"service\":{\"loaded\":\(loaded)}}"
+            } else {
+                "{\"ok\":true}"
+            }
             return CommandResult(
                 success: true,
-                payload: Data("{\"ok\":true}".utf8),
+                payload: Data(payload.utf8),
                 message: nil)
         }
         #endif
@@ -251,6 +257,7 @@ extension GatewayLaunchAgentManager {
     private nonisolated(unsafe) static var testingDisableLaunchAgentMarkerURL: URL?
     private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
     private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
+    private nonisolated(unsafe) static var testingDaemonStatusLoaded: Bool?
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
         self.testingDisableLaunchAgentMarkerURL = url
@@ -258,6 +265,10 @@ extension GatewayLaunchAgentManager {
 
     static func setTestingInterceptDaemonCommands(_ intercept: Bool) {
         self.testingInterceptDaemonCommands = intercept
+    }
+
+    static func setTestingDaemonStatusLoaded(_ loaded: Bool?) {
+        self.testingDaemonStatusLoaded = loaded
     }
 
     static func clearTestingDaemonCommandCalls() {
