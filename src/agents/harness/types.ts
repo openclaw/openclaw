@@ -145,6 +145,11 @@ type AgentHarnessRunCapability = {
   label: string;
   pluginId?: string;
   /**
+   * Exhaustive provider ids eligible for automatic selection. Omitting this hint preserves
+   * dynamic probing; an empty list marks an explicit-only harness.
+   */
+  autoSelection?: { providerIds: readonly string[] };
+  /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.
    */

@@ -6,6 +6,7 @@ import {
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
@@ -99,6 +100,17 @@ describe("buildChannelProgressDraftLine", () => {
       status: "exit 2",
     });
     expect(line?.text).not.toContain("command false");
+  });
+});
+
+describe("mergeChannelProgressDraftLine", () => {
+  it("keeps identical visible lines distinct when their stable ids differ", () => {
+    const first = { id: "tool-1", kind: "tool" as const, text: "bash", label: "bash" };
+    const second = { id: "tool-2", kind: "tool" as const, text: "bash", label: "bash" };
+
+    const lines = mergeChannelProgressDraftLine([first], second, { maxLines: 8 });
+
+    expect(lines.map((line) => line.id)).toEqual(["tool-1", "tool-2"]);
   });
 });
 

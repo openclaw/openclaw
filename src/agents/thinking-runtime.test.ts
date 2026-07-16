@@ -65,6 +65,28 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("openclaw");
   });
 
+  it("uses static auto-selection facts before resolving provider routes", () => {
+    const supports = vi.fn<AgentHarness["supports"]>(() => ({ supported: true, priority: 100 }));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      autoSelection: { providerIds: ["openai", "codex"] },
+      supports,
+      runAttempt: async () => {
+        throw new Error("not exercised");
+      },
+    });
+
+    expect(
+      resolveEffectiveAgentRuntime({
+        cfg: {},
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+      }),
+    ).toBe("openclaw");
+    expect(supports).not.toHaveBeenCalled();
+  });
+
   it("keeps an authored custom route on OpenClaw before registered harness selection", () => {
     const supports = vi.fn<AgentHarness["supports"]>(({ provider }) =>
       provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
