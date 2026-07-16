@@ -390,6 +390,18 @@ describe("normalizeAssistantReplayContent", () => {
     expect(normalizeAssistantReplayContent(messages)).toBe(messages);
   });
 
+  it("preserves adjacent zero-usage assistant turns with tool calls", () => {
+    const content = [
+      { type: "text", text: "checking" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: { path: "file.txt" } },
+    ];
+    const first = bedrockAssistant(content, "stop");
+    const second = bedrockAssistant(content, "stop");
+    const messages = [userMessage("check"), first, second];
+
+    expect(normalizeAssistantReplayContent(messages)).toBe(messages);
+  });
+
   it("returns the original array reference when nothing needs to change", () => {
     const messages = [userMessage("hello"), bedrockAssistant([{ type: "text", text: "fine" }])];
     const out = normalizeAssistantReplayContent(messages);
