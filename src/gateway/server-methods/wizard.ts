@@ -98,6 +98,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
               {
                 mode: params.mode,
                 workspace: readStringValue(params.workspace),
+                installDaemon: params.installDaemon,
+                skipUi: true,
+                suppressGatewayTokenOutput: true,
               },
               defaultRuntime,
               prompter,
