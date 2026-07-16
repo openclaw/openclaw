@@ -2015,6 +2015,19 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("bounds Mantis Slack runner IP discovery", () => {
+    const workflow = parse(
+      readFileSync(".github/workflows/mantis-slack-desktop-smoke.yml", "utf8"),
+    ) as { jobs: { run_slack_desktop: { steps: WorkflowStep[] } } };
+    const runStep = workflow.jobs.run_slack_desktop.steps.find(
+      (step) => step.name === "Run Slack desktop scenario",
+    );
+
+    expect(runStep?.run).toContain(
+      "curl -fsS --connect-timeout 5 --max-time 15 --retry 2 https://checkip.amazonaws.com",
+    );
+  });
+
   it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
     const workflow = readFileSync(".github/workflows/windows-blacksmith-testbox.yml", "utf8");
 
