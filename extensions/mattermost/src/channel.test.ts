@@ -57,6 +57,14 @@ function requireMattermostNormalizeTarget() {
   return normalize;
 }
 
+function requireMattermostTargetResolver() {
+  const resolveTarget = mattermostPlugin.messaging?.targetResolver?.resolveTarget;
+  if (!resolveTarget) {
+    throw new Error("mattermost messaging.targetResolver.resolveTarget missing");
+  }
+  return resolveTarget;
+}
+
 function requireMattermostPairingNormalizer() {
   const normalize = mattermostPlugin.pairing?.normalizeAllowEntry;
   if (!normalize) {
@@ -765,6 +773,27 @@ describe("mattermostPlugin", () => {
               conversationReadOrigin: "direct-operator",
             }),
           ),
+        ),
+      ).rejects.toThrow('Mattermost account "default" is disabled');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("rejects disabled accounts before opaque target resolution provider access", async () => {
+      const cfg = createMattermostTestConfig(`disabled-target-${++reactionActionSequence}`);
+      const mattermostConfig = cfg.channels?.mattermost;
+      if (!mattermostConfig) {
+        throw new Error("expected Mattermost config fixture");
+      }
+      mattermostConfig.accounts = { default: { enabled: false } };
+      const fetchImpl = vi.fn<typeof fetch>();
+
+      await expect(
+        withMockedGlobalFetch(fetchImpl, async () =>
+          requireMattermostTargetResolver()({
+            cfg,
+            accountId: "default",
+            input: "disabled12abcd1234abcd1234",
+          }),
         ),
       ).rejects.toThrow('Mattermost account "default" is disabled');
       expect(fetchImpl).not.toHaveBeenCalled();
