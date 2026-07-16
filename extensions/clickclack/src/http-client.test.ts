@@ -1,7 +1,11 @@
 import { createServer, type Server } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
+import {
+  claimClickClackSetupCode,
+  createClickClackClient,
+  normalizeClickClackCorrelationId,
+} from "./http-client.js";
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
@@ -125,6 +129,100 @@ function streamedErrorResponse(body: string, limit: number) {
 }
 
 describe("ClickClack HTTP client", () => {
+  it("claims setup codes over guarded HTTPS without bearer authentication", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        token: "ccb_claimed",
+        bot: {
+          id: "usr_bot",
+          handle: "openclaw",
+          display_name: "OpenClaw",
+        },
+        workspace: {
+          id: "wsp_1",
+          route_id: "clickclack",
+          slug: "default",
+          name: "ClickClack",
+        },
+        defaults: {
+          defaultTo: "channel:general",
+          allowFrom: ["*"],
+          agentActivity: true,
+        },
+      }),
+    );
+
+    await expect(
+      claimClickClackSetupCode({
+        baseUrl: "https://clickclack.example",
+        code: "ABCD-EFGH-JKMP",
+        fetch: fetchMock as unknown as typeof fetch,
+      }),
+    ).resolves.toEqual({
+      token: "ccb_claimed",
+      bot: {
+        id: "usr_bot",
+        handle: "openclaw",
+        display_name: "OpenClaw",
+      },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {
+        defaultTo: "channel:general",
+        allowFrom: ["*"],
+        agentActivity: true,
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://clickclack.example/api/bot-setup-codes/claim",
+    );
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init).toMatchObject({ method: "POST", redirect: "manual" });
+    expect(requestBodyJson(init)).toEqual({ code: "ABCD-EFGH-JKMP" });
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
+  it("rejects non-HTTPS setup-code claims before sending a request", async () => {
+    const fetchMock = vi.fn();
+
+    await expect(
+      claimClickClackSetupCode({
+        baseUrl: "http://clickclack.example",
+        code: "ABCD-EFGH-JKMP",
+        fetch: fetchMock as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("URL must use https");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed setup-code claim responses", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        token: "ccb_claimed",
+        bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+        workspace: { id: "wsp_1", route_id: "clickclack", slug: "default" },
+        defaults: {},
+      }),
+    );
+
+    await expect(
+      claimClickClackSetupCode({
+        baseUrl: "https://clickclack.example",
+        code: "ABCD-EFGH-JKMP",
+        fetch: fetchMock as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("invalid workspace.name");
+  });
+
   it("replaces the authenticated bot command menu", async () => {
     const botCommand = {
       id: "botcmd_1",
