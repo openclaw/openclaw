@@ -12,6 +12,10 @@ import type { CrestodianToolOptions } from "../agents/tools/crestodian-tool.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
+  resolveToolsMcpAgentSessionKey,
+} from "./agent-session-env.js";
+import {
   resolveOpenClawToolsMcpCrestodianApproval,
   resolveOpenClawToolsMcpCrestodianSurface,
   resolveOpenClawToolsMcpToolSelection,
@@ -23,13 +27,12 @@ export {
   OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
 } from "./openclaw-tools-serve-config.js";
-
-export const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
+export { OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV } from "./agent-session-env.js";
 
 export function resolveOpenClawToolsMcpAgentSessionKey(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return env[OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV]?.trim() || undefined;
+  return resolveToolsMcpAgentSessionKey(env);
 }
 
 export function resolveOpenClawToolsForMcp(
