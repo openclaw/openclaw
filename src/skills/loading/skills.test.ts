@@ -540,6 +540,7 @@ describe("shouldIncludeSkill", () => {
     withClearedEnv([envName], () => {
       expect(shouldInclude(resolvedSkillApiKeyConfig("env-skill", "   "))).toBe(false);
       expect(shouldInclude(resolvedSkillApiKeyConfig("env-skill", " example "))).toBe(true);
+      expect(shouldInclude(rawSkillApiKeyRefConfig("env-skill"))).toBe(true);
     });
   });
 

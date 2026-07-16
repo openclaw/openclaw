@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import type { SkillConfig } from "../../config/types.skills.js";
 import {
   evaluateRuntimeEligibility,
@@ -65,10 +66,7 @@ export function isSkillEnvRequirementSatisfied(params: {
   return (
     normalizeOptionalString(process.env[envName]) !== undefined ||
     normalizeOptionalString(skillConfig?.env?.[envName]) !== undefined ||
-    (primaryEnv === envName &&
-      (typeof skillConfig?.apiKey === "string"
-        ? normalizeOptionalString(skillConfig.apiKey) !== undefined
-        : skillConfig?.apiKey !== undefined))
+    (primaryEnv === envName && hasConfiguredSecretInput(skillConfig?.apiKey))
   );
 }
 
