@@ -5247,6 +5247,47 @@ describe("gateway server chat", () => {
     );
   });
 
+  test("chat.send forwards one-turn queue mode overrides internally", async () => {
+    await withGatewayChatHarness(
+      async ({ ws, createSessionDir }) => {
+        const spy = getReplyFromConfig;
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        await createSessionDir();
+        await writeMainSessionStore();
+        let capturedOpts: InternalGetReplyOptions | undefined;
+        mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+          capturedOpts = opts;
+          return undefined;
+        });
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "steer this turn",
+          queueMode: "steer",
+          idempotencyKey: "idem-queue-mode-override",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(() => {
+          expect(spy.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
+
+        expect(capturedOpts).toMatchObject({ queueModeOverride: "steer" });
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
+  });
+
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });

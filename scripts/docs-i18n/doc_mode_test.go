@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -741,6 +742,118 @@ func TestValidateDocChunkTranslationAcceptsReorderedInlineCode(t *testing.T) {
 
 	if err := validateDocChunkTranslation(source, translated); err != nil {
 		t.Fatalf("expected reordered intact inline code to pass, got %v", err)
+	}
+}
+
+func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		"- A Windows path can end in a backslash: `C:\\`.",
+		"- **`command`-typed actions** render as `` label: `command` `` so users can copy it.",
+		"- **`callback`-typed actions** and legacy **`value`** fields render label-only.",
+		"",
+	}, "\n")
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	wantLiterals := []string{"`command`", "`` label: `command` ``", "`callback`", "`value`", "`C:\\`"}
+	for _, literal := range wantLiterals {
+		if strings.Contains(masked, literal) {
+			t.Fatalf("expected %q to be masked:\n%s", literal, masked)
+		}
+	}
+	for _, prose := range []string{"typed actions", "so users can copy it", "fields render label-only", "A Windows path can end in a backslash"} {
+		if !strings.Contains(masked, prose) {
+			t.Fatalf("expected translatable prose %q to remain visible:\n%s", prose, masked)
+		}
+	}
+	maskedLiterals := []string{}
+	for _, value := range mapping {
+		if strings.HasPrefix(value, "`") {
+			maskedLiterals = append(maskedLiterals, value)
+		}
+	}
+	if !sameStringMultiset(wantLiterals, maskedLiterals) {
+		t.Fatalf("masked inline literals = %v, want %v", maskedLiterals, wantLiterals)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("inline-code round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
+func TestMaskMarkdownDocSyntaxProtectsProductLinksInsideRawHTML(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		`<div className="maturity-category-docs">`,
+		"",
+		"Use `channel links`: [Discord](/channels/discord), [Render](https://render.com/docs), [Groups](/channels/groups).",
+		"[Render](/guides/pre-render) the page first.",
+		"",
+		`</div>`,
+		"",
+	}, "\n")
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	if strings.Contains(masked, "[Discord](/channels/discord)") {
+		t.Fatalf("expected protected link %q to be masked:\n%s", "Discord", masked)
+	}
+	if strings.Contains(masked, "[Render](https://render.com/docs)") {
+		t.Fatalf("expected contextual product link %q to be masked:\n%s", "Render", masked)
+	}
+	if !strings.Contains(masked, "[Groups]") {
+		t.Fatalf("expected ordinary link label to remain translatable:\n%s", masked)
+	}
+	if !strings.Contains(masked, "[Render](/guides/pre-render)") {
+		t.Fatalf("expected contextual ordinary-word label to remain translatable:\n%s", masked)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
+func TestMaskMarkdownDocSyntaxKeepsProtectedLinkAssociationOpaque(t *testing.T) {
+	t.Parallel()
+
+	source := "Read [Slack](/channels/slack) and nearby Slack setup notes.\n"
+	state := NewPlaceholderState(source)
+	placeholders := []string{}
+	mapping := map[string]string{}
+	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+
+	if strings.Contains(masked, "[Slack]") || strings.Contains(masked, "/channels/slack") {
+		t.Fatalf("expected protected link label and destination to share one opaque placeholder:\n%s", masked)
+	}
+	if !strings.Contains(masked, "nearby Slack setup notes") {
+		t.Fatalf("expected ordinary surrounding product prose to remain visible:\n%s", masked)
+	}
+	if len(placeholders) != 1 || mapping[placeholders[0]] != "[Slack](/channels/slack)" {
+		t.Fatalf("unexpected protected-link placeholder mapping: placeholders=%v mapping=%v", placeholders, mapping)
+	}
+	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
+	}
+}
+
+func TestValidateDocBodyRejectsTranslatedInlineCode(t *testing.T) {
+	t.Parallel()
+
+	source := "- **`callback`-typed actions** and legacy **`value`** fields render label-only.\n"
+	translated := "- **`कॉलबैक`-typed actions** and legacy **`मान`** fields render label-only.\n"
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil || !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected final-document inline-code mismatch, got %v", err)
+	}
+
+	preserved := "- **`callback`-प्रकार की कार्रवाइयाँ** और पुराने **`value`** फ़ील्ड केवल लेबल दिखाते हैं।\n"
+	if err := validateDocBodyFencedLiterals(source, preserved); err != nil {
+		t.Fatalf("expected translated prose with preserved inline code to pass: %v", err)
 	}
 }
 
@@ -2329,8 +2442,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 28") {
-		t.Fatalf("expected prompt version 28 in output metadata:\n%s", text)
+	if !strings.Contains(text, fmt.Sprintf("prompt_version: %d", promptVersion)) {
+		t.Fatalf("expected prompt version %d in output metadata:\n%s", promptVersion, text)
 	}
 }
 
@@ -2424,6 +2537,23 @@ func TestExtractNumericValuesKeepsLowAmbiguityComposites(t *testing.T) {
 	}
 	if err := validateDocChunkTranslation("Available 24/7.\n", "24/7 उपलब्ध।\n"); err != nil {
 		t.Fatalf("expected translated prose around exact slash ratio to pass: %v", err)
+	}
+}
+
+func TestExtractNumericValuesKeepsClockCoreBeforeMeridiemSuffix(t *testing.T) {
+	t.Parallel()
+
+	if got := strings.Join(extractNumericValues("At 5am, meet again by 6:14am."), ","); got != "6:14" {
+		t.Fatalf("unexpected clock values: %q", got)
+	}
+	if err := validateDocChunkTranslation(
+		"At 5am, meet again by 6:14am.\n",
+		"सुबह 5 बजे मिलें और 6:14 बजे तक फिर मिलें।\n",
+	); err != nil {
+		t.Fatalf("expected detached translated clock suffix to preserve the numeric core: %v", err)
+	}
+	if got := extractNumericValues("Versions v6:14am and 6:14amx stay unprotected."); len(got) != 0 {
+		t.Fatalf("unexpected embedded clock values: %v", got)
 	}
 }
 

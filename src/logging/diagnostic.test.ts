@@ -14,11 +14,13 @@ import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "./diagnostic-run-activity.js";
+import {
   markDiagnosticModelStartedForTest,
   markDiagnosticRunProgressForTest,
   markDiagnosticToolStartedForTest,
-  resetDiagnosticRunActivityForTest,
-} from "./diagnostic-run-activity.js";
+} from "./diagnostic-run-activity.test-support.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
   requestStuckSessionRecovery,

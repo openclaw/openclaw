@@ -281,7 +281,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "gateway",
     label: "gateway",
-    description: "Gateway control",
+    description: "Read Gateway config and schema",
     sectionId: "automation",
     profiles: [],
     includeInOpenClawGroup: true,

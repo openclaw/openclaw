@@ -7,7 +7,6 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import {
-  isCasePreservingPeer,
   normalizeSessionKeyPreservingOpaquePeerIds,
   normalizeSessionPeerId,
   parseRawSessionConversationRef,
@@ -29,22 +28,6 @@ const entry = (to: string, updatedAt: number): SessionEntry =>
 const ROOM_A = "!MixedRoomAbCdEf:example.org";
 const ROOM_B = "!OtherRoomGhIjKl:matrix.example.org";
 const EVENT = "$EvMixedCaseAbCdEfGhIjKlMnOpQrStUvWxYz0";
-
-describe("isCasePreservingPeer", () => {
-  it("enrolls Matrix channel/group and Signal group; not direct or other channels", () => {
-    expect(isCasePreservingPeer("matrix", "channel")).toBe(true);
-    expect(isCasePreservingPeer("matrix", "group")).toBe(true);
-    expect(isCasePreservingPeer("matrix", "direct")).toBe(false);
-    expect(isCasePreservingPeer("signal", "group")).toBe(true);
-    expect(isCasePreservingPeer("signal", "direct")).toBe(false);
-    expect(isCasePreservingPeer("telegram", "group")).toBe(false);
-    expect(isCasePreservingPeer("slack", "channel")).toBe(false);
-  });
-
-  it("is case-insensitive on the channel/peerKind labels", () => {
-    expect(isCasePreservingPeer("Matrix", "Channel")).toBe(true);
-  });
-});
 
 describe("requiresFoldedSessionKeyAliasProof", () => {
   it("requires alias proof only for tail-preserved Matrix room keys", () => {

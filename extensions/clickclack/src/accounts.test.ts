@@ -1,5 +1,8 @@
 // Clickclack tests cover accounts plugin behavior.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listClickClackAccountIds,
   resolveClickClackAccount,
@@ -8,6 +11,10 @@ import {
 import type { CoreConfig } from "./types.js";
 
 describe("ClickClack account resolution", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("preserves top-level default account when named accounts are configured", () => {
     const cfg = {
       channels: {
@@ -117,6 +124,53 @@ describe("ClickClack account resolution", () => {
       timeoutSeconds: undefined,
       toolsAllow: undefined,
       workspace: "wsp_1",
+    });
+  });
+
+  it("uses the default ClickClack env token only for the default account", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } satisfies CoreConfig;
+    const env = { CLICKCLACK_BOT_TOKEN: "  default-env-token  " };
+    vi.stubEnv("CLICKCLACK_BOT_TOKEN", env.CLICKCLACK_BOT_TOKEN);
+
+    expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveClickClackAccount({ cfg, env }).token).toBe("default-env-token");
+    expect(resolveClickClackAccount({ cfg, accountId: "work", env }).token).toBe("");
+  });
+
+  it("reads tokenFile credentials without overriding a named account token", async () => {
+    await withTempDir("clickclack-token-", async (tempDir) => {
+      const tokenFile = path.join(tempDir, "token");
+      fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
+      const cfg = {
+        channels: {
+          clickclack: {
+            enabled: true,
+            baseUrl: "https://app.clickclack.chat",
+            workspace: "wsp_1",
+            tokenFile,
+            accounts: {
+              work: {
+                token: "work-token",
+              },
+            },
+          },
+        },
+      } satisfies CoreConfig;
+
+      expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
+      expect(resolveClickClackAccount({ cfg }).token).toBe("file-token");
+      expect(resolveClickClackAccount({ cfg, accountId: "work" }).token).toBe("work-token");
     });
   });
 

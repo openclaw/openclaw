@@ -44,7 +44,6 @@ import {
 } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
-import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
@@ -71,6 +70,7 @@ import {
 } from "./run-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import {
+  listQaScenariosForExecutionProfile,
   QA_RUNTIME_PARITY_TIERS,
   readQaScenarioPack,
   type QaRuntimeParityTier,
@@ -110,17 +110,14 @@ const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
   "ETIMEDOUT",
   "UND_ERR_SOCKET",
 ]);
-
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
 };
-
 export type QaLabSelfCheckCommandOptions = {
   repoRoot?: string;
   output?: string;
 };
-
 type QaScenarioProviderCommandOptions = {
   transportId?: string;
   providerMode?: QaProviderModeInput;
@@ -128,15 +125,14 @@ type QaScenarioProviderCommandOptions = {
   alternateModel?: string;
   fastMode?: boolean;
 };
-
 type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   concurrency?: number;
   allowFailures?: boolean;
+  failFast?: boolean;
 };
-
 export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
   profile: string;
   surface?: string;
@@ -161,6 +157,10 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   preflight?: boolean;
   runtimePair?: string;
   runtimeParityTier?: string[];
+  sutAccountId?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+  explicitScenarioSelection?: boolean;
 };
 
 function normalizeQaSuiteChannelDriver(
@@ -817,6 +817,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
+      failFast: opts.failFast,
       scenarioIds: scenarios.map((scenario) => scenario.id),
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
@@ -986,13 +987,14 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (liveChannelId && !liveAdapterFactory) {
     throw new Error(`unknown live QA adapter: ${liveChannelId}`);
   }
+  // liveChannelId exists only for the live driver, and explicit IDs always win.
+  // This keeps adapter profiles out of non-live and explicit-selection paths.
   const liveScenarioIds =
     liveAdapterFactory && scenarioIds.length === 0
-      ? [...(liveAdapterFactory.scenarioIds ?? [])]
+      ? listQaScenariosForExecutionProfile(`${liveChannelId}:adapter`).map(
+          (scenario) => scenario.id,
+        )
       : scenarioIds;
-  if (liveAdapterFactory && liveScenarioIds.length === 0) {
-    throw new Error(`live QA adapter ${liveChannelId} does not declare default scenarios`);
-  }
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -1120,6 +1122,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
             channelId: liveChannelId,
             adapterOptions: {
               repoRoot,
+              sutAccountId: opts.sutAccountId,
+              credentialSource: opts.credentialSource,
+              credentialRole: opts.credentialRole,
+              explicitScenarioSelection:
+                opts.explicitScenarioSelection ?? Boolean(opts.scenarioIds?.length),
             },
           }
         : {}),
@@ -1128,6 +1135,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       primaryModel,
       alternateModel,
       fastMode: opts.fastMode,
+      failFast: opts.failFast,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
       scenarioIds: liveChannelId ? liveScenarioIds : hostScenarioIds,
@@ -1362,9 +1370,7 @@ export async function runQaCoverageReportCommand(opts: {
         : renderQaScenarioMatchesMarkdownReport({ query, matches });
       outputLabel = "QA scenario match report";
     } else {
-      const inventory = buildQaCoverageInventory(scenarios, {
-        nonYamlScenarios: await loadNonYamlScenarioRefs(),
-      });
+      const inventory = buildQaCoverageInventory(scenarios);
       body = opts.json
         ? `${JSON.stringify(inventory, null, 2)}\n`
         : renderQaCoverageMarkdownReport(inventory);

@@ -3272,6 +3272,7 @@ describe("handleSendChat", () => {
           sessionKey: "agent:main:main",
           message: "tighten the plan",
           deliver: false,
+          queueMode: "steer",
         }),
       ),
     );
@@ -6765,6 +6766,7 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main:main",
       message: "tighten the plan",
       deliver: false,
+      queueMode: "steer",
       idempotencyKey,
       attachments: undefined,
     });

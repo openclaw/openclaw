@@ -240,6 +240,13 @@ describe("package Telegram live Docker E2E", () => {
       path.resolve(TEST_DIR, "../../extensions/qa-lab/src/runtime-api.ts"),
       "utf8",
     );
+    const qaHarnessSources = [
+      "extensions/qa-lab/api.ts",
+      "extensions/qa-lab/src/self-check.ts",
+      "extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts",
+      "extensions/qa-lab/src/suite-launch.runtime.ts",
+      "extensions/qa-lab/src/suite.ts",
+    ].map((relativePath) => readFileSync(path.resolve(TEST_DIR, "../..", relativePath), "utf8"));
 
     expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
     expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
@@ -251,6 +258,9 @@ describe("package Telegram live Docker E2E", () => {
     expect(preparePackage).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
     expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
     expect(qaRuntimeApi).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
+    for (const source of qaHarnessSources) {
+      expect(source).not.toContain('from "openclaw/plugin-sdk/qa-runtime"');
+    }
   });
 
   it("exposes installed package dependencies to the mounted QA harness", () => {
@@ -284,15 +294,15 @@ describe("package Telegram live Docker E2E", () => {
 
   it("defaults package Telegram RTT for the normal package live lane", () => {
     expect(testing.resolveRttOptions({})).toEqual({
-      rttCount: 20,
-      rttTimeoutMs: undefined,
-      maxRttFailures: 20,
-      rttCheckIds: [],
+      scenarioId: "channel-canary",
+      count: 20,
+      timeoutMs: 30_000,
+      maxFailures: 20,
     });
   });
 
   it("does not force default RTT onto focused non-RTT scenario runs", () => {
-    expect(testing.resolveRttOptions({}, ["telegram-canary"])).toEqual({});
+    expect(testing.resolveRttOptions({}, ["telegram-status-command"])).toBeUndefined();
   });
 
   it("maps repeated RTT env onto package Telegram live options", () => {
@@ -301,14 +311,38 @@ describe("package Telegram live Docker E2E", () => {
         OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: "7",
         OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS: "45000",
         OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES: "2",
-        OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "telegram-mentioned-message-reply",
+        OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "channel-canary",
       }),
     ).toEqual({
-      rttCount: 7,
-      rttTimeoutMs: 45_000,
-      maxRttFailures: 2,
-      rttCheckIds: ["telegram-mentioned-message-reply"],
+      scenarioId: "channel-canary",
+      count: 7,
+      timeoutMs: 45_000,
+      maxFailures: 2,
     });
+  });
+
+  it("builds a generic suite probe for the Telegram RTT lane", () => {
+    const probe = testing.createRoundTripProbe(testing.resolveRttOptions({}));
+
+    expect(probe).toMatchObject({
+      scenarioId: "channel-canary",
+      count: 20,
+      timeoutMs: 30_000,
+      markerPrefix: "QA-TELEGRAM-RTT",
+      textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",
+      chainReplies: true,
+      input: {
+        conversation: { id: "telegram-rtt-room", kind: "group" },
+      },
+    });
+  });
+
+  it("rejects retired RTT scenario ids", () => {
+    expect(() =>
+      testing.resolveRttOptions({
+        OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "telegram-mentioned-message-reply",
+      }),
+    ).toThrow("unknown Telegram QA RTT check: telegram-mentioned-message-reply");
   });
 
   it("rejects invalid repeated RTT env", () => {

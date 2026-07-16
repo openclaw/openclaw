@@ -48,15 +48,15 @@ function selectQaFlowSuiteScenarios(params: {
     const selectedScenarios = [...requestedScenarioIds].map(
       (scenarioId) => scenarioById.get(scenarioId)!,
     );
-    const nonFlowScenarios = selectedScenarios.filter(
+    const unsupportedScenarios = selectedScenarios.filter(
       (scenario) => scenario.execution.kind !== "flow",
     );
-    if (nonFlowScenarios.length > 0) {
-      const scenarioList = nonFlowScenarios
+    if (unsupportedScenarios.length > 0) {
+      const scenarioList = unsupportedScenarios
         .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
         .join(", ");
       throw new Error(
-        `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+        `suite execution requires flow scenarios; unsupported scenario(s): ${scenarioList}`,
       );
     }
     const channelDriverMismatches = selectedScenarios.flatMap((scenario) => {
@@ -282,6 +282,8 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
       params.scenarios.some(
         (scenario) =>
           isQaMergePatchObject(scenario.gatewayConfigPatch) ||
+          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined) ||
+          (scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined) ||
           (scenario.execution.kind === "flow" && scenario.execution.transportPolicy !== undefined),
       ))
   );
@@ -293,6 +295,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   }
   return (
     scenario.execution.suiteIsolation === "isolated" ||
+    scenario.execution.runtime !== undefined ||
     // Transport policy is fixed when the gateway starts; sharing it would leak routing rules.
     scenario.execution.transportPolicy !== undefined ||
     isQaMergePatchObject(scenario.gatewayConfigPatch) ||
@@ -363,8 +366,10 @@ async function mapQaSuiteWithConcurrency<T, U>(
   opts?: {
     startStaggerMs?: number;
     sleepImpl?: (ms: number) => Promise<unknown>;
+    shouldStop?: (result: U, index: number) => boolean;
   },
 ) {
+  let stopped = false;
   let nextStartGate = Promise.resolve();
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
@@ -395,17 +400,34 @@ async function mapQaSuiteWithConcurrency<T, U>(
       }
     })();
   }
-  return await pMap(
+  const results = await pMap(
     items,
     async (item, index) => {
+      if (stopped) {
+        return undefined;
+      }
       await waitForStartSlot(index < items.length - 1);
-      return await mapper(item, index);
+      if (stopped) {
+        return undefined;
+      }
+      const result = await mapper(item, index);
+      if (opts?.shouldStop?.(result, index)) {
+        stopped = true;
+      }
+      return result;
     },
     {
       concurrency: Math.max(1, Math.floor(concurrency)),
       stopOnError: true,
     },
   );
+  const completed: U[] = [];
+  for (const result of results) {
+    if (result !== undefined) {
+      completed.push(result as U);
+    }
+  }
+  return completed;
 }
 
 async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
