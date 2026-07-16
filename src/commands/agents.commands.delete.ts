@@ -1,5 +1,4 @@
 // Implements agent deletion with gateway delegation and local cleanup fallback.
-import path from "node:path";
 import {
   findOverlappingWorkspaceAgentIds,
   removeEmptyAgentParentDir,
