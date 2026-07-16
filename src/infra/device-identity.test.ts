@@ -1,7 +1,7 @@
 // Covers device identity creation, conversion, signing, and verification.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -232,5 +232,39 @@ describe("device identity crypto helpers", () => {
       expect(verifyDeviceSignature("%%%invalid%%%", payload, signature)).toBe(false);
       expect(verifyDeviceSignature(identity.publicKeyPem, payload, "%%%invalid%%%")).toBe(false);
     });
+  });
+});
+
+describe("loadDeviceIdentityIfPresent error handling", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns null without warning when the file does not exist (ENOENT)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await withTempDir("openclaw-device-identity-", async (dir) => {
+      const identityPath = path.join(dir, "nonexistent", "device.json");
+      const result = loadDeviceIdentityIfPresent(identityPath);
+      expect(result).toBeNull();
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("warns and returns null on corrupt identity files", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await withTempDir("openclaw-device-identity-", async (dir) => {
+      const identityDir = path.join(dir, "identity");
+      fs.mkdirSync(identityDir, { recursive: true });
+      const identityPath = path.join(identityDir, "device.json");
+      // Write invalid JSON that is not valid identity data
+      fs.writeFileSync(identityPath, "not-valid-json{{{", "utf-8");
+      const result = loadDeviceIdentityIfPresent(identityPath);
+      expect(result).toBeNull();
+    });
+    // Should have warned about the corrupt file
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0]?.[0]).toContain("Failed to load device identity");
+    warnSpy.mockRestore();
   });
 });
