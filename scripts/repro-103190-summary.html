@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Issue #103190 — 修复 /tmp 权限破坏问题</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f8f9fa; color: #1a1a2e; line-height: 1.7; }
+  h1 { border-bottom: 3px solid #4361ee; padding-bottom: 10px; }
+  h2 { color: #4361ee; margin-top: 32px; border-left: 4px solid #4361ee; padding-left: 12px; }
+  .card { background: white; border-radius: 12px; padding: 20px; margin: 16px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .bug { background: #fff5f5; border-left: 4px solid #e63946; }
+  .fix { background: #f0fff4; border-left: 4px solid #2d6a4f; }
+  .code { background: #1a1a2e; color: #e0e0e0; padding: 4px 8px; border-radius: 4px; font-family: "SF Mono", Consolas, monospace; font-size: 14px; }
+  .file { font-weight: 600; color: #4361ee; }
+  .highlight { background: #fff3cd; padding: 2px 6px; border-radius: 3px; }
+  ul { padding-left: 20px; }
+  li { margin: 8px 0; }
+  .check { display: inline-block; background: #2d6a4f; color: white; padding: 2px 10px; border-radius: 99px; font-size: 13px; }
+  .cross { display: inline-block; background: #e63946; color: white; padding: 2px 10px; border-radius: 99px; font-size: 13px; }
+  .tag { display: inline-block; background: #e0e7ff; color: #4361ee; padding: 2px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; }
+  .box { background: #fefcbf; border: 2px dashed #d69e2e; border-radius: 8px; padding: 16px; margin: 12px 0; }
+  kbd { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; font-family: monospace; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+
+<h1>🐛 Issue #103190 — OpenClaw 破坏了 <code>/tmp</code> 目录权限</h1>
+<p>
+  <span class="tag">Issue</span>
+  <a href="https://github.com/openclaw/openclaw/issues/103190">github.com/openclaw/openclaw/issues/103190</a>
+  &nbsp;·&nbsp;
+  <span class="tag">PR</span>
+  <a href="https://github.com/openclaw/openclaw/pull/103302">github.com/openclaw/openclaw/pull/103302</a>
+</p>
+
+<h2>💥 出了什么问题？</h2>
+
+<div class="card bug">
+  <p><strong>一句话：</strong>OpenClaw 在 <code>/tmp</code> 目录上执行了 <code>chmod 700</code>，导致整个系统共享的临时目录变成 <strong>只有自己能用</strong>，其他程序全都打不开。</p>
+
+  <h3>用生活场景理解</h3>
+  <p>想象一栋公寓楼有一个<strong>公共快递架</strong>（这就是 <code>/tmp</code>）—— 所有住户都可以往上面放东西、取东西。</p>
+  <p>有一天 OpenClaw 想："我要在这个架子上给自己划一小块专属区域。" 于是它去设置了 "这个架子只能我自己碰" —— 结果整个快递架都被锁上了！<strong>其他住户全放不了也拿不了快递了。</strong></p>
+  <p>这就是 OpenClaw 调用 <code>chmod(0o700)</code> 对 <code>/tmp</code> 做的事。</p>
+
+  <p style="margin-top:16px"><strong>技术上说：</strong></p>
+  <ul>
+    <li><code>/tmp</code> 的权限是 <code>0o1777</code>（任何用户都能读写，加 sticky bit🔒 防止互相删文件）</li>
+    <li>OpenClaw 的 <code>ensurePrivateDirectory()</code> 函数会执行 <code>chmod(目录, 0o700)</code>（改成仅自己可访问）</li>
+    <li>如果这个目录就是 <code>/tmp</code> 本身 → <strong>灾难</strong>：</li>
+  </ul>
+  <pre style="background:#1a1a2e;color:#e0e0e0;padding:12px;border-radius:6px;overflow-x:auto;">
+# 修复前，/tmp 会从这样：
+drwxrwxrwt   (0o1777, 任何人可读写)
+# 变成这样：
+drwx------   (0o0700, 只有 OpenClaw 能用)
+# → sudo, apt, ssh 全部失效，因为都用 /tmp
+  </pre>
+</div>
+
+<h2>🔍 根因：调用链分析</h2>
+
+<div class="card">
+  <p>问题出在<strong>两处代码</strong>都直接传了系统临时目录给一个会改权限的函数：</p>
+
+  <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:12px;">
+    <div style="flex:1; min-width:250px; background:#fff5f5; border-radius:8px; padding:14px;">
+      <strong>① 临时下载目录</strong>
+      <p style="margin:6px 0; font-size:14px; color:#666;"><code>temp-download.ts</code></p>
+      <code style="font-size:13px;">
+createTempDownloadTarget()<br>
+&nbsp;&nbsp;→ tempWorkspace({rootDir: <span class="highlight">os.tmpdir()</span>})<br>
+&nbsp;&nbsp;&nbsp;&nbsp;→ ensurePrivateDirectory(<span class="highlight">"/tmp"</span>)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ chmod("/tmp", 0o700) ❌
+      </code>
+    </div>
+    <div style="flex:1; min-width:250px; background:#fff5f5; border-radius:8px; padding:14px;">
+      <strong>② 安装临时目录</strong>
+      <p style="margin:6px 0; font-size:14px; color:#666;"><code>install-source-utils.ts</code></p>
+      <code style="font-size:13px;">
+installPluginFromSource()<br>
+&nbsp;&nbsp;→ withTempDir()<br>
+&nbsp;&nbsp;&nbsp;&nbsp;→ tempWorkspace({rootDir: <span class="highlight">os.tmpdir()</span>})<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ ensurePrivateDirectory(<span class="highlight">"/tmp"</span>)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ chmod("/tmp", 0o700) ❌
+      </code>
+    </div>
+  </div>
+</div>
+
+<h2>🛠️ 怎么修的？三层防御</h2>
+
+<p style="margin-bottom:8px">就像一个安全系统有多道防线，我们的修复也是<strong>三层保护</strong>，每一层独立阻截问题：</p>
+
+<div class="fix card">
+  <h3>🛡️ 第 1 层 — 避开雷区（<span class="file">temp-download.ts</span>）</h3>
+  <p>在创建临时目录之前，先检查目标是不是系统级共享目录。如果是，<strong>自动跳转到子目录</strong>：</p>
+
+  <pre style="background:#1a1a2e;color:#e0e0e0;padding:12px;border-radius:6px;overflow-x:auto;">
+// 修复前：直接使用 os.tmpdir() 作为工作区根目录
+tempWorkspace({ rootDir: <span style="color:#ff6b6b">os.tmpdir()</span>, ... })
+
+// 修复后：如果是 /tmp 等系统目录，自动用 /tmp/openclaw 子目录
+<strong style="color:#69db7c">if (检测到 /tmp 等系统共享目录)</strong>
+<strong style="color:#69db7c">  rootDir = "/tmp/openclaw";  // 安全的子目录</strong>
+tempWorkspace({ rootDir, ... })
+// 这样 chmod(700) 只影响 /tmp/openclaw，不影响 /tmp 本身</pre>
+</div>
+
+<div class="fix card">
+  <h3>🛡️ 第 2 层 — 看到"粘性位"就停手（<span class="file">tmp-openclaw-dir.ts</span>）</h3>
+  <p>即使在 <code>ensurePrivateDirectory</code> 内部增加一道检查：如果目录有 <strong>sticky bit（粘性位）</strong>—— 即别的程序也可以在里面写文件 —— 说明这是共享目录，绝对不能改权限：</p>
+
+  <pre style="background:#1a1a2e;color:#e0e0e0;padding:12px;border-radius:6px;overflow-x:auto;">
+// 修复前：不管三七二十一直接改
+chmod(dir, 0o700);
+
+// 修复后：先检查有没有 sticky bit
+<strong style="color:#69db7c">if (目录有 sticky bit) {  // 共享目录的标志</strong>
+<strong style="color:#69db7c">  return;  // 不动它！</strong>
+<strong style="color:#69db7c">}</strong>
+chmod(dir, 0o700); // 只改非共享目录</pre>
+</div>
+
+<div class="fix card">
+  <h3>🛡️ 第 3 层 — 不要乱传 <code>os.tmpdir()</code>（<span class="file">install-source-utils.ts</span>）</h3>
+  <p>安装插件时的临时目录函数，改为使用 OpenClaw 自己的安全临时目录：</p>
+
+  <pre style="background:#1a1a2e;color:#e0e0e0;padding:12px;border-radius:6px;overflow-x:auto;">
+// 修复前：直接传 os.tmpdir()
+withTempDir(prefix, fn);
+
+// 修复后：明确指定安全的根目录
+withTempDir(prefix, fn, <strong style="color:#69db7c">{ rootDir: resolvePreferredOpenClawTmpDir() }</strong>);</pre>
+</div>
+
+<h2>📁 修改了哪些文件？</h2>
+
+<table style="width:100%; border-collapse:collapse; margin:12px 0;">
+  <tr style="background:#4361ee; color:white;">
+    <th style="padding:10px; text-align:left;">文件</th>
+    <th style="padding:10px; text-align:left;">修改内容</th>
+    <th style="padding:10px; text-align:left;">作用</th>
+  </tr>
+  <tr style="border-bottom:1px solid #ddd;">
+    <td style="padding:10px; font-weight:600;">src/infra/temp-download.ts</td>
+    <td style="padding:10px;">新增 <code>resolveSecureTempRoot()</code></td>
+    <td style="padding:10px;">检测系统共享目录，自动跳到子目录</td>
+  </tr>
+  <tr style="border-bottom:1px solid #ddd;">
+    <td style="padding:10px; font-weight:600;">src/infra/tmp-openclaw-dir.ts</td>
+    <td style="padding:10px;">新增 sticky bit 检查</td>
+    <td style="padding:10px;">防御性检测，遇到共享目录直接跳过</td>
+  </tr>
+  <tr style="border-bottom:1px solid #ddd;">
+    <td style="padding:10px; font-weight:600;">src/infra/install-source-utils.ts</td>
+    <td style="padding:10px;">添加 <code>rootDir</code> 参数</td>
+    <td style="padding:10px;">不再传 <code>os.tmpdir()</code>，用安全目录</td>
+  </tr>
+  <tr>
+    <td style="padding:10px; font-weight:600;">scripts/repro-103190.mjs</td>
+    <td style="padding:10px;">新增验证脚本</td>
+    <td style="padding:10px;">模拟 bug 并验证修复正确性（11 项检查）</td>
+  </tr>
+</table>
+
+<h2>📐 为什么需要三层？</h2>
+
+<div class="box">
+  <p><strong>防御纵深（Defense in depth）</strong>—— 不依赖任何单一防线：</p>
+  <ul>
+    <li>✏️ 第 1 层：以后写新代码的人如果又传了 <code>os.tmpdir()</code>，会被自动纠正</li>
+    <li>✏️ 第 2 层：即使第 1 层漏了，<code>ensurePrivateDirectory</code> 自己也会刹车</li>
+    <li>✏️ 第 3 层：这个具体的调用点（安装插件）也被修正了</li>
+  </ul>
+  <p>就像<strong>开车系安全带 + 安全气囊 + 防碰撞结构</strong>——任何一层失效，后面的还能兜底。</p>
+</div>
+
+<h2>🧪 怎么验证修复有效的？</h2>
+
+<div class="card">
+  <p>写了一个专用验证脚本 <code>scripts/repro-103190.mjs</code>，它在<strong>自己的私有临时目录</strong>中（不会碰真实 <code>/tmp</code>）：</p>
+  <ol>
+    <li>创建一个模拟 <code>/tmp</code>（权限 0o1777 + sticky bit）</li>
+    <li>模拟修复前的 bug：对模拟 <code>/tmp</code> 执行 <code>chmod(700)</code> → <span class="cross">失败（权限被破坏）</span></li>
+    <li>应用修复后再次测试 → <span class="check">通过（共享目录被保护）</span></li>
+    <li>共 11 项检查，全部通过 ✅</li>
+  </ol>
+  <p>运行方式：<kbd>node scripts/repro-103190.mjs</kbd></p>
+</div>
+
+<h2>📊 总结</h2>
+
+<table style="width:100%; border-collapse:collapse; margin:12px 0;">
+  <tr><td style="padding:8px; font-weight:600; border:1px solid #ddd;">问题</td><td style="padding:8px; border:1px solid #ddd;">OpenClaw 把 <code>/tmp</code> 权限从 0o1777 改成 0o700，导致其他程序无法使用系统临时目录</td></tr>
+  <tr><td style="padding:8px; font-weight:600; border:1px solid #ddd;">根因</td><td style="padding:8px; border:1px solid #ddd;">直接传 <code>os.tmpdir()</code> 给 <code>ensurePrivateDirectory()</code>，后者无条件执行 <code>chmod(dir, 0o700)</code></td></tr>
+  <tr><td style="padding:8px; font-weight:600; border:1px solid #ddd;">修复策略</td><td style="padding:8px; border:1px solid #ddd;">三层防御：调用前重定向 + 调用中检测 sticky bit + 修正具体调用点</td></tr>
+  <tr><td style="padding:8px; font-weight:600; border:1px solid #ddd;">PR 地址</td><td style="padding:8px; border:1px solid #ddd;"><a href="https://github.com/openclaw/openclaw/pull/103302">openclaw/openclaw #103302</a></td></tr>
+  <tr><td style="padding:8px; font-weight:600; border:1px solid #ddd;">Issue 地址</td><td style="padding:8px; border:1px solid #ddd;"><a href="https://github.com/openclaw/openclaw/issues/103190">openclaw/openclaw #103190</a></td></tr>
+</table>
+
+<p style="margin-top:32px; font-size:14px; color:#888; text-align:center;">Generated for Issue #103190 / PR #103302</p>
+
+</body>
+</html>

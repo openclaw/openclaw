@@ -2,10 +2,6 @@
  * Handles /loop autonomous agent loop command and result formatting.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import type {
-  CommandHandlerResult,
-} from "./commands-types.js";
 import type { LoopPhase, LoopSubtask } from "../../loop/loop-types.js";
 import { LOOP_PHASE_LABELS } from "../../loop/loop-types.js";
 
@@ -65,14 +61,6 @@ export function parseLoopCommand(raw: string): {
   return { task, maxIterations, tokenBudget };
 }
 
-function loopReply(text: string): CommandHandlerResult {
-  return {
-    shouldContinue: false,
-    reply: { text },
-  };
-}
-
-
 // ── Phase prompt builders ──────────────────────────────────────────
 
 /** Builds the Phase 1 (Analyze) prompt. */
@@ -121,7 +109,7 @@ export function buildPlanPrompt(task: string, analysisSummary: string): string {
     '- action: "phase_complete"\n' +
     '- phase: "plan"\n' +
     '- summary: "[Plan overview — what the key milestones are]"' +
-    '\n- subtasks: [array of subtask objects with id, name, description, acceptanceCriteria, dependencies, parallelizable]'
+    "\n- subtasks: [array of subtask objects with id, name, description, acceptanceCriteria, dependencies, parallelizable]"
   );
 }
 
@@ -143,10 +131,7 @@ export function extractSubtasksFromAgentResponse(): LoopSubtask[] {
 // Parallel subtasks are dispatched together via sessions_spawn.
 
 /** Builds the execute prompt for a single serial subtask. */
-export function buildSerialExecutePrompt(
-  subtask: LoopSubtask,
-  overallTask?: string,
-): string {
+export function buildSerialExecutePrompt(subtask: LoopSubtask, overallTask?: string): string {
   return (
     `# /loop: Execution - ${subtask.name}\n` +
     (overallTask ? `## Overall Task\n${overallTask}\n\n` : "") +
@@ -243,10 +228,7 @@ export function buildSpawnedVerifyPrompt(subtask: LoopSubtask): string {
 }
 
 /** Builds the fix/re-execute prompt for a subtask that failed verification. */
-export function buildSerialFixPrompt(
-  subtask: LoopSubtask,
-  verifyIssues: string,
-): string {
+export function buildSerialFixPrompt(subtask: LoopSubtask, verifyIssues: string): string {
   return (
     `# /loop: Fix - ${subtask.name} (Verification Failed)\n` +
     "## Issues Found\n" +
@@ -268,10 +250,7 @@ export function buildSerialFixPrompt(
 }
 
 /** Builds the dispatch prompt for parallel subtasks. */
-export function buildParallelDispatchPrompt(
-  subtasks: LoopSubtask[],
-  overallTask?: string,
-): string {
+export function buildParallelDispatchPrompt(subtasks: LoopSubtask[], overallTask?: string): string {
   const taskList = subtasks
     .map(
       (s, i) =>
@@ -294,7 +273,7 @@ export function buildParallelDispatchPrompt(
     "For each **sessions_spawn** call:\n" +
     '- mode: "run"\n' +
     "- task: the subtask's description and acceptance criteria\n" +
-    "- cleanup: \"delete\" (auto-cleanup after completion)\n\n" +
+    '- cleanup: "delete" (auto-cleanup after completion)\n\n' +
     "Track progress by calling **loop_update** for each subtask:\n" +
     '- action: "subtask_status"\n' +
     '- subtaskId: "[the subtask id]"\n' +
@@ -309,19 +288,12 @@ export function buildParallelDispatchPrompt(
 }
 
 /** Builds the Phase 5 (Report) prompt with all subtask results. */
-export function buildReportPrompt(
-  task: string,
-  subtasks?: LoopSubtask[],
-): string {
+export function buildReportPrompt(task: string, subtasks?: LoopSubtask[]): string {
   const subtaskLines = (subtasks ?? [])
     .map(
       (s) =>
         `- **${s.name}** (${s.status})` +
-        (s.verdict
-          ? s.verdict.passed
-            ? " ✅ Verified"
-            : " ❌ Failed verification"
-          : "") +
+        (s.verdict ? (s.verdict.passed ? " ✅ Verified" : " ❌ Failed verification") : "") +
         (s.result ? `\n  Result: ${s.result.slice(0, 200)}` : ""),
     )
     .join("\n");
@@ -350,9 +322,7 @@ export function buildReportPrompt(
 // ── Spawned verify helpers ────────────────────────────────────────────
 
 /** Parses the verdict from a spawned verifier agent response text. */
-export function parseSpawnedVerdict(
-  text: string,
-): { passed: boolean; summary: string } | null {
+export function parseSpawnedVerdict(text: string): { passed: boolean; summary: string } | null {
   const verdictMatch = text.match(/---VERDICT---\s*\n\s*passed:\s*(true|false)/i);
   if (!verdictMatch) return null;
   const passed = verdictMatch[1]!.toLowerCase() === "true";
@@ -382,7 +352,7 @@ export function formatLoopResultReport(result: {
   iterations: number;
   tokenUsage: number;
   task: string;
-  summary: string;
+  summary?: string;
 }): string {
   const statusEmoji = result.success ? "✅" : "⏹️";
   const lines = [

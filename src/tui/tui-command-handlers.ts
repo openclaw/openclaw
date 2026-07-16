@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
+import {
+  getLoopState,
+  setLoopState,
+  createInitialLoopState,
+  setCurrentSessionKey,
+} from "../agents/tools/loop-tools.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -17,12 +23,19 @@ import {
   buildReportPrompt,
   buildSerialExecutePrompt,
   buildSerialFixPrompt,
-  buildSerialVerifyPrompt,
   buildSpawnedVerifyPrompt,
   parseSpawnedVerdict,
   parseLoopCommand,
 } from "../auto-reply/reply/commands-loop.js";
-import { getLoopState, setLoopState, createInitialLoopState, setCurrentSessionKey } from "../agents/tools/loop-tools.js";
+import {
+  formatThinkingLevels,
+  isSessionDefaultDirectiveValue,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../auto-reply/thinking.js";
+import { callGateway } from "../gateway/call.js";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import {
   createLoopDirectory,
   writePhasePrompt,
@@ -32,15 +45,6 @@ import {
 } from "../loop/loop-directory.js";
 import type { LoopPhase } from "../loop/loop-types.js";
 import { LOOP_PHASE_LABELS } from "../loop/loop-types.js";
-import {
-  formatThinkingLevels,
-  isSessionDefaultDirectiveValue,
-  normalizeUsageDisplay,
-  resolveResponseUsageMode,
-} from "../auto-reply/thinking.js";
-import { isChatStopCommandText } from "../gateway/chat-abort.js";
-import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
-import { callGateway } from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, isSharedTextCommand, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
@@ -555,11 +559,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           loopDir,
           phaseComplete: false,
         };
-        setLoopState(createInitialLoopState({
-          task: loopTask,
-          maxIterations: parsedLoop.maxIterations,
-          tokenBudget: parsedLoop.tokenBudget,
-        }));
+        setLoopState(
+          createInitialLoopState({
+            task: loopTask,
+            maxIterations: parsedLoop.maxIterations,
+            tokenBudget: parsedLoop.tokenBudget,
+          }),
+        );
 
         chatLog.addSystem(
           `/loop started: "${loopTask}" (5-phase workflow${loopDir ? `, logs: ${loopDir}` : ""})`,
@@ -578,7 +584,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               state._onRunEnd = null;
               reject(new Error(`Phase timed out after ${timeout / 1000}s`));
             }, timeout);
-            state._onRunEnd = (runId) => {
+            state._onRunEnd = (_runId) => {
               clearTimeout(timer);
               resolve();
             };
@@ -759,7 +765,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           try {
             await phaseWait;
           } catch (timeoutErr) {
-            chatLog.addSystem(`/loop: ⚠️ ${timeoutErr instanceof Error ? timeoutErr.message : String(timeoutErr)}`);
+            chatLog.addSystem(
+              `/loop: ⚠️ ${timeoutErr instanceof Error ? timeoutErr.message : String(timeoutErr)}`,
+            );
             state.loopState = null;
             setLoopState(null);
             setCurrentSessionKey(undefined);
@@ -776,8 +784,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           }
 
           const phaseResult = usageState?.phaseResult;
-          const phaseSummary =
-            typeof phaseResult?.summary === "string" ? phaseResult.summary : "";
+          const phaseSummary = typeof phaseResult?.summary === "string" ? phaseResult.summary : "";
 
           if (loopDir && phaseResult) {
             writePhaseResult(phaseDir, phaseResult).catch(() => {});
@@ -824,108 +831,129 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         const SUBTASK_TIMEOUT = 300_000; // 5 min per subtask operation
 
         if (serialTasks.length > 0) {
-          chatLog.addSystem(`/loop: Executing ${serialTasks.length} serial subtask(s) (each: execute → verify → pass → next)`);
+          chatLog.addSystem(
+            `/loop: Executing ${serialTasks.length} serial subtask(s) (each: execute → verify → pass → next)`,
+          );
           tui.requestRender();
 
-        for (const subtask of serialTasks) {
-          if (!state.loopState) break;
-          let maxFixAttempts = 3;
-          let attempt = 0;
-
-          while (attempt < maxFixAttempts && state.loopState) {
-            // ── Execute subtask ──────────────────────────────────
-            const execPrompt = buildSerialExecutePrompt(subtask, loopTask);
-            const execDir = getPhaseDir(loopDir, "execute", 3);
-            if (loopDir) writePhasePrompt(execDir, execPrompt).catch(() => {});
-
-            state.loopState.currentPhase = "execute";
-            const execState = getLoopState() ?? createInitialLoopState({
-              task: loopTask, maxIterations: parsedLoop.maxIterations,
-              tokenBudget: parsedLoop.tokenBudget,
-            });
-            execState.currentPhase = "execute";
-            execState.phaseComplete = false;
-            execState.phaseResult = null;
-            setLoopState(execState);
-            tui.requestRender();
-
-            try {
-              // Check budget before executing
-              if (!checkBudget()) break;
-              const execWait = createPhaseWait(SUBTASK_TIMEOUT);
-              await sendMessage(execPrompt);
-              await execWait;
-            } catch (err) {
-              chatLog.addSystem(`/loop: ⚠️ Execute "${subtask.name}" failed: ${err instanceof Error ? err.message : String(err)}`);
-              subtask.status = "failed";
-              subtask.verdict = { passed: false, notes: "Execution timed out or failed" };
-              break;
-            }
-            incrementTokenUsage();
+          for (const subtask of serialTasks) {
             if (!state.loopState) break;
+            let maxFixAttempts = 3;
+            let attempt = 0;
 
-            if (loopDir) writePhaseResult(execDir, getLoopState()?.phaseResult ?? {}).catch(() => {});
+            while (attempt < maxFixAttempts && state.loopState) {
+              // ── Execute subtask ──────────────────────────────────
+              const execPrompt = buildSerialExecutePrompt(subtask, loopTask);
+              const execDir = getPhaseDir(loopDir, "execute", 3);
+              if (loopDir) writePhasePrompt(execDir, execPrompt).catch(() => {});
 
-            // ── Verify subtask (independent sub-agent) ──────────────
-            const verifyPrompt = buildSpawnedVerifyPrompt(subtask);
-            const verifyDir = getPhaseDir(loopDir, "verify", 4);
+              state.loopState.currentPhase = "execute";
+              const execState =
+                getLoopState() ??
+                createInitialLoopState({
+                  task: loopTask,
+                  maxIterations: parsedLoop.maxIterations,
+                  tokenBudget: parsedLoop.tokenBudget,
+                });
+              execState.currentPhase = "execute";
+              execState.phaseComplete = false;
+              execState.phaseResult = null;
+              setLoopState(execState);
+              tui.requestRender();
 
-            state.loopState.currentPhase = "verify";
-            tui.requestRender();
+              try {
+                // Check budget before executing
+                if (!checkBudget()) break;
+                const execWait = createPhaseWait(SUBTASK_TIMEOUT);
+                await sendMessage(execPrompt);
+                await execWait;
+              } catch (err) {
+                chatLog.addSystem(
+                  `/loop: ⚠️ Execute "${subtask.name}" failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                subtask.status = "failed";
+                subtask.verdict = { passed: false, notes: "Execution timed out or failed" };
+                break;
+              }
+              incrementTokenUsage();
+              if (!state.loopState) break;
 
-            if (loopDir) writePhasePrompt(verifyDir, verifyPrompt).catch(() => {});
+              if (loopDir)
+                writePhaseResult(execDir, getLoopState()?.phaseResult ?? {}).catch(() => {});
 
-            // Check budget before verifying
-            if (!checkBudget()) break;
+              // ── Verify subtask (independent sub-agent) ──────────────
+              const verifyPrompt = buildSpawnedVerifyPrompt(subtask);
+              const verifyDir = getPhaseDir(loopDir, "verify", 4);
 
-            const verifyResult = await spawnVerifySession(verifyPrompt, SUBTASK_TIMEOUT);
-            if (loopDir && verifyResult) writePhaseResult(verifyDir, verifyResult).catch(() => {});
+              state.loopState.currentPhase = "verify";
+              tui.requestRender();
 
-            if (verifyResult === null) {
-              chatLog.addSystem(`/loop: ⚠️ Verify "${subtask.name}" sub-agent did not respond`);
-              attempt++;
-              // Fall through to fix-and-retry so the main agent can investigate
-            } else if (verifyResult.passed) {
-              chatLog.addSystem(`/loop: ✅ "${subtask.name}" passed independent verification`);
-              subtask.status = "complete";
-              subtask.verdict = { passed: true, notes: verifyResult.summary };
-              break; // move to next serial subtask
-            } else {
-              chatLog.addSystem(`/loop: ❌ "${subtask.name}" failed independent verification, fixing…`);
-              attempt++;
-            }
+              if (loopDir) writePhasePrompt(verifyDir, verifyPrompt).catch(() => {});
 
-            // ── Fix and retry ────────────────────────────────────
-            const fixIssues = verifyResult?.summary ?? "Verification did not pass — review and fix.";
-            const fixPrompt = buildSerialFixPrompt(subtask, fixIssues);
-
-            chatLog.addSystem(`/loop: 🔄 "${subtask.name}" fix attempt (${attempt}/${maxFixAttempts})…`);
-            tui.requestRender();
-
-            const fixDir = getPhaseDir(loopDir, "execute", 3);
-            if (loopDir) writePhasePrompt(fixDir, fixPrompt).catch(() => {});
-
-            try {
-              // Check budget before fixing
+              // Check budget before verifying
               if (!checkBudget()) break;
-              const fixWait = createPhaseWait(SUBTASK_TIMEOUT);
-              await sendMessage(fixPrompt);
-              await fixWait;
-            } catch (err) {
-              chatLog.addSystem(`/loop: ⚠️ Fix "${subtask.name}" failed: ${err instanceof Error ? err.message : String(err)}`);
-              subtask.status = "failed";
-              subtask.verdict = { passed: false, notes: "Fix attempt timed out or failed" };
-              break;
-            }
-            incrementTokenUsage();
 
-            if (attempt >= maxFixAttempts) {
-              chatLog.addSystem(`/loop: ⚠️ "${subtask.name}" failed after ${maxFixAttempts} fix attempts`);
-              subtask.status = "failed";
-              subtask.verdict = { passed: false, notes: `Failed after ${maxFixAttempts} fix attempts` };
+              const verifyResult = await spawnVerifySession(verifyPrompt, SUBTASK_TIMEOUT);
+              if (loopDir && verifyResult)
+                writePhaseResult(verifyDir, verifyResult).catch(() => {});
+
+              if (verifyResult === null) {
+                chatLog.addSystem(`/loop: ⚠️ Verify "${subtask.name}" sub-agent did not respond`);
+                attempt++;
+                // Fall through to fix-and-retry so the main agent can investigate
+              } else if (verifyResult.passed) {
+                chatLog.addSystem(`/loop: ✅ "${subtask.name}" passed independent verification`);
+                subtask.status = "complete";
+                subtask.verdict = { passed: true, notes: verifyResult.summary };
+                break; // move to next serial subtask
+              } else {
+                chatLog.addSystem(
+                  `/loop: ❌ "${subtask.name}" failed independent verification, fixing…`,
+                );
+                attempt++;
+              }
+
+              // ── Fix and retry ────────────────────────────────────
+              const fixIssues =
+                verifyResult?.summary ?? "Verification did not pass — review and fix.";
+              const fixPrompt = buildSerialFixPrompt(subtask, fixIssues);
+
+              chatLog.addSystem(
+                `/loop: 🔄 "${subtask.name}" fix attempt (${attempt}/${maxFixAttempts})…`,
+              );
+              tui.requestRender();
+
+              const fixDir = getPhaseDir(loopDir, "execute", 3);
+              if (loopDir) writePhasePrompt(fixDir, fixPrompt).catch(() => {});
+
+              try {
+                // Check budget before fixing
+                if (!checkBudget()) break;
+                const fixWait = createPhaseWait(SUBTASK_TIMEOUT);
+                await sendMessage(fixPrompt);
+                await fixWait;
+              } catch (err) {
+                chatLog.addSystem(
+                  `/loop: ⚠️ Fix "${subtask.name}" failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                subtask.status = "failed";
+                subtask.verdict = { passed: false, notes: "Fix attempt timed out or failed" };
+                break;
+              }
+              incrementTokenUsage();
+
+              if (attempt >= maxFixAttempts) {
+                chatLog.addSystem(
+                  `/loop: ⚠️ "${subtask.name}" failed after ${maxFixAttempts} fix attempts`,
+                );
+                subtask.status = "failed";
+                subtask.verdict = {
+                  passed: false,
+                  notes: `Failed after ${maxFixAttempts} fix attempts`,
+                };
+              }
             }
           }
-        }
         }
 
         if (parallelTasks.length > 0 && state.loopState) {
@@ -947,14 +975,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               await sendMessage(dispatchPrompt);
               await dispatchWait;
             } catch (err) {
-              chatLog.addSystem(`/loop: ⚠️ Parallel dispatch failed: ${err instanceof Error ? err.message : String(err)}`);
+              chatLog.addSystem(
+                `/loop: ⚠️ Parallel dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
             }
             incrementTokenUsage();
           }
 
           // ── Verify each parallel subtask ──────────────────────────
           if (state.loopState) {
-            chatLog.addSystem(`/loop: Verifying ${parallelTasks.length} parallel subtask(s) with independent agents`);
+            chatLog.addSystem(
+              `/loop: Verifying ${parallelTasks.length} parallel subtask(s) with independent agents`,
+            );
             tui.requestRender();
 
             for (const subtask of parallelTasks) {
@@ -968,18 +1000,26 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               tui.requestRender();
 
               const parallelResult = await spawnVerifySession(verifyPrompt, SUBTASK_TIMEOUT);
-              if (loopDir && parallelResult) writePhaseResult(verifyDir, parallelResult).catch(() => {});
+              if (loopDir && parallelResult)
+                writePhaseResult(verifyDir, parallelResult).catch(() => {});
 
               if (parallelResult === null) {
                 chatLog.addSystem(`/loop: ⚠️ "${subtask.name}" (parallel) verification timed out`);
                 subtask.status = "failed";
-                subtask.verdict = { passed: false, notes: "Verification sub-agent did not respond" };
+                subtask.verdict = {
+                  passed: false,
+                  notes: "Verification sub-agent did not respond",
+                };
               } else if (parallelResult.passed) {
-                chatLog.addSystem(`/loop: ✅ "${subtask.name}" (parallel) passed independent verification`);
+                chatLog.addSystem(
+                  `/loop: ✅ "${subtask.name}" (parallel) passed independent verification`,
+                );
                 subtask.status = "complete";
                 subtask.verdict = { passed: true, notes: parallelResult.summary };
               } else {
-                chatLog.addSystem(`/loop: ❌ "${subtask.name}" (parallel) failed independent verification`);
+                chatLog.addSystem(
+                  `/loop: ❌ "${subtask.name}" (parallel) failed independent verification`,
+                );
                 subtask.status = "failed";
                 subtask.verdict = { passed: false, notes: parallelResult.summary };
               }
@@ -988,7 +1028,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
 
         // Budget check before report phase
-        if (!checkBudget()) { break; }
+        if (!checkBudget()) {
+          break;
+        }
 
         // ── Phase 5: Report ────────────────────────────────────────
         if (state.loopState && !state.loopState.completed) {
@@ -1001,10 +1043,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           if (loopDir) writePhasePrompt(reportDir, reportPrompt).catch(() => {});
 
           state.loopState.currentPhase = "report";
-          const reportState = getLoopState() ?? createInitialLoopState({
-            task: loopTask, maxIterations: parsedLoop.maxIterations,
-            tokenBudget: parsedLoop.tokenBudget,
-          });
+          const reportState =
+            getLoopState() ??
+            createInitialLoopState({
+              task: loopTask,
+              maxIterations: parsedLoop.maxIterations,
+              tokenBudget: parsedLoop.tokenBudget,
+            });
           reportState.currentPhase = "report";
           reportState.phaseComplete = false;
           reportState.phaseResult = null;
@@ -1015,7 +1060,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             await sendMessage(reportPrompt);
             await reportWait;
           } catch (err) {
-            chatLog.addSystem(`/loop: ⚠️ Report phase failed: ${err instanceof Error ? err.message : String(err)}`);
+            chatLog.addSystem(
+              `/loop: ⚠️ Report phase failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
           incrementTokenUsage();
 

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 /**
  * Loop status, completion, phase, and update tools for the /loop command.
  *
@@ -9,15 +10,10 @@
  * controller and agent tools. Single-threaded TUI guarantees safety.
  */
 import { Type } from "typebox";
-import { AsyncLocalStorage } from "node:async_hooks";
+import type { LoopPhase, LoopSubtask } from "../../loop/loop-types.js";
+import { LOOP_PHASE_ORDER } from "../../loop/loop-types.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
-import type {
-  LoopPhase,
-  LoopSubtask,
-  PhaseCompletePayload,
-} from "../../loop/loop-types.js";
-import { LOOP_PHASE_ORDER } from "../../loop/loop-types.js";
 
 // ── Shared loop state ──────────────────────────────────────────────
 
@@ -46,14 +42,21 @@ export type LoopState = {
 
 /** Session-scoped loop state storage */
 const loopStates = new Map<string, LoopState | null>();
-let stateChangeHistory: Array<{ timestamp: string; sessionKey?: string; action: string; details: unknown }> = [];
+let stateChangeHistory: Array<{
+  timestamp: string;
+  sessionKey?: string;
+  action: string;
+  details: unknown;
+}> = [];
 
 /** Sets the session key for the current execution context (used by TUI) */
 export function setCurrentSessionKey(sessionKey: string | undefined): void {
   if (sessionKey === undefined) {
     const alsKey = "openclaw.loop.sessionKey";
     try {
-      const als = (globalThis as Record<PropertyKey, unknown>)[alsKey] as AsyncLocalStorage<unknown> | undefined;
+      const als = (globalThis as Record<PropertyKey, unknown>)[alsKey] as
+        | AsyncLocalStorage<unknown>
+        | undefined;
       if (als) {
         als.run(undefined, () => {});
       }
@@ -62,7 +65,9 @@ export function setCurrentSessionKey(sessionKey: string | undefined): void {
     const alsKey = "openclaw.loop.sessionKey";
     let als: AsyncLocalStorage<string> | undefined;
     try {
-      als = (globalThis as Record<PropertyKey, unknown>)[alsKey] as AsyncLocalStorage<string> | undefined;
+      als = (globalThis as Record<PropertyKey, unknown>)[alsKey] as
+        | AsyncLocalStorage<string>
+        | undefined;
     } catch {}
     if (!als) {
       als = new AsyncLocalStorage<string>();
@@ -82,16 +87,18 @@ function resolveSessionKey(): string {
   // 1) Check AsyncLocalStorage (set by setCurrentSessionKey or agent runner)
   try {
     const alsKey = "openclaw.loop.sessionKey";
-    const als = (globalThis as Record<PropertyKey, unknown>)[alsKey] as AsyncLocalStorage<unknown> | undefined;
+    const als = (globalThis as Record<PropertyKey, unknown>)[alsKey] as
+      | AsyncLocalStorage<unknown>
+      | undefined;
     if (als) {
       const stored = als.getStore();
-      if (stored && typeof stored === 'string') return stored;
+      if (stored && typeof stored === "string") return stored;
     }
   } catch {}
   // 2) Fallback to environment (used by isolated runs)
   if (process.env.OPENCLAW_SESSION_KEY) return process.env.OPENCLAW_SESSION_KEY;
   // 3) Single-session default
-  return 'default';
+  return "default";
 }
 
 /** Logs state changes for audit trail */
@@ -106,7 +113,12 @@ function logStateChange(action: string, details?: unknown): void {
   while (stateChangeHistory.length > 100) stateChangeHistory.shift();
 }
 
-export function getStateChangeHistory(): Array<{ timestamp: string; sessionKey?: string; action: string; details: unknown }> {
+export function getStateChangeHistory(): Array<{
+  timestamp: string;
+  sessionKey?: string;
+  action: string;
+  details: unknown;
+}> {
   return [...stateChangeHistory];
 }
 
@@ -117,7 +129,9 @@ export function getLoopState(): LoopState | null {
   if (state !== undefined) return state;
   // Fallback: if only one session state exists, return it regardless of key.
   // This handles TUI → agent tool calls where ALS context may differ.
-  const entries = Array.from(loopStates.entries()).filter(([, v]) => v !== null) as Array<[string, LoopState]>;
+  const entries = Array.from(loopStates.entries()).filter(([, v]) => v !== null) as Array<
+    [string, LoopState]
+  >;
   if (entries.length === 1) return entries[0]![1];
   return null;
 }
@@ -129,7 +143,7 @@ export function setLoopState(state: LoopState | null): void {
   if (prev && state) {
     const validation = validateStateTransition(prev, state);
     if (!validation.valid) {
-      console.error('[loop-tools] Invalid state transition:', validation.reason);
+      console.error("[loop-tools] Invalid state transition:", validation.reason);
       return;
     }
   }
@@ -138,11 +152,17 @@ export function setLoopState(state: LoopState | null): void {
   } else {
     loopStates.set(key, state);
   }
-  logStateChange('setLoopState', { from: prev?.currentPhase ?? 'null', to: state?.currentPhase ?? 'null' });
+  logStateChange("setLoopState", {
+    from: prev?.currentPhase ?? "null",
+    to: state?.currentPhase ?? "null",
+  });
 }
 
 /** Validates a state transition */
-function validateStateTransition(oldState: LoopState, newState: LoopState): { valid: boolean; reason?: string } {
+function validateStateTransition(
+  oldState: LoopState,
+  newState: LoopState,
+): { valid: boolean; reason?: string } {
   // Phase transitions must not revert to earlier phases
   const oldIdx = LOOP_PHASE_ORDER.indexOf(oldState.currentPhase);
   const newIdx = LOOP_PHASE_ORDER.indexOf(newState.currentPhase);
@@ -150,7 +170,10 @@ function validateStateTransition(oldState: LoopState, newState: LoopState): { va
   // Allow same phase or any forward advance (verify is embedded in execute phase,
   // so skipping verify when advancing execute→report is expected)
   if (newIdx < oldIdx) {
-    return { valid: false, reason: `Cannot revert phase from ${oldState.currentPhase} to ${newState.currentPhase}` };
+    return {
+      valid: false,
+      reason: `Cannot revert phase from ${oldState.currentPhase} to ${newState.currentPhase}`,
+    };
   }
 
   return { valid: true };
@@ -217,7 +240,7 @@ export function createLoopStatusTool(): AnyAgentTool {
           cycleTime: diagnostics.cycleTime,
         });
       } catch (error) {
-        console.error('[loop-tools] Error generating status:', error);
+        console.error("[loop-tools] Error generating status:", error);
         return jsonResult({
           active: true,
           task: state.task,
@@ -286,9 +309,10 @@ export function createLoopPhaseTool(): AnyAgentTool {
 
       const phaseIndex = LOOP_PHASE_ORDER.indexOf(state.currentPhase);
       const totalPhases = LOOP_PHASE_ORDER.length;
-      const completedPhases = state.currentPhase === "complete"
-        ? LOOP_PHASE_ORDER
-        : LOOP_PHASE_ORDER.slice(0, phaseIndex);
+      const completedPhases =
+        state.currentPhase === "complete"
+          ? LOOP_PHASE_ORDER
+          : LOOP_PHASE_ORDER.slice(0, phaseIndex);
 
       return jsonResult({
         active: true,
@@ -319,9 +343,7 @@ const LoopUpdateToolSchema = Type.Object({
       '"phase_complete" — mark the current phase as done with results. ' +
       '"subtask_status" — update a subtask\'s status and result.',
   }),
-  phase: Type.Optional(
-    Type.String({ description: "Phase name (required for phase_complete)." }),
-  ),
+  phase: Type.Optional(Type.String({ description: "Phase name (required for phase_complete)." })),
   summary: Type.Optional(
     Type.String({ description: "Summary of what was accomplished (required for phase_complete)." }),
   ),
@@ -334,20 +356,21 @@ const LoopUpdateToolSchema = Type.Object({
   result: Type.Optional(
     Type.String({ description: "Detailed result from executing or verifying a subtask." }),
   ),
-  passed: Type.Optional(
-    Type.Boolean({ description: "Whether verification passed." }),
-  ),
+  passed: Type.Optional(Type.Boolean({ description: "Whether verification passed." })),
   subtasks: Type.Optional(
-    Type.Array(Type.Object({
-      id: Type.String(),
-      name: Type.String(),
-      description: Type.String(),
-      acceptanceCriteria: Type.Array(Type.String()),
-      dependencies: Type.Array(Type.String()),
-      parallelizable: Type.Boolean(),
-    }), {
-      description: "Subtask definitions (required for phase_complete during plan phase).",
-    }),
+    Type.Array(
+      Type.Object({
+        id: Type.String(),
+        name: Type.String(),
+        description: Type.String(),
+        acceptanceCriteria: Type.Array(Type.String()),
+        dependencies: Type.Array(Type.String()),
+        parallelizable: Type.Boolean(),
+      }),
+      {
+        description: "Subtask definitions (required for phase_complete during plan phase).",
+      },
+    ),
   ),
 });
 
@@ -377,10 +400,16 @@ export function createLoopUpdateTool(): AnyAgentTool {
         const phase = typeof params.phase === "string" ? params.phase : state.currentPhase;
         const summary = typeof params.summary === "string" ? params.summary : "";
         const subtaskId = typeof params.subtaskId === "string" ? params.subtaskId : undefined;
-        const subtasks = params.subtasks as Array<{
-          id: string; name: string; description: string;
-          acceptanceCriteria: string[]; dependencies: string[]; parallelizable: boolean;
-        }> | undefined;
+        const subtasks = params.subtasks as
+          | Array<{
+              id: string;
+              name: string;
+              description: string;
+              acceptanceCriteria: string[];
+              dependencies: string[];
+              parallelizable: boolean;
+            }>
+          | undefined;
 
         state.phaseComplete = true;
         state.phaseResult = {
@@ -430,7 +459,12 @@ export function createLoopUpdateTool(): AnyAgentTool {
           });
         }
 
-        if (status === "in-progress" || status === "complete" || status === "failed" || status === "skipped") {
+        if (
+          status === "in-progress" ||
+          status === "complete" ||
+          status === "failed" ||
+          status === "skipped"
+        ) {
           subtask.status = status;
         }
         if (result) {
@@ -484,24 +518,22 @@ function generateLoopDiagnostics(state: LoopState): {
   cycleTime: number;
 } {
   const now = Date.now();
-  const firstStarted = state.subtasks.find(s => s.startedAt);
-  const startTime = firstStarted
-    ? new Date(firstStarted.startedAt!).getTime()
-    : now;
+  const firstStarted = state.subtasks.find((s) => s.startedAt);
+  const startTime = firstStarted ? new Date(firstStarted.startedAt!).getTime() : now;
   const cycleTime = (now - startTime) / 1000;
 
-  const activeSubtasks = state.subtasks.filter(s => s.status === 'in-progress').length;
-  const pendingSubtasks = state.subtasks.filter(s => s.status === 'pending').length;
-  const failedSubtasks = state.subtasks.filter(s => s.status === 'failed').length;
-  const skippedSubtasks = state.subtasks.filter(s => s.status === 'skipped').length;
+  const activeSubtasks = state.subtasks.filter((s) => s.status === "in-progress").length;
+  const pendingSubtasks = state.subtasks.filter((s) => s.status === "pending").length;
+  const failedSubtasks = state.subtasks.filter((s) => s.status === "failed").length;
+  const skippedSubtasks = state.subtasks.filter((s) => s.status === "skipped").length;
 
   // Check for deadlocks: pending subtasks whose dependencies are not all complete
   const blockedSubtasks: string[] = [];
   for (const subtask of state.subtasks) {
-    if (subtask.status === 'pending') {
-      const depsComplete = subtask.dependencies.every(depId => {
-        const dep = state.subtasks.find(s => s.id === depId);
-        return dep && dep.status === 'complete';
+    if (subtask.status === "pending") {
+      const depsComplete = subtask.dependencies.every((depId) => {
+        const dep = state.subtasks.find((s) => s.id === depId);
+        return dep && dep.status === "complete";
       });
       if (!depsComplete) {
         blockedSubtasks.push(subtask.name);
@@ -517,7 +549,7 @@ function generateLoopDiagnostics(state: LoopState): {
       sessionKey: state.sessionKey,
       createdAt: state.subtasks[0]?.startedAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      version: '1.0',
+      version: "1.0",
       totalIterations: state.iteration,
       completedPhases: state.currentPhase ? [state.currentPhase] : [],
     },
@@ -527,7 +559,9 @@ function generateLoopDiagnostics(state: LoopState): {
     skippedSubtasks,
     nextPhase: computeNextPhase(state.currentPhase),
     isBlocked,
-    blockReason: isBlocked ? `Pending subtasks blocked by dependencies: ${blockedSubtasks.join(', ')}` : undefined,
+    blockReason: isBlocked
+      ? `Pending subtasks blocked by dependencies: ${blockedSubtasks.join(", ")}`
+      : undefined,
     cycleTime,
   };
 }
@@ -548,7 +582,10 @@ export function getActiveSessionsDiagnostic() {
   };
 }
 
-export function validateSubtaskDependencies(subtasks: LoopSubtask[]): { valid: boolean; cycle?: string[] } {
+export function validateSubtaskDependencies(subtasks: LoopSubtask[]): {
+  valid: boolean;
+  cycle?: string[];
+} {
   const visited = new Set<string>();
   const recStack = new Set<string>();
   const cycle: string[] = [];
@@ -565,7 +602,7 @@ export function validateSubtaskDependencies(subtasks: LoopSubtask[]): { valid: b
     recStack.add(id);
     path.push(id);
 
-    const subtask = subtasks.find(s => s.id === id);
+    const subtask = subtasks.find((s) => s.id === id);
     if (subtask) {
       for (const dep of subtask.dependencies) {
         if (dfs(dep, [...path])) return true;
@@ -586,8 +623,11 @@ export function validateSubtaskDependencies(subtasks: LoopSubtask[]): { valid: b
 }
 
 /** Checks for deadlock in subtask dependency graph */
-export function checkForDeadlocks(state: LoopState): { deadlocked: boolean; blockedSubtasks?: string[] } {
-  const pending = state.subtasks.filter(s => s.status === 'pending');
+export function checkForDeadlocks(state: LoopState): {
+  deadlocked: boolean;
+  blockedSubtasks?: string[];
+} {
+  const pending = state.subtasks.filter((s) => s.status === "pending");
   if (pending.length === 0) return { deadlocked: false };
 
   // Check if any pending subtask can eventually complete
@@ -597,16 +637,16 @@ export function checkForDeadlocks(state: LoopState): { deadlocked: boolean; bloc
 
     if (subtask.dependencies.length === 0) return true;
 
-    return subtask.dependencies.every(depId => {
-      const dep = state.subtasks.find(s => s.id === depId);
+    return subtask.dependencies.every((depId) => {
+      const dep = state.subtasks.find((s) => s.id === depId);
       if (!dep) return false; // missing dep
-      if (dep.status === 'complete') return true;
-      if (dep.status === 'failed' || dep.status === 'skipped') return false;
+      if (dep.status === "complete") return true;
+      if (dep.status === "failed" || dep.status === "skipped") return false;
       return canComplete(dep, visited);
     });
   };
 
-  const blockedSubtasks = pending.filter(s => !canComplete(s)).map(s => s.name);
+  const blockedSubtasks = pending.filter((s) => !canComplete(s)).map((s) => s.name);
 
   return {
     deadlocked: blockedSubtasks.length === pending.length && pending.length > 0,

@@ -13,12 +13,10 @@
  * (uses the unit vitest config which excludes src/agents/ and src/auto-reply/)
  */
 
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import {
-  setLoopState,
-  getLoopState,
-  createInitialLoopState,
-} from "../agents/tools/loop-tools.js";
+import { setLoopState, getLoopState, createInitialLoopState } from "../agents/tools/loop-tools.js";
 import {
   parseLoopCommand,
   formatLoopResultReport,
@@ -32,17 +30,6 @@ import {
   buildSpawnedVerifyPrompt,
   parseSpawnedVerdict,
 } from "../auto-reply/reply/commands-loop.js";
-import type {
-  LoopPhase,
-  LoopSubtask,
-  PhaseCompletePayload,
-  SubtaskUpdatePayload,
-  LoopSubtaskStatus,
-} from "./loop-types.js";
-import {
-  LOOP_PHASE_LABELS,
-  LOOP_PHASE_ORDER,
-} from "./loop-types.js";
 import {
   createLoopDirectory,
   writePhasePrompt,
@@ -54,8 +41,14 @@ import {
   writeFinalReport,
   appendPhaseToMetadata,
 } from "./loop-directory.js";
-import path from "node:path";
-import fs from "node:fs/promises";
+import type {
+  LoopPhase,
+  LoopSubtask,
+  PhaseCompletePayload,
+  SubtaskUpdatePayload,
+  LoopSubtaskStatus,
+} from "./loop-types.js";
+import { LOOP_PHASE_LABELS, LOOP_PHASE_ORDER } from "./loop-types.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -73,10 +66,16 @@ function makeSubtask(overrides: Partial<LoopSubtask> = {}): LoopSubtask {
 }
 
 /** Creates a subtask as the loop_update tool would (with the minimal structure). */
-function makeToolSubtask(overrides: Partial<{
-  id: string; name: string; description: string;
-  acceptanceCriteria: string[]; dependencies: string[]; parallelizable: boolean;
-}> = {}) {
+function makeToolSubtask(
+  overrides: Partial<{
+    id: string;
+    name: string;
+    description: string;
+    acceptanceCriteria: string[];
+    dependencies: string[];
+    parallelizable: boolean;
+  }> = {},
+) {
   return {
     id: "tool-sub-1",
     name: "Tool Subtask",
@@ -114,7 +113,15 @@ describe("1. Types and Constants", () => {
   });
 
   it("LOOP_PHASE_LABELS covers all phases", () => {
-    const phases: LoopPhase[] = ["idle", "analyze", "plan", "execute", "verify", "report", "complete"];
+    const phases: LoopPhase[] = [
+      "idle",
+      "analyze",
+      "plan",
+      "execute",
+      "verify",
+      "report",
+      "complete",
+    ];
     for (const p of phases) {
       expect(LOOP_PHASE_LABELS[p]).toBeDefined();
       expect(typeof LOOP_PHASE_LABELS[p]).toBe("string");
@@ -269,9 +276,11 @@ describe("4. State Transitions", () => {
   });
 
   it("subtask status lifecycle: pending → in-progress → complete", () => {
-    setLoopState(makeBaseState({
-      subtasks: [makeSubtask({ id: "x", status: "pending" })],
-    }));
+    setLoopState(
+      makeBaseState({
+        subtasks: [makeSubtask({ id: "x", status: "pending" })],
+      }),
+    );
 
     const sub = getLoopState()!.subtasks[0];
     expect(sub.status).toBe("pending");
@@ -284,9 +293,11 @@ describe("4. State Transitions", () => {
   });
 
   it("subtask can transition to failed", () => {
-    setLoopState(makeBaseState({
-      subtasks: [makeSubtask({ id: "x" })],
-    }));
+    setLoopState(
+      makeBaseState({
+        subtasks: [makeSubtask({ id: "x" })],
+      }),
+    );
     getLoopState()!.subtasks[0].status = "failed";
     expect(getLoopState()?.subtasks[0].status).toBe("failed");
   });
@@ -781,7 +792,7 @@ describe("9. TUI Integration Contract", () => {
     });
 
     expect(getLoopState()?.subtasks).toHaveLength(2);
-    expect(getLoopState()?.subtasks[1].dependencies).toEqual(["t1"]);
+    expect(getLoopState()?.subtasks?.[1]?.dependencies).toEqual(["t1"]);
   });
 
   it("TUI cleanup sets state to null", () => {
@@ -867,7 +878,7 @@ describe("10. Token budget enforcement", () => {
 
     // Simulate TUI phase transition: merge into existing state
     const prev = getLoopState()!;
-    const merged = { ...prev, currentPhase: "plan", phaseComplete: false };
+    const merged = { ...prev, currentPhase: "plan" as const, phaseComplete: false };
     setLoopState(merged);
 
     expect(getLoopState()?.tokenUsage).toBe(5); // preserved from prev
@@ -891,8 +902,8 @@ describe("11. Subtask storage and status management", () => {
     setLoopState(makeBaseState({ subtasks: subs }));
     const stored = getLoopState()?.subtasks ?? [];
     expect(stored).toHaveLength(2);
-    expect(stored[0].id).toBe("s1");
-    expect(stored[1].dependencies).toEqual(["s1"]);
+    expect(stored[0]!.id).toBe("s1");
+    expect(stored[1]!.dependencies).toEqual(["s1"]);
   });
 
   it("subtask status can transition through all states", () => {
@@ -900,24 +911,23 @@ describe("11. Subtask storage and status management", () => {
 
     const statuses = ["in-progress", "complete", "failed", "skipped"] as const;
     for (const st of statuses) {
-      getLoopState()!.subtasks[0].status = st;
-      expect(getLoopState()?.subtasks[0].status).toBe(st);
+      getLoopState()!.subtasks[0]!.status = st;
+      expect(getLoopState()?.subtasks?.[0]?.status).toBe(st);
     }
   });
 
   it("subtask verdict stores pass/fail with notes", () => {
     setLoopState(makeBaseState({ subtasks: [makeSubtask({ id: "v1" })] }));
-    getLoopState()!.subtasks[0].verdict = { passed: true, notes: "All criteria met" };
-    expect(getLoopState()?.subtasks[0].verdict?.passed).toBe(true);
-    expect(getLoopState()?.subtasks[0].verdict?.notes).toBe("All criteria met");
+    getLoopState()!.subtasks[0]!.verdict = { passed: true, notes: "All criteria met" };
+    expect(getLoopState()?.subtasks?.[0]?.verdict?.passed).toBe(true);
+    expect(getLoopState()?.subtasks?.[0]?.verdict?.notes).toBe("All criteria met");
   });
 
   it("subtask objects from module state reflect mutations", () => {
     setLoopState(makeBaseState({ subtasks: [makeSubtask({ id: "m1" })] }));
-    getLoopState()!.subtasks[0].status = "complete";
-    getLoopState()!.subtasks[0].result = "Done";
-    expect(getLoopState()?.subtasks[0].status).toBe("complete");
-    expect(getLoopState()?.subtasks[0].result).toBe("Done");
+    getLoopState()!.subtasks[0]!.status = "complete";
+    getLoopState()!.subtasks[0]!.result = "Done";
+    expect(getLoopState()?.subtasks?.[0]?.status).toBe("complete");
+    expect(getLoopState()?.subtasks?.[0]?.result).toBe("Done");
   });
 });
-
