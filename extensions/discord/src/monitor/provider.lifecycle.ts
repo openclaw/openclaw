@@ -324,7 +324,7 @@ function createGatewayStatusObserver(params: {
   };
 }
 
-export async function waitForGatewayReady(params: {
+async function waitForGatewayReady(params: {
   gateway?: Pick<MutableDiscordGateway, "connect" | "disconnect" | "isConnected" | "ws">;
   abortSignal?: AbortSignal;
   beforePoll?: () => Promise<"continue" | "stop"> | "continue" | "stop";
@@ -585,3 +585,7 @@ export async function runDiscordGatewayLifecycle(params: {
     params.threadBindings.stop();
   }
 }
+
+// Test-only surface. Re-exported from the plugin root `test-api.ts` entry so Knip's
+// production scan sees the consumer; tests import `testing` from `test-api.js`.
+export const testing = { waitForGatewayReady };

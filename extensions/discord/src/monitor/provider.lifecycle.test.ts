@@ -742,10 +742,11 @@ describe("runDiscordGatewayLifecycle", () => {
 });
 
 describe("waitForGatewayReady", () => {
-  let waitForGatewayReady: typeof import("./provider.lifecycle.js").waitForGatewayReady;
+  let waitForGatewayReady: (typeof import("../../test-api.js"))["discordGatewayLifecycleTesting"]["waitForGatewayReady"];
 
   beforeAll(async () => {
-    ({ waitForGatewayReady } = await import("./provider.lifecycle.js"));
+    waitForGatewayReady = (await import("../../test-api.js")).discordGatewayLifecycleTesting
+      .waitForGatewayReady;
   });
 
   it("returns promptly when abortSignal fires during the READY retry backoff", async () => {
@@ -759,6 +760,7 @@ describe("waitForGatewayReady", () => {
       isConnected: false,
       connect: vi.fn(),
       disconnect: vi.fn(),
+      ws: null,
     };
     const runtime: RuntimeEnv = {
       log: () => {},
