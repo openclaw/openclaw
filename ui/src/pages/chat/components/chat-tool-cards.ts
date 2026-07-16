@@ -156,7 +156,9 @@ const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 // binding, so the template must read the reported height back or it resets.
 const widgetFrameHeightsBySrc = new Map<string, number>();
 const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
-let widgetSizeListenerInstalled = false;
+// Keyed by window, not a module boolean: non-isolated test workers swap the
+// global window between files while module state persists.
+const widgetSizeListenerWindows = new WeakSet<Window>();
 
 function rememberWidgetFrameHeight(src: string, height: number) {
   if (
@@ -280,7 +282,9 @@ const pendingWidgetPromptPorts = new WeakMap<object, MessagePort>();
 const offeredWidgetPromptSources = new WeakSet<object>();
 const promptEligibleFrames = new WeakSet<HTMLIFrameElement>();
 const adoptedWidgetPromptFrames = new WeakSet<HTMLIFrameElement>();
-let widgetPromptOfferListenerInstalled = false;
+// Keyed by window, not a module boolean: non-isolated test workers swap the
+// global window between files while module state persists.
+const widgetPromptOfferListenerWindows = new WeakSet<Window>();
 
 function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
   const source = frame.contentWindow as unknown as object | null;
@@ -300,10 +304,10 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
 }
 
 function installWidgetPromptOfferListener() {
-  if (widgetPromptOfferListenerInstalled || typeof window === "undefined") {
+  if (typeof window === "undefined" || widgetPromptOfferListenerWindows.has(window)) {
     return;
   }
-  widgetPromptOfferListenerInstalled = true;
+  widgetPromptOfferListenerWindows.add(window);
   window.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: unknown } | null;
     if (!data || data.type !== WIDGET_PROMPT_OFFER_MESSAGE_TYPE) {
@@ -345,10 +349,10 @@ function adoptWidgetPromptPort(frame: HTMLIFrameElement) {
 }
 
 function installWidgetSizeListener() {
-  if (widgetSizeListenerInstalled || typeof window === "undefined") {
+  if (typeof window === "undefined" || widgetSizeListenerWindows.has(window)) {
     return;
   }
-  widgetSizeListenerInstalled = true;
+  widgetSizeListenerWindows.add(window);
   window.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: unknown; height?: unknown } | null;
     if (!data || data.type !== WIDGET_SIZE_MESSAGE_TYPE || typeof data.height !== "number") {

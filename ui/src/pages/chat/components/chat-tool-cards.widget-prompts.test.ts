@@ -51,10 +51,13 @@ function postPrompt(port: MessagePort, prompt: unknown) {
   port.postMessage({ type: "openclaw:widget-prompt", prompt });
 }
 
-function flushPorts() {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+async function flushPorts() {
+  // Port delivery may take more than one macrotask on loaded CI workers.
+  for (let index = 0; index < 5; index += 1) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
 }
 
 function emulateInteractableFrame(frame: HTMLIFrameElement) {
