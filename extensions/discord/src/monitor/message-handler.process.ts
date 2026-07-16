@@ -137,11 +137,7 @@ export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
 ) {
-  try {
-    await processDiscordMessageInner(ctx, observer);
-  } finally {
-    ctx.replyTypingFeedback?.onCleanup?.();
-  }
+  await processDiscordMessageInner(ctx, observer);
 }
 
 async function processDiscordMessageInner(
@@ -174,7 +170,6 @@ async function processDiscordMessageInner(
     threadBindings,
     route,
     abortSignal,
-    replyTypingFeedback,
     preparedMedia: mediaList,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
@@ -209,10 +204,9 @@ async function processDiscordMessageInner(
   const configuredTypingInterval =
     cfg.agents?.defaults?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
   const shouldDisableCoreTypingKeepalive =
-    Boolean(replyTypingFeedback) ||
-    (sourceRepliesAreToolOnly &&
-      configuredTypingMode === undefined &&
-      configuredTypingInterval === undefined);
+    sourceRepliesAreToolOnly &&
+    configuredTypingMode === undefined &&
+    configuredTypingInterval === undefined;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
@@ -415,11 +409,9 @@ async function processDiscordMessageInner(
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
-  // Deliver target can move into a thread after preflight accepted the message.
-  // The typing owner follows the final target before reply dispatch starts.
-  const typingFeedback =
-    replyTypingFeedback ??
-    createDiscordReplyTypingFeedback({
+  let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
+  const getTypingFeedback = () =>
+    (typingFeedback ??= createDiscordReplyTypingFeedback({
       cfg,
       token,
       accountId,
@@ -427,21 +419,20 @@ async function processDiscordMessageInner(
       rest: feedbackRest,
       log: logVerbose,
       keepaliveIntervalMs: shouldDisableCoreTypingKeepalive ? undefined : 0,
-    });
-  if (replyTypingFeedback) {
-    // Preflight only prepares the feedback owner. Dispatch refreshes it after
-    // retargeting, then the generic reply pipeline starts it after suppression gates.
-    replyTypingFeedback.restartForDispatch(typingChannelId);
-  } else {
-    typingFeedback.updateChannelId(typingChannelId);
-  }
+    }));
 
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "discord",
     accountId: route.accountId,
-    typingCallbacks: typingFeedback,
+    // The core lifecycle reaches this callback only after reply admission.
+    // Silent pre-dispatch outcomes therefore never allocate or emit feedback.
+    typingCallbacks: {
+      onReplyStart: () => getTypingFeedback().onReplyStart(),
+      onIdle: () => typingFeedback?.onIdle?.(),
+      onCleanup: () => typingFeedback?.onCleanup?.(),
+    },
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
