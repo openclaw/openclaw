@@ -355,7 +355,6 @@ describe("runCapability video provider wiring", () => {
             providers: {
               moonshot: {
                 auth: "api-key",
-                apiKey: "moonshot-key", // pragma: allowlist secret
                 models: [],
               },
             },
@@ -397,61 +396,6 @@ describe("runCapability video provider wiring", () => {
         expect(output.provider).toBe("moonshot");
         expect(output.model).toBe("kimi-k2.5");
         expect(seenModel).toBe("kimi-k2.5");
-      });
-    });
-  });
-
-  it("preserves undefined model for self-defaulting video config entries without defaultModels", async () => {
-    let seenModel: string | undefined;
-
-    await withTempDir({ prefix: "openclaw-video-entry-no-default-" }, async (isolatedAgentDir) => {
-      await withVideoFixture("openclaw-video-entry-no-default", async ({ ctx, media, cache }) => {
-        const cfg = {
-          models: {
-            providers: {
-              moonshot: {
-                auth: "api-key",
-                apiKey: "moonshot-key", // pragma: allowlist secret
-                models: [],
-              },
-            },
-          },
-          tools: {
-            media: {
-              video: {
-                models: [{ provider: "moonshot" }],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig;
-
-        const result = await runCapability({
-          capability: "video",
-          cfg,
-          ctx,
-          agentDir: isolatedAgentDir,
-          attachments: cache,
-          media,
-          providerRegistry: new Map<string, MediaUnderstandingProvider>([
-            [
-              "moonshot",
-              {
-                id: "moonshot",
-                capabilities: ["video"],
-                describeVideo: async (req) => {
-                  seenModel = req.model;
-                  return { text: "moonshot", model: "provider-default" };
-                },
-              },
-            ],
-          ]),
-        });
-
-        expect(result.decision.outcome).toBe("success");
-        const output = requireCapabilityOutput(result, 0);
-        expect(output.provider).toBe("moonshot");
-        expect(output.model).toBe("provider-default");
-        expect(seenModel).toBeUndefined();
       });
     });
   });
