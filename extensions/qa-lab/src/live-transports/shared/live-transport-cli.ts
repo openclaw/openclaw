@@ -139,6 +139,11 @@ function createSharedLiveTransportQaCliRegistration(
   };
 }
 
+// All dedicated commands share one memoized import of the consolidated suite host.
+export const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<
+  typeof import("./live-transport-suite.runtime.js")
+>(() => import("./live-transport-suite.runtime.js"));
+
 type QaLabLiveTransportQaCliRegistrationOptions = Omit<
   LiveTransportQaCliRegistrationOptions,
   "allowFailuresHelp" | "defaultProviderMode" | "providerModeHelp"
@@ -155,4 +160,15 @@ export function createLiveTransportQaCliRegistration(
     defaultProviderMode: params.defaultProviderMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
     providerModeHelp: formatQaProviderModeHelp(),
   });
+}
+
+export function createLiveTransportQaAdapterFactory(params: {
+  create: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
+  id: string;
+}): NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]> {
+  return {
+    id: params.id,
+    matches: ({ channelId, driver }) => driver === "live" && channelId === params.id,
+    create: params.create,
+  };
 }

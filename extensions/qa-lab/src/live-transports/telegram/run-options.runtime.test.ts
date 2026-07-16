@@ -1,11 +1,11 @@
 // Qa Lab tests cover live transport cli plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveLiveTransportQaRunOptions } from "./live-transport-cli.runtime.js";
+import { resolveTelegramQaRunOptions } from "./run-options.runtime.js";
 
-describe("resolveLiveTransportQaRunOptions", () => {
+describe("resolveTelegramQaRunOptions", () => {
   it("drops blank model refs so live transports can use provider defaults", () => {
-    const options = resolveLiveTransportQaRunOptions({
+    const options = resolveTelegramQaRunOptions({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "live-frontier",
       primaryModel: " ",

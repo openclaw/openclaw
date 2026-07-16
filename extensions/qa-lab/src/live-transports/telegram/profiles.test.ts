@@ -28,16 +28,16 @@ describe("Telegram QA profiles", () => {
     ).toEqual(["thread-follow-up"]);
   });
 
-  it("rejects unknown profiles and scenarios before gateway startup", () => {
+  it("rejects unknown profiles and leaves explicit scenario validation to the suite catalog", () => {
     expect(() =>
       resolveTelegramQaScenarioIds({ providerMode: "live-frontier", profile: "transport" }),
     ).toThrow('Unknown QA Lab Telegram profile "transport"');
-    expect(() =>
+    expect(
       resolveTelegramQaScenarioIds({
         providerMode: "live-frontier",
-        scenarioIds: ["telegram-missing"],
+        scenarioIds: ["channel-chat-baseline"],
       }),
-    ).toThrow("unknown Telegram QA scenario id(s): telegram-missing");
+    ).toEqual(["channel-chat-baseline"]);
   });
 
   it("lists the YAML catalog with provider-specific release defaults", () => {
