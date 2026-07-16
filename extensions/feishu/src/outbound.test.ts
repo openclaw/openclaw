@@ -2560,6 +2560,7 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     ["loopback URL", "http://127.0.0.1:3000/tmp/openclaw-voice.mp3"],
     ["localhost URL", "https://localhost/tmp/openclaw-voice.mp3"],
     ["private-DNS URL", "https://files.example.test/openclaw-voice.mp3"],
+    ["credentialed URL", "https://user@example.com/openclaw-voice.mp3"],
   ])("does not leak a %s in the upload failure fallback", async (_label, mediaUrl) => {
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
 

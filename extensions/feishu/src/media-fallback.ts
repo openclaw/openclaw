@@ -17,9 +17,11 @@ async function resolvePublicFeishuMediaReference(
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
       return undefined;
     }
-    if (isBlockedHostnameOrIp(parsed.hostname)) {
+    if (parsed.username || parsed.password || isBlockedHostnameOrIp(parsed.hostname)) {
       return undefined;
     }
+    // A proxy route cannot prove its destination is public. Fail closed unless
+    // local pinned DNS validates the URL without private or special-use answers.
     await resolvePinnedHostnameWithPolicy(parsed.hostname);
     return raw;
   } catch {
