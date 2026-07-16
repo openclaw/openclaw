@@ -181,6 +181,7 @@ const prestartContainerEnvFlags = [
 
 const noFollowOwnershipRepair = (root: string) =>
   `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h node:node {} +`;
+const prestartSafePath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 function createEnv(
   sandbox: DockerSetupSandbox,
@@ -854,6 +855,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+    expect(log).toContain(`${prestartSafePath}; export PATH`);
     expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw"));
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));

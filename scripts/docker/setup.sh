@@ -798,7 +798,8 @@ echo "==> Fixing data-directory permissions"
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  '/usr/bin/find -P /home/node/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH; \
+   /usr/bin/find -P /home/node/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
    /usr/bin/chown -h node:node /home/node/.config; \
    /usr/bin/find -P /home/node/.config/openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
    if [ -d /home/node/.openclaw/workspace/.openclaw ] && [ ! -L /home/node/.openclaw/workspace/.openclaw ]; then \
