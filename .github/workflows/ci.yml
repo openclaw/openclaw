@@ -2776,7 +2776,7 @@ jobs:
 
           if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
             mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-            curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
+            curl -fsSL --connect-timeout 10 --max-time 300 "$URL" -o "/tmp/${ARCHIVE}"
             rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
             unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
             mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
