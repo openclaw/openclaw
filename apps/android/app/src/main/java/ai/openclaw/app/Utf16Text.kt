@@ -8,7 +8,7 @@ private val graphemeBreakIterator = ThreadLocal.withInitial { BreakIterator.getC
 
 internal fun String.firstGraphemeOrNull(): String? {
   if (isEmpty()) return null
-  val iterator = graphemeBreakIterator.get()
+  val iterator = checkNotNull(graphemeBreakIterator.get())
   iterator.setText(this)
   iterator.first()
   val end = iterator.next()
