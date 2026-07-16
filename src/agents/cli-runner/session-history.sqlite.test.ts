@@ -116,6 +116,8 @@ describe("SQLite CLI session history", () => {
       sessionId,
       storePath,
     });
+    const sqliteQueries = await import("../../infra/kysely-sync.js");
+    const iterateSpy = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
     const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
 
     try {
@@ -156,8 +158,14 @@ describe("SQLite CLI session history", () => {
         expect(warnSpy).toHaveBeenCalledWith(
           expect.stringContaining("cli session history truncated to last"),
         );
+        const tailSelectionSql = iterateSpy.mock.calls
+          .map(([, query]) => query.compile().sql)
+          .find((sql) => sql.includes('from "transcript_events"'));
+        expect(tailSelectionSql).toBeDefined();
+        expect(tailSelectionSql).not.toMatch(/select "event_json"/);
       });
     } finally {
+      iterateSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });
