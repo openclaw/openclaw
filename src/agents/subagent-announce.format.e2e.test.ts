@@ -8,6 +8,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import * as configSessions from "../config/sessions.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
@@ -23,9 +24,9 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import * as embeddedRuns from "./embedded-agent-runner/runs.js";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
-import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -124,6 +125,7 @@ function expectAgentCallFields(
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse());
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
+const loadSessionEntrySpy = vi.spyOn(sessionAccessor, "loadSessionEntry");
 const loadSessionStoreSpy = vi.spyOn(configSessions, "loadSessionStore");
 const resolveAgentIdFromSessionKeySpy = vi.spyOn(configSessions, "resolveAgentIdFromSessionKey");
 const resolveStorePathSpy = vi.spyOn(configSessions, "resolveStorePath");
@@ -245,7 +247,18 @@ const announceFormatChannelPlugins = [
   },
   {
     pluginId: "matrix",
-    plugin: createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+    plugin: {
+      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+      messaging: {
+        resolveDeliveryTarget: (params: {
+          conversationId: string;
+          parentConversationId?: string;
+        }) => ({
+          to: `room:${params.parentConversationId ?? params.conversationId}`,
+          ...(params.parentConversationId ? { threadId: params.conversationId } : {}),
+        }),
+      },
+    },
     source: "test",
   },
   {
@@ -414,6 +427,9 @@ describe("subagent announce formatting", () => {
       resolveAgentIdFromSessionKey: () => "main",
       resolveStorePath: () => "/tmp/sessions.json",
     });
+    loadSessionEntrySpy
+      .mockReset()
+      .mockImplementation((scope) => loadSessionStoreFixture()[scope.sessionKey]);
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
@@ -3648,3 +3664,4 @@ describe("subagent announce formatting", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

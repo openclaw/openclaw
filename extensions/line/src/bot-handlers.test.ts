@@ -22,8 +22,10 @@ vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
     },
 }));
 vi.mock("openclaw/plugin-sdk/command-auth-native", () => ({
-  hasControlCommand: (text: string) => text.trim().startsWith("!"),
-  shouldComputeCommandAuthorized: (text: string) => text.trim().startsWith("!"),
+  hasControlCommand: (text: string) => {
+    const body = text.trim().toLowerCase();
+    return body === "/status" || body.startsWith("/status ");
+  },
   resolveControlCommandGate: ({
     hasControlCommand,
     authorizers,
@@ -175,7 +177,6 @@ vi.mock("./bot-message-context.js", () => ({
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
 let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineWebhookReplayCache;
-let LineRetryableWebhookError: typeof import("./bot-handlers.js").LineRetryableWebhookError;
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
@@ -315,8 +316,7 @@ async function startInflightReplayDuplicate(params: {
 
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
-    ({ handleLineWebhookEvents, createLineWebhookReplayCache, LineRetryableWebhookError } =
-      await import("./bot-handlers.js"));
+    ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
   });
 
   afterAll(() => {
@@ -445,7 +445,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m3a", type: "text", text: "!status", quoteToken: "quote-token" },
+          message: { id: "m3a", type: "text", text: "/status", quoteToken: "quote-token" },
           source: { type: "group", groupId: "group-1", userId: "user-ag" },
           webhookEventId: "evt-3a",
         }),
@@ -468,12 +468,87 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("does not bypass requireMention for a plain allowlisted message with an inline slash token", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: { id: "m-bypass-1", type: "text", text: "cd /home", quoteToken: "quote-token" },
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-1",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("still bypasses requireMention for an allowlisted real control command", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: { id: "m-bypass-2", type: "text", text: "/status", quoteToken: "quote-token" },
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-2",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps command authorization for mentioned group text with an inline command token", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-bypass-mentioned",
+            type: "text",
+            text: "@Bot please check /status",
+            mention: {
+              mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }],
+            },
+          } as MessageEvent["message"],
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-mentioned",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ commandAuthorized: true }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks unauthorized group control commands even when an open group sender is allowed", async () => {
     const processMessage = vi.fn();
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m3b", type: "text", text: "!status", quoteToken: "quote-token" },
+          message: { id: "m3b", type: "text", text: "/status", quoteToken: "quote-token" },
           source: { type: "group", groupId: "group-1", userId: "user-open" },
           webhookEventId: "evt-3b",
         }),
@@ -521,6 +596,28 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("does not use the DM allowlist when group allowlist policy has no group entries", async () => {
+    const processMessage = vi.fn();
+    await expectGroupMessageBlocked({
+      processMessage,
+      event: createReplayMessageEvent({
+        messageId: "m5c",
+        groupId: "group-1",
+        userId: "user-open-dm",
+        webhookEventId: "evt-5c",
+        isRedelivery: false,
+      }),
+      context: createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "allowlist",
+        requireMention: false,
+      }),
+    });
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -747,7 +844,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("mirrors in-flight retryable replay failures so concurrent duplicates also fail", async () => {
+  it("commits in-flight failures so concurrent duplicates do not retry", async () => {
     let rejectFirst: ((err: Error) => void) | undefined;
     const firstDone = new Promise<void>((_, reject) => {
       rejectFirst = reject;
@@ -764,10 +861,10 @@ describe("handleLineWebhookEvents", () => {
     });
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
     const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
-    const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
-    rejectFirst?.(new LineRetryableWebhookError("transient inflight failure"));
+    rejectFirst?.(new Error("transient inflight failure"));
 
-    await Promise.all([firstFailure, secondFailure]);
+    await firstFailure;
+    await expect(secondRun).resolves.toBeUndefined();
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -921,6 +1018,272 @@ describe("handleLineWebhookEvents", () => {
     expect(entry?.timestamp).toBe(1700000000000);
   });
 
+  it("keeps a group message recorded during a mention turn instead of clearing it", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    let releaseTurn: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const processMessage = vi.fn(() => gate);
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
+    });
+
+    // A plain ambient message is recorded first; the mention turn will consume it.
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-past",
+            type: "text",
+            text: "earlier chatter",
+            quoteToken: "test-token-placeholder",
+          },
+          source: { type: "group", groupId: "grp-race", userId: "user-b" },
+          webhookEventId: "evt-past",
+          timestamp: 1000,
+        }),
+      ],
+      context,
+    );
+    expect(groupHistories.get("grp-race")).toHaveLength(1);
+
+    // A mention turn starts and parks in processMessage (agent still running).
+    const mentionRun = handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-mention",
+            type: "text",
+            text: "@Bot summarize",
+            quoteToken: "test-token-placeholder",
+            mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+          },
+          source: { type: "group", groupId: "grp-race", userId: "user-a" },
+          webhookEventId: "evt-mention",
+          timestamp: 2000,
+        }),
+      ],
+      context,
+    );
+    await vi.waitFor(() => expect(processMessage).toHaveBeenCalledTimes(1));
+
+    // A concurrent plain message arrives mid-turn and is recorded.
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-concurrent",
+            type: "text",
+            text: "ping",
+            quoteToken: "test-token-placeholder",
+          },
+          source: { type: "group", groupId: "grp-race", userId: "user-c" },
+          webhookEventId: "evt-concurrent",
+          timestamp: 3000,
+        }),
+      ],
+      context,
+    );
+    expect(groupHistories.get("grp-race")).toHaveLength(2);
+
+    // Finish the turn; cleanup runs.
+    releaseTurn();
+    await mentionRun;
+
+    // The turn's context saw exactly the pre-mention window...
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inboundHistory: [expect.objectContaining({ body: "earlier chatter" })],
+      }),
+    );
+    // ...so cleanup drops "m-past" and the concurrent "m-concurrent" survives.
+    expect(groupHistories.get("grp-race")).toEqual([expect.objectContaining({ body: "ping" })]);
+  });
+
+  it("keeps a message arriving between the history snapshot and context construction for the next mention", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    let releaseContextBuild: () => void = () => {};
+    const contextGate = new Promise<void>((resolve) => {
+      releaseContextBuild = resolve;
+    });
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
+    });
+
+    // An ambient message the mention turn will consume.
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-past",
+            type: "text",
+            text: "earlier chatter",
+            quoteToken: "test-token-placeholder",
+          },
+          source: { type: "group", groupId: "grp-mid", userId: "user-b" },
+          webhookEventId: "evt-past",
+          timestamp: 1000,
+        }),
+      ],
+      context,
+    );
+
+    // The mention turn parks inside buildLineMessageContext: the handler has
+    // snapshotted the window, but the turn context does not exist yet.
+    buildLineMessageContextMock.mockImplementationOnce(async () => {
+      await contextGate;
+      return {
+        ctxPayload: { From: "line:group:grp-mid" },
+        replyToken: "test-auth-token",
+        route: { agentId: "default" },
+        isGroup: true,
+        accountId: "default",
+      };
+    });
+    const mentionRun = handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-mention",
+            type: "text",
+            text: "@Bot summarize",
+            quoteToken: "test-token-placeholder",
+            mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+          },
+          source: { type: "group", groupId: "grp-mid", userId: "user-a" },
+          webhookEventId: "evt-mention",
+          timestamp: 2000,
+        }),
+      ],
+      context,
+    );
+    await vi.waitFor(() => expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1));
+
+    // An ambient message lands in that window and is recorded.
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-mid",
+            type: "text",
+            text: "ping",
+            quoteToken: "test-token-placeholder",
+          },
+          source: { type: "group", groupId: "grp-mid", userId: "user-c" },
+          webhookEventId: "evt-mid",
+          timestamp: 3000,
+        }),
+      ],
+      context,
+    );
+
+    // The turn's context was captured with the snapshot, so it excludes "m-mid".
+    expect(buildLineMessageContextMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        inboundHistory: [expect.objectContaining({ body: "earlier chatter" })],
+      }),
+    );
+
+    releaseContextBuild();
+    await mentionRun;
+
+    // Cleanup drops only the consumed "m-past"; "m-mid" survives...
+    expect(groupHistories.get("grp-mid")).toEqual([expect.objectContaining({ body: "ping" })]);
+
+    // ...and the next mention turn consumes it exactly once.
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-mention-2",
+            type: "text",
+            text: "@Bot again",
+            quoteToken: "test-token-placeholder",
+            mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+          },
+          source: { type: "group", groupId: "grp-mid", userId: "user-a" },
+          webhookEventId: "evt-mention-2",
+          timestamp: 4000,
+        }),
+      ],
+      context,
+    );
+    expect(buildLineMessageContextMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        inboundHistory: [expect.objectContaining({ body: "ping" })],
+      }),
+    );
+    expect(groupHistories.has("grp-mid")).toBe(false);
+  });
+
+  it("keeps group history intact when a mention turn fails, so the retry still has context", async () => {
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    const processMessage = vi.fn(async () => {
+      throw new Error("agent failure");
+    });
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
+    });
+
+    // An ambient message the turn will consume.
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-ambient",
+            type: "text",
+            text: "context",
+            quoteToken: "test-token-placeholder",
+          },
+          source: { type: "group", groupId: "grp-fail", userId: "user-b" },
+          webhookEventId: "evt-ambient",
+          timestamp: 1000,
+        }),
+      ],
+      context,
+    );
+    expect(groupHistories.get("grp-fail")).toHaveLength(1);
+
+    // A mention turn whose processMessage throws; the handler rethrows after commit.
+    await expect(
+      handleLineWebhookEvents(
+        [
+          createTestMessageEvent({
+            message: {
+              id: "m-mention-fail",
+              type: "text",
+              text: "@Bot help",
+              quoteToken: "test-token-placeholder",
+              mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+            },
+            source: { type: "group", groupId: "grp-fail", userId: "user-a" },
+            webhookEventId: "evt-mention-fail",
+            timestamp: 2000,
+          }),
+        ],
+        context,
+      ),
+    ).rejects.toThrow(/agent failure/);
+
+    // Cleanup runs only after a successful turn, so the failed turn leaves the
+    // window intact for the retry.
+    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(groupHistories.get("grp-fail")).toHaveLength(1);
+  });
+
   it("skips group messages without mention when requireMention is set", async () => {
     const processMessage = vi.fn();
     const event = createTestMessageEvent({
@@ -1006,6 +1369,33 @@ describe("handleLineWebhookEvents", () => {
     );
 
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps command authorization for DM text with an inline command token", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-command-dm",
+        type: "text",
+        text: "please check /status",
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "user", userId: "user-dm" },
+      webhookEventId: "evt-command-dm",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ commandAuthorized: true }),
+    );
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -1142,25 +1532,5 @@ describe("handleLineWebhookEvents", () => {
       "line: event handler failed: Error: transient failure",
     );
   });
-
-  it("reopens replay after an explicit retryable event failure", async () => {
-    const processMessage = vi
-      .fn()
-      .mockRejectedValueOnce(new LineRetryableWebhookError("retry me"))
-      .mockResolvedValueOnce(undefined);
-    const event = createReplayMessageEvent({
-      messageId: "m-fail-then-retryable",
-      groupId: "group-retry",
-      userId: "user-retry",
-      webhookEventId: "evt-fail-then-retryable",
-      isRedelivery: false,
-    });
-    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
-
-    await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("retry me");
-    await handleLineWebhookEvents([event], context);
-
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(2);
-    expect(processMessage).toHaveBeenCalledTimes(2);
-  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

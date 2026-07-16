@@ -3,6 +3,8 @@
 // timeout handling, and grouped CI output.
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import pMap from "p-map";
+import prettyMilliseconds from "pretty-ms";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
@@ -13,9 +15,12 @@ const POST_FORCE_KILL_WAIT_MS = 250;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 /** Ordered list of supplemental boundary checks used by CI sharding. */
+// prompt:snapshots:check is intentionally absent: it regenerates snapshots by
+// running real embedded-agent turns (~2min) and owns a dedicated CI lane
+// (check-prompt-snapshots) so no boundary shard carries that wall clock.
 export const BOUNDARY_CHECKS = [
-  ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
+  ["lint:docker-e2e", "pnpm", ["run", "lint:docker-e2e"]],
   ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
   ["lint:tmp:channel-agnostic-boundaries", "pnpm", ["run", "lint:tmp:channel-agnostic-boundaries"]],
   ["lint:tmp:tsgo-core-boundary", "pnpm", ["run", "lint:tmp:tsgo-core-boundary"]],
@@ -444,10 +449,10 @@ function formatDuration(ms) {
   if (!Number.isFinite(ms)) {
     return "";
   }
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  return `${(ms / 1000).toFixed(1)}s`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 100) * 100;
+  return prettyMilliseconds(Math.max(0, roundedMs), {
+    unitCount: 1,
+  });
 }
 
 function writeGroupedResult(result, output) {
@@ -495,43 +500,23 @@ export async function runChecks(
     outputMaxBytes = DEFAULT_OUTPUT_MAX_BYTES,
   } = {},
 ) {
-  const results = Array.from({ length: checks.length });
   const activeChildren = new Set();
   const removeActiveChildCleanup = installActiveChildCleanup(activeChildren);
-  let nextIndex = 0;
-  let active = 0;
+  let results;
 
   try {
-    await new Promise((resolve) => {
-      const launch = () => {
-        if (nextIndex >= checks.length && active === 0) {
-          resolve();
-          return;
-        }
-
-        while (active < concurrency && nextIndex < checks.length) {
-          const index = nextIndex;
-          const check = checks[nextIndex++];
-          active += 1;
-          void runSingleCheck(check, {
-            activeChildren,
-            checkTimeoutMs,
-            cwd,
-            env,
-            outputMaxBytes,
-          })
-            .then((result) => {
-              results[index] = result;
-            })
-            .finally(() => {
-              active -= 1;
-              launch();
-            });
-        }
-      };
-
-      launch();
-    });
+    results = await pMap(
+      checks,
+      (check) =>
+        runSingleCheck(check, {
+          activeChildren,
+          checkTimeoutMs,
+          cwd,
+          env,
+          outputMaxBytes,
+        }),
+      { concurrency, stopOnError: true },
+    );
   } finally {
     removeActiveChildCleanup();
   }

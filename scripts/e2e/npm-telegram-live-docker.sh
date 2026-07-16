@@ -18,7 +18,8 @@ case "$OUTPUT_DIR" in
   /*) OUTPUT_DIR_HOST="$OUTPUT_DIR" ;;
   *) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;
 esac
-OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"
+OUTPUT_DIR_CONTAINER_RELATIVE=".artifacts/qa-e2e/npm-telegram-live-output"
+OUTPUT_DIR_CONTAINER="/app/$OUTPUT_DIR_CONTAINER_RELATIVE"
 
 resolve_credential_source() {
   if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
@@ -220,7 +221,7 @@ docker_env=(
   -e TMPDIR=/tmp
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
-  -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"
+  -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"
   -e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"
   -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
   -e OPENCLAW_QA_RUNNER="${OPENCLAW_QA_RUNNER:-docker}"
@@ -416,6 +417,7 @@ run_logged docker_e2e_run_with_harness \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
   -v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER" \
   -v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro" \
+  -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail

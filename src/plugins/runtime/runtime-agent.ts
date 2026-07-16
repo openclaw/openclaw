@@ -16,7 +16,7 @@ import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   listSessionEntries as listAccessorSessionEntries,
@@ -24,16 +24,12 @@ import {
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackPluginOwnedSessionEntryLifecycle,
   type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import {
-  loadSessionStore,
-  saveSessionStore,
-  updateSessionStore,
-  type ResolvedSessionMaintenanceConfigInput,
-} from "../../config/sessions/store.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   beginSessionWorkAdmission,
@@ -41,11 +37,13 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
+
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
@@ -89,16 +87,6 @@ type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
-
-function resolveRuntimeThinkingCatalog(
-  params: Parameters<PluginRuntime["agent"]["resolveThinkingPolicy"]>[0],
-) {
-  if (params.catalog) {
-    return params.catalog;
-  }
-  const configuredCatalog = buildConfiguredModelCatalog({ cfg: getRuntimeConfig() });
-  return configuredCatalog.length > 0 ? configuredCatalog : undefined;
-}
 
 function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
   // Keep plugin runtime parameters aligned with the public SDK wrapper while
@@ -188,6 +176,8 @@ async function createSessionEntry(
     key: params.key,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
   });
+  const cliInitial = "cliBackendId" in params.initialEntry ? params.initialEntry : undefined;
+  const harnessInitial = "agentHarnessId" in params.initialEntry ? params.initialEntry : undefined;
   const identities = new Set([target.canonicalKey, ...target.storeKeys]);
   return await runExclusiveSessionLifecycleMutation({
     scope: target.storePath,
@@ -240,11 +230,23 @@ async function createSessionEntry(
         let created: { key: string; agentId: string; entry: SessionEntry };
         if (matchingEntry) {
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
+          const expectedExecNode = params.execNode?.trim() || undefined;
+          const expectedExecCwd = params.execCwd?.trim() || undefined;
           const initialEntryMatches =
             matchingEntry.initializationPending === true &&
-            matchingEntry.agentHarnessId === params.initialEntry.agentHarnessId &&
+            matchingEntry.agentHarnessId === harnessInitial?.agentHarnessId &&
+            matchingEntry.pluginOwnerId === cliInitial?.pluginOwnerId &&
             matchingEntry.modelSelectionLocked === params.initialEntry.modelSelectionLocked &&
+            (!cliInitial ||
+              (matchingEntry.providerOverride === cliInitial.cliBackendId &&
+                matchingEntry.modelOverride === cliInitial.model &&
+                isDeepStrictEqual(
+                  matchingEntry.cliSessionBindings?.[cliInitial.cliBackendId],
+                  cliInitial.cliSessionBinding,
+                ))) &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
+            matchingEntry.execNode === expectedExecNode &&
+            matchingEntry.execCwd === expectedExecCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
           if (!initialEntryMatches) {
             throw new Error(
@@ -271,10 +273,30 @@ async function createSessionEntry(
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
-            initialEntry: afterCreate
-              ? { ...params.initialEntry, initializationPending: true }
-              : params.initialEntry,
-            authorizedAgentHarnessId: params.initialEntry.agentHarnessId,
+            ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
+            ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
+            initialEntry: {
+              ...(harnessInitial ? { agentHarnessId: harnessInitial.agentHarnessId } : {}),
+              ...(cliInitial
+                ? {
+                    pluginOwnerId: cliInitial.pluginOwnerId,
+                    providerOverride: cliInitial.cliBackendId,
+                    modelOverride: cliInitial.model,
+                    cliSessionBindings: {
+                      [cliInitial.cliBackendId]: cliInitial.cliSessionBinding,
+                    },
+                  }
+                : {}),
+              ...(params.initialEntry.modelSelectionLocked === true
+                ? { modelSelectionLocked: true }
+                : {}),
+              ...(params.initialEntry.pluginExtensions
+                ? { pluginExtensions: params.initialEntry.pluginExtensions }
+                : {}),
+              ...(afterCreate ? { initializationPending: true } : {}),
+            },
+            ...(harnessInitial ? { authorizedAgentHarnessId: harnessInitial.agentHarnessId } : {}),
+            ...(cliInitial?.pluginOwnerId ? { authorizedPluginId: cliInitial.pluginOwnerId } : {}),
             commandSource: "plugin-runtime",
             ...(afterCreate ? { afterCreate: runAfterCreate } : {}),
           });
@@ -351,11 +373,16 @@ async function createSessionEntry(
               storeKeys: [callbackContext.key],
             },
           };
-          // Locked rows require the narrow harness rollback capability. Unlocked
+          // Locked rows require owner-specific rollback capabilities. Unlocked
           // initializers stay on the ordinary guarded lifecycle deletion path.
           const rolledBack =
             expectedEntry.modelSelectionLocked === true
-              ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
+              ? expectedEntry.agentHarnessId
+                ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
+                : await rollbackPluginOwnedSessionEntryLifecycle({
+                    ...rollbackParams,
+                    expectedPluginOwnerId: cliInitial?.pluginOwnerId ?? "",
+                  })
               : await deleteSessionEntryLifecycle(rollbackParams);
           if (!rolledBack.deleted) {
             throw new Error(`created session ${callbackContext.key} changed before rollback`, {
@@ -449,7 +476,9 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
       const profile = resolveThinkingProfile({
         ...params,
         agentRuntime: effectiveRuntime,
-        catalog: resolveRuntimeThinkingCatalog(params),
+        catalog: resolveRuntimeThinkingCatalog(params, () =>
+          buildConfiguredModelCatalog({ cfg: getRuntimeConfig() }),
+        ),
       });
       const policy: Omit<
         ReturnType<PluginRuntime["agent"]["resolveThinkingPolicy"]>,
@@ -480,11 +509,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     patchSessionEntry,
     upsertSessionEntry,
     runWithWorkAdmission: runWithSessionWorkAdmission,
-    loadSessionStore,
-    saveSessionStore,
-    updateSessionStore,
     updateSessionStoreEntry,
-    resolveSessionFilePath,
   }));
 
   return agentRuntime as PluginRuntime["agent"];

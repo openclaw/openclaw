@@ -667,6 +667,7 @@ describe("OpenClaw SDK", () => {
         ageMs: 1000,
         idleMs: 250,
         attachedSessionIds: [],
+        tunnelStatus: "stopped",
       },
     };
     const transport = new FakeTransport({
@@ -1654,3 +1655,4 @@ describe("OpenClaw SDK", () => {
     expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

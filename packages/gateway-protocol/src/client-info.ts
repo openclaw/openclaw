@@ -25,6 +25,7 @@ export const GATEWAY_CLIENT_IDS = {
   WATCHOS_APP: "openclaw-watchos",
   ANDROID_APP: "openclaw-android",
   NODE_HOST: "node-host",
+  WORKER: "openclaw-worker",
   TEST: "test",
   FINGERPRINT: "fingerprint",
   PROBE: "openclaw-probe",
@@ -45,6 +46,7 @@ export const GATEWAY_CLIENT_MODES = {
   UI: "ui",
   BACKEND: "backend",
   NODE: "node",
+  WORKER: "worker",
   PROBE: "probe",
   TEST: "test",
 } as const;
@@ -76,6 +78,7 @@ export type GatewayClientInfo = {
 export const GATEWAY_CLIENT_CAPS = {
   INLINE_WIDGETS: "inline-widgets",
   TASK_SUGGESTIONS: "task-suggestions",
+  TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
   TOOL_EVENTS: "tool-events",
 } as const;
 

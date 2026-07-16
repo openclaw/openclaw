@@ -1,5 +1,6 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -282,7 +283,9 @@ function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
 
 function normalizeConfigMutationExplicitSetPath(path: PathSegment[]): PathSegment[] {
   if (path.length >= 4 && path[0] === "agents" && path[1] === "defaults" && path[2] === "models") {
-    const normalizedModelId = normalizeAgentModelRefForConfig(path[3]);
+    const normalizedModelId = normalizeAgentModelRefForConfig(
+      expectDefined(path[3], "path entry at 3"),
+    );
     return normalizedModelId === path[3]
       ? path
       : [...path.slice(0, 3), normalizedModelId, ...path.slice(4)];
@@ -687,9 +690,12 @@ function setAtPath(
   value: unknown,
   options?: SetAtPathOptions,
 ): void {
+  const last = path.at(-1);
+  if (last === undefined) {
+    throw new Error("Config path must contain at least one segment");
+  }
   let current: unknown = root;
-  for (let i = 0; i < path.length - 1; i += 1) {
-    const segment = path[i];
+  for (const [i, segment] of path.slice(0, -1).entries()) {
     const next = path[i + 1];
     const nextIsIndex = shouldCreateArrayForMissingPathSegment({
       path,
@@ -723,7 +729,6 @@ function setAtPath(
     current = record[segment];
   }
 
-  const last = path[path.length - 1];
   if (Array.isArray(current)) {
     if (!isIndexSegment(last)) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
@@ -892,9 +897,12 @@ function assertNonDestructiveReplacement(params: {
 type UnsetAtPathResult = { removed: true; leafContainer: "array" | "object" } | { removed: false };
 
 function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetAtPathResult {
+  const last = path.at(-1);
+  if (last === undefined) {
+    return { removed: false };
+  }
   let current: unknown = root;
-  for (let i = 0; i < path.length - 1; i += 1) {
-    const segment = path[i];
+  for (const segment of path.slice(0, -1)) {
     if (!current || typeof current !== "object") {
       return { removed: false };
     }
@@ -916,7 +924,6 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
     current = record[segment];
   }
 
-  const last = path[path.length - 1];
   if (Array.isArray(current)) {
     if (!isIndexSegment(last)) {
       return { removed: false };
@@ -953,7 +960,8 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   return snapshot;
 }
 
-function parseRequiredPath(path: string): PathSegment[] {
+/** Parse and validate the exact path grammar accepted by config set/get/unset. */
+export function parseConfigSetPath(path: string): string[] {
   const parsedPath = parsePath(path);
   if (parsedPath.length === 0) {
     throw new Error("Path is empty.");
@@ -1410,7 +1418,7 @@ function buildValueAssignmentOperation(params: {
 function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
   const operations: ConfigSetOperation[] = [];
   for (const [index, entry] of entries.entries()) {
-    const path = parseRequiredPath(entry.path);
+    const path = parseConfigSetPath(entry.path);
     if (entry.ref !== undefined) {
       const ref = parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`);
       operations.push(
@@ -1495,7 +1503,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
 }
 
 function parseReplacePaths(paths: string[] | undefined): PathSegment[][] {
-  return (paths ?? []).map((path) => parseRequiredPath(path));
+  return (paths ?? []).map((path) => parseConfigSetPath(path));
 }
 
 function pathKey(path: PathSegment[]): string {
@@ -1649,7 +1657,7 @@ function buildSingleSetOperations(params: {
   opts: ConfigSetOptions;
 }): ConfigSetOperation[] {
   const pathProvided = typeof params.path === "string" && params.path.trim().length > 0;
-  const parsedPath = pathProvided ? parseRequiredPath(params.path as string) : null;
+  const parsedPath = pathProvided ? parseConfigSetPath(params.path as string) : null;
   const strictJson = Boolean(params.opts.strictJson || params.opts.json);
   const modeResolution = resolveConfigSetMode({
     hasBatchMode: false,
@@ -2435,7 +2443,7 @@ export async function runConfigPatch(opts: {
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const parsedPath = parseRequiredPath(opts.path);
+    const parsedPath = parseConfigSetPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
@@ -2481,7 +2489,7 @@ export async function runConfigUnset(opts: {
     if (cliOptions.json && !cliOptions.dryRun) {
       throw new Error("--json can only be used with --dry-run.");
     }
-    const parsedPath = parseRequiredPath(opts.path);
+    const parsedPath = parseConfigSetPath(opts.path);
     const autoManagedUnsetTargets = findAutoManagedMetaUnsetTargets(parsedPath);
     if (autoManagedUnsetTargets.length > 0) {
       throw new Error(formatAutoManagedMetaError(autoManagedUnsetTargets));
@@ -2828,3 +2836,4 @@ export function registerConfigCli(program: Command) {
       await runConfigValidate({ json: Boolean(opts.json) });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

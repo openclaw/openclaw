@@ -1,16 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionStore as loadPluginSessionStore } from "../../plugin-sdk/session-store-runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
-  applySessionEntryLifecycleMutation,
   clearSessionStoreCacheForTest,
-  cleanupSessionLifecycleArtifacts,
-  deleteSessionEntryLifecycle,
   loadSessionStore,
-  rollbackAgentHarnessSessionEntryLifecycle,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -70,7 +66,10 @@ describe("agent harness session store invariant", () => {
     await updateSessionStore(
       storePath,
       (store) => {
-        store[sessionKey] = { ...store[sessionKey], label: "Legacy notes" };
+        store[sessionKey] = {
+          ...expectDefined(store[sessionKey], "stored harness session"),
+          label: "Legacy notes",
+        };
       },
       { skipMaintenance: true },
     );
@@ -92,7 +91,10 @@ describe("agent harness session store invariant", () => {
     await updateSessionStore(
       storePath,
       (store) => {
-        store[sessionKey] = { ...store[sessionKey], sessionId: "generated-session" };
+        store[sessionKey] = {
+          ...expectDefined(store[sessionKey], "stored legacy session"),
+          sessionId: "generated-session",
+        };
       },
       { skipMaintenance: true },
     );
@@ -100,36 +102,6 @@ describe("agent harness session store invariant", () => {
     expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual({
       ...entry,
       sessionId: "generated-session",
-    });
-  });
-
-  it("rejects an invalid reserved lifecycle upsert before persistence", async () => {
-    await saveSessionStore(
-      storePath,
-      { "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 1 } },
-      { skipMaintenance: true },
-    );
-
-    await expect(
-      applySessionEntryLifecycleMutation({
-        storePath,
-        upserts: [
-          {
-            sessionKey: "agent:main:harness:codex:supervision:native-thread",
-            entry: {
-              agentHarnessId: "other",
-              modelSelectionLocked: true,
-              sessionId: "native-session",
-              updatedAt: 1,
-            },
-          },
-        ],
-        skipMaintenance: true,
-      }),
-    ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
-
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-      "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 1 },
     });
   });
 
@@ -152,34 +124,6 @@ describe("agent harness session store invariant", () => {
     ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
 
     expect(fs.existsSync(storePath)).toBe(false);
-  });
-
-  it("persists a locked reserved lifecycle upsert owned by its matching harness", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-
-    await expect(
-      applySessionEntryLifecycleMutation({
-        storePath,
-        upserts: [
-          {
-            sessionKey,
-            entry: {
-              agentHarnessId: "codex",
-              modelSelectionLocked: true,
-              sessionId: "native-session",
-              updatedAt: 1,
-            },
-          },
-        ],
-        skipMaintenance: true,
-      }),
-    ).resolves.toMatchObject({ afterCount: 1 });
-
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionId: "native-session",
-    });
   });
 
   it("rejects removing or reassigning any durable model-selection lock", async () => {
@@ -205,7 +149,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], agentHarnessId: "other" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            agentHarnessId: "other",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -214,7 +161,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], agentHarnessId: "codex-app-server" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            agentHarnessId: "codex-app-server",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -223,7 +173,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], sessionId: "replacement-session" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            sessionId: "replacement-session",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -246,7 +199,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], sessionId: "replacement-session" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            sessionId: "replacement-session",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -496,117 +452,6 @@ describe("agent harness session store invariant", () => {
       [sessionKey]: entry,
       "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 2 },
     });
-  });
-
-  it("does not expose the writer-owned cache through the plugin SDK", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-    const entry: SessionEntry = {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionId: "native-session",
-      updatedAt: 1,
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-
-    const exposed = loadPluginSessionStore(storePath, { clone: false });
-    delete exposed[sessionKey];
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        store["agent:main:ordinary"] = { sessionId: "ordinary-session", updatedAt: 2 };
-      },
-      { skipMaintenance: true },
-    );
-
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-      [sessionKey]: entry,
-      "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 2 },
-    });
-  });
-
-  it("rejects locked lifecycle cleanup before transcript side effects", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-    const transcriptPath = path.join(tempDir, "native-session.jsonl");
-    const entry: SessionEntry = {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionFile: transcriptPath,
-      sessionId: "native-session",
-      updatedAt: 1,
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-    fs.writeFileSync(transcriptPath, '{"runId":"codex-supervision-marker"}\n', "utf-8");
-    fs.utimesSync(transcriptPath, new Date(1), new Date(1));
-
-    await expect(
-      cleanupSessionLifecycleArtifacts({
-        storePath,
-        sessionKeySegmentPrefix: "harness:codex:supervision:",
-        transcriptContentMarker: "codex-supervision-marker",
-        orphanTranscriptMinAgeMs: 1,
-        nowMs: Date.now(),
-      }),
-    ).rejects.toThrow("Model-selection-locked sessions cannot be removed");
-
-    expect(fs.existsSync(transcriptPath)).toBe(true);
-    expect(fs.readdirSync(tempDir).some((name) => name.includes(".jsonl.deleted."))).toBe(false);
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        store["agent:main:ordinary"] = { sessionId: "ordinary-session", updatedAt: 2 };
-      },
-      { skipMaintenance: true },
-    );
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(entry);
-  });
-
-  it("allows only the dedicated exact harness-initialization rollback", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-    const entry: SessionEntry = {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionId: "native-session",
-      updatedAt: 1,
-    };
-    const params = {
-      archiveTranscript: false,
-      expectedEntry: entry,
-      expectedSessionId: entry.sessionId,
-      expectedUpdatedAt: entry.updatedAt,
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-
-    await expect(deleteSessionEntryLifecycle(params)).rejects.toThrow(
-      "Model-selection-locked sessions cannot be removed",
-    );
-    await expect(rollbackAgentHarnessSessionEntryLifecycle(params)).resolves.toMatchObject({
-      deleted: true,
-    });
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
-  });
-
-  it("does not expose privileged rollback for an unlocked legacy prefix collision", async () => {
-    const sessionKey = "agent:main:harness:notes";
-    const entry: SessionEntry = {
-      agentHarnessId: "openclaw",
-      sessionId: "legacy-session",
-      updatedAt: 1,
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-
-    await expect(
-      rollbackAgentHarnessSessionEntryLifecycle({
-        archiveTranscript: false,
-        expectedEntry: entry,
-        expectedSessionId: entry.sessionId,
-        expectedUpdatedAt: entry.updatedAt,
-        storePath,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      }),
-    ).rejects.toThrow("Model-selection-locked sessions cannot be removed");
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(entry);
   });
 
   it("does not treat reserved harness keys as relocatable aliases", async () => {

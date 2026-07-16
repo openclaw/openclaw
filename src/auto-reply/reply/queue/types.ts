@@ -37,7 +37,7 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
-export type QueueInsertPosition = "tail" | "front";
+type QueueInsertPosition = "tail" | "front";
 
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
@@ -74,7 +74,7 @@ export type FollowupRun = {
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   queuedLifecycle?: QueuedReplyLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
-  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
+  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -157,7 +157,7 @@ export type FollowupRun = {
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
-    execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+    execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
     bashElevated?: {
       enabled: boolean;
       allowed: boolean;
@@ -187,6 +187,15 @@ export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
 ): boolean {
   return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
+}
+
+export function resolveFollowupAbortSignal(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): AbortSignal | undefined {
+  const signals = [run.abortSignal, run.queueAbortSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
 }
 
 const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
+import { getActiveAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -9,13 +10,13 @@ import {
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import {
-  applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
   shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
+import { resolveAgentToolSearchRuntimeConfig } from "../tool-search-runtime-config.js";
 import {
   applyToolSchemaDirectoryCatalog,
   applyToolSearchCatalog,
@@ -84,22 +85,22 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
     sessionKey: params.sessionKey,
   });
   const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
-  const toolSearchRuntimeConfig = forceDirectMessageTool
-    ? params.config
-    : applyLocalModelLeanToolSearchDefaults({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      });
+  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    forceDirectMessageTool,
+  });
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const toolsAvailable =
     params.modelToolsEnabled &&
     params.disableTools !== true &&
     params.isRawModelRun !== true &&
     params.toolsAllow?.length !== 0;
-  const codeModeControlsEnabled = toolsAvailable && codeModeConfig.enabled;
+  const ringZeroToolRun = getActiveAgentRingZeroTools().length > 0;
+  const codeModeControlsEnabled = toolsAvailable && !ringZeroToolRun && codeModeConfig.enabled;
   const toolSearchControlsEnabled =
-    toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
+    toolsAvailable && !ringZeroToolRun && !codeModeControlsEnabled && toolSearchConfig.enabled;
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
   const runtimeToolAllowlist =

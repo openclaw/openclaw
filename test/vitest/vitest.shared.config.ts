@@ -186,12 +186,20 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "extensions", "discord", "api.ts"),
       },
       {
+        find: "@openclaw/matrix/test-api.js",
+        replacement: path.join(repoRoot, "extensions", "matrix", "test-api.ts"),
+      },
+      {
         find: "@openclaw/slack/api.js",
         replacement: path.join(repoRoot, "extensions", "slack", "api.ts"),
       },
       {
         find: "@openclaw/whatsapp/api.js",
         replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
+      },
+      {
+        find: "@openclaw/gateway-client/browser",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "browser.ts"),
       },
       {
         find: "@openclaw/gateway-client/readiness",
@@ -392,6 +400,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
       {
+        find: "@openclaw/normalization-core/agent-id",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "agent-id.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/boolean-coercion",
         replacement: path.join(
           repoRoot,
@@ -430,6 +442,10 @@ export const sharedVitestConfig = {
           "src",
           "record-coerce.ts",
         ),
+      },
+      {
+        find: "@openclaw/normalization-core/result",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "result.ts"),
       },
       {
         find: "@openclaw/normalization-core/string-coerce",
@@ -471,6 +487,8 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "mime"),
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
+      sourcePackageAlias("retry"),
+      sourcePackageAlias("workboard-contract"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,

@@ -11,6 +11,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -55,11 +56,7 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./tools/common.js";
-export {
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-  isCodeModeControlTool,
-} from "./code-mode-control-tools.js";
+export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -74,7 +71,7 @@ const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
-export type CodeModeConfig = {
+type CodeModeConfig = {
   enabled: boolean;
   runtime: "quickjs-wasi";
   mode: "only";
@@ -97,12 +94,7 @@ type PendingBridgeRequest = {
   args: unknown[];
 };
 
-type SettledBridgeRequest = {
-  id: string;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-};
+type SettledBridgeRequest = { id: string } & Result<unknown, string>;
 
 type PendingBridgeState = PendingBridgeRequest & {
   promise: Promise<SettledBridgeRequest>;
@@ -116,6 +108,8 @@ type CodeModeRunState = {
   config: CodeModeConfig;
   snapshotBytes: Uint8Array;
   pending: PendingBridgeState[];
+  // True only when every future bridge call is enforced read-only before execution.
+  replaySafe: boolean;
   output: unknown[];
   createdAt: number;
   expiresAt: number;
@@ -398,7 +392,11 @@ function enforceResultLimit(params: {
   }
 }
 
-function readCode(args: unknown): { code: string; language?: CodeModeLanguage } {
+function readCode(args: unknown): {
+  code: string;
+  language?: CodeModeLanguage;
+  restartSafe: boolean;
+} {
   const params = asToolParamsRecord(args);
   const codeParam = params.code;
   const commandParam = params.command;
@@ -417,7 +415,11 @@ function readCode(args: unknown): { code: string; language?: CodeModeLanguage } 
   if (language !== undefined && language !== "javascript" && language !== "typescript") {
     throw new ToolInputError("language must be javascript or typescript.");
   }
-  return { code, language };
+  const restartSafe = params.restartSafe;
+  if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
+    throw new ToolInputError("restartSafe must be a boolean.");
+  }
+  return { code, language, restartSafe: restartSafe === true };
 }
 
 function readRunId(args: unknown): string {
@@ -1113,6 +1115,7 @@ function snapshotState(params: {
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
+  replaySafe: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
@@ -1120,6 +1123,28 @@ function snapshotState(params: {
   return storeSnapshotState({
     ...params,
     pending: createPendingBridgeStates(params),
+    replaySafe:
+      params.replaySafe && pendingBridgeRequestsReplaySafe(params.pendingRequests, params.runtime),
+  });
+}
+
+function pendingBridgeRequestsReplaySafe(
+  pending: readonly PendingBridgeRequest[],
+  runtime: ToolSearchRuntime,
+): boolean {
+  return pending.every((request) => {
+    if (
+      request.method === "search" ||
+      request.method === "describe" ||
+      request.method === "yield"
+    ) {
+      return true;
+    }
+    if (request.method !== "call") {
+      return false;
+    }
+    const id = Array.isArray(request.args) ? request.args[0] : undefined;
+    return typeof id === "string" && runtime.isReplaySafeExactId(id);
   });
 }
 
@@ -1172,6 +1197,7 @@ function createPendingBridgeStates(params: {
 
 function storeSnapshotState(params: {
   pending: PendingBridgeState[];
+  replaySafe: boolean;
   snapshotBytes: Uint8Array;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
@@ -1193,6 +1219,7 @@ function storeSnapshotState(params: {
     config: params.config,
     snapshotBytes: params.snapshotBytes,
     pending: params.pending,
+    replaySafe: params.replaySafe,
     output: params.output,
     createdAt: now,
     expiresAt,
@@ -1204,6 +1231,7 @@ function storeSnapshotState(params: {
     runId,
     reason: codeModeWaitingReason(params.pending),
     pendingToolCalls: pendingToolCalls(params.pending),
+    replaySafe: params.replaySafe,
     output: params.output,
     telemetry: telemetry(params.runtime),
   };
@@ -1242,6 +1270,7 @@ async function runExec(params: {
   ctx: CodeModeToolContext;
   code: string;
   language?: CodeModeLanguage;
+  restartSafe: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
@@ -1267,6 +1296,7 @@ async function runExec(params: {
       error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: [],
+      replaySafe: params.restartSafe,
       telemetry: telemetry(runtime),
     };
   }
@@ -1287,6 +1317,7 @@ async function runExec(params: {
     return await settleCodeModeResult({
       result,
       output: result.output,
+      replaySafe: params.restartSafe,
       parentToolCallId: params.toolCallId,
       ctx: params.ctx,
       config,
@@ -1301,6 +1332,7 @@ async function runExec(params: {
       error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: [],
+      replaySafe: params.restartSafe,
       telemetry: telemetry(runtime),
     };
   }
@@ -1329,6 +1361,7 @@ async function waitForPending(pending: PendingBridgeState[], timeoutMs: number):
 async function settleCodeModeResult(params: {
   result: CodeModeWorkerResult;
   output: unknown[];
+  replaySafe: boolean;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
@@ -1349,6 +1382,16 @@ async function settleCodeModeResult(params: {
     result.pendingRequests.every((request) => request.method === "namespace") &&
     namespaceRounds < params.config.maxPendingToolCalls
   ) {
+    if (params.replaySafe) {
+      return {
+        status: "failed" as const,
+        error: "restart-safe code mode cannot call plugin namespaces.",
+        code: "invalid_input" as const,
+        output,
+        replaySafe: true,
+        telemetry: telemetry(params.runtime),
+      };
+    }
     const remainingMs = settleDeadline - Date.now();
     if (remainingMs <= 0) {
       break;
@@ -1372,6 +1415,7 @@ async function settleCodeModeResult(params: {
       if (!ready) {
         return storeSnapshotState({
           pending,
+          replaySafe: false,
           snapshotBytes: result.snapshotBytes,
           parentToolCallId: params.parentToolCallId,
           ctx: params.ctx,
@@ -1404,6 +1448,20 @@ async function settleCodeModeResult(params: {
     namespaceRounds += 1;
   }
   if (result.status === "waiting") {
+    const pendingReplaySafe = pendingBridgeRequestsReplaySafe(
+      result.pendingRequests,
+      params.runtime,
+    );
+    if (params.replaySafe && !pendingReplaySafe) {
+      return {
+        status: "failed" as const,
+        error: "restart-safe code mode cannot call side-effecting tools.",
+        code: "invalid_input" as const,
+        output,
+        replaySafe: true,
+        telemetry: telemetry(params.runtime),
+      };
+    }
     return snapshotState({
       pendingRequests: result.pendingRequests,
       snapshotBytes: result.snapshotBytes,
@@ -1413,6 +1471,7 @@ async function settleCodeModeResult(params: {
       runtime: params.runtime,
       namespaceRuntime: params.namespaceRuntime,
       output,
+      replaySafe: params.replaySafe,
       signal: params.signal,
       onUpdate: params.onUpdate,
     });
@@ -1425,6 +1484,7 @@ async function settleCodeModeResult(params: {
   return {
     ...result,
     output,
+    replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
 }
@@ -1466,6 +1526,7 @@ async function runWait(params: {
         runId: state.runId,
         reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
         pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
+        replaySafe: state.replaySafe,
         output: state.output,
         telemetry: telemetry(state.runtime),
       };
@@ -1492,6 +1553,7 @@ async function runWait(params: {
     return await settleCodeModeResult({
       result,
       output,
+      replaySafe: state.replaySafe,
       parentToolCallId: params.toolCallId,
       ctx: state.ctx,
       config: state.config,
@@ -1506,6 +1568,7 @@ async function runWait(params: {
       error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: state.output,
+      replaySafe: state.replaySafe,
       telemetry: telemetry(state.runtime),
     };
   } finally {
@@ -1535,6 +1598,12 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         description:
           'Source language. Must be "javascript" or "typescript". Defaults to javascript.',
       }),
+      restartSafe: Type.Optional(
+        Type.Boolean({
+          description:
+            "Set true for read-only work that OpenClaw may reconstruct after a gateway restart. This rejects side-effecting catalog tools and plugin namespaces.",
+        }),
+      ),
     }),
     execute: async (
       toolCallId: string,
@@ -1550,6 +1619,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
             ctx,
             code: input.code,
             language: input.language,
+            restartSafe: ctx.forceRestartSafeTools === true || input.restartSafe,
             signal,
             onUpdate,
           }),
@@ -1657,20 +1727,22 @@ export function addClientToolsToCodeModeCatalog(params: {
 }
 
 /** Test-only hooks and state accessors for Code Mode worker orchestration. */
-export const testing = {
+const testing = {
   activeRuns,
   resumingRunIds,
-  codeModeWorkerUrl,
   createHeadlessAbortScope,
   normalizeCodeModeWorkerResult,
   runCodeModeWorker,
   resolveCodeModeHeadlessConfig,
   resolveCodeModeWorkerUrl,
-  resolveCodeModeConfig,
   getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
     typescriptRuntimeLoader.peek() ?? null,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
   },
 };
-export { testing as __testing };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codeModeTestApi")] = testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

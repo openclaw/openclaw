@@ -6,12 +6,12 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
-import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
+import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
-export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
+type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
-export type GitUpdateStatus = {
+type GitUpdateStatus = {
   root: string;
   sha: string | null;
   tag: string | null;
@@ -24,7 +24,7 @@ export type GitUpdateStatus = {
   error?: string;
 };
 
-export type DepsStatus = {
+type DepsStatus = {
   manager: PackageManager;
   status: "ok" | "missing" | "stale" | "unknown";
   lockfilePath: string | null;
@@ -32,7 +32,7 @@ export type DepsStatus = {
   reason?: string;
 };
 
-export type RegistryStatus = {
+type RegistryStatus = {
   latestVersion: string | null;
   tag?: string;
   error?: string;
@@ -45,7 +45,7 @@ export type ExtendedStableFailureReason =
   | "exact_package_mismatch"
   | "unsupported_git_channel";
 
-export type ExtendedStableResolutionResult =
+type ExtendedStableResolutionResult =
   | {
       status: "resolved";
       selector: "extended-stable";
@@ -57,13 +57,13 @@ export type ExtendedStableResolutionResult =
       reason: ExtendedStableFailureReason;
     };
 
-export type NpmTagStatus = {
+type NpmTagStatus = {
   tag: string;
   version: string | null;
   error?: string;
 };
 
-export type NpmPackageTargetStatus = {
+type NpmPackageTargetStatus = {
   target: string;
   version: string | null;
   nodeEngine: string | null;
@@ -107,10 +107,12 @@ function parseNpmPackageTargetMetadata(raw: string): {
   } catch (err) {
     throw new Error(`npm view returned invalid JSON: ${String(err)}`, { cause: err });
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  // npm 12 wraps `npm view --json` results in a singleton array.
+  const entry = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : parsed;
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return { version: null, nodeEngine: null };
   }
-  const rec = parsed as Record<string, unknown>;
+  const rec = entry as Record<string, unknown>;
   const engines = rec.engines && typeof rec.engines === "object" ? rec.engines : null;
   const nodeEngine =
     toOptionalTrimmedString(rec["engines.node"]) ??
@@ -434,7 +436,7 @@ async function resolveDepsMarker(params: { root: string; manager: PackageManager
   return { lockfilePath: null, markerPath: null };
 }
 
-export async function checkDepsStatus(params: {
+async function checkDepsStatus(params: {
   root: string;
   manager: PackageManager;
 }): Promise<DepsStatus> {
@@ -502,7 +504,7 @@ export async function checkDepsStatus(params: {
   };
 }
 
-export async function fetchNpmLatestVersion(params?: {
+async function fetchNpmLatestVersion(params?: {
   timeoutMs?: number;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -521,7 +523,7 @@ export async function fetchNpmLatestVersion(params?: {
   };
 }
 
-export async function fetchNpmRegistryVersionForChannel(params: {
+async function fetchNpmRegistryVersionForChannel(params: {
   channel: UpdateChannel;
   timeoutMs?: number;
   cwd?: string;
@@ -677,10 +679,9 @@ export function compareSemverStrings(a: string | null, b: string | null): number
       return openClawReleaseCmp;
     }
   }
-  return compareComparableSemver(
-    parseComparableSemver(a, { normalizeLegacyDotBeta: true }),
-    parseComparableSemver(b, { normalizeLegacyDotBeta: true }),
-  );
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 export async function checkUpdateStatus(params: {

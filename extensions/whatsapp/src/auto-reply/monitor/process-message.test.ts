@@ -316,12 +316,9 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
-      commandBody: "/status",
-      commandAuthorized: true,
-      commandTurn: {
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      command: {
         kind: "text-slash",
-        source: "text",
         authorized: true,
         body: "/status",
       },
@@ -343,9 +340,13 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
-      commandBody: "/reset",
+      command: {
+        kind: "text-slash",
+        authorized: true,
+        body: "/reset",
+      },
       rawBody: "/reset",
     });
   });
@@ -359,18 +360,14 @@ describe("processMessage group system prompt wiring", () => {
       msg: makeBaseMsg({ body: "please inspect `/tmp/foo`" }),
     });
 
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
-      commandBody: "please inspect `/tmp/foo`",
-      commandAuthorized: true,
-      commandTurn: {
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      command: {
         kind: "normal",
-        source: "message",
-        authorized: false,
+        authorized: true,
         body: "please inspect `/tmp/foo`",
       },
       rawBody: "please inspect `/tmp/foo`",
     });
-    expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();
   });
 
   it("passes pending group history from the history window into inbound context", async () => {
@@ -392,7 +389,7 @@ describe("processMessage group system prompt wiring", () => {
 
     await callProcessMessage({ groupHistories });
 
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       groupHistory: [
         {
           sender: "Alice (+15550002222)",

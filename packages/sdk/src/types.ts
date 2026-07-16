@@ -61,6 +61,8 @@ export type WorkerEnvironmentState =
   | "failed"
   | "orphaned";
 
+export type WorkerTunnelStatus = "stopped" | "connecting" | "connected" | "reconnecting";
+
 export type WorkerEnvironmentMetadata = {
   providerId: string;
   leaseId?: string;
@@ -68,6 +70,7 @@ export type WorkerEnvironmentMetadata = {
   ageMs: number;
   idleMs?: number;
   attachedSessionIds: string[];
+  tunnelStatus: WorkerTunnelStatus;
 };
 
 export type EnvironmentSummary = {
@@ -341,6 +344,7 @@ export type SessionCreateParams = {
   parentSessionKey?: string;
   task?: string;
   message?: string;
+  attachments?: unknown[];
 };
 
 /** Parameters for sending a message to an existing session. */
