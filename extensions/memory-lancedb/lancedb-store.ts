@@ -22,9 +22,9 @@ export type MemoryEntry = {
   createdAt: number;
 };
 
-export type MemoryListEntry = Omit<MemoryEntry, "vector">;
+type MemoryListEntry = Omit<MemoryEntry, "vector">;
 
-export type MemoryListOptions = {
+type MemoryListOptions = {
   orderByCreatedAt?: boolean;
 };
 
@@ -41,7 +41,7 @@ export type MemoryQueryFilter = {
   value: string | number;
 };
 
-export type MemoryQueryOptions = {
+type MemoryQueryOptions = {
   columns: MemoryQueryColumn[];
   filter?: MemoryQueryFilter;
   limit?: number;
