@@ -3284,6 +3284,10 @@ describe("short-term promotion", () => {
         const memoryPath = path.join(workspaceDir, "MEMORY.md");
         const seeded = "# Long-Term Memory\n\nSome small existing content.\n";
         await fs.writeFile(memoryPath, seeded, "utf-8");
+        if (process.platform !== "win32") {
+          await fs.chmod(workspaceDir, 0o750);
+          await fs.chmod(memoryPath, 0o640);
+        }
 
         await recordShortTermRecalls({
           workspaceDir,
@@ -3321,6 +3325,10 @@ describe("short-term promotion", () => {
         expect(applied.compactedDates).toEqual([]);
         const memoryText = await fs.readFile(memoryPath, "utf-8");
         expect(memoryText).toContain("Some small existing content.");
+        if (process.platform !== "win32") {
+          expect((await fs.stat(workspaceDir)).mode & 0o7777).toBe(0o750);
+          expect((await fs.stat(memoryPath)).mode & 0o7777).toBe(0o640);
+        }
       });
     });
   });
@@ -3339,7 +3347,6 @@ describe("short-term promotion", () => {
         const filler = "pad line filler content ".repeat(9_000);
         const seeded = `# Long-Term Memory\n\n${filler}\n- ${sentinel}\n`;
         await fs.writeFile(memoryPath, seeded, "utf-8");
-        const seededBytes = Buffer.byteLength(seeded);
 
         await recordShortTermRecalls({
           workspaceDir,
@@ -3397,8 +3404,20 @@ describe("short-term promotion", () => {
         ).rejects.toMatchObject({ code: "EFBIG" });
 
         const after = await fs.readFile(memoryPath, "utf-8");
-        expect(after).toContain(sentinel);
-        expect(Buffer.byteLength(after)).toBe(seededBytes);
+        expect(after).toBe(seeded);
+        await expect(
+          rankShortTermPromotionCandidates({
+            workspaceDir,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          }),
+        ).resolves.toHaveLength(1);
+        expect(
+          (await fs.readdir(workspaceDir)).filter((entry) =>
+            entry.startsWith("MEMORY.md.promotion"),
+          ),
+        ).toEqual([]);
       });
     });
   });

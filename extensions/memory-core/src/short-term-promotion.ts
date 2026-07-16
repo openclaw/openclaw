@@ -2531,12 +2531,16 @@ export async function applyShortTermPromotions(
       compactedDates = compaction.droppedDates;
       const baseMemory = compaction.compacted;
       const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
+      const workspaceMode = (await fs.stat(workspaceDir)).mode & 0o7777;
       await replaceFileAtomic({
         filePath: memoryPath,
         content: `${header}${withTrailingNewline(baseMemory)}${section}`,
+        dirMode: workspaceMode,
         mode: 0o600,
         preserveExistingMode: true,
         tempPrefix: `${path.basename(memoryPath)}.promotion`,
+        syncTempFile: true,
+        syncParentDir: true,
         throwOnCleanupError: true,
       });
     }
