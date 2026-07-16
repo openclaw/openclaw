@@ -10,7 +10,6 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
-import { resolveOpenAITtsInstructions } from "./internal.test-support.js";
 import {
   isValidOpenAIModel,
   isValidOpenAIVoice,

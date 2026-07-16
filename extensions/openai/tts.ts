@@ -81,12 +81,6 @@ function resolveOpenAITtsInstructions(
   return model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  Reflect.set(globalThis, Symbol.for("openclaw.openaiTtsTestApi"), {
-    resolveOpenAITtsInstructions,
-  });
-}
-
 function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
