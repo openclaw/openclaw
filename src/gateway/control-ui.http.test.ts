@@ -24,13 +24,17 @@ import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  type ControlUiPluginFrameGrantAck,
+} from "./control-ui-contract.js";
 import { resolveOpenedControlUiRepresentation } from "./control-ui-static.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
+import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -98,6 +102,7 @@ describe("handleControlUiHttpRequest", () => {
       seamColor?: string;
       timeFormat?: "auto" | "12" | "24";
       terminalEnabled: boolean;
+      pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
 
@@ -382,6 +387,34 @@ describe("handleControlUiHttpRequest", () => {
         }
         expect(typeof operatorToken).toBe("string");
         return await params.fn(operatorToken ?? "");
+      });
+    } finally {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  }
+
+  async function withScopedPairedOperatorDevice<T>(params: {
+    scopes: string[];
+    fn: (bearer: string) => Promise<T>;
+  }) {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-scoped-device-"));
+    try {
+      return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+        const deviceId = `control-ui-device-${randomUUID()}`;
+        const requested = await requestDevicePairing({
+          deviceId,
+          publicKey: "test-public-key",
+          role: "operator",
+          scopes: params.scopes,
+        });
+        const approved = await approveDevicePairing(requested.request.requestId, {
+          callerScopes: params.scopes,
+        });
+        expect(approved).toMatchObject({ status: "approved" });
+        const operatorBearer =
+          approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+        expect(typeof operatorBearer).toBe("string");
+        return await params.fn(operatorBearer ?? "");
       });
     } finally {
       await fs.rm(tempHome, { recursive: true, force: true });
@@ -1330,7 +1363,7 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("sets route-bound plugin tab cookies for visible external plugin tabs", async () => {
+  it("sets least-privilege route-bound cookies for multiple external plugin tabs", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const registry = createEmptyPluginRegistry();
@@ -1343,6 +1376,33 @@ describe("handleControlUiHttpRequest", () => {
             label: "Demo",
             path: "/secure-hook",
           },
+        });
+        registry.controlUiDescriptors.push({
+          pluginId: "other-plugin",
+          source: "other-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "other",
+            label: "Other",
+            path: "/other-hook/panel",
+            requiredScopes: ["operator.read"],
+          },
+        });
+        registry.httpRoutes.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          path: "/secure-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
+        });
+        registry.httpRoutes.push({
+          pluginId: "other-plugin",
+          source: "other-plugin",
+          path: "/other-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
         });
         setActivePluginRegistry(registry);
 
@@ -1360,14 +1420,128 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         const setCookie = setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
-        expect(setCookie).toEqual([expect.stringContaining("__openclaw_plugin_tab_auth=")]);
-        expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain("Path=/");
-        expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain("HttpOnly");
-        expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain(
-          "SameSite=Strict",
-        );
+        expect(Array.isArray(setCookie)).toBe(true);
+        const cookies = Array.isArray(setCookie) ? setCookie : [];
+        expect(cookies).toHaveLength(2);
+        const cookieNames = cookies.map((cookie) => String(cookie).split("=", 1)[0] ?? "");
+        expect(new Set(cookieNames).size).toBe(2);
+        expect(
+          cookieNames.every((name) =>
+            /^__openclaw_plugin_tab_auth_[0-9a-f]{16}_[0-9a-f]{64}$/.test(name),
+          ),
+        ).toBe(true);
+        expect(cookies.map(String)).toEqual([
+          expect.stringContaining("Path=/secure-hook"),
+          expect.stringContaining("Path=/other-hook"),
+        ]);
+        expect(cookies.every((cookie) => String(cookie).includes("HttpOnly"))).toBe(true);
+        expect(cookies.every((cookie) => String(cookie).includes("Secure"))).toBe(true);
+        expect(cookies.every((cookie) => String(cookie).includes("SameSite=None"))).toBe(true);
+        const payloads = cookies.map((cookie) => {
+          const encoded = String(cookie).match(/=v1\.([^.]+)\./)?.[1];
+          return JSON.parse(Buffer.from(encoded ?? "", "base64url").toString("utf8"));
+        });
+        expect(payloads).toMatchObject([
+          {
+            pluginId: "demo-plugin",
+            path: "/secure-hook",
+            scopes: ["operator.read"],
+          },
+          {
+            pluginId: "other-plugin",
+            path: "/other-hook",
+            scopes: ["operator.read"],
+          },
+        ]);
       },
     });
+  });
+
+  it("acknowledges only plugin frame grants issued by bootstrap", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const registry = createEmptyPluginRegistry();
+        registry.controlUiDescriptors.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "demo",
+            label: "Demo",
+            path: "/secure-hook/panel",
+          },
+        });
+        registry.httpRoutes.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          path: "/secure-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
+        });
+        setActivePluginRegistry(registry);
+
+        const { end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
+          headers: { authorization: "Bearer test-auth-token" },
+        });
+
+        expect(parseBootstrapPayload(end).pluginFrameGrants).toEqual([
+          {
+            pluginId: "demo-plugin",
+            path: "/secure-hook",
+            match: "prefix",
+          },
+        ]);
+      },
+    });
+  });
+
+  it("issues read-only plugin frame grants for Tailscale-authenticated bootstrap", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.controlUiDescriptors.push({
+      pluginId: "demo-plugin",
+      source: "demo-plugin",
+      descriptor: {
+        surface: "tab",
+        id: "demo",
+        label: "Demo",
+        path: "/secure-hook/panel",
+        requiredScopes: ["operator.admin"],
+      },
+    });
+    registry.httpRoutes.push({
+      pluginId: "demo-plugin",
+      source: "demo-plugin",
+      path: "/secure-hook",
+      auth: "gateway",
+      match: "prefix",
+      handler: async () => true,
+    });
+    setActivePluginRegistry(registry);
+    const { res, setHeader } = makeMockHttpResponse();
+
+    expect(
+      setControlUiPluginAuthCookieForRequest(
+        { headers: {} } as IncomingMessage,
+        res,
+        "tailscale",
+        true,
+        "test-generation",
+      ),
+    ).toEqual([
+      {
+        pluginId: "demo-plugin",
+        path: "/secure-hook",
+        match: "prefix",
+        scopes: ["operator.read"],
+      },
+    ]);
+    expect(setHeader).toHaveBeenCalledWith(
+      "Set-Cookie",
+      expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
+    );
   });
 
   it("serves bootstrap config JSON when paired device-token auth is valid", async () => {
@@ -1386,6 +1560,52 @@ describe("handleControlUiHttpRequest", () => {
             expect(res.statusCode).toBe(200);
             const parsed = parseBootstrapPayload(end);
             expect(parsed.assistantAgentId).toBe("main");
+          },
+        });
+      },
+    });
+  });
+
+  it("selects higher-scope frame tabs using paired device-token scopes", async () => {
+    await withScopedPairedOperatorDevice({
+      scopes: ["operator.read", "operator.admin"],
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            const registry = createEmptyPluginRegistry();
+            registry.controlUiDescriptors.push({
+              pluginId: "admin-plugin",
+              source: "admin-plugin",
+              descriptor: {
+                surface: "tab",
+                id: "admin",
+                label: "Admin",
+                path: "/admin-hook/panel",
+                requiredScopes: ["operator.admin"],
+              },
+            });
+            registry.httpRoutes.push({
+              pluginId: "admin-plugin",
+              source: "admin-plugin",
+              path: "/admin-hook",
+              auth: "gateway",
+              match: "prefix",
+              handler: async () => true,
+            });
+            setActivePluginRegistry(registry);
+
+            const { end } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
+              headers: { authorization: `Bearer ${operatorToken}` },
+            });
+            expect(parseBootstrapPayload(end).pluginFrameGrants).toEqual([
+              {
+                pluginId: "admin-plugin",
+                path: "/admin-hook",
+                match: "prefix",
+              },
+            ]);
           },
         });
       },

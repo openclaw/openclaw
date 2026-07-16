@@ -14,12 +14,15 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import {
-  resolveControlUiPluginAuthCookieScopes,
+  resolveControlUiPluginAuthCookieGrants,
   setControlUiPluginAuthCookie,
 } from "./control-ui-plugin-auth-cookie.js";
-import { listControlUiPluginTabs } from "./control-ui-plugin-tabs.js";
+import {
+  listControlUiPluginTabAuthGrants,
+  type ControlUiPluginTabAuthGrant,
+} from "./control-ui-plugin-tabs.js";
 import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
-import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES, READ_SCOPE } from "./method-scopes.js";
+import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -48,7 +51,8 @@ type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
   trustDeclaredOperatorScopes: boolean;
-  controlUiPluginCookie?: boolean;
+  controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
+  controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
 
 export type GatewayHttpRequestAuthCheckResult =
@@ -117,25 +121,22 @@ export function setControlUiPluginAuthCookieForRequest(
   authMethod: GatewayAuthResult["method"],
   trustDeclaredOperatorScopes: boolean,
   authGeneration: string | undefined,
-) {
+  authenticatedScopes?: readonly string[],
+): ControlUiPluginTabAuthGrant[] {
   const scopes = usesSharedSecretGatewayMethod(authMethod)
-    ? resolveSharedSecretHttpOperatorScopes(req, {
-        authMethod,
-        trustDeclaredOperatorScopes: false,
-      })
-    : authMethod === "trusted-proxy"
+    ? [...CLI_DEFAULT_OPERATOR_SCOPES]
+    : authMethod === "trusted-proxy" || authMethod === "tailscale"
       ? resolveTrustedHttpOperatorScopes(req, {
           trustDeclaredOperatorScopes,
         })
       : authMethod === "device-token"
-        ? [READ_SCOPE]
+        ? (authenticatedScopes ?? [])
         : [];
-  const paths = listControlUiPluginTabs(scopes)
-    .map((tab) => tab.path)
-    .filter((path): path is string => typeof path === "string" && path.length > 0);
-  if (scopes.length > 0) {
-    setControlUiPluginAuthCookie(res, scopes, { paths, generation: authGeneration });
+  const grants = listControlUiPluginTabAuthGrants(scopes);
+  if (grants.length > 0) {
+    return setControlUiPluginAuthCookie(res, grants, { generation: authGeneration });
   }
+  return [];
 }
 
 export function authorizeControlUiPluginCookieRequest(
@@ -145,20 +146,29 @@ export function authorizeControlUiPluginCookieRequest(
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: string[];
 } | null {
-  const operatorScopes = resolveControlUiPluginAuthCookieScopes(req, {
+  // WebSocket upgrades bypass this HTTP-only handoff and use
+  // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return null;
+  }
+  // Native plugins and the UI they serve share the Gateway's trusted in-process
+  // boundary. Cross-site sandbox descendants need an ambient cookie, so this
+  // handoff is read-only; mutations stay on explicit Gateway auth surfaces.
+  const grants = resolveControlUiPluginAuthCookieGrants(req, {
     requestPath: params.requestPath,
     generation: params.authGeneration,
   });
-  if (!operatorScopes) {
+  if (grants.length === 0) {
     return null;
   }
   return {
     requestAuth: {
-      authMethod: "device-token",
       trustDeclaredOperatorScopes: false,
-      controlUiPluginCookie: true,
+      controlUiPluginGrants: grants,
     },
-    operatorScopes,
+    // Route dispatch selects the candidate that owns the first matched gateway
+    // route. Do not union scopes before that owner boundary is known.
+    operatorScopes: [],
   };
 }
 
