@@ -6,9 +6,10 @@ const CRON_EVERY_UNIT_MS = {
   days: 86_400_000,
 } as const;
 
-export type CronEveryUnit = keyof typeof CRON_EVERY_UNIT_MS;
-
-export function parseCronEveryMs(value: string, unit: CronEveryUnit): number | undefined {
+export function parseCronEveryMs(
+  value: string,
+  unit: keyof typeof CRON_EVERY_UNIT_MS,
+): number | undefined {
   const trimmed = value.trim();
   if (!CRON_POSITIVE_DECIMAL_RE.test(trimmed)) {
     return undefined;
