@@ -303,3 +303,32 @@ export async function resolveMessageChannelSelection(params: {
   }
   throw new Error(formatMultipleConfiguredChannelsMessage(configured));
 }
+
+// Test-only access to dedupe state for LRU eviction proof.
+const testing = {
+  getErrorDedupeSize() {
+    return loggedChannelSelectionErrors.size;
+  },
+  getErrorDedupeLimit() {
+    return CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT;
+  },
+  resetErrorDedupeForTest() {
+    loggedChannelSelectionErrors.clear();
+    channelSelectionErrorOrder.length = 0;
+  },
+  fillErrorDedupeForTest(count: number) {
+    for (let i = 0; i < count; i++) {
+      logChannelSelectionError({
+        pluginId: `proof-plugin-${i}`,
+        accountId: "proof",
+        operation: "resolveAccount",
+        error: new Error(`proof-error-${i}`),
+      });
+    }
+  },
+};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.channelSelectionErrorDedupeTestApi")
+  ] = testing;
+}
