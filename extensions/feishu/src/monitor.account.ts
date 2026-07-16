@@ -167,11 +167,7 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
-  /**
-   * Owning monitor account abort signal. Handlers that run retry/polling
-   * loops must propagate this so an account teardown short-circuits the
-   * loop instead of running through its full delay budget.
-   */
+  /** Owning account signal; retrying handlers must propagate it. */
   abortSignal?: AbortSignal;
   /**
    * Optional status sink. When provided, the message handler will publish

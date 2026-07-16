@@ -30,6 +30,10 @@ afterAll(() => {
   vi.resetModules();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 function buildMonitorConfig(): ClawdbotConfig {
   return {
     channels: {
@@ -201,7 +205,9 @@ function makeOpenApiClient(params: {
   };
 }
 
-async function setupCommentMonitorHandler(): Promise<(data: unknown) => Promise<void>> {
+async function setupCommentMonitorHandler(
+  abortSignal?: AbortSignal,
+): Promise<(data: unknown) => Promise<void>> {
   lastRuntime = createNonExitingRuntimeEnv();
 
   return createFeishuDriveCommentNoticeHandler({
@@ -210,6 +216,7 @@ async function setupCommentMonitorHandler(): Promise<(data: unknown) => Promise<
     runtime: lastRuntime,
     fireAndForget: true,
     getBotOpenId: () => "ou_bot",
+    abortSignal,
   });
 }
 
@@ -792,17 +799,8 @@ describe("resolveDriveCommentEventTurn", () => {
   });
 
   it("stops the comment reply retry loop when the owning abortSignal fires", async () => {
+    vi.useFakeTimers();
     const abortController = new AbortController();
-    // Simulate the owning monitor account calling abort mid-retry: the first
-    // waitMs returns false (abort observed), the loop must exit immediately,
-    // and the remaining attempts must not enqueue another fetchDriveCommentReplies.
-    const waitMs = vi.fn(async (_ms: number, signal?: AbortSignal) => {
-      if (signal?.aborted) {
-        return false;
-      }
-      abortController.abort();
-      return false;
-    });
     const client = makeOpenApiClient({
       includeTargetReplyInBatch: false,
       repliesSequence: [
@@ -814,29 +812,29 @@ describe("resolveDriveCommentEventTurn", () => {
         ],
       ],
     });
-    const turn = await resolveDriveCommentEventTurn({
+    const turnPromise = resolveDriveCommentEventTurn({
       cfg: buildMonitorConfig(),
       accountId: "default",
       event: makeDriveCommentEvent({ reply_id: "7623358762999999999" }),
       botOpenId: "ou_bot",
       createClient: () => client as never,
       abortSignal: abortController.signal,
-      waitMs,
     });
+
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    abortController.abort();
+    const turn = await turnPromise;
+
     expect(turn).not.toBeNull();
-    // First delay consumed the abort; no further waitMs calls and no further
-    // replies fetches after the initial miss.
-    expect(waitMs).toHaveBeenCalledTimes(1);
-    expect(waitMs).toHaveBeenNthCalledWith(1, 1000, abortController.signal);
+    expect(vi.getTimerCount()).toBe(0);
     expect(
       client.request.mock.calls.filter(
         ([request]: [{ method: string; url: string }]) =>
           request.method === "GET" && request.url.includes("/replies"),
       ),
     ).toHaveLength(1);
-    // The requested reply never resolved (loop broke before retry could find it),
-    // so targetReplyText stays unset — the only fetched reply is the "earlier"
-    // one that is not the requested reply_id.
     expect(turn?.targetReplyText).toBeUndefined();
   });
 
@@ -892,7 +890,8 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
   });
 
   it("dispatches comment notices through handleFeishuCommentEvent", async () => {
-    const onComment = await setupCommentMonitorHandler();
+    const abortController = new AbortController();
+    const onComment = await setupCommentMonitorHandler(abortController.signal);
 
     await onComment(makeDriveCommentEvent());
 
@@ -901,11 +900,13 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
       | {
           accountId?: string;
           botOpenId?: string;
+          abortSignal?: AbortSignal;
           event?: { comment_id?: string; event_id?: string };
         }
       | undefined;
     expect(handleArgs?.accountId).toBe("default");
     expect(handleArgs?.botOpenId).toBe("ou_bot");
+    expect(handleArgs?.abortSignal).toBe(abortController.signal);
     expect(handleArgs?.event?.event_id).toBe("10d9d60b990db39f96a4c2fd357fb877");
     expect(handleArgs?.event?.comment_id).toBe("7623358762119646411");
   });

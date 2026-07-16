@@ -365,13 +365,6 @@ async function resolveParsedCommentContent(params: {
   };
 }
 
-// Returns `true` when the full delay elapsed, `false` when the abort signal fired
-// first. The retry loop in `fetchDriveCommentContext` checks this so a stop on the
-// owning monitor account does not run through the full 6×1 s poll-miss window.
-async function delayMs(ms: number, abortSignal?: AbortSignal): Promise<boolean> {
-  return waitForAbortableDelay(ms, abortSignal);
-}
-
 function buildDriveCommentTargetUrl(params: {
   fileToken: string;
   fileType: CommentFileType;
@@ -1245,7 +1238,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     verificationTimeoutMs = FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
     logger,
     abortSignal,
-    waitMs = delayMs,
+    waitMs = waitForAbortableDelay,
   } = params;
   const eventId = event.event_id?.trim();
   const commentId = event.comment_id?.trim();
