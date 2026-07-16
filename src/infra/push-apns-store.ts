@@ -223,7 +223,7 @@ function normalizeDirectRegistration(
     typeof record.updatedAtMs === "number" &&
     Number.isSafeInteger(record.updatedAtMs) &&
     record.updatedAtMs >= 0 &&
-    record.updatedAtMs <= MAX_APNS_REGISTRATION_VERSION
+    record.updatedAtMs < MAX_APNS_REGISTRATION_VERSION
       ? record.updatedAtMs
       : null;
   if (
@@ -273,7 +273,7 @@ function normalizeRelayRegistration(
     typeof record.updatedAtMs === "number" &&
     Number.isSafeInteger(record.updatedAtMs) &&
     record.updatedAtMs >= 0 &&
-    record.updatedAtMs <= MAX_APNS_REGISTRATION_VERSION
+    record.updatedAtMs < MAX_APNS_REGISTRATION_VERSION
       ? record.updatedAtMs
       : null;
   if (
