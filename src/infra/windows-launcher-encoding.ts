@@ -43,7 +43,6 @@ function isAsciiOnly(value: string): boolean {
 export function encodeWindowsLauncherScript(params: {
   format: WindowsLauncherScriptFormat;
   content: string;
-  windowsEncoding?: string | null;
 }): Buffer {
   if (params.format === "vbs") {
     // UTF-16 LE with BOM is the one wscript encoding that works on every locale.
@@ -54,8 +53,7 @@ export function encodeWindowsLauncherScript(params: {
     // legacy byte-for-byte output so non-CJK installs see no change.
     return Buffer.from(params.content, "utf8");
   }
-  const encoding =
-    params.windowsEncoding !== undefined ? params.windowsEncoding : resolveWindowsSystemEncoding();
+  const encoding = resolveWindowsSystemEncoding();
   if (
     !encoding ||
     !CMD_ANSI_EQUALS_OEM_ENCODINGS.has(encoding) ||

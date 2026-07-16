@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { OnePasswordError } from "./errors.js";
 
 const MAX_STDOUT_BYTES = 1024 * 1024;
@@ -190,13 +192,12 @@ export class OpClient {
   }
 
   private async readToken(): Promise<string> {
-    let contents: string;
+    let contents: string | undefined;
     try {
-      const [raw, stat] = await Promise.all([
-        fs.readFile(this.tokenFile, "utf8"),
-        fs.stat(this.tokenFile),
-      ]);
-      contents = raw.trim();
+      contents = tryReadSecretFileSync(this.tokenFile, "1Password service account token", {
+        rejectHardlinks: false,
+      });
+      const stat = await fs.stat(this.tokenFile);
       if (
         !this.permissionWarningEmitted &&
         process.platform !== "win32" &&
@@ -206,13 +207,11 @@ export class OpClient {
         this.warn("1Password service account token file permissions are broader than 0600");
       }
     } catch (error) {
-      throw new OnePasswordError(
-        "TOKEN_MISSING",
-        "1Password service account token file is missing",
-        {
-          cause: error,
-        },
-      );
+      const message =
+        error instanceof FsSafeError && error.code === "too-large"
+          ? "1Password service account token file is too large"
+          : "1Password service account token file is missing";
+      throw new OnePasswordError("TOKEN_MISSING", message, { cause: error });
     }
     if (!contents) {
       throw new OnePasswordError("TOKEN_MISSING", "1Password service account token file is empty");

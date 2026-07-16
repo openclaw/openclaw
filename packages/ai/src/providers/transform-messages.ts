@@ -10,7 +10,7 @@ import type {
   ToolResultMessage,
 } from "../types.js";
 import { resolveModelBoundThinkingReplayMode } from "./anthropic-model-contract.js";
-import { hasMediaPayload } from "./tool-result-text.js";
+import { isImageWithMediaPayload } from "./tool-result-text.js";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
@@ -24,7 +24,7 @@ function replaceImagesWithPlaceholder(
 
   for (const block of content) {
     if (block.type === "image") {
-      if (!hasMediaPayload(block)) {
+      if (!isImageWithMediaPayload(block)) {
         continue;
       }
       if (!previousWasPlaceholder) {

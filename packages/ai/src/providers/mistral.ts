@@ -36,7 +36,7 @@ import { buildBaseOptions } from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
-  hasMediaPayload,
+  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -875,7 +875,7 @@ function toChatMessages(
     const toolContent: ContentChunk[] = [];
     const textResult = extractToolResultText(msg.content);
     const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-    const hasImages = msg.content.some((part) => part.type === "image" && hasMediaPayload(part));
+    const hasImages = msg.content.some(isImageWithMediaPayload);
     const toolText = buildToolResultText(
       textResult,
       mediaPlaceholder,
@@ -888,7 +888,7 @@ function toChatMessages(
       if (!supportsImages) {
         continue;
       }
-      if (part.type !== "image" || !hasMediaPayload(part)) {
+      if (!isImageWithMediaPayload(part)) {
         continue;
       }
       toolContent.push({
