@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 
 const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
@@ -22,9 +21,7 @@ describe("appendCliOutputTail", () => {
 
   it("keeps appended tails UTF-8 safe when rolling overflow starts inside a character", () => {
     const existingTail = Buffer.from(
-      `${"x".repeat(10)}${MULTIBYTE_CHARACTER}${"y".repeat(
-        CLI_RUNNER_OUTPUT_TAIL_BYTES - 14,
-      )}`,
+      `${"x".repeat(10)}${MULTIBYTE_CHARACTER}${"y".repeat(CLI_RUNNER_OUTPUT_TAIL_BYTES - 14)}`,
     );
 
     const tail = appendCliOutputTail(existingTail, "z".repeat(11));
