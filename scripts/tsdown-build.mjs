@@ -606,21 +606,42 @@ export function resolveTsdownBuildInvocations(params = {}) {
   const forwardedArgs = params.args ?? [];
   const env = params.env ?? process.env;
   let declarationsEnabled = env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
-  for (const arg of forwardedArgs) {
+  let hasForwardedFilter = false;
+  let hasForwardedConfig = false;
+  const aiArgs = [];
+  for (let index = 0; index < forwardedArgs.length; index += 1) {
+    const arg = forwardedArgs[index];
+    if (arg === "--filter" || arg === "-F") {
+      hasForwardedFilter = true;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--filter=") || arg.startsWith("-F=")) {
+      hasForwardedFilter = true;
+      continue;
+    }
     if (arg === "--dts") {
       declarationsEnabled = true;
     } else if (arg === "--no-dts") {
       declarationsEnabled = false;
     }
+    hasForwardedConfig ||=
+      arg === "--config" ||
+      arg.startsWith("--config=") ||
+      arg === "-c" ||
+      arg.startsWith("-c=") ||
+      arg === "--no-config";
+    aiArgs.push(arg);
   }
-  const hasForwardedFilter = forwardedArgs.some(
-    (arg) =>
-      arg === "--filter" || arg.startsWith("--filter=") || arg === "-F" || arg.startsWith("-F="),
-  );
+
+  if (hasForwardedConfig) {
+    return [resolveTsdownBuildInvocation(params)];
+  }
+
   const invocations = [
     resolveTsdownBuildInvocation({
       ...params,
-      args: ["--config", "tsdown.ai.config.ts", ...forwardedArgs],
+      args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
     }),
   ];
 

@@ -205,7 +205,28 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(results).toHaveLength(2);
+    expect(results[0]?.args).not.toEqual(expect.arrayContaining(args));
     expect(results[1]?.args.slice(-args.length)).toEqual(args);
+  });
+
+  it.each([
+    ["long config", ["--config", "custom.tsdown.config.ts"]],
+    ["long assigned config", ["--config=custom.tsdown.config.ts"]],
+    ["short config", ["-c", "custom.tsdown.config.ts"]],
+    ["short assigned config", ["-c=custom.tsdown.config.ts"]],
+    ["config disabled", ["--no-config", "src/index.ts"]],
+  ])("keeps a caller-provided %s in one unfiltered invocation", (_label, args) => {
+    const results = resolveTsdownBuildInvocations({
+      args,
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.args.slice(-args.length)).toEqual(args);
   });
 
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
