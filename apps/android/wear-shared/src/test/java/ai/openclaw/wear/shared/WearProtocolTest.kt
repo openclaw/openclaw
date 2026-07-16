@@ -143,6 +143,29 @@ class WearProtocolTest {
   }
 
   @Test
+  fun rejectsExcessiveJsonDepthBeforeParsing() {
+    val nesting = WearProtocol.MAX_JSON_DEPTH + 1
+    val deeplyNested =
+      """{"type":"request","version":1,"requestId":"req-1","method":"chat.send","params":{"payload":${"[".repeat(nesting)}0${"]".repeat(nesting)}}}"""
+
+    assertEquals(
+      WearDecodeResult.Failure(WearDecodeFailureReason.TooDeep),
+      WearProtocolCodec.decode(deeplyNested.encodeToByteArray()),
+    )
+
+    val bracketsInString =
+      WearMessage.Request(
+        requestId = "req-2",
+        method = WearRpcMethod.ChatSend,
+        params = buildJsonObject { put("message", "[".repeat(WearProtocol.MAX_JSON_DEPTH + 1)) },
+      )
+    assertEquals(
+      WearDecodeResult.Success(bracketsInString),
+      WearProtocolCodec.decode(WearProtocolCodec.encode(bracketsInString)),
+    )
+  }
+
+  @Test
   fun encodingIsDeterministic() {
     val message = WearMessage.Request(requestId = "req-1", method = WearRpcMethod.SessionsList)
     assertArrayEquals(WearProtocolCodec.encode(message), WearProtocolCodec.encode(message))

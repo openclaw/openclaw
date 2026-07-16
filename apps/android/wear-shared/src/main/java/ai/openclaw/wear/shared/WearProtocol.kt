@@ -21,6 +21,9 @@ object WearProtocol {
   // MessageClient has a 100 KiB ceiling. Keep headroom for transport metadata and
   // force transcript pagination instead of depending on an edge-sized message.
   const val MAX_MESSAGE_BYTES = 64 * 1024
+
+  // Bound recursive JSON parsing at the untrusted Data Layer boundary.
+  const val MAX_JSON_DEPTH = 32
 }
 
 @Serializable
@@ -92,6 +95,7 @@ data class WearRpcError(
 enum class WearDecodeFailureReason {
   Empty,
   TooLarge,
+  TooDeep,
   Malformed,
   UnsupportedVersion,
   InvalidEnvelope,
@@ -140,6 +144,9 @@ object WearProtocolCodec {
       } catch (_: CharacterCodingException) {
         return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       }
+    if (exceedsJsonDepth(text)) {
+      return WearDecodeResult.Failure(WearDecodeFailureReason.TooDeep)
+    }
     val root =
       try {
         json.parseToJsonElement(text).jsonObject
@@ -166,6 +173,32 @@ object WearProtocolCodec {
       return WearDecodeResult.Failure(WearDecodeFailureReason.InvalidEnvelope)
     }
     return WearDecodeResult.Success(message)
+  }
+
+  private fun exceedsJsonDepth(text: String): Boolean {
+    var depth = 0
+    var inString = false
+    var escaped = false
+    for (character in text) {
+      if (inString) {
+        when {
+          escaped -> escaped = false
+          character == '\\' -> escaped = true
+          character == '"' -> inString = false
+        }
+        continue
+      }
+
+      when (character) {
+        '"' -> inString = true
+        '{', '[' -> {
+          depth += 1
+          if (depth > WearProtocol.MAX_JSON_DEPTH) return true
+        }
+        '}', ']' -> depth -= 1
+      }
+    }
+    return false
   }
 
   private fun requireValid(message: WearMessage) {
