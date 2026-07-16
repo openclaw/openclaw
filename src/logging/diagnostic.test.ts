@@ -456,7 +456,84 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("defers active-run recovery when heartbeat delay reaches a lower abort threshold", () => {
+  it.each([
+    { stuckSessionAbortMs: 1_000, heartbeatOverdueMs: 1_000 },
+    { stuckSessionAbortMs: 30_000, heartbeatOverdueMs: 1_000 },
+    { stuckSessionAbortMs: 31_000, heartbeatOverdueMs: 1_000 },
+    { stuckSessionAbortMs: 45_000, heartbeatOverdueMs: 15_000 },
+    { stuckSessionAbortMs: 89_000, heartbeatOverdueMs: 59_000 },
+  ])(
+    "defers a liveness-delayed heartbeat with a $stuckSessionAbortMs ms abort threshold",
+    ({ stuckSessionAbortMs, heartbeatOverdueMs }) => {
+      const recoverStuckSession = vi.fn();
+      const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+      vi.setSystemTime(0);
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 1_000,
+            stuckSessionAbortMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+      vi.setSystemTime(heartbeatOverdueMs);
+      vi.advanceTimersByTime(30_000);
+
+      expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(30_000);
+
+      expectRecoveryCall(
+        recoverStuckSession,
+        { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+        ["ageMs", "stateGeneration"],
+      );
+    },
+  );
+
+  it.each([
+    { stuckSessionAbortMs: 1_000, schedulingJitterMs: 1 },
+    { stuckSessionAbortMs: 30_000, schedulingJitterMs: 999 },
+  ])(
+    "recovers at a $stuckSessionAbortMs ms abort threshold with ordinary scheduling jitter",
+    ({ stuckSessionAbortMs, schedulingJitterMs }) => {
+      const recoverStuckSession = vi.fn();
+      const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+      vi.setSystemTime(0);
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 1_000,
+            stuckSessionAbortMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+      vi.setSystemTime(schedulingJitterMs);
+      vi.advanceTimersByTime(30_000);
+
+      expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+      expectRecoveryCall(
+        recoverStuckSession,
+        { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+        ["ageMs", "stateGeneration"],
+      );
+    },
+  );
+
+  it("defers a material heartbeat stall even when elapsed time is below the abort threshold", () => {
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
@@ -474,7 +551,16 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
 
-    vi.setSystemTime(15_000);
+    vi.advanceTimersByTime(20_000);
+    markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticRunProgressForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      reason: "embedded_run:progress",
+    });
+    vi.advanceTimersByTime(10_000);
+
+    vi.setSystemTime(35_000);
     vi.advanceTimersByTime(30_000);
 
     expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
@@ -489,7 +575,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("still recovers on an ordinary heartbeat with scheduling jitter", () => {
+  it("does not let ordinary heartbeat jitter consume the remaining abort budget", () => {
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
@@ -499,7 +585,7 @@ describe("stuck session diagnostics threshold", () => {
         diagnostics: {
           enabled: true,
           stuckSessionWarnMs: 1_000,
-          stuckSessionAbortMs: 1_000,
+          stuckSessionAbortMs: 45_000,
         },
       },
       { recoverStuckSession },
@@ -507,10 +593,23 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
 
-    vi.setSystemTime(1);
+    vi.advanceTimersByTime(15_500);
+    markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticRunProgressForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      reason: "embedded_run:progress",
+    });
+    vi.advanceTimersByTime(14_500);
+
+    vi.setSystemTime(30_999);
     vi.advanceTimersByTime(30_000);
 
     expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(30_000);
+
     expectRecoveryCall(
       recoverStuckSession,
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
