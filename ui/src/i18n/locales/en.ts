@@ -17,6 +17,7 @@ export const en: TranslationMap = {
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
+    staleData: "Showing stale data.",
     reload: "Reload",
     reset: "Reset",
     probe: "Probe",

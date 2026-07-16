@@ -14,6 +14,12 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+} from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -84,13 +90,15 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
   @state() private usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() private usageTimeSeries: SessionUsageTimeSeries | null = null;
+  private usageTimeSeriesSessionKey: string | null = null;
   @state() private usageTimeSeriesLoading = false;
-  @state() private usageTimeSeriesError: string | null = null;
+  @state() private usageTimeSeriesStatus = createPanelRefreshStatus();
   @state() private usageTimeSeriesCursorStart: number | null = null;
   @state() private usageTimeSeriesCursorEnd: number | null = null;
   @state() private usageSessionLogs: SessionLogEntry[] | null = null;
+  private usageSessionLogsSessionKey: string | null = null;
   @state() private usageSessionLogsLoading = false;
-  @state() private usageSessionLogsError: string | null = null;
+  @state() private usageSessionLogsStatus = createPanelRefreshStatus();
   @state() private usageSessionLogsExpanded = false;
   @state() private usageQuery = "";
   @state() private usageQueryDraft = "";
@@ -367,18 +375,38 @@ class UsagePage extends OpenClawLightDomElement {
     if (!client || !this.connected) {
       return;
     }
+    // Retained detail data belongs to one session. Never render another session's
+    // timeline as stale while its replacement request is in flight or failing.
+    if (this.usageTimeSeriesSessionKey !== sessionKey) {
+      this.usageTimeSeries = null;
+      this.usageTimeSeriesSessionKey = null;
+      this.usageTimeSeriesStatus = createPanelRefreshStatus();
+    }
     const requestId = ++this.timeSeriesRequestId;
     this.usageTimeSeriesLoading = true;
-    this.usageTimeSeriesError = null;
-    this.usageTimeSeries = null;
+    this.usageTimeSeriesStatus = beginPanelRefresh(this.usageTimeSeriesStatus);
     try {
       const result = await requestSessionUsageTimeSeries(client, sessionKey);
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
         this.usageTimeSeries = result;
+        this.usageTimeSeriesSessionKey = sessionKey;
+        this.usageTimeSeriesStatus = completePanelRefresh();
       }
     } catch (error) {
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
-        this.usageTimeSeriesError = toUsageErrorMessage(error);
+        if (isMissingOperatorReadScopeError(error)) {
+          this.usageTimeSeries = null;
+          this.usageTimeSeriesSessionKey = null;
+          this.usageTimeSeriesStatus = failPanelRefresh(
+            createPanelRefreshStatus(),
+            formatMissingOperatorReadScopeMessage("usage details"),
+          );
+        } else {
+          this.usageTimeSeriesStatus = failPanelRefresh(
+            this.usageTimeSeriesStatus,
+            toUsageErrorMessage(error),
+          );
+        }
       }
     } finally {
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
@@ -392,10 +420,16 @@ class UsagePage extends OpenClawLightDomElement {
     if (!client || !this.connected) {
       return;
     }
+    // Conversation retention follows the same session ownership rule as the
+    // timeline so a failed session switch cannot expose unrelated messages.
+    if (this.usageSessionLogsSessionKey !== sessionKey) {
+      this.usageSessionLogs = null;
+      this.usageSessionLogsSessionKey = null;
+      this.usageSessionLogsStatus = createPanelRefreshStatus();
+    }
     const requestId = ++this.logsRequestId;
     this.usageSessionLogsLoading = true;
-    this.usageSessionLogsError = null;
-    this.usageSessionLogs = null;
+    this.usageSessionLogsStatus = beginPanelRefresh(this.usageSessionLogsStatus);
     try {
       const payload = await requestSessionUsageLogs(client, sessionKey);
       if (!this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
@@ -404,9 +438,23 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageSessionLogs = Array.isArray(payload.logs)
         ? (payload.logs as SessionLogEntry[])
         : null;
+      this.usageSessionLogsSessionKey = sessionKey;
+      this.usageSessionLogsStatus = completePanelRefresh();
     } catch (error) {
       if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
-        this.usageSessionLogsError = toUsageErrorMessage(error);
+        if (isMissingOperatorReadScopeError(error)) {
+          this.usageSessionLogs = null;
+          this.usageSessionLogsSessionKey = null;
+          this.usageSessionLogsStatus = failPanelRefresh(
+            createPanelRefreshStatus(),
+            formatMissingOperatorReadScopeMessage("usage details"),
+          );
+        } else {
+          this.usageSessionLogsStatus = failPanelRefresh(
+            this.usageSessionLogsStatus,
+            toUsageErrorMessage(error),
+          );
+        }
       }
     } finally {
       if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
@@ -424,9 +472,11 @@ class UsagePage extends OpenClawLightDomElement {
   private clearDetails() {
     this.invalidateDetailRequests();
     this.usageTimeSeries = null;
-    this.usageTimeSeriesError = null;
+    this.usageTimeSeriesSessionKey = null;
+    this.usageTimeSeriesStatus = createPanelRefreshStatus();
     this.usageSessionLogs = null;
-    this.usageSessionLogsError = null;
+    this.usageSessionLogsSessionKey = null;
+    this.usageSessionLogsStatus = createPanelRefreshStatus();
     this.usageTimeSeriesCursorStart = null;
     this.usageTimeSeriesCursorEnd = null;
   }
@@ -536,12 +586,12 @@ class UsagePage extends OpenClawLightDomElement {
         timeSeriesBreakdownMode: this.usageTimeSeriesBreakdownMode,
         timeSeries: this.usageTimeSeries,
         timeSeriesLoading: this.usageTimeSeriesLoading,
-        timeSeriesError: this.usageTimeSeriesError,
+        timeSeriesStatus: this.usageTimeSeriesStatus,
         timeSeriesCursorStart: this.usageTimeSeriesCursorStart,
         timeSeriesCursorEnd: this.usageTimeSeriesCursorEnd,
         sessionLogs: this.usageSessionLogs,
         sessionLogsLoading: this.usageSessionLogsLoading,
-        sessionLogsError: this.usageSessionLogsError,
+        sessionLogsStatus: this.usageSessionLogsStatus,
         sessionLogsExpanded: this.usageSessionLogsExpanded,
         logFilters: {
           roles: this.usageLogFilterRoles,

@@ -3,6 +3,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import {
+  renderPanelRefreshStatus,
+  type PanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
@@ -247,7 +251,7 @@ function renderSessionDetailPanel(
   session: UsageSessionEntry,
   timeSeries: { points: TimeSeriesPoint[] } | null,
   timeSeriesLoading: boolean,
-  timeSeriesError: string | null,
+  timeSeriesStatus: PanelRefreshStatus,
   onRetryTimeSeries: () => void,
   timeSeriesMode: "cumulative" | "per-turn",
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void,
@@ -262,7 +266,7 @@ function renderSessionDetailPanel(
   timeZone: "local" | "utc",
   sessionLogs: SessionLogEntry[] | null,
   sessionLogsLoading: boolean,
-  sessionLogsError: string | null,
+  sessionLogsStatus: PanelRefreshStatus,
   onRetrySessionLogs: () => void,
   sessionLogsExpanded: boolean,
   onToggleSessionLogsExpanded: () => void,
@@ -350,7 +354,7 @@ function renderSessionDetailPanel(
           ${renderTimeSeriesCompact(
             timeSeries,
             timeSeriesLoading,
-            timeSeriesError,
+            timeSeriesStatus,
             onRetryTimeSeries,
             timeSeriesMode,
             onTimeSeriesModeChange,
@@ -369,7 +373,7 @@ function renderSessionDetailPanel(
           ${renderSessionLogsCompact(
             sessionLogs,
             sessionLogsLoading,
-            sessionLogsError,
+            sessionLogsStatus,
             onRetrySessionLogs,
             sessionLogsExpanded,
             onToggleSessionLogsExpanded,
@@ -397,7 +401,7 @@ function renderSessionDetailPanel(
 function renderTimeSeriesCompact(
   timeSeries: { points: TimeSeriesPoint[] } | null,
   loading: boolean,
-  error: string | null,
+  status: PanelRefreshStatus,
   onRetry: () => void,
   mode: "cumulative" | "per-turn",
   onModeChange: (mode: "cumulative" | "per-turn") => void,
@@ -411,32 +415,36 @@ function renderTimeSeriesCompact(
   cursorEnd?: number | null,
   onCursorRangeChange?: (start: number | null, end: number | null) => void,
 ) {
-  if (loading) {
+  if (loading && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
         <div class="usage-empty-block">${t("usage.loading.badge")}</div>
       </div>
     `;
   }
-  if (error) {
+  const refreshStatus = renderPanelRefreshStatus({
+    status,
+    errorMessage: status.error
+      ? t("usage.details.loadFailed", {
+          detail: normalizeLowercaseStringOrEmpty(t("usage.details.usageOverTime")),
+          error: status.error,
+        })
+      : undefined,
+    onRetry,
+    className: "usage-callout usage-detail-error--timeline",
+  });
+  if (status.error && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
         <div class="card-title usage-section-title">${t("usage.details.usageOverTime")}</div>
-        <div class="callout danger usage-callout usage-detail-error--timeline" role="alert">
-          <span
-            >${t("usage.details.loadFailed", {
-              detail: normalizeLowercaseStringOrEmpty(t("usage.details.usageOverTime")),
-              error,
-            })}</span
-          >
-          <button class="btn btn--sm" @click=${onRetry}>${t("common.retry")}</button>
-        </div>
+        ${refreshStatus}
       </div>
     `;
   }
   if (!timeSeries || timeSeries.points.length < 2) {
     return html`
       <div class="session-timeseries-compact">
+        ${refreshStatus}
         <div class="usage-empty-block">${t("usage.details.noTimeline")}</div>
       </div>
     `;
@@ -461,6 +469,7 @@ function renderTimeSeriesCompact(
   if (points.length < 2) {
     return html`
       <div class="session-timeseries-compact">
+        ${refreshStatus}
         <div class="usage-empty-block">${t("usage.details.noDataInRange")}</div>
       </div>
     `;
@@ -591,6 +600,7 @@ function renderTimeSeriesCompact(
             : nothing}
         </div>
       </div>
+      ${refreshStatus}
       <div class="timeseries-chart-wrapper">
         <svg viewBox="0 0 ${width} ${height + 18}" class="timeseries-svg">
           <!-- Y axis -->
@@ -1078,7 +1088,7 @@ function renderContextPanel(
 function renderSessionLogsCompact(
   logs: SessionLogEntry[] | null,
   loading: boolean,
-  error: string | null,
+  status: PanelRefreshStatus,
   onRetry: () => void,
   expandedAll: boolean,
   onToggleExpandedAll: () => void,
@@ -1096,7 +1106,7 @@ function renderSessionLogsCompact(
   cursorStart?: number | null,
   cursorEnd?: number | null,
 ) {
-  if (loading) {
+  if (loading && !status.hasLoaded) {
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
@@ -1104,19 +1114,22 @@ function renderSessionLogsCompact(
       </div>
     `;
   }
-  if (error) {
+  const refreshStatus = renderPanelRefreshStatus({
+    status,
+    errorMessage: status.error
+      ? t("usage.details.loadFailed", {
+          detail: normalizeLowercaseStringOrEmpty(t("usage.details.conversation")),
+          error: status.error,
+        })
+      : undefined,
+    onRetry,
+    className: "usage-callout usage-detail-error--conversation",
+  });
+  if (status.error && !status.hasLoaded) {
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
-        <div class="callout danger usage-callout usage-detail-error--conversation" role="alert">
-          <span
-            >${t("usage.details.loadFailed", {
-              detail: normalizeLowercaseStringOrEmpty(t("usage.details.conversation")),
-              error,
-            })}</span
-          >
-          <button class="btn btn--sm" @click=${onRetry}>${t("common.retry")}</button>
-        </div>
+        ${refreshStatus}
       </div>
     `;
   }
@@ -1124,6 +1137,7 @@ function renderSessionLogsCompact(
     return html`
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
+        ${refreshStatus}
         <div class="usage-empty-block">${t("usage.details.noMessages")}</div>
       </div>
     `;
@@ -1195,6 +1209,7 @@ function renderSessionLogsCompact(
           ${expandedAll ? t("usage.details.collapseAll") : t("usage.details.expandAll")}
         </button>
       </div>
+      ${refreshStatus}
       <div class="usage-filters-inline session-log-filters">
         <select
           multiple

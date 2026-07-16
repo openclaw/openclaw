@@ -1,7 +1,8 @@
 // Control UI tests cover usage detail behavior through the rendered panel.
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TimeSeriesPoint, UsageSessionEntry } from "./types.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { SessionLogEntry, TimeSeriesPoint, UsageSessionEntry } from "./types.ts";
 import { renderSessionDetailPanel } from "./view-details.ts";
 
 afterEach(() => {
@@ -68,17 +69,24 @@ function mount(
   errors: {
     timeSeries?: string;
     sessionLogs?: string;
+    sessionLogsData?: SessionLogEntry[];
+    stale?: boolean;
     onRetryTimeSeries?: () => void;
     onRetrySessionLogs?: () => void;
   } = {},
 ) {
+  const status = (error?: string): PanelRefreshStatus => ({
+    error: error ?? null,
+    hasLoaded: errors.stale ?? false,
+    stale: errors.stale ?? false,
+  });
   const container = document.createElement("div");
   render(
     renderSessionDetailPanel(
       session(),
       { points },
       false,
-      errors.timeSeries ?? null,
+      status(errors.timeSeries),
       errors.onRetryTimeSeries ?? vi.fn(),
       "per-turn",
       vi.fn(),
@@ -91,9 +99,9 @@ function mount(
       filters.endDate ?? "",
       filters.selectedDays ?? [],
       filters.timeZone ?? "local",
-      [],
+      errors.sessionLogsData ?? [],
       false,
-      errors.sessionLogs ?? null,
+      status(errors.sessionLogs),
       errors.onRetrySessionLogs ?? vi.fn(),
       false,
       vi.fn(),
@@ -297,5 +305,27 @@ describe("renderSessionDetailPanel filtered usage", () => {
     conversationError?.querySelector("button")?.click();
     expect(onRetryTimeSeries).toHaveBeenCalledOnce();
     expect(onRetrySessionLogs).toHaveBeenCalledOnce();
+  });
+
+  it("keeps loaded details visible and marks them stale after refresh failures", () => {
+    const container = mount(
+      [point({ timestamp: 1000 }), point({ timestamp: 2000 })],
+      null,
+      null,
+      "total",
+      {},
+      {
+        timeSeries: "timeline unavailable",
+        sessionLogs: "logs unavailable",
+        sessionLogsData: [{ timestamp: 1000, role: "user", content: "retained message" }],
+        stale: true,
+      },
+    );
+
+    expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
+    expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(1);
+    expect(container.querySelector(".timeseries-svg")).not.toBeNull();
+    expect(container.textContent).toContain("retained message");
+    expect(container.textContent).toContain("Showing stale data");
   });
 });

@@ -7,6 +7,7 @@ import type {
   SessionsUsageTotals,
   SessionUsageTimePoint,
 } from "./data-types.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
@@ -79,12 +80,12 @@ type UsageDetailState = {
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
   timeSeriesLoading: boolean;
-  timeSeriesError: string | null;
+  timeSeriesStatus: PanelRefreshStatus;
   timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
   timeSeriesCursorEnd: number | null; // End of selected range (null = no selection)
   sessionLogs: SessionLogEntry[] | null;
   sessionLogsLoading: boolean;
-  sessionLogsError: string | null;
+  sessionLogsStatus: PanelRefreshStatus;
   sessionLogsExpanded: boolean;
   logFilters: {
     roles: SessionLogRole[];

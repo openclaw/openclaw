@@ -6,6 +6,10 @@ import {
   renderSettingsStatus,
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
+import {
+  renderPanelRefreshStatus,
+  type PanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { LogEntry, LogLevel } from "./log-lines.ts";
@@ -15,7 +19,7 @@ type ExportFileLabel = "filtered" | "visible";
 
 type LogsProps = {
   loading: boolean;
-  error: string | null;
+  status: PanelRefreshStatus;
   file: string | null;
   entries: LogEntry[];
   filterText: string;
@@ -87,7 +91,11 @@ export function renderLogs(props: LogsProps) {
       </div>
     </div>
     <p class="settings-section__desc">${t("logsView.subtitle")}</p>
-    ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+    ${renderPanelRefreshStatus({
+      status: props.status,
+      onRetry: props.onRefresh,
+      className: "logs-refresh-status",
+    })}
     <div class="settings-group logs-card">
       ${renderSettingsRow({
         title: t("logsView.filter"),
