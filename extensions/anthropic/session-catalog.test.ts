@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -346,6 +347,52 @@ function sdkCliMessage(sessionId: string, text: string): Record<string, unknown>
     cwd: `/work/${sessionId}`,
     version: "2.1.204",
   };
+}
+
+// Fault-injects short positional reads on the target transcript's FileHandle so
+// tests can drive the reverse-scan pager through partial reads deterministically
+// (production short reads are non-deterministic and cannot be induced reliably).
+// `plan` returns the byte count each read is allowed to satisfy; returning 0
+// simulates a genuine mid-window EOF (truncation). Forward metadata-scan handles
+// (first read at position 0) and the reverse pager handle (first read at a high
+// offset) are distinguishable via `firstPosition`.
+function injectTranscriptShortReads(
+  sessionId: string,
+  plan: (input: {
+    length: number;
+    position: number;
+    call: number;
+    firstPosition: number;
+  }) => number,
+): void {
+  const realOpen = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation((async (target: unknown, ...rest: unknown[]) => {
+    const handle = await (realOpen as (...args: unknown[]) => Promise<FileHandle>)(target, ...rest);
+    if (typeof target === "string" && target.endsWith(`${sessionId}.jsonl`)) {
+      const realRead = handle.read.bind(handle) as (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => Promise<{ bytesRead: number; buffer: Buffer }>;
+      let call = 0;
+      let firstPosition = -1;
+      (handle as { read: unknown }).read = (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        if (firstPosition < 0) {
+          firstPosition = position;
+        }
+        const allowed = plan({ length, position, call, firstPosition });
+        call += 1;
+        return realRead(buffer, offset, allowed, position);
+      };
+    }
+    return handle;
+  }) as typeof fs.open);
 }
 
 afterEach(async () => {
@@ -1545,6 +1592,87 @@ describe("Claude session catalog", () => {
     await expect(
       provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
     ).rejects.toThrow("Claude node returned an invalid transcript page");
+  });
+
+  it("pages transcripts identically when every reverse-scan read returns short", async () => {
+    const home = await createHome();
+    const sessionId = "short-read-session";
+    // > TRANSCRIPT_READ_CHUNK_BYTES (128 KiB) so the reverse scan spans multiple
+    // windows, each of which is now split into many consecutive short reads.
+    const oldUser = "old user ".repeat(20_000);
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          summary: "Transcript",
+          modified: "2026-07-04T00:00:00.000Z",
+          isSidechain: false,
+        },
+      ],
+      transcripts: {
+        [sessionId]: [
+          { type: "queue-operation", sessionId },
+          message(sessionId, "user", oldUser, 1),
+          message(sessionId, "assistant", "old assistant", 2),
+          message(sessionId, "user", "new user", 3),
+          message(sessionId, "assistant", "new assistant", 4),
+        ],
+      },
+    });
+
+    // Every read satisfies at most 4 KiB, so each 128 KiB window is completed
+    // across dozens of non-zero short reads. Fails before the fill-loop fix: the
+    // first short read tripped the "transcript changed" throw.
+    injectTranscriptShortReads(sessionId, ({ length }) => Math.min(length, 4096));
+
+    const latest = await readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home);
+    expect(latest.items.map((item) => item.text)).toEqual(["new assistant", "new user"]);
+    expect(latest.nextCursor).toEqual(expect.any(String));
+
+    const older = await readLocalClaudeTranscriptPage(
+      { threadId: sessionId, limit: 2, cursor: latest.nextCursor },
+      home,
+    );
+    expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
+    expect(older.nextCursor).toBeUndefined();
+  });
+
+  it("still reports a truncated transcript when a reverse-scan read hits EOF mid-window", async () => {
+    const home = await createHome();
+    const sessionId = "truncated-read-session";
+    const oldUser = "old user ".repeat(20_000);
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          summary: "Transcript",
+          modified: "2026-07-04T00:00:00.000Z",
+          isSidechain: false,
+        },
+      ],
+      transcripts: {
+        [sessionId]: [
+          message(sessionId, "user", oldUser, 1),
+          message(sessionId, "assistant", "new assistant", 2),
+        ],
+      },
+    });
+
+    // Reverse pager handle (first read at a high offset): return a partial read,
+    // then a 0-byte read = the file was truncated out from under us mid-window,
+    // which must still surface the hard error. Forward metadata-scan handles
+    // (first read at position 0) read normally so the session still resolves.
+    injectTranscriptShortReads(sessionId, ({ length, call, firstPosition }) =>
+      firstPosition === 0 ? length : call === 0 ? Math.min(length, 8) : 0,
+    );
+
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home),
+    ).rejects.toThrow("Claude transcript changed while it was being read");
   });
 
   it("advertises terminal resume only when the store and Claude binary exist", async () => {
