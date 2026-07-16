@@ -312,6 +312,7 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
         const type = (block as { type?: unknown }).type;
         return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
       }));
+  const activeInput = sanitizedMessages[turnStart - 1];
 
   // A completed sessions_send target run is already delivered to its caller.
   // Require terminal text so compaction after tool output can still recover unfinished work.
@@ -319,7 +320,8 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
     endsWithTerminalAssistantText &&
     turnStart < sanitizedMessages.length &&
     turnStart > 0 &&
-    isReplayUnsafeInterSessionInput(sanitizedMessages[turnStart - 1])
+    activeInput !== undefined &&
+    isReplayUnsafeInterSessionInput(activeInput)
   ) {
     return sanitizedMessages.slice(0, turnStart - 1);
   }
