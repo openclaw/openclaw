@@ -155,6 +155,21 @@ describe("run-additional-boundary-checks", () => {
     expect(output.read()).toBe("[output truncated to last 12 bytes]\nsecond-line\n");
   });
 
+  it("drops split UTF-8 prefixes when one chunk exceeds the output byte cap", () => {
+    const output = createBoundedOutputBuffer(5);
+    output.append("old😀new");
+
+    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
+  it("drops split UTF-8 prefixes when older buffered output overflows", () => {
+    const output = createBoundedOutputBuffer(5);
+    output.append("old😀");
+    output.append("new");
+
+    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
   it("parses and applies CI shard specs", () => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
     expect(parseShardSelection("2/4,3/4")).toEqual([

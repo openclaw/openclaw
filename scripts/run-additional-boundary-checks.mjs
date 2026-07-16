@@ -3,6 +3,7 @@
 // timeout handling, and grouped CI output.
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { StringDecoder } from "node:string_decoder";
 import pMap from "p-map";
 import prettyMilliseconds from "pretty-ms";
 
@@ -183,6 +184,14 @@ export function formatCommand({ command, args }) {
   return [command, ...args].join(" ");
 }
 
+function decodeUtf8Tail(buffer) {
+  let start = 0;
+  while (start < buffer.length && (buffer[start] & 0b1100_0000) === 0b1000_0000) {
+    start += 1;
+  }
+  return new StringDecoder("utf8").write(buffer.subarray(start));
+}
+
 /**
  * Keeps only the tail of noisy check output so failure logs stay bounded.
  */
@@ -197,7 +206,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
     const textBytes = Buffer.byteLength(text);
     if (textBytes >= limit) {
       const buffer = Buffer.from(text);
-      const tail = buffer.subarray(buffer.length - limit).toString("utf8");
+      const tail = decodeUtf8Tail(buffer.subarray(buffer.length - limit));
       chunks.splice(0, chunks.length, tail);
       bytes = Buffer.byteLength(tail);
       truncated = true;
@@ -218,7 +227,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
       }
 
       const buffer = Buffer.from(first);
-      const tail = buffer.subarray(overflow).toString("utf8");
+      const tail = decodeUtf8Tail(buffer.subarray(overflow));
       chunks[0] = tail;
       bytes = chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk), 0);
       truncated = true;
