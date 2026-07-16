@@ -91,8 +91,11 @@ const KNOWN_CHANNELS = [
 ] as const;
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
-// Automation inventories change rarely; poll less aggressively than system info.
-const QUICK_AUTOMATION_POLL_INTERVAL_MS = 30_000;
+
+type QuickAutomationLoadParts = {
+  cron: boolean;
+  skills: boolean;
+};
 
 function isUnknownSystemInfoMethodError(error: unknown): boolean {
   return (
@@ -316,14 +319,9 @@ export class ConfigPage extends OpenClawLightDomElement {
   private quickAutomationClient: GatewayBrowserClient | null = null;
   private quickAutomationLoading = false;
   private quickAutomationRequestId = 0;
-  private readonly quickAutomationPolling = new PollController(
-    this,
-    QUICK_AUTOMATION_POLL_INTERVAL_MS,
-    () => {
-      void this.loadQuickAutomation();
-    },
-    false,
-  );
+  // Tracks whether Simple settings was already active so entry loads once
+  // per visibility epoch instead of polling the full Skills inventory.
+  private quickAutomationActive = false;
   private pendingRouteTargetId: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -346,6 +344,27 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.synchronizeSystemInfoGateway(gateway);
         this.synchronizeQuickAutomationGateway(gateway);
       },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) =>
+        // Cron already broadcasts a change event; reuse it so idle Settings
+        // never rebuilds the full Skills status inventory on a timer.
+        gateway.subscribeEvents((event) => {
+          if (
+            this.quickAutomationGatewaySource === gateway &&
+            gateway.snapshot.connected &&
+            gateway.snapshot.client &&
+            this.isQuickAutomationVisible() &&
+            !this.quickAutomationUnavailable &&
+            this.quickAutomation != null &&
+            event.event === "cron"
+          ) {
+            // Keep the prior Skills snapshot; only the cron total can change
+            // from this event without rebuilding skills.status.
+            void this.loadQuickAutomation({ cron: true, skills: false });
+          }
+        }),
     )
     .watch(
       () => this.context?.webPush,
@@ -376,9 +395,9 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.systemInfoPolling.stop();
-    this.quickAutomationPolling.stop();
     this.invalidateSystemInfoRequest();
     this.invalidateQuickAutomationRequest();
+    this.quickAutomationActive = false;
     this.runtimeConfigSource = null;
     this.resetConfigViewState();
     this.systemInfoGatewaySource = null;
@@ -401,9 +420,13 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (pageChanged || modeChanged) {
       this.invalidateSystemInfoRequest();
       this.invalidateQuickAutomationRequest();
+      // Leaving Simple settings ends the entry epoch so reopening reloads once.
+      if (!this.isQuickAutomationVisible()) {
+        this.quickAutomationActive = false;
+      }
     }
     this.syncSystemInfoPolling();
-    this.syncQuickAutomationPolling();
+    this.syncQuickAutomationLifecycle();
     this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants mic permission; the
     // refresh button next to the picker requests it explicitly.
@@ -464,6 +487,12 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private isSystemInfoVisible(): boolean {
     return this.pageId === "config" && this.settingsMode === "quick";
+  }
+
+  private isQuickAutomationVisible(): boolean {
+    // Automation counters share the Quick Settings visibility gate with the
+    // system info section; both render only while Simple settings is open.
+    return this.isSystemInfoVisible();
   }
 
   private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -611,8 +640,8 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private synchronizeQuickAutomationGateway(gateway: ApplicationContext["gateway"]) {
     if (gateway !== this.quickAutomationGatewaySource) {
-      this.quickAutomationPolling.stop();
       this.invalidateQuickAutomationRequest();
+      this.quickAutomationActive = false;
       this.quickAutomationGatewaySource = gateway;
       this.quickAutomationClient = null;
       this.quickAutomation = null;
@@ -627,10 +656,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.quickAutomationClient = snapshot.client;
     if (clientChanged) {
       this.invalidateQuickAutomationRequest();
+      this.quickAutomationActive = false;
       this.quickAutomation = null;
       this.quickAutomationUnavailable = false;
     } else if (!snapshot.connected) {
       this.invalidateQuickAutomationRequest();
+      this.quickAutomationActive = false;
       this.quickAutomation = null;
     }
     if (snapshot.connected && snapshot.hello) {
@@ -640,27 +671,30 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.quickAutomation = null;
       }
     }
-    this.syncQuickAutomationPolling();
+    this.syncQuickAutomationLifecycle();
   }
 
-  private syncQuickAutomationPolling() {
-    // Automation counters share the Quick Settings visibility gate with the
-    // system info section; both render only while Simple settings is open.
+  private syncQuickAutomationLifecycle() {
     const gateway = this.context.gateway.snapshot;
-    const shouldPoll =
+    const shouldActive =
       this.isConnected &&
-      this.isSystemInfoVisible() &&
+      this.isQuickAutomationVisible() &&
       !this.quickAutomationUnavailable &&
       gateway.connected &&
       supportsQuickAutomation(gateway.hello) &&
       gateway.client != null;
-    if (!shouldPoll) {
-      this.quickAutomationPolling.stop();
+    if (!shouldActive) {
+      this.quickAutomationActive = false;
       return;
     }
-    if (this.quickAutomationPolling.start()) {
-      void this.loadQuickAutomation();
+    // Entry / reconnect only: load both inventories once per visibility epoch.
+    // Skills have no lightweight change signal here, so they stay snapshot-
+    // until the next entry or reconnect rather than a recurring timer.
+    if (this.quickAutomationActive) {
+      return;
     }
+    this.quickAutomationActive = true;
+    void this.loadQuickAutomation({ cron: true, skills: true });
   }
 
   private invalidateQuickAutomationRequest() {
@@ -676,7 +710,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const gateway = gatewaySource.snapshot;
     return (
       this.isConnected &&
-      this.isSystemInfoVisible() &&
+      this.isQuickAutomationVisible() &&
       requestId === this.quickAutomationRequestId &&
       this.quickAutomationGatewaySource === gatewaySource &&
       this.context.gateway === gatewaySource &&
@@ -685,7 +719,10 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
   }
 
-  private async loadQuickAutomation() {
+  private async loadQuickAutomation(parts: QuickAutomationLoadParts) {
+    if (!parts.cron && !parts.skills) {
+      return;
+    }
     const gatewaySource = this.quickAutomationGatewaySource;
     if (!gatewaySource || gatewaySource !== this.context.gateway) {
       return;
@@ -695,7 +732,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (
       !gateway.connected ||
       !client ||
-      !this.isSystemInfoVisible() ||
+      !this.isQuickAutomationVisible() ||
       this.quickAutomationUnavailable ||
       this.quickAutomationLoading
     ) {
@@ -705,19 +742,31 @@ export class ConfigPage extends OpenClawLightDomElement {
     const requestId = ++this.quickAutomationRequestId;
     this.quickAutomationLoading = true;
     try {
-      // Both inventories load in parallel; a missing scope or unsupported method
-      // on either surfaces an unavailable state rather than a misleading zero.
+      // Entry/reconnect load both inventories; cron change events refresh only
+      // the cron total so Skills status is not rebuilt on every scheduler tick.
       const [cronResult, skillReport] = await Promise.all([
-        client.request<CronJobsListResult>("cron.list", {}),
-        client.request<SkillStatusReport | undefined>("skills.status", {}),
+        parts.cron
+          ? client.request<CronJobsListResult>("cron.list", {})
+          : Promise.resolve(undefined),
+        parts.skills
+          ? client.request<SkillStatusReport | undefined>("skills.status", {})
+          : Promise.resolve(undefined),
       ]);
       if (!this.isCurrentQuickAutomationRequest(requestId, client, gatewaySource)) {
         return;
       }
+      const previous = this.quickAutomation;
       const cronJobs = Array.isArray(cronResult?.jobs) ? cronResult.jobs : [];
-      const cronJobCount =
-        typeof cronResult?.total === "number" ? cronResult.total : cronJobs.length;
-      const skillCount = Array.isArray(skillReport?.skills) ? skillReport.skills.length : 0;
+      const cronJobCount = parts.cron
+        ? typeof cronResult?.total === "number"
+          ? cronResult.total
+          : cronJobs.length
+        : (previous?.cronJobCount ?? 0);
+      const skillCount = parts.skills
+        ? Array.isArray(skillReport?.skills)
+          ? skillReport.skills.length
+          : 0
+        : (previous?.skillCount ?? 0);
       this.quickAutomation = { cronJobCount, skillCount };
     } catch (error) {
       if (!this.isCurrentQuickAutomationRequest(requestId, client, gatewaySource)) {
@@ -726,9 +775,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       if (isMissingOperatorReadScopeError(error) || isUnknownQuickAutomationMethodError(error)) {
         this.quickAutomation = null;
         this.quickAutomationUnavailable = true;
-        this.quickAutomationPolling.stop();
       }
-      // Transient errors keep the last snapshot; the next poll tick retries.
+      // Transient errors keep the last snapshot; entry/reconnect/cron retries.
     } finally {
       if (this.isCurrentQuickAutomationRequest(requestId, client, gatewaySource)) {
         this.quickAutomationLoading = false;

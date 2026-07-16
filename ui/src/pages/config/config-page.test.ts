@@ -221,12 +221,51 @@ describe("ConfigPage system info", () => {
 });
 
 describe("ConfigPage quick automation inventory", () => {
+  type QuickAutomationHarness = {
+    context: ApplicationContext;
+    subscriptions: ReactiveController;
+    shouldUpdate: () => boolean;
+    pageId: string;
+    settingsMode: string;
+    syncQuickAutomationLifecycle: () => void;
+    synchronizeQuickAutomationGateway: (gateway: ApplicationGateway) => void;
+    loadQuickAutomation: (parts: { cron: boolean; skills: boolean }) => Promise<void>;
+    quickAutomation: { cronJobCount: number; skillCount: number } | null;
+    quickAutomationUnavailable: boolean;
+    quickAutomationActive: boolean;
+    quickAutomationGatewaySource: ApplicationGateway | null;
+  };
+
+  function mountQuickAutomationHarness(
+    gateway: ApplicationGateway,
+    opts: { autoLifecycle?: boolean } = {},
+  ) {
+    const page = new ConfigPage();
+    const state = page as unknown as QuickAutomationHarness;
+    page.removeController(state.subscriptions);
+    state.shouldUpdate = () => false;
+    state.pageId = "config";
+    state.settingsMode = "quick";
+    // Direct load tests stub lifecycle so gateway sync does not race a second load.
+    if (!opts.autoLifecycle) {
+      state.syncQuickAutomationLifecycle = () => undefined;
+    }
+    state.context = { gateway } as ApplicationContext;
+    document.body.append(page);
+    return { page, state };
+  }
+
   it("derives counts from cron.list and skills.status", async () => {
     const client = {
-      request: vi
-        .fn()
-        .mockImplementationOnce(() => Promise.resolve({ jobs: [{}, {}, {}], total: 3 }))
-        .mockImplementationOnce(() => Promise.resolve({ skills: [{}, {}, {}, {}, {}] })),
+      request: vi.fn(async (method: string) => {
+        if (method === "cron.list") {
+          return { jobs: [{}, {}, {}], total: 3 };
+        }
+        if (method === "skills.status") {
+          return { skills: [{}, {}, {}, {}, {}] };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
     } as unknown as GatewayBrowserClient;
     const snapshot = {
       client,
@@ -234,28 +273,86 @@ describe("ConfigPage quick automation inventory", () => {
       hello: { features: { methods: ["cron.list", "skills.status"] } },
     } as ApplicationGatewaySnapshot;
     const gateway = { snapshot } as ApplicationGateway;
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      subscriptions: ReactiveController;
-      shouldUpdate: () => boolean;
-      syncQuickAutomationPolling: () => void;
-      synchronizeQuickAutomationGateway: (gateway: ApplicationGateway) => void;
-      loadQuickAutomation: () => Promise<void>;
-      quickAutomation: { cronJobCount: number; skillCount: number } | null;
-      quickAutomationUnavailable: boolean;
-    };
-    page.removeController(state.subscriptions);
-    state.shouldUpdate = () => false;
-    state.syncQuickAutomationPolling = () => undefined;
-    state.context = { gateway } as ApplicationContext;
-    document.body.append(page);
+    const { page, state } = mountQuickAutomationHarness(gateway);
     state.synchronizeQuickAutomationGateway(gateway);
 
-    await state.loadQuickAutomation();
+    await state.loadQuickAutomation({ cron: true, skills: true });
 
     expect(state.quickAutomation).toEqual({ cronJobCount: 3, skillCount: 5 });
     expect(state.quickAutomationUnavailable).toBe(false);
+    expect(client.request).toHaveBeenCalledWith("cron.list", {});
+    expect(client.request).toHaveBeenCalledWith("skills.status", {});
+    page.remove();
+  });
+
+  it("loads both inventories once on Simple-settings entry", async () => {
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "cron.list") {
+          return { jobs: [{}, {}], total: 2 };
+        }
+        if (method === "skills.status") {
+          return { skills: [{}, {}, {}] };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+    } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      connected: true,
+      hello: { features: { methods: ["cron.list", "skills.status"] } },
+    } as ApplicationGatewaySnapshot;
+    const gateway = {
+      snapshot,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    } as unknown as ApplicationGateway;
+    const { page, state } = mountQuickAutomationHarness(gateway, { autoLifecycle: true });
+
+    state.synchronizeQuickAutomationGateway(gateway);
+    await vi.waitFor(() => {
+      expect(state.quickAutomation).toEqual({ cronJobCount: 2, skillCount: 3 });
+    });
+
+    expect(state.quickAutomationActive).toBe(true);
+    expect(client.request).toHaveBeenCalledTimes(2);
+
+    // A second lifecycle pass while still visible must not re-poll Skills.
+    state.syncQuickAutomationLifecycle();
+    await Promise.resolve();
+    expect(client.request).toHaveBeenCalledTimes(2);
+    page.remove();
+  });
+
+  it("refreshes only cron.list on the existing cron change event", async () => {
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === "cron.list") {
+          return { jobs: [{}, {}, {}, {}], total: 4 };
+        }
+        if (method === "skills.status") {
+          return { skills: [{}, {}] };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+    } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      connected: true,
+      hello: { features: { methods: ["cron.list", "skills.status"] } },
+    } as ApplicationGatewaySnapshot;
+    const gateway = { snapshot } as ApplicationGateway;
+    const { page, state } = mountQuickAutomationHarness(gateway);
+    state.synchronizeQuickAutomationGateway(gateway);
+    state.quickAutomation = { cronJobCount: 1, skillCount: 2 };
+    state.quickAutomationActive = true;
+
+    await state.loadQuickAutomation({ cron: true, skills: false });
+
+    expect(state.quickAutomation).toEqual({ cronJobCount: 4, skillCount: 2 });
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("cron.list", {});
+    expect(client.request).not.toHaveBeenCalledWith("skills.status", {});
     page.remove();
   });
 
@@ -266,21 +363,7 @@ describe("ConfigPage quick automation inventory", () => {
       hello: { features: { methods: ["health"] } },
     } as ApplicationGatewaySnapshot;
     const gateway = { snapshot } as ApplicationGateway;
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      subscriptions: ReactiveController;
-      shouldUpdate: () => boolean;
-      syncQuickAutomationPolling: () => void;
-      synchronizeQuickAutomationGateway: (gateway: ApplicationGateway) => void;
-      quickAutomation: { cronJobCount: number; skillCount: number } | null;
-      quickAutomationUnavailable: boolean;
-    };
-    page.removeController(state.subscriptions);
-    state.shouldUpdate = () => false;
-    state.syncQuickAutomationPolling = () => undefined;
-    state.context = { gateway } as ApplicationContext;
-    document.body.append(page);
+    const { page, state } = mountQuickAutomationHarness(gateway);
     state.synchronizeQuickAutomationGateway(gateway);
 
     expect(state.quickAutomationUnavailable).toBe(true);
