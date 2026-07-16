@@ -11,7 +11,6 @@ import {
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
-import { ChannelImplicitMentionsSchema } from "./zod-schema.channels-config.js";
 import {
   ChannelHealthMonitorSchema,
   ChannelHeartbeatVisibilitySchema,
@@ -45,6 +44,7 @@ import {
   DiscordPresenceEventsSchema,
   DiscordSnowflakeStringSchema,
 } from "./zod-schema.discord.js";
+import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
 import {
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
