@@ -14,6 +14,9 @@ const REEF_RELAY_ERROR_JSON_MAX_BYTES = 64 * 1024;
 // Relay envelopes are capped at 48 KiB. Leave room for inbox metadata while
 // rejecting oversized or compressed frames before ws materializes the message.
 const REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
+// Stalled TCP peers that never complete the HTTP upgrade would otherwise hang
+// forever — ws defaults to no handshakeTimeout. Match sibling channel WS budgets.
+const REEF_WS_HANDSHAKE_MS = 30_000;
 
 export class ReefRelayError extends Error {
   constructor(
@@ -190,8 +193,14 @@ export interface WebSocketLike {
   close(): void;
 }
 
-export function createReefWebSocket(url: string): WebSocketLike {
-  return new WebSocket(url, { maxPayload: REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES });
+export function createReefWebSocket(
+  url: string,
+  options: { handshakeTimeoutMs?: number } = {},
+): WebSocketLike {
+  return new WebSocket(url, {
+    maxPayload: REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES,
+    handshakeTimeout: options.handshakeTimeoutMs ?? REEF_WS_HANDSHAKE_MS,
+  });
 }
 
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {

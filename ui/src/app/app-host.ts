@@ -452,6 +452,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   private readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   private readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
   @query("openclaw-command-palette") private commandPalette?: CommandPaletteElement;
+  @query("openclaw-exec-approval")
+  private approvalOverlay?: HTMLElement & { show(): void };
   private commandPaletteTarget?: CommandPaletteTargetDetail;
   private navDrawerTrigger: HTMLElement | null = null;
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
@@ -1325,6 +1327,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .updateRunning=${overlaySnapshot.updateRunning}
                 .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
+                .onOpenApprovals=${() => this.approvalOverlay?.show()}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
                   const search = newSessionSearch(agentId, target);

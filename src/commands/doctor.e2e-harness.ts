@@ -292,6 +292,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/push/apns-registrations.json",
       hasLegacy: false,
     },
+    workspace: {
+      sources: [],
+      hasLegacy: false,
+    },
     webPush: {
       subscriptionsPath: "/tmp/state/push/web-push-subscriptions.json",
       vapidKeysPath: "/tmp/state/push/vapid-keys.json",

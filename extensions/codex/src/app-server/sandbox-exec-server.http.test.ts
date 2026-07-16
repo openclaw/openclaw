@@ -24,6 +24,15 @@ function testExecEnv(): NodeJS.ProcessEnv {
   };
 }
 
+async function openSandboxHttpSocket(sandbox: ReturnType<typeof createSandboxContext>) {
+  const client = createClient();
+  await ensureCodexSandboxExecServerEnvironment({
+    client: client as never,
+    sandbox,
+  });
+  return openSocket(execServerUrlFromClient(client));
+}
+
 function splitUtf8ChildScript(params: {
   stream: "stdout" | "stderr";
   value: string;
@@ -64,12 +73,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       code: 0,
     }));
     const sandbox = createSandboxContext({ runShellCommand });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
@@ -102,12 +106,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       code: 0,
     }));
     const sandbox = createSandboxContext({ runShellCommand });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
@@ -129,12 +128,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       stdinMode: "pipe-closed" as const,
     }));
     const sandbox = createSandboxContext({ buildExecSpec });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
@@ -185,12 +179,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       code: 0,
     }));
     const sandbox = createSandboxContext({ buildExecSpec, runShellCommand });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     const notifications = collectNotifications(socket);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
@@ -251,12 +240,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
         stdinMode: "pipe-closed",
       }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
@@ -297,12 +281,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
         stdinMode: "pipe-closed",
       }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     const notifications = collectNotifications(socket);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
@@ -353,12 +332,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
       finalizeExec,
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
@@ -406,12 +380,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
       finalizeExec,
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 

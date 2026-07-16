@@ -1700,6 +1700,7 @@ export const de: TranslationMap = {
   tabs: {
     agents: "Agenten",
     activity: "Aktivität",
+    approvals: "Genehmigungen",
     workboard: "Arbeitsbereich",
     worktrees: "Worktrees",
     channels: "Kanäle",
@@ -1732,6 +1733,7 @@ export const de: TranslationMap = {
   subtitles: {
     agents: "Agent-Arbeitsbereiche, Tools und Identitäten verwalten.",
     activity: "Browser-lokale Zusammenfassungen der Tool-Aktivität.",
+    approvals: "Kürzlich genehmigte Exec-, Plugin- und System-Agent-Anfragen.",
     workboard: "Agenten-Arbeitswarteschlange und Sitzungsübergabe.",
     worktrees: "Isolierte Checkouts für Agentenaufgaben und Wiederherstellungs-Snapshots.",
     channels: "Kanäle und Einstellungen verwalten.",
@@ -2801,6 +2803,56 @@ export const de: TranslationMap = {
     cronOverdue: "{count} Cronjob(s) überfällig",
     modelAuthExpired: "Modellauthentifizierung abgelaufen: {providers}",
     modelAuthExpiring: "Modellauthentifizierung läuft bald ab: {providers}",
+    pendingApproval: "{count} ausstehende Genehmigung",
+    pendingApprovals: "{count} ausstehende Genehmigungen",
+  },
+  approvalHistory: {
+    description:
+      "Von diesem Gateway aufgezeichnete Genehmigungen für Terminal-Exec, Plugins und System-Agenten, neueste zuerst.",
+    loading: "Genehmigungsverlauf wird geladen…",
+    loadingMore: "Wird geladen…",
+    loadMore: "Mehr laden",
+    empty: "Keine abgeschlossenen Genehmigungen im rollierenden 30-Tage-Zeitraum.",
+    retention: "Der Genehmigungsverlauf umfasst einen rollierenden 30-Tage-Zeitraum.",
+    offline: "Stellen Sie eine Verbindung zum Gateway her, um den Genehmigungsverlauf zu laden.",
+    invalidResponse:
+      "Das Gateway hat eine ungültige Antwort für den Genehmigungsverlauf zurückgegeben.",
+    unknown: "Unbekannt",
+    notApplicable: "N/A",
+    columns: {
+      resolved: "Abgeschlossen",
+      kind: "Art",
+      request: "Anfrage",
+      decision: "Entscheidung",
+      reason: "Grund für den Abschluss",
+      source: "Quell-Agent / Sitzung",
+      resolver: "Entscheidungsträger",
+    },
+    kinds: {
+      exec: "Exec",
+      plugin: "Plugin",
+      systemAgent: "System-Agent",
+    },
+    statuses: {
+      allowed: "Zugelassen",
+      denied: "Abgelehnt",
+      expired: "Abgelaufen",
+      cancelled: "Abgebrochen",
+    },
+    decisions: {
+      allowOnce: "Einmal erlauben",
+      allowAlways: "Immer erlauben",
+      deny: "Ablehnen",
+    },
+    reasons: {
+      user: "Benutzerentscheidung",
+      timeout: "Zeitüberschreitung",
+      malformedVerdict: "Fehlerhaftes Urteil",
+      noRoute: "Keine Route",
+      runAborted: "Ausführung abgebrochen",
+      gatewayRestart: "Gateway-Neustart",
+      storageCorrupt: "Speicher beschädigt",
+    },
   },
   palette: {
     placeholder: "Chats und Befehle durchsuchen…",
