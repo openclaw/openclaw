@@ -38,6 +38,7 @@ extension OnboardingView {
         case connection
         case cli
         case ai
+        case memory
         case permissions
         case chat
         case ready
@@ -52,6 +53,7 @@ extension OnboardingView {
         var aiPhase: OnboardingAISetupModel.Phase = .idle
         var aiBusy = false
         var aiFailed = false
+        var memoryPhase: OnboardingMemoryImportModel.Phase = .idle
         var remoteProbeState: RemoteOnboardingProbeState = .idle
         var allPermissionsGranted = false
     }
@@ -68,6 +70,7 @@ extension OnboardingView {
             aiPhase: self.aiSetup.phase,
             aiBusy: self.aiSetup.isBusy,
             aiFailed: Self.aiSetupLooksFailed(self.aiSetup),
+            memoryPhase: self.memoryImport.phase,
             remoteProbeState: self.remoteProbeState,
             allPermissionsGranted: Capability.importanceOrdered
                 .allSatisfy { self.permissionMonitor.status[$0] ?? false }))
@@ -82,6 +85,7 @@ extension OnboardingView {
         case self.connectionPageIndex: .connection
         case self.cliPageIndex: .cli
         case self.aiPageIndex: .ai
+        case self.memoryImportPageIndex: .memory
         case self.permissionsPageIndex: .permissions
         case self.onboardingChatPageIndex: .chat
         case self.readyPageIndex: .ready
@@ -131,6 +135,8 @@ extension OnboardingView {
             } else {
                 .curious
             }
+        case .memory:
+            self.memoryImportMood(for: snapshot.memoryPhase)
         case .permissions:
             snapshot.allPermissionsGranted ? .happy : .curious
         case .chat:
@@ -143,7 +149,20 @@ extension OnboardingView {
     static func mascotAccessory(for page: MascotPage) -> OpenClawMascotAccessory {
         switch page {
         case .ready: .gradCap
-        case .welcome, .connection, .cli, .ai, .permissions, .chat: .none
+        case .welcome, .connection, .cli, .ai, .memory, .permissions, .chat: .none
+        }
+    }
+
+    static func memoryImportMood(for phase: OnboardingMemoryImportModel.Phase) -> OpenClawMascotMood {
+        switch phase {
+        case .planning, .applying:
+            .thinking
+        case .failed:
+            .sad
+        case .done:
+            .happy
+        case .idle, .offer, .empty:
+            .curious
         }
     }
 }

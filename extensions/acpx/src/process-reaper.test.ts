@@ -1,7 +1,15 @@
 // ACPX tests cover process reaper plugin behavior.
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+
+const runExecMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runExec: runExecMock,
+}));
+
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
@@ -61,6 +69,35 @@ function collectMatching<T, U>(
 }
 
 describe("process reaper", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    runExecMock.mockReset();
+  });
+
+  it("bounds process inspection and fails closed on timeout", async () => {
+    runExecMock.mockRejectedValueOnce(new Error("process listing timed out"));
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const killSpy = vi.spyOn(process, "kill");
+
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: 200,
+      rootCommand: CODEX_WRAPPER_COMMAND,
+      wrapperRoot: WRAPPER_ROOT,
+    });
+
+    expect(runExecMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,ppid=,command="], {
+      logOutput: false,
+      maxBuffer: 8 * 1024 * 1024,
+      timeoutMs: 2_000,
+    });
+    expect(result).toEqual({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "unverified-root",
+    });
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+
   it("only treats generated wrappers as launch-lease aware", () => {
     expect(
       isOpenClawLeaseAwareAcpxProcessCommand({

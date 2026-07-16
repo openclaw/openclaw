@@ -27,6 +27,7 @@ export const hi: TranslationMap = {
     close: "बंद करें",
     previous: "पिछला",
     next: "अगला",
+    continue: "जारी रखें",
     back: "वापस",
     create: "बनाएँ",
     copy: "कॉपी करें",
@@ -1845,6 +1846,28 @@ export const hi: TranslationMap = {
     agent: "गंतव्य एजेंट",
     replaceExisting: "मौजूदा आयात बदलें",
     replaceHint: "टकरावों का फिर से पूर्वावलोकन करें और बदलने से पहले आइटम बैकअप सुरक्षित रखें।",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "अपने सहायक की मेमोरी अपने साथ लाएँ",
+      body: "OpenClaw को अन्य कोडिंग सहायकों की मेमोरी मिली है। इसे अपने एजेंट वर्कस्पेस में इम्पोर्ट करें?",
+      plannedCount: "{count} इम्पोर्ट के लिए तैयार",
+      alreadyImported: "पहले ही इम्पोर्ट किए गए: {count}",
+      sourceUnavailable: "स्रोत पथ उपलब्ध नहीं है",
+      import: "इंपोर्ट करें",
+      skip: "छोड़ें",
+      reviewDetails: "विवरण की समीक्षा करें",
+      importingProvider: "आयात किया जा रहा है…",
+      providerResult: "{migrated} माइग्रेट किए गए, {skipped} छोड़े गए",
+      providerIncomplete:
+        "{migrated} माइग्रेट किए गए, {skipped} छोड़े गए, {errors} विफल, {conflicts} टकराव",
+      providerError: "इम्पोर्ट विफल रहा: {error}",
+      connectionChanged: "छोड़ा गया: इम्पोर्ट के दौरान Gateway कनेक्शन बदल गया",
+      unknownError: "अनुरोध विफल रहा",
+      doneTitle: "मेमोरी इम्पोर्ट पूरा हुआ",
+      doneBody:
+        "{migrated} माइग्रेट किए गए, {skipped} छोड़े गए। आप OpenClaw को सेट अप करना जारी रख सकते हैं।",
+    },
   },
   mcpPage: {
     manageServersLink: "Plugins पेज पर सर्वर प्रबंधित करें।",

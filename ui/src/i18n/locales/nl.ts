@@ -27,6 +27,7 @@ export const nl: TranslationMap = {
     close: "Sluiten",
     previous: "Vorige",
     next: "Volgende",
+    continue: "Doorgaan",
     back: "Terug",
     create: "Maken",
     copy: "Kopiëren",
@@ -1867,6 +1868,28 @@ export const nl: TranslationMap = {
     agent: "Doelagent",
     replaceExisting: "Bestaande imports vervangen",
     replaceHint: "Bekijk conflicten opnieuw en bewaar back-ups van items vóór vervanging.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Neem het geheugen van je assistent mee",
+      body: "OpenClaw heeft geheugen van andere programmeerassistenten gevonden. Wil je dit importeren in de werkruimte van je agent?",
+      plannedCount: "{count} klaar om te importeren",
+      alreadyImported: "Al geïmporteerd: {count}",
+      sourceUnavailable: "Bronpad niet beschikbaar",
+      import: "Importeren",
+      skip: "Overslaan",
+      reviewDetails: "Details bekijken",
+      importingProvider: "Importeren…",
+      providerResult: "{migrated} gemigreerd, {skipped} overgeslagen",
+      providerIncomplete:
+        "{migrated} gemigreerd, {skipped} overgeslagen, {errors} mislukt, {conflicts} conflicten",
+      providerError: "Importeren mislukt: {error}",
+      connectionChanged: "Overgeslagen: de Gateway-verbinding is tijdens het importeren gewijzigd",
+      unknownError: "Verzoek mislukt",
+      doneTitle: "Geheugenimport voltooid",
+      doneBody:
+        "{migrated} gemigreerd, {skipped} overgeslagen. Je kunt doorgaan met het instellen van OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Beheer servers op de Plugins-pagina.",
