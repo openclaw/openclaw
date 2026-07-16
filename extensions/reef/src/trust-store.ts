@@ -19,9 +19,9 @@ import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } fro
 export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
 const REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE = "outbound-deliveries";
-const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
+export const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
 const REEF_RELAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
+export const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
@@ -45,6 +45,7 @@ const ReefOutboundDeliveryBindingSchema = z
   })
   .strict();
 const ReefOutboundDeliverySchema = ReefOutboundDeliveryBindingSchema.extend({
+  resendDisabled: z.literal(true).optional(),
   rejection: ReefOutboundRejectionSchema.optional(),
 }).strict();
 const ReefPeerStateSchema = z
@@ -326,9 +327,14 @@ export class ReefTrustStore {
     });
   }
 
-  recordOutboundDelivery(peer: string, id: string, binding: ReefOutboundDeliveryBinding): void {
+  recordOutboundDelivery(
+    peer: string,
+    id: string,
+    binding: ReefOutboundDeliveryBinding,
+    options: { resendDisabled?: true } = {},
+  ): void {
     const key = this.#deliveryKey(peer, id);
-    const value = ReefOutboundDeliverySchema.parse(binding);
+    const value = ReefOutboundDeliverySchema.parse({ ...binding, ...options });
     if (!this.stores.deliveries.registerIfAbsent(key, value)) {
       throw new Error(`Duplicate outbound Reef delivery id ${id}`);
     }
@@ -389,7 +395,6 @@ export class ReefTrustStore {
     if (!update) {
       throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
     }
-    const rejection = ReefOutboundRejectionSchema.parse(category ? { category } : {});
     return update(key, (value) => {
       const parsed = ReefOutboundDeliverySchema.safeParse(value);
       if (!parsed.success || !this.#matchesDeliveryBinding(parsed.data, expected)) {
@@ -398,6 +403,10 @@ export class ReefTrustStore {
       if (parsed.data.rejection) {
         return parsed.data;
       }
+      const rejection = ReefOutboundRejectionSchema.parse({
+        ...(category ? { category } : {}),
+        ...(parsed.data.resendDisabled ? { notice: { lastRejectionAt: Date.now() } } : {}),
+      });
       return { ...parsed.data, rejection };
     });
   }

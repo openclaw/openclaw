@@ -183,6 +183,27 @@ describe("ReefTrustStore", () => {
     expect(reopened.completeOutboundRejection("clawd", id, noticeState)).toBe(true);
   });
 
+  it("marks imported delivery rejections stop-only in the atomic receipt update", () => {
+    const id = "01JZ0000000000000000000129";
+    const store = openReefTrustStore(runtime(), config());
+    const trustedPeer = peerTrust();
+    const recipient = reefPeerIdentity(trustedPeer);
+    const binding = { bodyHash: "a".repeat(64), recipient };
+    store.set("clawd", trustedPeer);
+    store.recordOutboundDelivery("clawd", id, binding, { resendDisabled: true });
+
+    expect(store.recordOutboundRejection("clawd", id, binding, "guard_deny")).toBe(true);
+    expect(store.pendingOutboundRejections()).toEqual([
+      {
+        id,
+        peer: "clawd",
+        recipient,
+        category: "guard_deny",
+        reservedNotice: { lastRejectionAt: expect.any(Number) },
+      },
+    ]);
+  });
+
   it("does not recover a rejected delivery after the peer identity changes", () => {
     const id = "01JZ0000000000000000000124";
     const store = openReefTrustStore(runtime(), config());
