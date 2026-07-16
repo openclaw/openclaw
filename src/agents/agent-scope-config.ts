@@ -132,7 +132,7 @@ export function resolveAgentConfig(
         : undefined,
     ...(entry.models ? { models: entry.models } : {}),
     utilityModel: readStringValue(entry.utilityModel),
-    thinkingDefault: entry.thinkingDefault,
+    thinkingDefault: entry.thinkingDefault ?? agentDefaults?.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault,

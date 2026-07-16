@@ -95,6 +95,39 @@ describe("resolveAgentConfig", () => {
     expect(resolveAgentConfig(cfg, "main")?.verboseDefault).toBe("on");
   });
 
+  it("prefers per-agent thinkingDefault over global default", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+        },
+        list: [
+          {
+            id: "main",
+            thinkingDefault: "high",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentConfig(cfg, "main")?.thinkingDefault).toBe("high");
+  });
+
+  it("falls back to global thinkingDefault when per-agent is not set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          thinkingDefault: "high",
+        },
+        list: [
+          {
+            id: "main",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentConfig(cfg, "main")?.thinkingDefault).toBe("high");
+  });
+
   it("merges contextLimits from defaults with per-agent overrides", () => {
     const cfg: OpenClawConfig = {
       agents: {
