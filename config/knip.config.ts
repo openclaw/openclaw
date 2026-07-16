@@ -200,7 +200,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@openai/codex",
   "@pierre/theme",
   "@tloncorp/tlon-skill",
-  "@zed-industries/codex-acp",
+  "@agentclientprotocol/codex-acp",
   "jiti",
   "json5",
   "lit",
