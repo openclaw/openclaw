@@ -230,9 +230,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: dual-field plan payload builder for the steps deprecation window.
       // +12: active plan-step consumers pinned through channel-outbound and mirrors.
       // +6: app-guided provider setup types retained by plugin-entry and mirrors.
+      // +3: widget HTML validation helpers and tool input error.
       // Used-union narrowing: 31 wildcard barrels drop to explicit used exports;
       // proxy stream API and codex marker/scaffold pins retained.
-      7945,
+      7948,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -246,8 +247,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: plan-step normalizer across channel barrels.
       // +4: dual-field plan payload builder for the steps deprecation window.
       // +6: active plan-step helpers pinned through channel-outbound and mirrors.
+      // +2: widget HTML document detection and size assertion.
       // Used-union narrowing of the 31 wildcard barrels.
-      4434,
+      4436,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

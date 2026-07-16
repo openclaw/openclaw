@@ -1497,6 +1497,23 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds Android SDK command-line tools downloads", () => {
+    const workflow = readCiWorkflow();
+    const releaseWorkflow = readAndroidReleaseWorkflow();
+    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
+
+    for (const job of sdkJobs) {
+      const setupStep = expectDefined(
+        job.steps.find((step: WorkflowStep) =>
+          step.run?.includes("commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"),
+        ),
+        "Android SDK setup step",
+      );
+
+      expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
+    }
+  });
+
   it("covers Android app variants, lint, and benchmark compilation", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
@@ -3616,6 +3633,12 @@ describe("ci workflow guards", () => {
     expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
     expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
     expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
+    expect(smokeRunStep.run).toContain(
+      "console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+    );
+    expect(smokeRunStep.run).not.toContain(
+      "console.log(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+    );
     expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");

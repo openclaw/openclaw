@@ -913,13 +913,14 @@ function normalizePersistedDeliveryChannel(
   return channel;
 }
 
-function buildFailureAlert(form: CronFormState, existingChannel?: string) {
+function buildFailureAlert(form: CronFormState, existing?: CronJob["failureAlert"]) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
   }
   if (form.failureAlertMode !== "custom") {
-    return undefined;
+    return existing !== undefined ? null : undefined;
   }
+  const existingConfig = existing && typeof existing === "object" ? existing : undefined;
   const after = toNumber(form.failureAlertAfter.trim(), 0);
   const cooldownRaw = form.failureAlertCooldownSeconds.trim();
   const cooldownSeconds = cooldownRaw.length > 0 ? toNumber(cooldownRaw, 0) : undefined;
@@ -929,18 +930,23 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
       : undefined;
   const deliveryMode = form.failureAlertDeliveryMode;
   const accountId = form.failureAlertAccountId.trim();
+  const to = form.failureAlertTo.trim();
   const patch: Record<string, unknown> = {
-    after: after > 0 ? Math.floor(after) : undefined,
+    after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
-      preserveLastOnUpdate: Boolean(existingChannel),
+      preserveLastOnUpdate: Boolean(existingConfig?.channel),
     }),
-    to: form.failureAlertTo.trim() || undefined,
-    ...(cooldownMs !== undefined ? { cooldownMs } : {}),
+    to: to || (existingConfig?.to ? null : undefined),
+    ...(cooldownMs !== undefined
+      ? { cooldownMs }
+      : existingConfig?.cooldownMs !== undefined
+        ? { cooldownMs: null }
+        : {}),
   };
   if (deliveryMode) {
     patch.mode = deliveryMode;
   }
-  patch.accountId = accountId || undefined;
+  patch.accountId = accountId || (existingConfig?.accountId ? null : undefined);
   return patch;
 }
 
@@ -1032,12 +1038,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         : selectedDeliveryMode === "none"
           ? ({ mode: "none" } as const)
           : undefined;
-    const failureAlert = buildFailureAlert(
-      form,
-      editingJob?.failureAlert && typeof editingJob.failureAlert === "object"
-        ? editingJob.failureAlert.channel
-        : undefined,
-    );
+    const failureAlert = buildFailureAlert(form, editingJob?.failureAlert);
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
