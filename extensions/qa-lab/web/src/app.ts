@@ -1,5 +1,5 @@
 // Qa Lab plugin module implements app behavior.
-import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
+import { defaultQaModelForMode, isQaFastModeEnabled } from "../../src/model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
 import { getJson, getJsonNoStore, postJson } from "./http.js";
