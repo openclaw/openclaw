@@ -171,9 +171,12 @@ describe("process start times", () => {
     });
   });
 
-  it("returns null for unavailable Darwin file-lock start times", () => {
+  it("fails conservatively when the Darwin file-lock start-time probe times out", () => {
     vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
-      throw new Error("missing process");
+      throw Object.assign(new Error("spawnSync /bin/ps ETIMEDOUT"), {
+        code: "ETIMEDOUT",
+        signal: "SIGTERM",
+      });
     });
 
     return withMockedPlatform("darwin", async () => {
