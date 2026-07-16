@@ -266,6 +266,27 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
       channels: { demo: { allowFrom: [] } },
     });
   });
+
+  it("keeps an empty channel override after clearing a materialized list", async () => {
+    const parsedConfig: Record<string, unknown> = {};
+    const edit = (action: "add" | "remove", entry: string) =>
+      adapter.applyConfigEdit?.({
+        cfg: parsedConfig as OpenClawConfig,
+        parsedConfig,
+        accountId: "default",
+        scope: "dm",
+        action,
+        entry,
+      });
+
+    await edit("add", "dm-admin");
+    await edit("remove", "dm-owner");
+    await edit("remove", "dm-admin");
+
+    expect(parsedConfig).toMatchObject({
+      channels: { demo: { allowFrom: [] } },
+    });
+  });
 });
 
 describe("buildLegacyDmAccountAllowlistAdapter", () => {

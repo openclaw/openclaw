@@ -336,14 +336,9 @@ function applyAccountScopedAllowlistConfigEdit(params: {
   }
 
   if (changed) {
-    // Effective and account-scoped lists need an explicit empty override after their last removal.
-    // Deleting the key would reactivate entries inherited from another config surface.
-    const emptyNeedsOverride = !hasStoredList || resolvedTarget.writeTarget.kind === "account";
-    if (next.length === 0 && !emptyNeedsOverride) {
-      deleteNestedValue(resolvedTarget.target, params.paths.writePath);
-    } else {
-      setNestedValue(resolvedTarget.target, params.paths.writePath, next);
-    }
+    // Keep empty lists explicit: deleting the key can reactivate effective entries inherited
+    // from another config surface, including after an earlier edit materialized that list.
+    setNestedValue(resolvedTarget.target, params.paths.writePath, next);
     // Legacy readers can observe multiple paths, but writes must leave one canonical path.
     for (const path of params.paths.cleanupPaths ?? []) {
       deleteNestedValue(resolvedTarget.target, path);
