@@ -168,7 +168,7 @@ class WearProtocolTest {
     )
 
     var nestedPayload: JsonElement = JsonPrimitive(0)
-    repeat(nesting) {
+    repeat(4_096) {
       nestedPayload = JsonArray(listOf(nestedPayload))
     }
     val deeplyNestedMessage =

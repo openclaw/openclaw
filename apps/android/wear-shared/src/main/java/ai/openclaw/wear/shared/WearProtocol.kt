@@ -4,6 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -122,6 +123,9 @@ object WearProtocolCodec {
 
   fun encode(message: WearMessage): ByteArray {
     requireValid(message)
+    require(hasValidPayloadDepth(message)) {
+      "Wear message exceeds JSON depth ${WearProtocol.MAX_JSON_DEPTH}"
+    }
     val encoded = json.encodeToString(WearMessage.serializer(), message)
     require(!exceedsJsonDepth(encoded)) {
       "Wear message exceeds JSON depth ${WearProtocol.MAX_JSON_DEPTH}"
@@ -132,6 +136,37 @@ object WearProtocolCodec {
       "Wear message exceeds ${WearProtocol.MAX_MESSAGE_BYTES} bytes"
     }
     return bytes
+  }
+
+  private fun hasValidPayloadDepth(message: WearMessage): Boolean {
+    val payloads =
+      when (message) {
+        is WearMessage.Request -> listOf(message.params)
+        is WearMessage.Response -> listOfNotNull(message.result)
+        is WearMessage.Event -> listOfNotNull(message.payload)
+      }
+    return payloads.all { element -> hasValidElementDepth(element, parentDepth = 1) }
+  }
+
+  private fun hasValidElementDepth(
+    element: JsonElement,
+    parentDepth: Int,
+  ): Boolean {
+    val pending = ArrayDeque<Pair<JsonElement, Int>>()
+    pending.addLast(element to parentDepth)
+    while (pending.isNotEmpty()) {
+      val (current, parent) = pending.removeLast()
+      val children =
+        when (current) {
+          is JsonArray -> current
+          is JsonObject -> current.values
+          else -> continue
+        }
+      val depth = parent + 1
+      if (depth > WearProtocol.MAX_JSON_DEPTH) return false
+      children.forEach { child -> pending.addLast(child to depth) }
+    }
+    return true
   }
 
   fun decode(bytes: ByteArray): WearDecodeResult {
