@@ -835,7 +835,7 @@ surfaces:
             coverageIds: [cli.service-install-and-control]
             description: The CLI documents install, status, start, stop, restart, and run flows for managed gateway services.
           - name: Service auth wiring
-            coverageIds: [agents.create, channels.discord-config, config.crestodian-setup]
+            coverageIds: [agents.create, channels.discord-config, config.system-agent-setup]
             description: Gateway service installation documents how auth tokens and other sensitive values are handled.
           - name: Drift and reinstall recovery
             coverageIds: [cli.drift-and-reinstall-recovery]
@@ -1356,7 +1356,7 @@ surfaces:
                 agents.create,
                 agents.instructions,
                 channels.discord-config,
-                config.crestodian-setup,
+                config.system-agent-setup,
                 runtime.first-action,
                 runtime.multi-turn-continuity,
                 runtime.long-context,
@@ -2017,7 +2017,7 @@ surfaces:
             coverageIds: [channels.status-taxonomy-in-channels-list]
             description: Channel status taxonomy in channels list, channels status, and setup status output
           - name: Setup/onboarding flows
-            coverageIds: [agents.create, channels.discord-config, config.crestodian-setup]
+            coverageIds: [agents.create, channels.discord-config, config.system-agent-setup]
             description: Setup/onboarding flows, including first-run channel selection and channel account setup
           - name: Install-on-demand
             coverageIds: [channels.install-on-demand]
@@ -4606,7 +4606,7 @@ surfaces:
             description: Hosted installer and local-prefix install paths on macOS
           - name: Node 24 recommendation
             coverageIds: [macos.node-24-recommendation]
-            description: Node 24 recommendation and Node 22.19+ compatibility floor
+            description: Node 24.15+ recommendation and WAL-reset-safe Node runtime floor
           - name: App-triggered CLI install
             coverageIds: [macos.app-triggered-cli-install]
             description: App-triggered CLI install and runtime discovery
@@ -5423,7 +5423,7 @@ surfaces:
             description: WSL2 and Ubuntu installation requirements.
           - name: Node runtime
             coverageIds: [wsl2.node-runtime]
-            description: Node 24 and Node 22.19+ runtime requirements inside WSL2.
+            description: WAL-reset-safe Node runtime requirements inside WSL2.
           - name: Linux install flow inside WSL2
             coverageIds: [wsl2.linux-install-flow-inside-wsl2]
             description: Linux install and getting-started flow run inside WSL2.

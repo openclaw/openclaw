@@ -17,10 +17,8 @@ import {
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
-import {
-  acknowledgeSessionStateNotices,
-  decodeSessionStateNoticeContextKey,
-} from "../../sessions/session-state-events.js";
+import { acknowledgeSessionStateNotices } from "../../sessions/session-state-events.js";
+import { decodeSessionStateNoticeContextKey } from "../../sessions/session-state-notices.js";
 
 function isCronContextSystemEvent(event: SystemEvent): boolean {
   return event.contextKey?.startsWith("cron:") ?? false;

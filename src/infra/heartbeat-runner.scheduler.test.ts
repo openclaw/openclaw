@@ -11,12 +11,13 @@ import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heart
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-  type RetryableHeartbeatBusySkipReason,
   requestHeartbeat,
-  resetHeartbeatWakeStateForTests,
 } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
+  type RetryableHeartbeatBusySkipReason =
+    | typeof HEARTBEAT_SKIP_CRON_IN_PROGRESS
+    | typeof HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT;
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
   type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
   const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
@@ -169,7 +170,6 @@ describe("startHeartbeatRunner", () => {
   }
 
   afterEach(() => {
-    resetHeartbeatWakeStateForTests();
     resetConfigRuntimeState();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -777,6 +777,64 @@ describe("startHeartbeatRunner", () => {
     }
 
     expect(runSpy).toHaveBeenCalledTimes(3);
+    runner.stop();
+  });
+
+  it("runs a targeted notification wake for an agent without a heartbeat schedule", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:ops:main",
+      heartbeat: { target: "last" },
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expectRunCallFields(runSpy, 0, {
+      agentId: "ops",
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:ops:main",
+      heartbeat: { target: "last" },
+    });
+    runner.stop();
+  });
+
+  it("rejects targeted notification wakes for unconfigured agents", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: { agents: { list: [{ id: "main", heartbeat: { every: "30m" } }] } } as OpenClawConfig,
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:bogus:main",
+      heartbeat: { target: "last" },
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
     runner.stop();
   });
 

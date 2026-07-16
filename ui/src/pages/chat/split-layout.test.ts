@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   closePane,
-  createSinglePaneLayout,
-  createSplitLayout,
   findPane,
   insertPane,
-  nextPaneId,
   normalizeChatSplitLayout,
   panesOf,
   resizeColumns,
@@ -14,6 +11,18 @@ import {
   setPaneSession,
   type ChatSplitLayout,
 } from "./split-layout.ts";
+
+function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {
+  return {
+    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
+    columnWeights: [1],
+    activePaneId: "p1",
+  };
+}
+
+function createSplitLayout(sessionKey: string): ChatSplitLayout {
+  return insertPane(createSinglePaneLayout(sessionKey), "p1", sessionKey, "right");
+}
 
 function threePaneLayout(): ChatSplitLayout {
   return insertPane(createSplitLayout("main"), "p2", "agent:main:second", "down");
@@ -197,7 +206,7 @@ describe("chat split layout", () => {
     ).toBeUndefined();
   });
 
-  it("generates ids after the highest matching numeric suffix", () => {
+  it("inserts after the highest restored pane and column suffix", () => {
     const layout: ChatSplitLayout = {
       columns: [
         {
@@ -212,8 +221,9 @@ describe("chat split layout", () => {
       columnWeights: [1],
       activePaneId: "custom",
     };
-    expect(nextPaneId(layout)).toBe("p15");
+
     const inserted = insertPane(layout, "custom", "c", "right");
+
     expect(inserted.columns.at(1)?.id).toBe("c10");
     expect(inserted.columns.at(1)?.panes.at(0)?.id).toBe("p15");
   });

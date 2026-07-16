@@ -57,32 +57,31 @@ import {
   assertEnterpriseSlackDmPolicy,
   assertEnterpriseSlackPolicyConfig,
   assertNoEnterpriseSlackBindings,
+  resolveSlackIdentityHealth,
   resolveSlackInstallationIdentity,
   type SlackAuthTestIdentity,
 } from "./enterprise-install.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
+import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
+import { createSlackPresenceMonitor, hasSlackPresenceEventsEnabled } from "./presence-monitor.js";
 import {
   createSlackBoltApp,
-  createSlackSocketDisconnectWaiter,
   formatSlackChannelResolved,
   formatSlackUserResolved,
   gracefulStopSlackApp,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
-  resolveSlackSocketShutdownClient,
   startSlackSocketAndWaitForDisconnect,
   type SlackBoltResolvedExports,
 } from "./provider-support.js";
 import {
   formatSlackSocketModeSharedConnectionWarning,
   formatUnknownError,
-  getSocketEmitter,
   isNonRecoverableSlackAuthError,
   registerSlackSocketModeConnectionDiagnostics,
   SLACK_SOCKET_RECONNECT_POLICY,
-  waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
 import { setSlackDefaultSendIdentity } from "./send.runtime.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
@@ -133,7 +132,7 @@ function resolveStableSlackUserAllowlistEntries(entries: string[]): SlackUserRes
   return resolved;
 }
 
-export function formatSlackSocketReconnectMessage(params: {
+function formatSlackSocketReconnectMessage(params: {
   event: string;
   attempt: number;
   delayMs: number;
@@ -143,7 +142,7 @@ export function formatSlackSocketReconnectMessage(params: {
   return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/∞)${suffix}`;
 }
 
-export function formatSlackSocketStartRetryMessage(params: {
+function formatSlackSocketStartRetryMessage(params: {
   attempt: number;
   delayMs: number;
   error: unknown;
@@ -426,6 +425,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     runtime.log?.(warn(authIdentityWarning));
   }
 
+  const identityHealth = resolveSlackIdentityHealth({
+    installationIdentity,
+    botUserId,
+    authTestError,
+    authIdentityWarning,
+  });
+
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
     runtime.error?.(
       `slack token mismatch: bot token app_id=${apiAppId} but app token looks like app_id=${expectedApiAppIdFromAppToken}`,
@@ -480,7 +486,30 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     : undefined;
 
-  const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+  const presenceEventsEnabled = hasSlackPresenceEventsEnabled({
+    account: slackCfg.presenceEvents,
+    channels: slackCfg.channels,
+  });
+  const presenceMonitor =
+    installationIdentity.kind !== "enterprise" && presenceEventsEnabled
+      ? createSlackPresenceMonitor({
+          accountId: account.accountId,
+          accountConfig: slackCfg.presenceEvents,
+          client: app.client.users,
+          cooldownStore: openSlackPresenceCooldownStore(),
+          log: runtime.log,
+          error: runtime.error,
+        })
+      : undefined;
+  if (installationIdentity.kind === "enterprise" && presenceEventsEnabled) {
+    runtime.log?.(warn("slack presence events are unavailable for Enterprise Grid org installs"));
+  }
+  const handleSlackMessage = createSlackMessageHandler({
+    ctx,
+    account,
+    trackEvent,
+    onPrepared: presenceMonitor?.observe,
+  });
   if (
     installationIdentity.kind !== "enterprise" &&
     isSlackAnyNativeApprovalClientEnabled({
@@ -515,6 +544,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     appHomeSlashCommandName,
     trackEvent,
   });
+  presenceMonitor?.start();
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -675,10 +705,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             abortSignal: opts.abortSignal,
             onStarted: () => {
               reconnectAttempts = 0;
-              publishSlackConnectedStatus(opts.setStatus);
+              publishSlackConnectedStatus(opts.setStatus, identityHealth);
               if (!hasLoggedSocketConnected) {
                 hasLoggedSocketConnected = true;
-                runtime.log?.("slack socket mode connected");
+                runtime.log?.(
+                  identityHealth.healthState === "degraded"
+                    ? "slack socket mode connected (degraded identity)"
+                    : "slack socket mode connected",
+                );
               }
             },
           });
@@ -768,6 +802,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    await presenceMonitor?.stop();
     if (slackMode === "relay") {
       setSlackDefaultSendIdentity(account.accountId, undefined);
     }
@@ -778,24 +813,5 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 }
 
-export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
-
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
-
-export const testing = {
-  formatSlackChannelResolved,
-  formatSlackUserResolved,
-  publishSlackConnectedStatus,
-  publishSlackDisconnectedStatus,
-  resolveSlackSocketShutdownClient,
-  gracefulStopSlackApp,
-  resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveSlackBoltInterop,
-  createSlackBoltApp,
-  createSlackSocketDisconnectWaiter,
-  startSlackSocketAndWaitForDisconnect,
-  getSocketEmitter,
-  waitForSlackSocketDisconnect,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

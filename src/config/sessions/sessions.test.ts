@@ -11,13 +11,13 @@ import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps, resolveSessionWorkStartError } from "./lifecycle.js";
 import {
-  resolveExplicitSessionFilePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import { loadSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -29,9 +29,19 @@ import {
   updateSessionStoreEntry,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
+import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
+
+it("merges bounded restart tombstones without evicting fresh-only ids", () => {
+  const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
+
+  expect(mergeRestartRecoveryTerminalRunIds(existing, [...existing.slice(1), "run-new"])).toEqual([
+    ...existing.slice(1),
+    "run-new",
+  ]);
+  expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
+});
 
 function requireWriteTextAtomicCall(
   spy: { mock: { calls: WriteTextAtomicCall[] } },
@@ -74,16 +84,6 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
-  });
-
-  it("rejects explicit sessionFile paths without derived fallback", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    expect(() =>
-      resolveExplicitSessionFilePath("/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl", {
-        sessionsDir,
-      }),
-    ).toThrow(/within sessions directory/);
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {
@@ -456,7 +456,13 @@ describe("session store writer queue", () => {
           channel: "discord",
           to: [],
         },
+        restartRecoveryDeliveryMediaUrls: "not-an-array",
+        restartRecoveryDisableMessageTool: "yes",
+        restartRecoverySuppressTextDelivery: "yes",
         restartRecoveryDeliveryRunId: 123,
+        restartRecoveryDeliverySourceRunId: 123,
+        restartRecoveryTerminalDeliveryEvidence: [{ runId: 123, payloads: "bad" }],
+        restartRecoveryTerminalRunIds: [123, "", {}],
       },
       "agent:main:good-pending": {
         sessionId: "s-good-pending",
@@ -480,7 +486,40 @@ describe("session store writer queue", () => {
           accountId: "Main",
           threadId: "reply-1",
         },
+        restartRecoveryDeliveryMediaUrls: [" /tmp/proof.png ", "", "/tmp/proof.png"],
+        restartRecoveryDisableMessageTool: true,
+        restartRecoverySuppressTextDelivery: true,
         restartRecoveryDeliveryRunId: "run-1",
+        restartRecoveryDeliverySourceRunId: "source-run-1",
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            runId: " terminal-1 ",
+            captured: true,
+            payloads: [{ visible: false }, { visible: true, mediaUrls: [" /tmp/proof.png "] }],
+            deliveryStatus: {
+              status: "partial_failed",
+              payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+            },
+            messagingToolSentTargets: [
+              {
+                provider: " Discord ",
+                to: " channel:123 ",
+                threadId: 42,
+                mediaUrls: [" /tmp/proof.png "],
+                visible: true,
+              },
+              {
+                provider: " Discord ",
+                to: " channel:empty ",
+                visible: false,
+              },
+            ],
+            messagingToolSentTargetsTruncated: true,
+            messagingToolAggregateEvidenceUnaccounted: true,
+            restartUnsafeSideEffectsDetected: true,
+          },
+        ],
+        restartRecoveryTerminalRunIds: [" terminal-1 ", "terminal-2", "terminal-1", null],
       },
     } as unknown as Record<string, SessionEntry>);
 
@@ -501,7 +540,13 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(bad?.restartRecoveryDeliveryMediaUrls).toBeUndefined();
+    expect(bad?.restartRecoveryDisableMessageTool).toBeUndefined();
+    expect(bad?.restartRecoverySuppressTextDelivery).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(bad?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
+    expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
 
     expect(good).toMatchObject({
       pendingFinalDelivery: true,
@@ -523,7 +568,40 @@ describe("session store writer queue", () => {
         accountId: "main",
         threadId: "reply-1",
       },
+      restartRecoveryDeliveryMediaUrls: ["/tmp/proof.png"],
+      restartRecoveryDisableMessageTool: true,
+      restartRecoverySuppressTextDelivery: true,
       restartRecoveryDeliveryRunId: "run-1",
+      restartRecoveryDeliverySourceRunId: "source-run-1",
+      restartRecoveryTerminalDeliveryEvidence: [
+        {
+          runId: "terminal-1",
+          captured: true,
+          payloads: [{ visible: false }, { visible: true, mediaUrls: ["/tmp/proof.png"] }],
+          deliveryStatus: {
+            status: "partial_failed",
+            payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+          },
+          messagingToolSentTargets: [
+            {
+              provider: "Discord",
+              to: "channel:123",
+              threadId: "42",
+              mediaUrls: ["/tmp/proof.png"],
+              visible: true,
+            },
+            {
+              provider: "Discord",
+              to: "channel:empty",
+              visible: false,
+            },
+          ],
+          messagingToolSentTargetsTruncated: true,
+          messagingToolAggregateEvidenceUnaccounted: true,
+          restartUnsafeSideEffectsDetected: true,
+        },
+      ],
+      restartRecoveryTerminalRunIds: ["terminal-2", "terminal-1"],
     });
   });
 
@@ -985,36 +1063,6 @@ describe("session store writer queue", () => {
     expect(merged.sessionFile).toBe("/tmp/openclaw/sessions/custom-transcript.jsonl");
   });
 
-  it("caps future updatedAt values at the session merge boundary", () => {
-    const now = 1_000;
-    const merged = mergeSessionEntryWithPolicy(
-      {
-        sessionId: "sess-future",
-        updatedAt: now + 10_000,
-      },
-      {
-        updatedAt: now + 20_000,
-      },
-      { now },
-    );
-
-    expect(merged.updatedAt).toBe(now);
-  });
-
-  it("caps future updatedAt values while preserving activity", () => {
-    const now = 1_000;
-    const merged = mergeSessionEntryWithPolicy(
-      {
-        sessionId: "sess-preserve-future",
-        updatedAt: now + 10_000,
-      },
-      {},
-      { now, policy: "preserve-activity" },
-    );
-
-    expect(merged.updatedAt).toBe(now);
-  });
-
   it("normalizes orphan modelProvider fields at store write boundary", async () => {
     const key = "agent:main:orphan-provider";
     const { storePath } = await makeTmpStore({
@@ -1204,3 +1252,4 @@ describe("resolveAndPersistSessionFile", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

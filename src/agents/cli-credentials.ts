@@ -38,7 +38,7 @@ let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
 
 /** Clears in-memory CLI credential caches for isolated tests. */
-export function resetCliCredentialCachesForTest(): void {
+function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
   minimaxCliCache = null;
@@ -55,6 +55,7 @@ export type ClaudeCliCredential =
       expires: number;
       subscriptionType?: string;
       rateLimitTier?: string;
+      email?: string;
     }
   | {
       type: "token";
@@ -63,6 +64,7 @@ export type ClaudeCliCredential =
       expires: number;
       subscriptionType?: string;
       rateLimitTier?: string;
+      email?: string;
     };
 
 /** Credential shape parsed from Codex CLI storage. */
@@ -77,7 +79,7 @@ export type CodexCliCredential = {
 };
 
 /** Credential shape parsed from MiniMax portal CLI storage. */
-export type MiniMaxCliCredential = {
+type MiniMaxCliCredential = {
   type: "oauth";
   provider: "minimax-portal";
   access: string;
@@ -460,8 +462,37 @@ function readClaudeCliKeychainCredentials(
   }
 }
 
+// The CLI login flow writes the account identity to the config file next to
+// the credential store, so the pair describes one login. Capturing it here
+// keeps usage surfaces from re-reading ambient config at fetch time, where a
+// later account switch could mislabel another credential's quota.
+function readClaudeCliAccountEmail(homeDir?: string): string | undefined {
+  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
+  const raw = loadJsonFile(path.join(baseDir, ".claude.json"));
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const account = (raw as { oauthAccount?: unknown }).oauthAccount;
+  if (!account || typeof account !== "object") {
+    return undefined;
+  }
+  const email = (account as { emailAddress?: unknown }).emailAddress;
+  return typeof email === "string" && email.trim() ? email.trim() : undefined;
+}
+
+function withClaudeAccountEmail(
+  cliLogin: ClaudeCliCredential | null,
+  homeDir?: string,
+): ClaudeCliCredential | null {
+  if (!cliLogin) {
+    return null;
+  }
+  const email = readClaudeCliAccountEmail(homeDir);
+  return email ? { ...cliLogin, email } : cliLogin;
+}
+
 /** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
-export function readClaudeCliCredentials(options?: {
+function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
   homeDir?: string;
@@ -474,7 +505,7 @@ export function readClaudeCliCredentials(options?: {
       log.info("read anthropic credentials from claude cli keychain", {
         type: keychainCreds.type,
       });
-      return keychainCreds;
+      return withClaudeAccountEmail(keychainCreds, options?.homeDir);
     }
   }
 
@@ -485,7 +516,10 @@ export function readClaudeCliCredentials(options?: {
   }
 
   const data = raw as Record<string, unknown>;
-  return parseClaudeCliOauthCredential(data.claudeAiOauth);
+  return withClaudeAccountEmail(
+    parseClaudeCliOauthCredential(data.claudeAiOauth),
+    options?.homeDir,
+  );
 }
 
 /** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */
@@ -519,7 +553,7 @@ export function readClaudeCliCredentialsCached(options?: {
 }
 
 /** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
-export function readCodexCliCredentials(options?: {
+function readCodexCliCredentials(options?: {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
@@ -648,4 +682,11 @@ export function readGeminiCliCredentialsCached(options?: {
     },
     readSourceFingerprint: () => readFileMtimeMs(credPath),
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliCredentialsTestApi")] = {
+    readCodexAuth: readCodexCliCredentials,
+    resetCaches: resetCliCredentialCachesForTest,
+  };
 }

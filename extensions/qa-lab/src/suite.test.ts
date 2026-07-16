@@ -7,7 +7,7 @@ import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summa
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
-import { qaSuiteProgressTesting, runQaFlowSuite, runQaScenarioWithFlakeRetry } from "./suite.js";
+import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -83,7 +83,7 @@ describe("qa suite", () => {
     expect(startLab).not.toHaveBeenCalled();
   });
 
-  it("keeps metadata-only live channel drivers on the canonical QA transport", async () => {
+  it("keeps metadata-only live channel drivers on the shared QA transport", async () => {
     const create = vi.fn();
 
     await expect(
@@ -97,6 +97,45 @@ describe("qa suite", () => {
     ).resolves.toMatchObject({ adapter: { id: "qa-channel" } });
 
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("records live transport preparation as the first shared flow step", async () => {
+    const prepareFlow = vi.fn(async () => {
+      throw new Error("setup failed");
+    });
+    const scenario = makeQaSuiteTestScenario("matrix-preparation-failure", {
+      channel: "matrix",
+      config: { expected: "value" },
+    });
+    if (scenario.execution.kind !== "flow") {
+      throw new Error("expected flow scenario");
+    }
+    scenario.execution.timeoutMs = 45_000;
+    const env = {
+      gateway: { baseUrl: "http://127.0.0.1:18789" },
+      outputDir: "/tmp/qa-output",
+      transport: { label: "Matrix live", prepareFlow },
+    } as unknown as Parameters<typeof qaSuiteProgressTesting.createScenarioStepRunner>[0];
+    const run = qaSuiteProgressTesting.createScenarioStepRunner(env, scenario, {});
+    const scenarioStep = vi.fn(async () => "not reached");
+
+    await expect(
+      run("Matrix preparation", [{ name: "Scenario", run: scenarioStep }]),
+    ).resolves.toEqual({
+      name: "Matrix preparation",
+      status: "fail",
+      steps: [{ name: "Prepare Matrix live", status: "fail", details: "setup failed" }],
+      details: "setup failed",
+    });
+
+    expect(prepareFlow).toHaveBeenCalledWith({
+      config: { expected: "value" },
+      gateway: env.gateway,
+      outputDir: "/tmp/qa-output",
+      timeoutMs: 45_000,
+      waitForConfigRestartSettle: expect.any(Function),
+    });
+    expect(scenarioStep).not.toHaveBeenCalled();
   });
 
   it("uses a contributed live adapter when its channel is selected", async () => {
@@ -476,8 +515,25 @@ describe("qa suite", () => {
         },
       });
 
+      const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
+        run?: {
+          channelCapabilityMatrixPath?: string;
+          channelDriverSmokePath?: string;
+        };
+      };
+      const capabilityMatrixPath = summary.run?.channelCapabilityMatrixPath;
+      const smokeArtifactPath = summary.run?.channelDriverSmokePath;
+      if (typeof capabilityMatrixPath !== "string" || typeof smokeArtifactPath !== "string") {
+        throw new Error("Crabline generation artifact paths missing from QA summary.");
+      }
+      const artifactGenerationDirectory = path.dirname(capabilityMatrixPath);
+      expect(path.dirname(artifactGenerationDirectory)).toBe(".crabline-smoke-artifacts");
+      expect(path.basename(artifactGenerationDirectory)).toMatch(/^generation-[^/\\]+$/u);
+      expect(path.basename(capabilityMatrixPath)).toBe("crabline-fake-provider-capabilities.json");
+      expect(path.dirname(smokeArtifactPath)).toBe(artifactGenerationDirectory);
+      expect(path.basename(smokeArtifactPath)).toBe("crabline-fake-provider-smoke.json");
       const matrix = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-fake-provider-capabilities.json"), "utf8"),
+        await fs.readFile(path.resolve(outputDir, capabilityMatrixPath), "utf8"),
       ) as {
         report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
       };
@@ -486,7 +542,7 @@ describe("qa suite", () => {
         [...CRABLINE_SERVER_CHANNELS].toSorted(),
       );
       const smoke = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
+        await fs.readFile(path.resolve(outputDir, smokeArtifactPath), "utf8"),
       ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
       expect(smoke.smoke?.result).toMatchObject({ ok: true, provider: "telegram" });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
@@ -505,19 +561,24 @@ describe("qa suite", () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-generation-");
     const capabilityMatrixPath = path.join(
       outputDir,
-      "crabline-generations",
-      "generation-1",
+      ".crabline-smoke-artifacts",
+      "generation-11111111-1111-4111-8111-111111111111",
       "capabilities.json",
     );
     const smokeArtifactPath = path.join(
       outputDir,
-      "crabline-generations",
-      "generation-1",
+      ".crabline-smoke-artifacts",
+      "generation-11111111-1111-4111-8111-111111111111",
       "smoke.json",
+    );
+    const providerReadinessArtifactPath = path.join(
+      path.dirname(smokeArtifactPath),
+      "provider-readiness.json",
     );
     await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
     await fs.writeFile(capabilityMatrixPath, "authoritative capabilities\n", "utf8");
     await fs.writeFile(smokeArtifactPath, "authoritative smoke\n", "utf8");
+    await fs.writeFile(providerReadinessArtifactPath, "authoritative provider readiness\n", "utf8");
 
     const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
       outputDir,
@@ -547,12 +608,22 @@ describe("qa suite", () => {
         capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
+        providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
         smokeArtifactPath: "crabline-fake-provider-smoke.json",
       },
       runCrablineChannelDriverSmoke: vi.fn(async () => ({
+        artifactPointerPath: path.join(outputDir, ".crabline-smoke-artifacts", "current.json"),
         capabilityMatrixPath,
         capabilityReport: {},
-        manifestPath: path.join(outputDir, "crabline-generations", "generation-1", "manifest.json"),
+        generation: "generation-11111111-1111-4111-8111-111111111111",
+        manifestPath: path.join(
+          outputDir,
+          ".crabline-smoke-artifacts",
+          "generation-11111111-1111-4111-8111-111111111111",
+          "manifest.json",
+        ),
+        providerReadiness: {},
+        providerReadinessArtifactPath,
         smoke: {},
         smokeArtifactPath,
       })),
@@ -562,6 +633,9 @@ describe("qa suite", () => {
       "authoritative capabilities\n",
     );
     await expect(fs.readFile(smokeArtifactPath, "utf8")).resolves.toBe("authoritative smoke\n");
+    await expect(fs.readFile(providerReadinessArtifactPath, "utf8")).resolves.toBe(
+      "authoritative provider readiness\n",
+    );
     await expect(
       fs.access(path.join(outputDir, "crabline-fake-provider-capabilities.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -588,8 +662,10 @@ describe("qa suite", () => {
       channelCapabilityMatrixPath: capabilityMatrixPath,
       channelDriverSmokePath: smokeArtifactPath,
     });
-    expect(artifacts.report).toContain(`Channel capability report: ${capabilityMatrixPath}.`);
-    expect(artifacts.report).toContain(`Channel driver smoke: ${smokeArtifactPath}.`);
+    expect(artifacts.report).toContain(`Generation capability filename: ${capabilityMatrixPath}.`);
+    expect(artifacts.report).toContain(
+      `Generation provider-readiness filename: ${providerReadinessArtifactPath}.`,
+    );
     expect(artifacts.report).not.toContain("crabline-fake-provider-capabilities.json");
     expect(artifacts.report).not.toContain("crabline-fake-provider-smoke.json");
   });
@@ -785,41 +861,5 @@ describe("qa suite", () => {
         forcedRuntime: "openclaw",
       }),
     ).toBe("mock-openai/gpt-5.6-luna");
-  });
-});
-
-describe("runQaScenarioWithFlakeRetry", () => {
-  const failResult = {
-    name: "s",
-    status: "fail" as const,
-    steps: [],
-    details: "timed out after 20000ms",
-  };
-  const passResult = { name: "s", status: "pass" as const, steps: [], details: "ok" };
-
-  it("returns a first-attempt pass without retrying", async () => {
-    const run = vi.fn(async () => passResult);
-    const onRetry = vi.fn();
-    await expect(runQaScenarioWithFlakeRetry(run, onRetry)).resolves.toEqual(passResult);
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(onRetry).not.toHaveBeenCalled();
-  });
-
-  it("retries one failure and annotates the retried pass", async () => {
-    const run = vi.fn(async () => (run.mock.calls.length === 1 ? failResult : passResult));
-    const onRetry = vi.fn();
-    const result = await runQaScenarioWithFlakeRetry(run, onRetry);
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(result.status).toBe("pass");
-    expect(result.details).toContain("passed on retry");
-    expect(result.details).toContain("timed out after 20000ms");
-  });
-
-  it("keeps the first failure diagnostics when the retry also fails", async () => {
-    const run = vi.fn(async () => failResult);
-    const result = await runQaScenarioWithFlakeRetry(run);
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(result).toEqual(failResult);
   });
 });

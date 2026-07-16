@@ -6,6 +6,7 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Result } from "@openclaw/normalization-core/result";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -142,7 +143,7 @@ type ToolSearchDirectoryIntent = {
 
 type ToolDirectoryFamily = "memory" | "web";
 
-export type ToolSearchCatalogSession = {
+type ToolSearchCatalogSession = {
   entries: ToolSearchCatalogEntry[];
   searchCount: number;
   describeCount: number;
@@ -161,13 +162,7 @@ type CodeModeChildMessage =
   | { type: "log"; items?: unknown[] }
   | { type: "bridge"; id?: unknown; method?: unknown; args?: unknown };
 
-type CodeModeBridgeResultMessage = {
-  type: "bridge-result";
-  id: string;
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-};
+type CodeModeBridgeResultMessage = { type: "bridge-result"; id: string } & Result<unknown, string>;
 
 const TOOL_SEARCH_CODE_MODE_CHILD_SOURCE = String.raw`
 import vm from "node:vm";
@@ -2398,7 +2393,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
   ];
 }
 
-export const testing = {
+const testing = {
   sessionCatalogs,
   reusableCatalogSnapshots,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
@@ -2418,3 +2413,8 @@ export const testing = {
   appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolSearchTestApi")] = testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

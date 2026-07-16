@@ -15,7 +15,10 @@ import type {
 } from "./src/app-server/models.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 
+// `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
+// New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
+const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",
@@ -34,6 +37,15 @@ type CodexAppServerAgentHarness = AgentHarness & {
     params: AgentHarnessCompactParams,
   ): Promise<AgentHarnessCompactResult | undefined>;
 };
+
+async function disposeSharedCodexAppServerClients(): Promise<void> {
+  const dispose = (
+    globalThis as typeof globalThis & {
+      [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
+    }
+  )[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER];
+  await dispose?.();
+}
 
 /**
  * Creates the Codex app-server harness used for attempts, side questions,
@@ -77,6 +89,12 @@ export function createCodexAppServerAgentHarness(options: {
           await import("./src/app-server/runtime-artifact.js");
         return validateCodexAppServerRuntimeArtifact(binding);
       },
+    },
+    fetchUsageSnapshot: async (ctx) => {
+      const { fetchCodexAppServerUsageSnapshot } = await import("./src/app-server/usage.js");
+      return await fetchCodexAppServerUsageSnapshot(ctx, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
     },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
@@ -194,11 +212,7 @@ export function createCodexAppServerAgentHarness(options: {
         }
       }
     },
-    dispose: async () => {
-      const { clearSharedCodexAppServerClientAndWait } =
-        await import("./src/app-server/shared-client.js");
-      await clearSharedCodexAppServerClientAndWait();
-    },
+    dispose: disposeSharedCodexAppServerClients,
   };
   return harness;
 }

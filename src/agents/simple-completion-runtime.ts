@@ -40,10 +40,8 @@ import {
 } from "./model-selection.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "./provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "./provider-secret-egress.js";
+import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
@@ -180,29 +178,6 @@ async function setRuntimeApiKeyForCompletion(params: {
   workspaceDir?: string;
   profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
-  if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
-    const copilotToken = await resolveCopilotApiToken({
-      githubToken: unwrapSecretSentinelsForProviderEgress(
-        params.apiKey,
-        "GitHub Copilot runtime auth exchange",
-      ),
-      config: params.cfg,
-    });
-    const protectedAuth = protectPreparedProviderRuntimeAuth({
-      provider: params.model.provider,
-      preparedAuth: {
-        apiKey: copilotToken.token,
-        baseUrl: copilotToken.baseUrl,
-      },
-    });
-    const runtimeApiKey = protectedAuth?.apiKey ?? copilotToken.token;
-    params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
-    return {
-      apiKey: runtimeApiKey,
-      model: { ...params.model, baseUrl: copilotToken.baseUrl },
-    };
-  }
   const preparedAuth = protectPreparedProviderRuntimeAuth({
     provider: params.model.provider,
     preparedAuth: await prepareProviderRuntimeAuth({
@@ -217,10 +192,7 @@ async function setRuntimeApiKeyForCompletion(params: {
         provider: params.model.provider,
         modelId: params.model.id,
         model: params.model,
-        apiKey: unwrapSecretSentinelsForProviderEgress(
-          params.apiKey,
-          "provider runtime auth exchange",
-        ),
+        apiKey: params.apiKey,
         authMode: params.authMode,
         profileId: params.profileId,
       },
@@ -255,6 +227,7 @@ export async function prepareSimpleCompletionModel(params: {
   bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
+  const workspaceDir = resolveSimpleCompletionModelResolverWorkspace(params.modelResolver);
   const resolved =
     params.useAsyncModelResolution || params.skipAgentDiscovery
       ? await (params.modelResolver ?? resolveModelAsync)(
@@ -267,11 +240,13 @@ export async function prepareSimpleCompletionModel(params: {
               ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
               : {}),
             ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
+            workspaceDir,
             authProfileId: params.profileId,
             preferredProfile: params.preferredProfile,
           },
         )
       : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+          workspaceDir,
           authProfileId: params.profileId,
           preferredProfile: params.preferredProfile,
         });
@@ -294,6 +269,7 @@ export async function prepareSimpleCompletionModel(params: {
       model: resolved.model,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      workspaceDir,
       profileId: params.profileId,
       preferredProfile: params.preferredProfile,
       ...(authStore ? { store: authStore } : {}),
@@ -319,7 +295,7 @@ export async function prepareSimpleCompletionModel(params: {
     };
   }
 
-  let resolvedApiKey = rawApiKey;
+  let authValue = rawApiKey;
   let resolvedModel = resolved.model;
   if (rawApiKey) {
     const runtimeCredential = await setRuntimeApiKeyForCompletion({
@@ -328,16 +304,16 @@ export async function prepareSimpleCompletionModel(params: {
       apiKey: rawApiKey,
       authMode: auth.mode,
       cfg: params.cfg,
-      workspaceDir: params.agentDir,
+      workspaceDir: workspaceDir ?? params.agentDir,
       profileId: auth.profileId,
     });
-    resolvedApiKey = runtimeCredential.apiKey;
+    authValue = runtimeCredential.apiKey;
     resolvedModel = runtimeCredential.model;
   }
 
   const resolvedAuth: ResolvedProviderAuth = {
     ...auth,
-    apiKey: resolvedApiKey,
+    apiKey: authValue,
   };
   const profileCredential = params.profileId ? authStore?.profiles[params.profileId] : undefined;
   const sourceAuthFingerprint = params.bindAuthOwner

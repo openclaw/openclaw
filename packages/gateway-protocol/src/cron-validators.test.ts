@@ -74,6 +74,32 @@ describe("cron protocol validators", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { trigger: null } })).toBe(true);
   });
 
+  it("accepts toolsAllow on systemEvent payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        payload: {
+          kind: "systemEvent",
+          text: "tick",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "systemEvent",
+            toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects invalid trigger scripts and additional properties", () => {
     expect(validateCronAddParams({ ...minimalAddParams, trigger: { script: "" } })).toBe(false);
     expect(
@@ -361,8 +387,15 @@ describe("cron protocol validators", () => {
   });
 
   it("accepts run params mode for id and jobId selectors", () => {
-    expect(validateCronRunParams({ id: "job-1", mode: "force" })).toBe(true);
+    expect(
+      validateCronRunParams({
+        id: "job-1",
+        mode: "force",
+        expectedProcessInstanceId: "process-1",
+      }),
+    ).toBe(true);
     expect(validateCronRunParams({ jobId: "job-2", mode: "due" })).toBe(true);
+    expect(validateCronRunParams({ id: "job-1", expectedProcessInstanceId: "" })).toBe(false);
   });
 
   it("accepts list paging/filter/sort params", () => {
@@ -421,6 +454,7 @@ describe("cron protocol validators", () => {
     expect(
       validateCronRunsParams({
         scope: "all",
+        agentId: "ops",
         limit: 25,
         statuses: ["ok", "error"],
         deliveryStatuses: ["delivered", "not-requested"],
@@ -428,6 +462,7 @@ describe("cron protocol validators", () => {
         sortDir: "desc",
       }),
     ).toBe(true);
+    expect(validateCronRunsParams({ scope: "all", agentId: "" })).toBe(false);
     expect(
       validateCronRunsParams({
         scope: "job",

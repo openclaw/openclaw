@@ -400,7 +400,7 @@ export function buildQaRuntimeEnv(params: {
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
 }
 
-export function buildQaForcedRuntimeEnvPatch(params: {
+function buildQaForcedRuntimeEnvPatch(params: {
   forcedRuntime?: RuntimeId;
   providerMode: QaProviderMode;
   providerBaseUrl?: string;
@@ -1603,4 +1603,4 @@ export async function startQaGatewayChild(params: {
     throw new Error(message, { cause: error });
   }
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

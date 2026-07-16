@@ -94,6 +94,25 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("keeps extracted test entries in their owner configs", () => {
+    expect(buildVitestRunPlans(["src/agents/openai-transport-stream.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/openai-transport-stream.test.ts"],
+        watchMode: false,
+      },
+    ]);
+    expect(buildVitestRunPlans(["src/auto-reply/reply/dispatch-from-config.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/reply/dispatch-from-config.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes top-level repo tests to the contracts config", () => {
     expect(buildVitestRunPlans(["test/appcast.test.ts"])).toEqual([
       {
@@ -1222,3 +1241,4 @@ describe("test-projects args", () => {
     ).toThrow("watch mode with mixed test suites is not supported");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

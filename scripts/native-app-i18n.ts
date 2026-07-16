@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
@@ -87,14 +88,14 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
-const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
+  /(?:\bString\s*\(\s*localized:|\bAttributedString\s*\(\s*localized:|\bLocalizedString(?:Key|Resource)\s*\(|(?:\b[A-Za-z_]\w*)?\.localized(?:Format)?\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_LOCALIZED_STRING_MULTILINE_CALLS =
-  /\b(?:String\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
+  /\b(?:String\s*\(\s*localized:|AttributedString\s*\(\s*localized:|LocalizedString(?:Key|Resource)\s*\()\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
@@ -1185,31 +1186,6 @@ async function readNativeI18nInventory(): Promise<{
   return { entries: inventory.entries as NativeI18nEntry[], raw };
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  limit: number,
-  run: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results = Array<R>(values.length);
-  let nextIndex = 0;
-  const workerCount = Math.min(limit, values.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      for (;;) {
-        const index = nextIndex;
-        nextIndex += 1;
-        if (index >= values.length) {
-          return;
-        }
-        results[index] = await run(
-          expectDefined(values[index], `native i18n concurrency input at index ${index}`),
-        );
-      }
-    }),
-  );
-  return results;
-}
-
 export async function collectNativeI18nEntries(
   previousEntries?: readonly NativeI18nEntry[],
 ): Promise<NativeI18nEntry[]> {
@@ -1225,14 +1201,17 @@ export async function collectNativeI18nEntries(
       surface,
     })),
   );
-  const sources = await mapWithConcurrency(
+  const sources = await pMap(
     filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
-    NATIVE_SOURCE_READ_CONCURRENCY,
     async ({ filePath, surface }) => ({
       repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
       source: await readFile(filePath, "utf8"),
       surface,
     }),
+    {
+      concurrency: NATIVE_SOURCE_READ_CONCURRENCY,
+      stopOnError: true,
+    },
   );
   const typedSources: Array<{
     repoPath: string;
@@ -1550,14 +1529,17 @@ export async function syncNativeLocale(
     // The first refresh creates the locale artifact.
   }
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
+  const reusableById = new Map(
+    entries.map((entry) => {
+      const exact = previousById.get(entry.id);
+      const translated =
+        exact?.source === entry.source && exact.translated.trim() ? exact.translated : undefined;
+      return [entry.id, translated] as const;
+    }),
+  );
   const glossaryChanged = previous.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => {
-      const current = previousById.get(entry.id);
-      return (
-        glossaryChanged || !current || current.source !== entry.source || !current.translated.trim()
-      );
-    })
+    .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
@@ -1573,8 +1555,7 @@ export async function syncNativeLocale(
     entries: entries.map((entry) => ({
       id: entry.id,
       source: entry.source,
-      translated:
-        translated.get(entry.id) ?? previousById.get(entry.id)?.translated ?? entry.source,
+      translated: translated.get(entry.id) ?? reusableById.get(entry.id) ?? entry.source,
     })),
   };
   try {

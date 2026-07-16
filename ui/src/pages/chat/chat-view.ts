@@ -3,9 +3,12 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequest,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ChatSendShortcut } from "../../app/settings.ts";
+import type { ChatFollowUpMode, ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,13 +21,13 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
+import { handleChatAttachmentDrop } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   renderBackgroundTasksToggle,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import {
-  handleChatAttachmentDrop,
   isChatRunWorking,
   renderChatComposer,
   resetChatComposerState,
@@ -45,6 +48,7 @@ import type {
 } from "./components/chat-sidebar.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
+  type ChatTranscriptController,
   isChatThreadSearchOpen,
   renderChatPinnedMessages,
   renderChatSearchBar,
@@ -65,8 +69,10 @@ function isFileDrag(dataTransfer: DataTransfer | null): boolean {
 }
 
 export type ChatProps = {
+  transcript: ChatTranscriptController;
   paneId: string;
   sessionKey: string;
+  announceTranscript?: boolean;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
   showThinking: boolean;
@@ -80,8 +86,6 @@ export type ChatProps = {
   messages: unknown[];
   historyPagination?: {
     loading: boolean;
-    manualFallback: boolean;
-    onLoadOlder: () => void;
   };
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
@@ -122,6 +126,7 @@ export type ChatProps = {
   chatMessageMaxWidth?: string | null;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
+  followUpMode?: ChatFollowUpMode;
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -152,6 +157,7 @@ export type ChatProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
+  onHistoryIntent?: (event: Event) => void;
   /** Sends a detached /btw side question (selection popup or side-chat
    * follow-up). `displayQuestion` overrides the pending-turn display when the
    * command embeds carried follow-up context; `onSendRejected` lets the panel
@@ -198,6 +204,7 @@ export type ChatProps = {
   onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   pullRequests?: ControlUiSessionPullRequest[];
+  pullRequestsBranch?: ControlUiSessionBranch;
   pullRequestsRateLimited?: boolean;
   pullRequestsExpanded?: boolean;
   onExpandPullRequests?: () => void;
@@ -214,6 +221,7 @@ export function renderChat(props: ChatProps) {
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
   const sidebarStacked = props.sidebarStacked === true;
+  const workspaceCollapsed = props.sessionWorkspace?.collapsed !== false;
   const workspaceDockBottom = Boolean(
     props.sessionWorkspace &&
     (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
@@ -254,57 +262,62 @@ export function renderChat(props: ChatProps) {
     }
   };
 
-  const thread = renderChatThread({
-    paneId: props.paneId,
-    sessionKey: props.sessionKey,
-    loading: props.loading,
-    historyPagination: props.historyPagination,
-    messages: props.messages,
-    toolMessages: props.toolMessages,
-    streamSegments: props.streamSegments,
-    stream: props.stream,
-    streamStartedAt: props.streamStartedAt,
-    queue: props.queue,
-    showThinking: props.showThinking,
-    showToolCalls: props.showToolCalls,
-    runActive: Boolean(props.canAbort),
-    runWorking: isChatRunWorking(props),
-    sessions: props.sessions,
-    sessionHost: props.sessionHost,
-    assistantName: props.assistantName,
-    assistantAvatar: props.assistantAvatar,
-    assistantAvatarUrl: props.assistantAvatarUrl,
-    userName: props.userName,
-    userAvatar: props.userAvatar,
-    basePath: props.basePath,
-    fullMessageAgentId: props.fullMessageAgentId,
-    localMediaPreviewRoots: props.localMediaPreviewRoots,
-    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
-    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-    embedSandboxMode: props.embedSandboxMode,
-    allowExternalEmbedUrls: props.allowExternalEmbedUrls,
-    autoExpandToolCalls: props.autoExpandToolCalls,
-    realtimeTalkConversation: props.realtimeTalkConversation,
-    onOpenSidebar: props.onOpenSidebar,
-    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
-    onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
-    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-    onRequestUpdate: requestUpdate,
-    onScrollToBottom: props.onScrollToBottom,
-    onChatScroll: props.onChatScroll,
-    onDraftChange: props.onDraftChange,
-    getDraft: props.getDraft,
-    onSend: props.onSend,
-    onSetReply: props.onSetReply,
-    // Archived/non-composable sessions must not offer selection actions:
-    // withholding the callback keeps the popup from rendering at all.
-    onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
-    onOpenSession: props.onSessionSelect,
-    onFocusComposer: () =>
-      chatSection
-        ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
-        ?.focus({ preventScroll: true }),
-  });
+  const thread = renderChatThread(
+    {
+      paneId: props.paneId,
+      sessionKey: props.sessionKey,
+      announceTranscript: props.announceTranscript,
+      loading: props.loading,
+      historyPagination: props.historyPagination,
+      messages: props.messages,
+      toolMessages: props.toolMessages,
+      streamSegments: props.streamSegments,
+      stream: props.stream,
+      streamStartedAt: props.streamStartedAt,
+      queue: props.queue,
+      showThinking: props.showThinking,
+      showToolCalls: props.showToolCalls,
+      runActive: Boolean(props.canAbort),
+      runWorking: isChatRunWorking(props),
+      sessions: props.sessions,
+      sessionHost: props.sessionHost,
+      assistantName: props.assistantName,
+      assistantAvatar: props.assistantAvatar,
+      assistantAvatarUrl: props.assistantAvatarUrl,
+      userName: props.userName,
+      userAvatar: props.userAvatar,
+      basePath: props.basePath,
+      fullMessageAgentId: props.fullMessageAgentId,
+      localMediaPreviewRoots: props.localMediaPreviewRoots,
+      assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
+      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+      embedSandboxMode: props.embedSandboxMode,
+      allowExternalEmbedUrls: props.allowExternalEmbedUrls,
+      autoExpandToolCalls: props.autoExpandToolCalls,
+      realtimeTalkConversation: props.realtimeTalkConversation,
+      onOpenSidebar: props.onOpenSidebar,
+      onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+      onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
+      onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestUpdate: requestUpdate,
+      onChatScroll: props.onChatScroll,
+      onHistoryIntent: props.onHistoryIntent,
+      onDraftChange: props.onDraftChange,
+      getDraft: props.getDraft,
+      onSend: props.onSend,
+      onSetReply: props.onSetReply,
+      // Archived/non-composable sessions must not offer selection actions:
+      // withholding the callback keeps the popup from rendering at all.
+      onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
+      onOpenSession: props.onSessionSelect,
+      backgroundTasks: props.backgroundTasks,
+      onFocusComposer: () =>
+        chatSection
+          ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+          ?.focus({ preventScroll: true }),
+    },
+    props.transcript,
+  );
 
   const chatColumnFooter = renderChatComposer({
     paneId: props.paneId,
@@ -326,6 +339,7 @@ export function renderChat(props: ChatProps) {
     providerUsage: props.providerUsage,
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
+    followUpMode: props.followUpMode,
     attachments: props.attachments,
     getAttachments: props.getAttachments,
     replyTarget: props.replyTarget,
@@ -463,7 +477,7 @@ export function renderChat(props: ChatProps) {
         requestUpdate,
       )}
       <div
-        class="chat-workbench ${props.sessionWorkspace?.collapsed
+        class="chat-workbench ${workspaceCollapsed
           ? "chat-workbench--workspace-collapsed"
           : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${tasksOpen &&
         !tasksDockBottom
@@ -550,6 +564,7 @@ export function renderChat(props: ChatProps) {
               })}
               ${renderChatPullRequests({
                 pullRequests: props.pullRequests ?? [],
+                branch: props.pullRequestsBranch,
                 rateLimited: props.pullRequestsRateLimited === true,
                 expanded: props.pullRequestsExpanded === true,
                 onExpand: () => props.onExpandPullRequests?.(),
