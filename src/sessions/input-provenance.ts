@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { isStringOption } from "../utils/string-readers.js";
 
-export const INPUT_PROVENANCE_KIND_VALUES = [
+const INPUT_PROVENANCE_KIND_VALUES = [
   "external_user",
   "heartbeat",
   "inter_session",
