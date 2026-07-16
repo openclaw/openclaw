@@ -14,6 +14,20 @@ const reply = vi.fn(async (..._args: ReplyArgs) => ({
   messageId: "reply_1",
   threadId: "thread_1",
 }));
+const get = vi.fn(async (_inboxId: string, messageId: string) => ({
+  inboxId: "inbox_1",
+  threadId: "thread_1",
+  messageId,
+  labels: ["received"],
+  timestamp: new Date(0),
+  from: "Allowed Sender <sender@example.com>",
+  replyTo: ["attacker@example.net"],
+  to: ["inbox@example.com"],
+  size: 1,
+  updatedAt: new Date(0),
+  createdAt: new Date(0),
+}));
+const client = () => ({ inboxes: { messages: { get, reply } } }) as never;
 const loadAgentMailOutboundAttachments = vi.hoisted(() =>
   vi.fn(async () => [
     {
@@ -42,8 +56,9 @@ describe("AgentMail reply-only outbound", () => {
     expect(() => parseAgentMailMessageTarget("person@example.com")).toThrow("message:<messageId>");
   });
 
-  it("replies to the triggering message once without recipient overrides", async () => {
+  it("replies once to the authorized From even when Reply-To names another recipient", async () => {
     reply.mockClear();
+    get.mockClear();
     const onPlatformSendDispatch = vi.fn(async () => undefined);
     await sendAgentMailReply(
       {
@@ -52,6 +67,7 @@ describe("AgentMail reply-only outbound", () => {
             agentmail: {
               apiKey: "key",
               inboxId: "inbox_1",
+              allowFrom: ["sender@example.com"],
               mediaMaxMb: 20,
             },
           },
@@ -64,7 +80,7 @@ describe("AgentMail reply-only outbound", () => {
         deliveryQueueId: "queue_1",
         onPlatformSendDispatch,
       },
-      { client: { inboxes: { messages: { reply } } } as never },
+      { client: client() },
     );
 
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
@@ -75,34 +91,82 @@ describe("AgentMail reply-only outbound", () => {
     expect(request).toEqual({
       text: "Hello",
       attachments: [expect.objectContaining({ filename: "proof.txt" })],
+      to: ["sender@example.com"],
       replyAll: false,
     });
-    expect(request).not.toHaveProperty("to");
     expect(request).not.toHaveProperty("cc");
     expect(request).not.toHaveProperty("bcc");
     expect(request).not.toHaveProperty("replyTo");
     expect(requestOptions?.idempotencyKey).toMatch(/^openclaw-agentmail-[a-f0-9]{64}$/u);
+    expect(get).toHaveBeenCalledWith("inbox_1", "msg_1");
   });
 
   it("rejects a different target than the active turn's triggering message", async () => {
     await expect(
       sendAgentMailReply(
         {
-          cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+          cfg: {
+            channels: {
+              agentmail: {
+                apiKey: "key",
+                inboxId: "inbox_1",
+                allowFrom: ["sender@example.com"],
+              },
+            },
+          },
           to: "message:msg_b",
           text: "Wrong recipient",
           replyToId: "msg_a",
           replyToIdSource: "implicit",
           deliveryQueueId: "queue_1",
         },
-        { client: { inboxes: { messages: { reply } } } as never },
+        { client: client() },
       ),
     ).rejects.toThrow("triggering message");
   });
 
+  it("rejects a reply when the authoritative From is not allowlisted", async () => {
+    reply.mockClear();
+    const deniedGet = vi.fn(async (_inboxId: string, messageId: string) => ({
+      ...(await get("inbox_1", messageId)),
+      from: "denied@example.net",
+      replyTo: ["sender@example.com"],
+    }));
+    await expect(
+      sendAgentMailReply(
+        {
+          cfg: {
+            channels: {
+              agentmail: {
+                apiKey: "key",
+                inboxId: "inbox_1",
+                allowFrom: ["sender@example.com"],
+              },
+            },
+          },
+          to: "message:msg_1",
+          text: "Hello",
+          replyToId: "msg_1",
+          replyToIdSource: "implicit",
+          deliveryQueueId: "queue_1",
+        },
+        { client: { inboxes: { messages: { get: deniedGet, reply } } } as never },
+      ),
+    ).rejects.toThrow("recipient is not an authorized triggering sender");
+    expect(reply).not.toHaveBeenCalled();
+  });
+
   it("rejects explicit and proactive message targets", async () => {
     const base = {
-      cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+      cfg: {
+        channels: {
+          agentmail: {
+            apiKey: "key",
+            inboxId: "inbox_1",
+            allowFrom: ["sender@example.com"],
+          },
+        },
+      },
       to: "message:msg_1",
       text: "Not an automatic source reply",
       deliveryQueueId: "queue_1",
@@ -110,12 +174,12 @@ describe("AgentMail reply-only outbound", () => {
     await expect(
       sendAgentMailReply(
         { ...base, replyToId: "msg_1", replyToIdSource: "explicit" },
-        { client: { inboxes: { messages: { reply } } } as never },
+        { client: client() },
       ),
     ).rejects.toThrow("triggering message");
     await expect(
       sendAgentMailReply(base, {
-        client: { inboxes: { messages: { reply } } } as never,
+        client: client(),
       }),
     ).rejects.toThrow("triggering message");
   });
@@ -124,13 +188,21 @@ describe("AgentMail reply-only outbound", () => {
     await expect(
       sendAgentMailReply(
         {
-          cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+          cfg: {
+            channels: {
+              agentmail: {
+                apiKey: "key",
+                inboxId: "inbox_1",
+                allowFrom: ["sender@example.com"],
+              },
+            },
+          },
           to: "message:msg_1",
           text: "Hello",
           replyToId: "msg_1",
           replyToIdSource: "implicit",
         },
-        { client: { inboxes: { messages: { reply } } } as never },
+        { client: client() },
       ),
     ).rejects.toThrow("durable OpenClaw delivery queue ID");
   });
@@ -142,7 +214,15 @@ describe("AgentMail reply-only outbound", () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("proof"));
     const result = await reconcileAgentMailUnknownSend(
       {
-        cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+        cfg: {
+          channels: {
+            agentmail: {
+              apiKey: "key",
+              inboxId: "inbox_1",
+              allowFrom: ["sender@example.com"],
+            },
+          },
+        },
         queueId: "queue_1",
         channel: "agentmail",
         to: "message:msg_1",
@@ -155,7 +235,7 @@ describe("AgentMail reply-only outbound", () => {
         mediaLocalRoots: ["/"],
         mediaReadFile,
       },
-      { client: { inboxes: { messages: { reply } } } as never, now: () => now },
+      { client: client(), now: () => now },
     );
     expect(result.status).toBe("sent");
     expect(loadAgentMailOutboundAttachments).toHaveBeenCalledWith(
@@ -170,13 +250,62 @@ describe("AgentMail reply-only outbound", () => {
     });
   });
 
+  it("does not restore media removed by the persisted rendered plan", async () => {
+    loadAgentMailOutboundAttachments.mockClear();
+    const now = 10_000;
+    await reconcileAgentMailUnknownSend(
+      {
+        cfg: {
+          channels: {
+            agentmail: {
+              apiKey: "key",
+              inboxId: "inbox_1",
+              allowFrom: ["sender@example.com"],
+            },
+          },
+        },
+        queueId: "queue_1",
+        channel: "agentmail",
+        to: "message:msg_1",
+        accountId: "default",
+        enqueuedAt: now - 1_000,
+        retryCount: 1,
+        effectiveReplyToId: "msg_1",
+        payloads: [{ text: "Hello", mediaUrls: ["file:///filtered.txt"] }],
+        renderedBatchPlan: {
+          payloadCount: 1,
+          textCount: 1,
+          mediaCount: 0,
+          voiceCount: 0,
+          presentationCount: 0,
+          interactiveCount: 0,
+          channelDataCount: 0,
+          items: [{ index: 0, kinds: ["text"], text: "Hello", mediaUrls: [] }],
+        },
+      },
+      { client: client(), now: () => now },
+    );
+
+    expect(loadAgentMailOutboundAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrls: [] }),
+    );
+  });
+
   it("fails closed before AgentMail's idempotency key can expire", async () => {
     reply.mockClear();
     loadAgentMailOutboundAttachments.mockClear();
     const now = 24 * 60 * 60 * 1000;
     const result = await reconcileAgentMailUnknownSend(
       {
-        cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+        cfg: {
+          channels: {
+            agentmail: {
+              apiKey: "key",
+              inboxId: "inbox_1",
+              allowFrom: ["sender@example.com"],
+            },
+          },
+        },
         queueId: "queue_1",
         channel: "agentmail",
         to: "message:msg_1",
@@ -187,7 +316,7 @@ describe("AgentMail reply-only outbound", () => {
         effectiveReplyToId: "msg_1",
         payloads: [{ text: "Hello" }],
       },
-      { client: { inboxes: { messages: { reply } } } as never, now: () => now },
+      { client: client(), now: () => now },
     );
 
     expect(result).toEqual({
@@ -211,7 +340,15 @@ describe("AgentMail reply-only outbound", () => {
     await expect(
       reconcileAgentMailUnknownSend(
         {
-          cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+          cfg: {
+            channels: {
+              agentmail: {
+                apiKey: "key",
+                inboxId: "inbox_1",
+                allowFrom: ["sender@example.com"],
+              },
+            },
+          },
           queueId: "queue_1",
           channel: "agentmail",
           to: "message:msg_1",
@@ -221,7 +358,7 @@ describe("AgentMail reply-only outbound", () => {
           effectiveReplyToId: "msg_1",
           payloads: [{ text: "Hello", mediaUrls: ["file:///oversized.bin"] }],
         },
-        { client: { inboxes: { messages: { reply } } } as never, now: () => now },
+        { client: client(), now: () => now },
       ),
     ).resolves.toEqual({
       status: "unresolved",
@@ -235,7 +372,15 @@ describe("AgentMail reply-only outbound", () => {
     const now = 10_000;
     const result = await reconcileAgentMailUnknownSend(
       {
-        cfg: { channels: { agentmail: { apiKey: "key", inboxId: "inbox_1" } } },
+        cfg: {
+          channels: {
+            agentmail: {
+              apiKey: "key",
+              inboxId: "inbox_1",
+              allowFrom: ["sender@example.com"],
+            },
+          },
+        },
         queueId: "queue_1",
         channel: "agentmail",
         to: "message:msg_b",
@@ -245,7 +390,7 @@ describe("AgentMail reply-only outbound", () => {
         effectiveReplyToId: "msg_a",
         payloads: [{ text: "Hello" }],
       },
-      { client: { inboxes: { messages: { reply } } } as never, now: () => now },
+      { client: client(), now: () => now },
     );
     expect(result).toEqual({
       status: "unresolved",

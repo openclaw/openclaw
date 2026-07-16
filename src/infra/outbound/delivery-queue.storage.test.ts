@@ -19,6 +19,7 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
+  saveDeliveryPlatformSendPayload,
 } from "./delivery-queue.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 
@@ -167,6 +168,34 @@ describe("delivery-queue storage", () => {
       expect(entry.recoveryState).toBe("send_attempt_started");
       expect(entry.effectiveReplyToId).toBe("1782584644.377229");
       expect(entry.retryCount).toBe(0);
+    });
+
+    it("persists the exact provider-bound payload without marking a send attempt", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "original", mediaUrls: ["file:///tmp/original.png"] }],
+        },
+        tmpDir(),
+      );
+
+      await saveDeliveryPlatformSendPayload(
+        id,
+        { text: "rewritten", mediaUrls: ["file:///tmp/final.png"] },
+        tmpDir(),
+      );
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.payloads).toEqual([
+        { text: "original", mediaUrls: ["file:///tmp/original.png"] },
+      ]);
+      expect(entry.platformSendPayload).toEqual({
+        text: "rewritten",
+        mediaUrls: ["file:///tmp/final.png"],
+      });
+      expect(entry.platformSendStartedAt).toBeUndefined();
+      expect(entry.recoveryState).toBeUndefined();
     });
 
     it("marks entries as unknown-after-send after platform I/O returns", async () => {

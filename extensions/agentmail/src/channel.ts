@@ -207,6 +207,7 @@ export const agentMailPlugin: ChannelPlugin<ResolvedAgentMailAccount, AgentMailP
     },
     outbound: {
       deliveryMode: "gateway",
+      extractMarkdownImages: true,
       resolveTarget: ({ to }) => {
         const target = normalizeAgentMailTarget(to);
         return target

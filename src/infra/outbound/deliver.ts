@@ -80,6 +80,7 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
+  saveDeliveryPlatformSendPayload,
   type QueuedReplyPayloadSendingHook,
   type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
@@ -206,7 +207,22 @@ type ChannelHandler = {
 type PlatformSendRoute = {
   replyToId?: string | null;
   threadId?: string | number | null;
+  text?: string;
+  mediaUrl?: string;
+  payload?: ReplyPayload;
+  audioAsVoice?: boolean;
 };
+
+function resolvePlatformSendPayload(route: PlatformSendRoute): ReplyPayload {
+  if (route.payload) {
+    return route.payload;
+  }
+  return {
+    ...(route.text !== undefined ? { text: route.text } : {}),
+    ...(route.mediaUrl !== undefined ? { mediaUrl: route.mediaUrl } : {}),
+    ...(route.audioAsVoice === true ? { audioAsVoice: true } : {}),
+  };
+}
 
 type ChannelHandlerParams = {
   cfg: OpenClawConfig;
@@ -1607,7 +1623,15 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     requiredUnknownSendReconciliation: exactReconciliationRequired,
     onPlatformSendStart: async (route) => {
       platformSendRoute = route;
-      if (platformQueueId && !exactReconciliationRequired && queuedPreSendState === undefined) {
+      if (platformQueueId && exactReconciliationRequired) {
+        // Recovery must repeat the final post-hook content. Persist it separately so a
+        // proven-not-sent retry can still replay the original payload through current hooks.
+        await saveDeliveryPlatformSendPayload(
+          platformQueueId,
+          resolvePlatformSendPayload(route),
+          platformQueueStateDir,
+        );
+      } else if (platformQueueId && queuedPreSendState === undefined) {
         queuedPreSendState = await persistQueuedPreSendState({
           queueId: platformQueueId,
           queuePolicy: platformQueuePolicy,

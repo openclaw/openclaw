@@ -6,9 +6,11 @@ import {
   type AgentMailCatchUpSession,
 } from "./catch-up.js";
 import { createAgentMailClient } from "./client.js";
+import { AgentMailIngressCapacityError } from "./ingress.js";
 import type { AgentMailIngressRecord, ResolvedAgentMailAccount } from "./types.js";
 
 const AGENTMAIL_WEBSOCKET_LIVE_QUEUE_MAX = 32;
+const AGENTMAIL_WEBSOCKET_CATCH_UP_INTERVAL_MS = 60_000;
 
 type WebSocketLog = {
   info?: (message: string) => void;
@@ -42,6 +44,7 @@ async function receiveUntilDurable(params: {
   receive: (record: AgentMailIngressRecord) => Promise<void>;
   abortSignal: AbortSignal;
   retryDelay: (attempt: number) => number;
+  onCapacity: () => void;
   log?: WebSocketLog;
 }): Promise<void> {
   let attempts = 0;
@@ -50,6 +53,15 @@ async function receiveUntilDurable(params: {
       await params.receive(params.record);
       return;
     } catch (error) {
+      if (error instanceof AgentMailIngressCapacityError) {
+        // Do not pin the single bounded live worker behind a full durable queue. REST catch-up
+        // retains the provider-side source and retries once durable capacity becomes available.
+        params.log?.warn?.(
+          "AgentMail durable ingress is full; deferring the message to REST catch-up",
+        );
+        params.onCapacity();
+        return;
+      }
       attempts += 1;
       params.log?.error?.(
         `AgentMail WebSocket durable ingress failed; retrying: ${error instanceof Error ? error.message : String(error)}`,
@@ -69,6 +81,7 @@ export async function startAgentMailWebSocket(params: {
   retryDelayMs?: (attempt: number) => number;
   catchUpSession?: AgentMailCatchUpSession;
   liveQueueMax?: number;
+  catchUpIntervalMs?: number;
 }): Promise<void> {
   const client = createAgentMailClient(params.account);
   const catchUpSession =
@@ -100,6 +113,17 @@ export async function startAgentMailWebSocket(params: {
     retryDelayMs: retryDelay,
     log: params.log,
   });
+  const catchUpIntervalMs = params.catchUpIntervalMs ?? AGENTMAIL_WEBSOCKET_CATCH_UP_INTERVAL_MS;
+  const periodicCatchUpWorker = (async () => {
+    while (!params.abortSignal.aborted) {
+      if (!(await waitForRetry(params.abortSignal, catchUpIntervalMs))) {
+        return;
+      }
+      // The SDK protocol has no replay cursor. Periodic REST overlap also covers half-open
+      // sockets that emit neither a close event nor new messages.
+      catchUpSupervisor.request();
+    }
+  })();
 
   const runLiveWorker = (): void => {
     if (liveWorker) {
@@ -117,6 +141,7 @@ export async function startAgentMailWebSocket(params: {
             receive: params.receive,
             abortSignal: params.abortSignal,
             retryDelay,
+            onCapacity: catchUpSupervisor.request,
             log: params.log,
           });
         } finally {
@@ -176,7 +201,7 @@ export async function startAgentMailWebSocket(params: {
       messageId: event.message.messageId,
       eventId: event.eventId,
       transport: "websocket",
-      receivedAt: Date.now(),
+      receivedAt: event.message.timestamp.getTime(),
     });
     runLiveWorker();
   });
@@ -200,7 +225,7 @@ export async function startAgentMailWebSocket(params: {
       { once: true },
     );
   });
-  const workers = [liveWorker, catchUpSupervisor.settle()].filter(
+  const workers = [liveWorker, periodicCatchUpWorker, catchUpSupervisor.settle()].filter(
     (worker): worker is Promise<void> => worker !== undefined,
   );
   await Promise.allSettled(workers);

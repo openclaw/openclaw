@@ -6,6 +6,7 @@ describe("agentmail@0.5.16 SDK positional contract", () => {
   it("declares one atomic payload send for ordinary outbound attachments", () => {
     expect(agentMailPlugin.message?.send?.mediaPayloadMode).toBe("atomic");
     expect(agentMailPlugin.message?.send?.payload).toEqual(expect.any(Function));
+    expect(agentMailPlugin.outbound?.extractMarkdownImages).toBe(true);
   });
 
   it("keeps message and attachment identifiers positional", () => {

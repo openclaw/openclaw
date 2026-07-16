@@ -24,6 +24,14 @@ type DurableInboundReceiveCompletedRecord<TMetadata = unknown> = {
   metadata?: TMetadata;
 };
 
+/** Terminal failed inbound receive tombstone used to suppress unsafe replay. */
+export type DurableInboundReceiveFailedRecord = {
+  id: string;
+  failedAt: number;
+  reason: string;
+  message?: string;
+};
+
 /** Accept result for a new or duplicate inbound platform event. */
 type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
@@ -40,6 +48,11 @@ type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> 
       kind: "completed";
       duplicate: true;
       record: DurableInboundReceiveCompletedRecord<TCompletedMetadata>;
+    }
+  | {
+      kind: "failed";
+      duplicate: true;
+      record: DurableInboundReceiveFailedRecord;
     };
 
 /** Options recorded when accepting a pending inbound event. */
@@ -144,14 +157,16 @@ export function createDurableInboundReceiveJournalFromQueue<
       if (result.kind === "pending" || result.kind === "claimed") {
         return { kind: "pending", duplicate: true, record: result.record };
       }
-      // Queue failures represent terminal corruption or an owner-level fail decision. Replaying
-      // caller payload over that tombstone cannot atomically replace it and may duplicate work.
+      // Queue failures represent terminal corruption or an owner-level fail decision. Preserve
+      // that state so callers do not mistake a failed event for a successfully completed one.
       return {
-        kind: "completed",
+        kind: "failed",
         duplicate: true,
         record: {
           id: result.record.id,
-          completedAt: result.record.failedAt,
+          failedAt: result.record.failedAt,
+          reason: result.record.reason,
+          ...(result.record.message === undefined ? {} : { message: result.record.message }),
         },
       };
     },

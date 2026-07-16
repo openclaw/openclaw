@@ -4,6 +4,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
   ChannelMessageSendCommitContext,
   ChannelMessageUnknownSendReconciliationResult,
@@ -54,6 +55,7 @@ import {
   failedOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
+import { summarizeOutboundPayloadForTransport } from "./payloads.js";
 
 type RecoverySummary = {
   recovered: number;
@@ -271,11 +273,25 @@ async function reconcileUnknownQueuedDelivery(opts: {
   }
   const { entry } = opts;
   try {
+    // Exact reconciliation consumes the immutable provider-bound snapshot. The original payload
+    // remains available to normal recovery when the adapter proves the provider did not send.
+    const reconciliationPayloads = entry.platformSendPayload
+      ? [entry.platformSendPayload]
+      : entry.payloads;
+    const reconciliationRenderedBatchPlan = entry.platformSendPayload
+      ? createRenderedMessageBatchPlan([
+          {
+            ...entry.platformSendPayload,
+            mediaUrl: undefined,
+            mediaUrls: summarizeOutboundPayloadForTransport(entry.platformSendPayload).mediaUrls,
+          },
+        ])
+      : entry.renderedBatchPlan;
     // Unknown-send reconciliation runs before normal recovery delivery. Rebuild the same
     // session-scoped media capability here so a provider retry cannot bypass or lose local media.
-    const persistedMediaSources = entry.renderedBatchPlan
-      ? entry.renderedBatchPlan.items.flatMap((item) => item.mediaUrls)
-      : entry.payloads.flatMap((payload) => [
+    const persistedMediaSources = reconciliationRenderedBatchPlan
+      ? reconciliationRenderedBatchPlan.items.flatMap((item) => item.mediaUrls)
+      : reconciliationPayloads.flatMap((payload) => [
           ...(payload.mediaUrl ? [payload.mediaUrl] : []),
           ...(payload.mediaUrls ?? []),
         ]);
@@ -311,8 +327,10 @@ async function reconcileUnknownQueuedDelivery(opts: {
       ...(entry.effectiveReplyToId !== undefined
         ? { effectiveReplyToId: entry.effectiveReplyToId }
         : {}),
-      payloads: entry.payloads,
-      ...(entry.renderedBatchPlan ? { renderedBatchPlan: entry.renderedBatchPlan } : {}),
+      payloads: reconciliationPayloads,
+      ...(reconciliationRenderedBatchPlan
+        ? { renderedBatchPlan: reconciliationRenderedBatchPlan }
+        : {}),
       ...(entry.replyToId !== undefined ? { replyToId: entry.replyToId } : {}),
       ...(entry.replyToMode !== undefined ? { replyToMode: entry.replyToMode } : {}),
       ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
@@ -352,7 +370,7 @@ function buildReconciledCommitContext(params: {
   cfg: OpenClawConfig;
   result: OutboundDeliveryResult;
 }): ChannelMessageSendCommitContext {
-  const payload = params.entry.payloads[0] ?? {};
+  const payload = params.entry.platformSendPayload ?? params.entry.payloads[0] ?? {};
   const result = {
     messageId: params.result.messageId,
     receipt: params.result.receipt ?? {

@@ -6,7 +6,7 @@ read_when:
 title: "AgentMail"
 ---
 
-AgentMail connects one OpenClaw channel account to one AgentMail inbox. Incoming email is durably queued, hydrated from AgentMail's REST API, checked against a sender allowlist, and dispatched as a threaded agent turn. Replies are always bound to the incoming message; the plugin cannot start a thread or choose recipients.
+AgentMail connects one OpenClaw channel account to one AgentMail inbox. Incoming email is durably queued, hydrated from AgentMail's REST API, checked against a sender allowlist, and dispatched as a threaded agent turn. Replies are always bound to the incoming message; callers cannot start a thread or choose recipients.
 
 Status: official plugin, installed separately. Requires OpenClaw `2026.7.2` or newer.
 
@@ -20,21 +20,30 @@ openclaw plugins install @openclaw/agentmail
 
 Create an AgentMail inbox and a `message.received` webhook subscription whose URL reaches the exact Gateway path. OpenClaw does not create or manage production AgentMail webhooks.
 
-```yaml
-channels:
-  agentmail:
-    enabled: true
-    defaultAccount: default
-    accounts:
-      default:
-        apiKey: { source: env, provider: default, id: AGENTMAIL_API_KEY }
-        inboxId: inbox_...
-        webhookSecret: { source: env, provider: default, id: AGENTMAIL_WEBHOOK_SECRET }
-        webhookPath: /webhooks/agentmail
-        dmPolicy: allowlist
-        allowFrom:
-          - sender@example.com
-        mediaMaxMb: 20
+```json5
+{
+  channels: {
+    agentmail: {
+      enabled: true,
+      defaultAccount: "default",
+      accounts: {
+        default: {
+          apiKey: { source: "env", provider: "default", id: "AGENTMAIL_API_KEY" },
+          inboxId: "inbox_...",
+          webhookSecret: {
+            source: "env",
+            provider: "default",
+            id: "AGENTMAIL_WEBHOOK_SECRET",
+          },
+          webhookPath: "/webhooks/agentmail",
+          dmPolicy: "allowlist",
+          allowFrom: ["sender@example.com"],
+          mediaMaxMb: 20,
+        },
+      },
+    },
+  },
+}
 ```
 
 Configure the AgentMail webhook as:
@@ -52,16 +61,20 @@ For named accounts, the default path is `/webhooks/agentmail/<accountId>`. Set a
 
 Omit `webhookSecret` to use AgentMail WebSocket ingress:
 
-```yaml
-channels:
-  agentmail:
-    apiKey: { source: env, provider: default, id: AGENTMAIL_API_KEY }
-    inboxId: inbox_...
-    dmPolicy: allowlist
-    allowFrom: [sender@example.com]
+```json5
+{
+  channels: {
+    agentmail: {
+      apiKey: { source: "env", provider: "default", id: "AGENTMAIL_API_KEY" },
+      inboxId: "inbox_...",
+      dmPolicy: "allowlist",
+      allowFrom: ["sender@example.com"],
+    },
+  },
+}
 ```
 
-Webhook and WebSocket are configuration alternatives. The plugin does not switch to WebSocket because a configured webhook has been quiet or unreachable. WebSocket mode re-subscribes on every connection and requests REST recovery from the plugin's durable cursor. The recovery path paginates authoritative `received` messages from AgentMail with a short overlap window. The shared message digest deduplicates overlap with live WebSocket or webhook events, closing restart, connection-gap, and exhausted-provider-retry windows without replaying pre-install mailbox history.
+Webhook and WebSocket are configuration alternatives. The plugin does not switch to WebSocket because a configured webhook has been quiet or unreachable. WebSocket mode re-subscribes on every connection and periodically requests REST recovery from the plugin's durable cursor, including when the socket appears open but has stopped delivering events. The recovery path paginates authoritative `received` messages from AgentMail with a short overlap window. The shared message digest deduplicates overlap with live WebSocket or webhook events, closing restart, connection-gap, and exhausted-provider-retry windows without replaying pre-install mailbox history.
 
 ## Sender security
 
@@ -69,9 +82,15 @@ Webhook and WebSocket are configuration alternatives. The plugin does not switch
 
 To intentionally accept every sender, configure both values explicitly:
 
-```yaml
-dmPolicy: open
-allowFrom: ["*"]
+```json5
+{
+  channels: {
+    agentmail: {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+    },
+  },
+}
 ```
 
 Every message is authorized independently, even when several people participate in the same AgentMail thread. Ambiguous or missing `From` mailboxes are rejected without starting an agent turn.
@@ -84,25 +103,25 @@ The only outbound target is:
 message:<messageId>
 ```
 
-The triggering message ID is fixed for the whole turn. The outbound adapter accepts only the implicit source-message binding supplied by the active inbound turn; proactive sends, explicit reply overrides, and attempts to switch to another message ID are rejected. OpenClaw does not keep a thread-to-latest-message pointer. Each reply calls AgentMail with `replyAll: false`, omits all recipient overrides, and uses an idempotency key derived from OpenClaw's durable delivery queue record. A multi-recipient email therefore receives a reply only through AgentMail's sender-reply semantics.
+The triggering message ID is fixed for the whole turn. The outbound adapter accepts only the implicit source-message binding supplied by the active inbound turn; proactive sends, explicit reply overrides, and attempts to switch to another message ID are rejected. OpenClaw does not keep a thread-to-latest-message pointer. Before each send or recovery attempt, the plugin hydrates that message again, parses its authoritative `From`, and reapplies the account allowlist. It then sets `to` to that authorized address, sets `replyAll: false`, omits `cc`, `bcc`, and `replyTo`, and uses an idempotency key derived from OpenClaw's durable delivery queue record. An untrusted `Reply-To` header therefore cannot redirect the agent response, and a multi-recipient email never replies to the other recipients.
 
 Sessions are keyed by OpenClaw account, AgentMail inbox, and AgentMail thread ID. Participants share the thread context, while sender authorization remains per message.
 
 ## Message bodies and attachments
 
-The REST-hydrated plain-text body is preferred. HTML-only mail is converted through OpenClaw's shared HTML-to-text helpers. When no body is available, the hydrated subject becomes the message. Transport event bodies are never used as authoritative content.
+The REST-hydrated extracted text is preferred because AgentMail removes quoted reply and forward history from it. Extracted HTML is the next choice and is converted through OpenClaw's shared HTML-to-text helpers. Full plain text and HTML are fallbacks when AgentMail did not provide extracted content. When no body is available, the hydrated subject becomes the message. Transport event bodies are never used as authoritative content.
 
 Inbound attachment metadata is hydrated with AgentMail's positional API, and its short-lived `downloadUrl` is loaded through OpenClaw's bounded, SSRF-aware media path. Inline/CID parts are skipped. Per-file and aggregate limits use `mediaMaxMb` (default 20 MiB). All accepted attachments must download before the agent turn starts; a transient download failure dispatches nothing and leaves the durable event retryable. A deterministic size-policy rejection omits the complete attachment set, adds an omission notice, and still dispatches the authoritative body or subject.
 
-Outbound text and attachments are normalized and loaded before one AgentMail reply request. The message adapter asks core to preserve the complete media payload, so ordinary attachment replies use the same atomic path instead of one send per media URL. Replies are not streamed or split into separate email messages.
+Outbound text and attachments are normalized and loaded before one AgentMail reply request. `MEDIA:` directives and Markdown images are extracted into attachments instead of leaking transport tokens into the email body. The message adapter asks core to preserve the complete media payload, so ordinary attachment replies use the same atomic path instead of one send per media URL. Replies are not streamed or split into separate email messages.
 
 ## Durability
 
 Webhook, live WebSocket, and REST catch-up records share a digest of account ID, inbox ID, and message ID, so retries, reconnects, overlap, and transport changes deduplicate to one turn. OpenClaw persists restart-recovery delivery state before agent or tool execution, and the plugin durably adopts the turn by completing its ingress row at that boundary. A fresh turn does not start if completion fails. If an active turn was already irrevocably queued, ingress retries only the completion marker and never redispatches it. After successful adoption, core recovery owns interrupted delivery.
 
-Pending and failed ingress records are retained for 30 days; completed records for 7 days. AgentMail uses an explicit 450-record admission limit that never evicts accepted pending mail. A message that fails dispatch 12 times is moved to a failed tombstone, freeing admission capacity without allowing transport redelivery to recreate poison work. Completed and failed tombstones are capped at 450 records. The retention windows and bounds follow the WhatsApp precedent, while AgentMail's reject-new admission policy is plugin-owned and does not change WhatsApp's existing retention behavior. Live WebSocket admission is also process-bounded; overflow is recovered by the single REST catch-up supervisor rather than accumulated as unbounded promises.
+Pending ingress records use a 30-day inactivity retention window, failed records use 30 days, and completed records use 7 days. AgentMail uses an explicit 450-record admission limit that never evicts accepted pending mail. Dispatch failures remain pending and retry with bounded exponential backoff instead of being converted into a successful duplicate marker; a persistently failing entry can therefore occupy admission capacity until it succeeds or an operator intervenes. Completed tombstones have no count cap so the full REST overlap window remains deduplicated even for busy inboxes; terminal failed tombstones remain capped at 450. The retention windows follow the WhatsApp precedent, while AgentMail's reject-new admission policy is plugin-owned and does not change WhatsApp's existing retention behavior. Live WebSocket admission is also process-bounded. When durable capacity is full, the live worker defers to the single REST catch-up supervisor rather than accumulating unbounded promises.
 
-Unknown outbound sends are retried only while AgentMail's queue-derived idempotency key is safely inside the provider's 24-hour retention window. Recovery reconstructs the original agent-scoped local-media capability before reloading attachments. Once the key is within one hour of expiry, the delivery fails closed for operator review instead of risking a duplicate email.
+Unknown outbound sends are retried only while AgentMail's queue-derived idempotency key is safely inside the provider's 24-hour retention window. Immediately before the adapter starts provider I/O, core persists the final post-hook text and media request separately from the original replay payload. Recovery uses that immutable content with the same idempotency key, preventing hooks or media normalization from changing a retry. It also reconstructs the original agent-scoped local-media capability before reloading attachments. Once the key is within one hour of expiry, the delivery fails closed for operator review instead of risking a duplicate email.
 
 ## Why a new official plugin
 

@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveAgentMailAccount } from "./accounts.js";
 import { createAgentMailClient } from "./client.js";
+import { isAgentMailSenderAllowed, parseSingleFromMailbox } from "./mailbox.js";
 import { AgentMailMediaPolicyError, loadAgentMailOutboundAttachments } from "./media.js";
 
 const TARGET_PREFIX = "message:";
@@ -100,6 +101,29 @@ async function sendBoundAgentMailReply(
   if (!ctx.deliveryQueueId) {
     throw new Error("AgentMail replies require a durable OpenClaw delivery queue ID.");
   }
+  const client = options.client ?? createAgentMailClient(account);
+  // The provider otherwise prefers the original Reply-To header over From. Re-hydrate the
+  // triggering message and explicitly bind `to` to the same authoritative sender we authorize
+  // inbound, preventing an allowlisted sender from redirecting the agent reply.
+  const triggeringMessage = await client.inboxes.messages.get(account.inboxId, triggeringMessageId);
+  if (
+    triggeringMessage.inboxId !== account.inboxId ||
+    triggeringMessage.messageId !== triggeringMessageId
+  ) {
+    throw new Error("AgentMail reply target did not hydrate to the configured inbox and message.");
+  }
+  const sender = parseSingleFromMailbox(triggeringMessage.from);
+  if (
+    !sender ||
+    !isAgentMailSenderAllowed({
+      policy: account.dmPolicy,
+      allowFrom: account.allowFrom,
+      sender: sender.address,
+    })
+  ) {
+    throw new Error("AgentMail reply recipient is not an authorized triggering sender.");
+  }
+
   const mediaUrls = collectMediaUrls(ctx);
   const attachments = await loadAgentMailOutboundAttachments({
     mediaUrls,
@@ -113,13 +137,13 @@ async function sendBoundAgentMailReply(
     throw new Error("AgentMail reply must contain text or at least one attachment.");
   }
   await ctx.onPlatformSendDispatch?.();
-  const client = options.client ?? createAgentMailClient(account);
   const result = await client.inboxes.messages.reply(
     account.inboxId,
     triggeringMessageId,
     {
       ...(text ? { text } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
+      to: [sender.address],
       replyAll: false,
     },
     { idempotencyKey: idempotencyKey(ctx.deliveryQueueId) },
@@ -193,7 +217,9 @@ export async function reconcileAgentMailUnknownSend(
       retryable: false,
     };
   }
-  const mediaUrls = rendered?.mediaUrls.length
+  // A rendered plan is authoritative even when its media list is empty: capability filtering may
+  // intentionally have removed media that still appears on the original queued payload.
+  const mediaUrls = rendered
     ? [...rendered.mediaUrls]
     : [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter((value): value is string =>
         Boolean(value),

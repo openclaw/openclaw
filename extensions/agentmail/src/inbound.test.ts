@@ -88,6 +88,32 @@ describe("AgentMail REST-authoritative inbound", () => {
     ).toBe("Hello world");
   });
 
+  it("prefers extracted reply content over the full quoted body", () => {
+    expect(
+      resolveAgentMailMessageText(
+        message({
+          extractedText: "new reply",
+          text: "new reply\n\nOn Tuesday, someone wrote:\nold quoted history",
+          extractedHtml: "<p>new html reply</p>",
+          html: "<p>full html history</p>",
+        }),
+      ),
+    ).toBe("new reply");
+  });
+
+  it("prefers extracted HTML over a full plain-text body", () => {
+    expect(
+      resolveAgentMailMessageText(
+        message({
+          extractedText: undefined,
+          extractedHtml: "<p>new reply</p>",
+          text: "new reply\n\nOn Tuesday, someone wrote:\nold quoted history",
+          html: "<p>full html history</p>",
+        }),
+      ),
+    ).toBe("new reply");
+  });
+
   it("uses the hydrated subject when the message body is empty", () => {
     expect(
       resolveAgentMailMessageText(
@@ -265,7 +291,29 @@ describe("AgentMail REST-authoritative inbound", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("settles an authoritatively deleted message without retrying", async () => {
+  it("retries a recent hydration 404 instead of permanently losing the message", async () => {
+    const notFound = new AgentMailError({ message: "not found", statusCode: 404 });
+    await expect(
+      dispatchAgentMailInboundEvent({
+        cfg: {},
+        account,
+        record: { ...record, receivedAt: 1_000 },
+        channelRuntime: { inbound: { run: vi.fn() } } as never,
+        client: {
+          inboxes: {
+            messages: {
+              get: vi.fn(async () => {
+                throw notFound;
+              }),
+            },
+          },
+        } as never,
+        now: () => 1_000 + 60_000,
+      }),
+    ).rejects.toBe(notFound);
+  });
+
+  it("settles an unavailable message after the bounded hydration retry window", async () => {
     const run = vi.fn();
     const warn = vi.fn();
     await expect(
@@ -284,9 +332,10 @@ describe("AgentMail REST-authoritative inbound", () => {
           },
         } as never,
         log: { warn },
+        now: () => 10 * 60_000,
       }),
     ).resolves.toBeUndefined();
     expect(run).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("deleted message"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("hydration retry window"));
   });
 });

@@ -8,6 +8,7 @@ export {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
+  saveDeliveryPlatformSendPayload,
 } from "./delivery-queue-storage.js";
 export type {
   QueuedReplyPayloadSendingHook,

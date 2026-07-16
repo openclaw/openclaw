@@ -30,6 +30,17 @@ type ActiveDispatch = {
 // restarts that open separate journal facades over the same shared queue.
 const activeDispatches = new Map<string, ActiveDispatch>();
 
+export class AgentMailIngressCapacityError extends Error {
+  constructor() {
+    super("AgentMail durable ingress capacity is full");
+    this.name = "AgentMailIngressCapacityError";
+  }
+}
+
+function isDurableIngressCapacityError(error: unknown): boolean {
+  return error instanceof Error && error.name === "DurableInboundReceiveCapacityError";
+}
+
 function retryDelayMs(attempt: number): number {
   return computeBackoff({ initialMs: 1_000, maxMs: 30 * 60_000, factor: 2, jitter: 0.2 }, attempt);
 }
@@ -55,10 +66,20 @@ export async function processAgentMailIngress(params: {
   retryDelayMs?: (attempt: number) => number;
 }): Promise<"accepted" | "duplicate"> {
   const id = createAgentMailDurableInboundId(params.record);
-  const accepted = await params.journal.accept(id, params.record, {
-    receivedAt: params.record.receivedAt,
-  });
-  if (accepted.kind === "completed") {
+  let accepted: Awaited<ReturnType<AgentMailJournal["accept"]>>;
+  try {
+    accepted = await params.journal.accept(id, params.record, {
+      receivedAt: params.record.receivedAt,
+    });
+  } catch (error) {
+    // Core intentionally keeps the capacity class internal to the generic queue facade. Normalize
+    // it here so AgentMail transport workers can apply plugin-owned backpressure policy.
+    if (isDurableIngressCapacityError(error)) {
+      throw new AgentMailIngressCapacityError();
+    }
+    throw error;
+  }
+  if (accepted.kind === "completed" || accepted.kind === "failed") {
     return "duplicate";
   }
   const record = accepted.kind === "pending" ? accepted.record.payload : params.record;

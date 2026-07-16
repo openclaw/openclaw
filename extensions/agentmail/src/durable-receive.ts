@@ -4,7 +4,6 @@ import { getAgentMailRuntime } from "./runtime.js";
 import type { AgentMailIngressRecord } from "./types.js";
 
 export const AGENTMAIL_DURABLE_PENDING_MAX_ENTRIES = 450;
-export const AGENTMAIL_DURABLE_COMPLETED_MAX_ENTRIES = 450;
 export const AGENTMAIL_DURABLE_PENDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const AGENTMAIL_DURABLE_COMPLETED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -38,7 +37,6 @@ export function createAgentMailDurableInboundReceiveJournal(params: {
       pendingTtlMs: AGENTMAIL_DURABLE_PENDING_TTL_MS,
       completedTtlMs: AGENTMAIL_DURABLE_COMPLETED_TTL_MS,
       failedTtlMs: AGENTMAIL_DURABLE_PENDING_TTL_MS,
-      completedMaxEntries: AGENTMAIL_DURABLE_COMPLETED_MAX_ENTRIES,
       failedMaxEntries: AGENTMAIL_DURABLE_PENDING_MAX_ENTRIES,
     },
   });

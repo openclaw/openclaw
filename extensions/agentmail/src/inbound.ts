@@ -8,6 +8,7 @@ import { AgentMailMediaPolicyError, loadAgentMailInboundAttachments } from "./me
 import type { AgentMailIngressRecord, ResolvedAgentMailAccount } from "./types.js";
 
 const CHANNEL_ID = "agentmail";
+const HYDRATION_NOT_FOUND_RETRY_WINDOW_MS = 5 * 60_000;
 
 type AgentMailLog = {
   info?: (message: string) => void;
@@ -20,13 +21,26 @@ export type AgentMailChannelRuntime = Pick<
 >;
 
 export function resolveAgentMailMessageText(message: AgentMail.Message): string {
-  const plain = message.text?.trim() || message.extractedText?.trim();
-  if (plain) {
-    return plain;
+  // AgentMail strips quoted reply/forward history in the extracted fields. Prefer those fields
+  // so an email thread does not re-inject its accumulated transcript into every agent turn.
+  const extractedText = message.extractedText?.trim();
+  if (extractedText) {
+    return extractedText;
   }
-  const html = message.html?.trim() || message.extractedHtml?.trim();
-  const converted = html ? markdownToText(htmlToMarkdown(html).text).trim() : "";
-  return converted || message.subject?.trim() || "";
+  const extractedHtml = message.extractedHtml?.trim();
+  const extractedHtmlText = extractedHtml
+    ? markdownToText(htmlToMarkdown(extractedHtml).text).trim()
+    : "";
+  if (extractedHtmlText) {
+    return extractedHtmlText;
+  }
+  const text = message.text?.trim();
+  if (text) {
+    return text;
+  }
+  const html = message.html?.trim();
+  const htmlText = html ? markdownToText(htmlToMarkdown(html).text).trim() : "";
+  return htmlText || message.subject?.trim() || "";
 }
 
 function hasRejectedLabel(message: AgentMail.Message): boolean {
@@ -58,6 +72,7 @@ export async function dispatchAgentMailInboundEvent(params: {
   client?: AgentMailClient;
   log?: AgentMailLog;
   onTurnAdopted?: () => void | Promise<void>;
+  now?: () => number;
 }): Promise<void> {
   const client = params.client ?? createAgentMailClient(params.account);
   let message: AgentMail.Message;
@@ -69,8 +84,16 @@ export async function dispatchAgentMailInboundEvent(params: {
     });
   } catch (error) {
     if (error instanceof AgentMailError && error.statusCode === 404) {
-      params.log?.warn?.(`AgentMail ignored deleted message ${params.record.messageId}`);
-      return;
+      const ageMs = Math.max(0, (params.now?.() ?? Date.now()) - params.record.receivedAt);
+      if (ageMs >= HYDRATION_NOT_FOUND_RETRY_WINDOW_MS) {
+        params.log?.warn?.(
+          `AgentMail ignored unavailable message ${params.record.messageId} after the hydration retry window`,
+        );
+        return;
+      }
+      // A receive event can race the provider's REST projection. Keep the durable row pending
+      // during a bounded window; treating the first 404 as deletion can permanently lose mail.
+      throw error;
     }
     throw error;
   }

@@ -1211,6 +1211,11 @@ export async function attachWebInboxToSocket(
           );
           return;
         }
+        if (accepted.kind === "failed") {
+          // A failed tombstone suppresses unsafe replay but is not successful delivery. Do not
+          // emit the read receipt reserved for completed durable messages.
+          return;
+        }
         if (accepted.kind === "pending" && accepted.record.attempts === 0) {
           return;
         }

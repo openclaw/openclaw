@@ -162,9 +162,14 @@ describe("createDurableInboundReceiveJournalFromQueue", () => {
         }),
       ).resolves.toBe(true);
       await expect(journal.accept("message-1", { body: "again" })).resolves.toMatchObject({
-        kind: "completed",
+        kind: "failed",
         duplicate: true,
-        record: { id: "message-1", completedAt: 20 },
+        record: {
+          id: "message-1",
+          failedAt: 20,
+          reason: "corrupt_payload",
+          message: "bad payload",
+        },
       });
     });
   });

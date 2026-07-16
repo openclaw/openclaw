@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { AgentMailIngressCapacityError } from "./ingress.js";
 import type { ResolvedAgentMailAccount } from "./types.js";
 import { startAgentMailWebSocket } from "./websocket.js";
 
@@ -72,7 +73,11 @@ describe("AgentMail WebSocket ingress", () => {
       type: "event",
       eventType: "message.received",
       eventId: "event_1",
-      message: { inboxId: "inbox_1", messageId: "message_1" },
+      message: {
+        inboxId: "inbox_1",
+        messageId: "message_1",
+        timestamp: new Date(1_234),
+      },
     });
     await vi.waitFor(() => expect(receive).toHaveBeenCalledOnce());
     expect(receive).toHaveBeenCalledWith(
@@ -80,6 +85,7 @@ describe("AgentMail WebSocket ingress", () => {
         inboxId: "inbox_1",
         messageId: "message_1",
         transport: "websocket",
+        receivedAt: 1_234,
       }),
     );
     controller.abort();
@@ -122,7 +128,11 @@ describe("AgentMail WebSocket ingress", () => {
     handlers.get("message")?.({
       type: "event",
       eventType: "message.received",
-      message: { inboxId: "inbox_1", messageId: "message_retry" },
+      message: {
+        inboxId: "inbox_1",
+        messageId: "message_retry",
+        timestamp: new Date(1_234),
+      },
     });
     await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(2));
     controller.abort();
@@ -151,18 +161,68 @@ describe("AgentMail WebSocket ingress", () => {
     handlers.get("message")?.({
       type: "event",
       eventType: "message.received",
-      message: { inboxId: "inbox_1", messageId: "message_1" },
+      message: { inboxId: "inbox_1", messageId: "message_1", timestamp: new Date(1_234) },
     });
     await vi.waitFor(() => expect(receive).toHaveBeenCalledOnce());
     handlers.get("message")?.({
       type: "event",
       eventType: "message.received",
-      message: { inboxId: "inbox_1", messageId: "message_2" },
+      message: { inboxId: "inbox_1", messageId: "message_2", timestamp: new Date(1_235) },
     });
     await vi.waitFor(() => expect(catchUpRun).toHaveBeenCalledOnce());
     expect(receive).toHaveBeenCalledOnce();
 
     finishReceive();
+    controller.abort();
+    await running;
+  });
+
+  it("defers capacity-blocked events to REST catch-up without pinning the live worker", async () => {
+    handlers.clear();
+    catchUpRun.mockClear();
+    const receive = vi
+      .fn<(record: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(new AgentMailIngressCapacityError())
+      .mockResolvedValueOnce(undefined);
+    const controller = new AbortController();
+    const running = startAgentMailWebSocket({
+      account,
+      abortSignal: controller.signal,
+      receive: receive as never,
+      retryDelayMs: () => 0,
+      catchUpSession: { run: catchUpRun },
+      liveQueueMax: 2,
+    });
+    await vi.waitFor(() => expect(handlers.has("message")).toBe(true));
+    handlers.get("message")?.({
+      type: "event",
+      eventType: "message.received",
+      message: { inboxId: "inbox_1", messageId: "message_full", timestamp: new Date(1_234) },
+    });
+    handlers.get("message")?.({
+      type: "event",
+      eventType: "message.received",
+      message: { inboxId: "inbox_1", messageId: "message_next", timestamp: new Date(1_235) },
+    });
+
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(catchUpRun).toHaveBeenCalledOnce());
+    controller.abort();
+    await running;
+  });
+
+  it("runs periodic REST catch-up even without a socket lifecycle event", async () => {
+    handlers.clear();
+    catchUpRun.mockClear();
+    const controller = new AbortController();
+    const running = startAgentMailWebSocket({
+      account,
+      abortSignal: controller.signal,
+      receive: vi.fn(async () => undefined),
+      catchUpSession: { run: catchUpRun },
+      catchUpIntervalMs: 1,
+    });
+    await vi.waitFor(() => expect(catchUpRun).toHaveBeenCalled());
     controller.abort();
     await running;
   });

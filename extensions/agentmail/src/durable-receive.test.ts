@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  AGENTMAIL_DURABLE_COMPLETED_MAX_ENTRIES,
   AGENTMAIL_DURABLE_COMPLETED_TTL_MS,
   AGENTMAIL_DURABLE_PENDING_MAX_ENTRIES,
   AGENTMAIL_DURABLE_PENDING_TTL_MS,
   createAgentMailDurableInboundId,
 } from "./durable-receive.js";
-import { processAgentMailIngress, replayPendingAgentMailIngress } from "./ingress.js";
+import {
+  AgentMailIngressCapacityError,
+  processAgentMailIngress,
+  replayPendingAgentMailIngress,
+} from "./ingress.js";
 import type { AgentMailIngressRecord } from "./types.js";
 
 const record: AgentMailIngressRecord = {
@@ -26,6 +29,22 @@ describe("AgentMail durable ingress", () => {
         messageId: record.messageId,
       }),
     );
+  });
+
+  it("normalizes generic durable capacity for transport backpressure", async () => {
+    const capacityError = new Error("queue full");
+    capacityError.name = "DurableInboundReceiveCapacityError";
+    await expect(
+      processAgentMailIngress({
+        journal: {
+          accept: vi.fn(async () => {
+            throw capacityError;
+          }),
+        } as never,
+        record,
+        dispatch: vi.fn(),
+      }),
+    ).rejects.toBeInstanceOf(AgentMailIngressCapacityError);
   });
 
   it("dispatches identical webhook and WebSocket deliveries only once", async () => {
@@ -169,6 +188,24 @@ describe("AgentMail durable ingress", () => {
     expect(release).toHaveBeenLastCalledWith(createAgentMailDurableInboundId(record), {
       lastError: "temporary dispatch failure",
     });
+  });
+
+  it("suppresses a terminal failed tombstone without dispatching it as completed work", async () => {
+    const dispatch = vi.fn(async () => undefined);
+    await expect(
+      processAgentMailIngress({
+        journal: {
+          accept: async () => ({
+            kind: "failed",
+            duplicate: true,
+            record: { id: "durable_1", failedAt: 1, reason: "corrupt_payload" },
+          }),
+        } as never,
+        record,
+        dispatch,
+      }),
+    ).resolves.toBe("duplicate");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("retries a failed completion marker without repeating the agent dispatch", async () => {
@@ -380,7 +417,6 @@ describe("AgentMail durable ingress", () => {
     expect(AGENTMAIL_DURABLE_PENDING_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
     expect(AGENTMAIL_DURABLE_COMPLETED_TTL_MS).toBe(7 * 24 * 60 * 60 * 1000);
     expect(AGENTMAIL_DURABLE_PENDING_MAX_ENTRIES).toBe(450);
-    expect(AGENTMAIL_DURABLE_COMPLETED_MAX_ENTRIES).toBe(450);
   });
 
   it("replays pending records after restart and completes them", async () => {

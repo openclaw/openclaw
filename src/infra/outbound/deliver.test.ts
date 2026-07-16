@@ -72,6 +72,7 @@ const queueMocks = vi.hoisted(() => ({
   markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {}),
   markDeliveryPlatformSendDispatched: vi.fn(async () => {}),
   markDeliveryPlatformSendAttemptStarted: vi.fn(async () => {}),
+  saveDeliveryPlatformSendPayload: vi.fn(async () => {}),
   withActiveDeliveryClaim: vi.fn<
     (
       entryId: string,
@@ -117,6 +118,7 @@ vi.mock("./delivery-queue.js", () => ({
   markDeliveryPlatformOutcomeUnknown: queueMocks.markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched: queueMocks.markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted: queueMocks.markDeliveryPlatformSendAttemptStarted,
+  saveDeliveryPlatformSendPayload: queueMocks.saveDeliveryPlatformSendPayload,
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
@@ -347,6 +349,8 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.markDeliveryPlatformSendAttemptStarted.mockResolvedValue(undefined);
     queueMocks.markDeliveryPlatformSendDispatched.mockClear();
     queueMocks.markDeliveryPlatformSendDispatched.mockResolvedValue(undefined);
+    queueMocks.saveDeliveryPlatformSendPayload.mockClear();
+    queueMocks.saveDeliveryPlatformSendPayload.mockResolvedValue(undefined);
     queueMocks.withActiveDeliveryClaim.mockClear();
     queueMocks.withActiveDeliveryClaim.mockImplementation(async (_entryId, fn) => ({
       status: "claimed",
@@ -808,6 +812,11 @@ describe("deliverOutboundPayloads", () => {
     expect(beforeParams?.to).toBe("!room:example");
     expect(beforeParams?.text).toBe("hello");
     expect(beforeParams?.deliveryQueueId).toBe("queue-1");
+    expect(queueMocks.saveDeliveryPlatformSendPayload).toHaveBeenCalledWith(
+      "queue-1",
+      { text: "hello" },
+      undefined,
+    );
     expect(queueMocks.markDeliveryPlatformSendDispatched).toHaveBeenCalledWith(
       "queue-1",
       undefined,
@@ -3003,6 +3012,107 @@ describe("deliverOutboundPayloads", () => {
       "mock-queue-id",
       undefined,
       { replyToId: "hooked-reply" },
+    );
+  });
+
+  it("snapshots the final post-hook atomic payload for exact reconciliation", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending" || hookName === "message_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValueOnce({
+      payload: {
+        text: "payload-hook text",
+        mediaUrls: ["file:///tmp/final.png"],
+      },
+    });
+    hookMocks.runner.runMessageSending.mockResolvedValueOnce({ content: "redacted text" });
+    const sendPayload = vi.fn(async (ctx: ChannelMessageSendPayloadContext) => {
+      await ctx.onPlatformSendDispatch?.();
+      return {
+        messageId: "atomic-1",
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "matrix", messageId: "atomic-1" }],
+          kind: "media",
+        }),
+      };
+    });
+    const registry = createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+            },
+          }),
+          message: {
+            id: "matrix",
+            durableFinal: {
+              capabilities: {
+                text: true,
+                media: true,
+                payload: true,
+                messageSendingHooks: true,
+                reconcileUnknownSend: true,
+              },
+              reconcileUnknownSendKinds: { payload: true },
+              reconcileUnknownSend: async () => ({ status: "not_sent" }),
+            },
+            send: {
+              mediaPayloadMode: "atomic",
+              text: vi.fn(),
+              payload: sendPayload,
+            },
+          },
+        },
+      },
+    ]);
+    setActivePluginRegistry(registry);
+    pinActivePluginChannelRegistry(registry);
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "secret\nMEDIA:file:///tmp/original.png" }],
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room" },
+      },
+      queuePolicy: "required",
+      requireUnknownSendReconciliation: true,
+    });
+
+    expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "secret",
+          mediaUrls: ["/tmp/original.png"],
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(queueMocks.saveDeliveryPlatformSendPayload).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.objectContaining({
+        text: "redacted text",
+        mediaUrls: ["file:///tmp/final.png"],
+      }),
+      undefined,
+    );
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "redacted text",
+        payload: expect.objectContaining({
+          text: "redacted text",
+          mediaUrls: ["file:///tmp/final.png"],
+        }),
+      }),
     );
   });
 
