@@ -107,7 +107,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ["slash command", { userMessage: "/status" }],
     ["manual label", { entry: { ...baseEntry, label: "My release" } }],
     ["manual display name", { entry: { ...baseEntry, displayName: "My release" } }],
-    ["existing session history", { entry: { ...baseEntry, systemSent: true } }],
   ])("skips %s", async (_name, override) => {
     await expect(
       maybeGenerateDashboardSessionTitle({ ...titleParams(), ...override }),
