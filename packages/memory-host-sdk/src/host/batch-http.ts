@@ -14,7 +14,7 @@ export async function postJsonWithRetry<T>(params: {
   retryImpl?: typeof retryAsync;
   body: unknown;
   errorPrefix: string;
-}): Promise<T> {
+}>: Promise<T> {
   const retry = params.retryImpl ?? retryAsync;
   return await retry(
     async () => {
@@ -26,15 +26,21 @@ export async function postJsonWithRetry<T>(params: {
         body: params.body,
         errorPrefix: params.errorPrefix,
         attachStatus: true,
+        attachRetryAfter: true,
         parse: async (payload) => payload as T,
       });
     },
     {
-      attempts: 3,
-      minDelayMs: 300,
-      maxDelayMs: 2000,
+      attempts: 5,
+      minDelayMs: 1_000,
+      maxDelayMs: 60_000,
+      retryAfterMaxDelayMs: 120_000,
       jitter: 0.2,
-      shouldRetry: (err) => {
+      retryAfterMs: (err: unknown) => {
+        const retryable = err as { retryAfterMs?: number };
+        return retryable.retryAfterMs;
+      },
+      shouldRetry: (err: unknown) => {
         const status = (err as { status?: number }).status;
         return status === 429 || (typeof status === "number" && status >= 500);
       },
