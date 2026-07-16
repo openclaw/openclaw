@@ -14,6 +14,7 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
+import { hasRestrictiveAllowPolicy } from "../../tool-policy.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import { resolveAgentToolSearchRuntimeConfig } from "../../tool-search-runtime-config.js";
 import {
@@ -171,6 +172,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
     runtimeToolAllowlist: effectiveToolsAllow,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
   });
+  const inheritedToolAllowlist = runtimeCapabilityProfile.policy.inheritancePolicies.some(
+    hasRestrictiveAllowPolicy,
+  )
+    ? []
+    : undefined;
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
     agentId: params.sessionAgentId,
@@ -299,6 +305,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           forceHeartbeatTool: attempt.forceHeartbeatTool,
           runtimeToolAllowlist: effectiveToolsAllow,
           cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
+          inheritedToolAllowlistRef: inheritedToolAllowlist,
           authProfileStore: attempt.authProfileStore,
           recordToolPrepStage: params.markCoreToolStage,
           onToolOutcome: attempt.onToolOutcome,
@@ -329,6 +336,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     computerContextEpoch,
     cronCreatorToolAllowlist,
     effectiveToolsAllow,
+    inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     replaySafetyOptions,

@@ -6,6 +6,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
+import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
@@ -36,6 +37,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const {
     cronCreatorToolAllowlist,
     effectiveToolsAllow,
+    inheritedToolAllowlist,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -195,6 +197,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       );
     }
     const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+    if (inheritedToolAllowlist) {
+      // Core tools are built before MCP/LSP runtimes. Refresh the shared ref
+      // from the exact model-visible surface so spawned children inherit those tools too.
+      replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+    }
     logRuntimeToolSchemaQuarantine({
       diagnostics: schemaProjection.diagnostics,
       tools: projectedTools,
