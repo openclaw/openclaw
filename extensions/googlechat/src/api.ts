@@ -161,14 +161,19 @@ async function fetchBuffer(
           throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
         }
       }
-      if (!maxBytes) {
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const contentType = res.headers.get("content-type") ?? undefined;
-        return { buffer, contentType };
-      }
-      const buffer = await readResponseWithLimit(res, maxBytes, {
+      // Always bound idle stalls; when callers omit maxBytes, keep a hard byte
+      // ceiling so an unbounded media endpoint cannot hang or OOM the process.
+      const limitBytes = maxBytes ?? GOOGLECHAT_JSON_RESPONSE_MAX_BYTES;
+      const buffer = await readResponseWithLimit(res, limitBytes, {
         chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
-        onOverflow: () => new Error(`Google Chat media exceeds max bytes (${maxBytes})`),
+        onOverflow: () =>
+          new Error(
+            maxBytes
+              ? `Google Chat media exceeds max bytes (${maxBytes})`
+              : `Google Chat media exceeds max bytes (${limitBytes})`,
+          ),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Google Chat media response stalled after ${chunkTimeoutMs}ms`),
       });
       const contentType = res.headers.get("content-type") ?? undefined;
       return { buffer, contentType };

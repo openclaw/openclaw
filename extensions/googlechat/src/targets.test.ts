@@ -350,7 +350,18 @@ describe("downloadGoogleChatMedia", () => {
 
     const result = expect(
       downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
-    ).rejects.toThrow("Media download stalled: no data received for 30000ms");
+    ).rejects.toThrow("Google Chat media response stalled after 30000ms");
+    await vi.advanceTimersByTimeAsync(30_001);
+    await result;
+  });
+
+  it("cancels a stalled media body when maxBytes is omitted", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(createStalledResponse()));
+
+    const result = expect(
+      downloadGoogleChatMedia({ account, resourceName: "media/123" }),
+    ).rejects.toThrow("Google Chat media response stalled after 30000ms");
     await vi.advanceTimersByTimeAsync(30_001);
     await result;
   });
