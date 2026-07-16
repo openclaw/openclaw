@@ -1,6 +1,8 @@
 // Check Deadcode Exports tests cover parsing and hard-zero enforcement.
 import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 import allExportsKnipConfig from "../../config/knip.all-exports.config.ts";
 import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
@@ -9,6 +11,36 @@ import {
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mjs";
+
+const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
+const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
+const fullUiWorkspace = allExportsKnipConfig.workspaces.ui;
+const scriptRootWorkspace = scriptExportsKnipConfig.workspaces["."];
+if (!fullRootWorkspace || !fullExtensionWorkspace || !fullUiWorkspace || !scriptRootWorkspace) {
+  throw new Error("deadcode Knip configs must define root, extension, and UI workspaces");
+}
+
+function listQaScenarioExecutionPaths(dir = "qa/scenarios"): string[] {
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        return listQaScenarioExecutionPaths(entryPath);
+      }
+      if (!entry.isFile() || (!entry.name.endsWith(".yaml") && !entry.name.endsWith(".yml"))) {
+        return [];
+      }
+      const document = YAML.parse(fs.readFileSync(entryPath, "utf8")) as {
+        scenario?: { execution?: { kind?: unknown; path?: unknown } };
+      };
+      const execution = document.scenario?.execution;
+      return execution?.kind !== "flow" && typeof execution?.path === "string"
+        ? [execution.path]
+        : [];
+    })
+    .toSorted();
+}
 
 describe("check-deadcode-exports", () => {
   it("requests every unused-export issue class from Knip", () => {
@@ -56,40 +88,48 @@ describe("check-deadcode-exports", () => {
       ]),
     );
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
-    const rootWorkspace = allExportsKnipConfig.workspaces["."];
-    const extensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
-    const uiWorkspace = allExportsKnipConfig.workspaces.ui;
-    expect(rootWorkspace).toBeDefined();
-    expect(extensionWorkspace).toBeDefined();
-    expect(uiWorkspace).toBeDefined();
-    expect(rootWorkspace!.entry).toEqual(
+    expect(fullRootWorkspace.entry).toEqual(
       expect.arrayContaining([
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/vitest/vitest*.config.ts!",
-        "test/e2e/qa-lab/runtime/media-talk-gateway.ts!",
-        "test/e2e/qa-lab/runtime/voice-call-gateway.ts!",
       ]),
     );
-    expect(extensionWorkspace!.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
-    expect(uiWorkspace!.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
+    expect(fullExtensionWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
+    expect(fullUiWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
+  });
+
+  it("models every QA scenario execution path as a full-tree root", () => {
+    const rootEntries = fullRootWorkspace.entry;
+    const executionPaths = listQaScenarioExecutionPaths();
+
+    expect(executionPaths.length).toBeGreaterThan(0);
+    for (const executionPath of executionPaths) {
+      expect(fs.existsSync(executionPath), executionPath).toBe(true);
+      expect(rootEntries, executionPath).toContain(`${executionPath}!`);
+    }
+    expect(rootEntries).toContain(
+      "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
+    );
   });
 
   it("keeps the script unused-export scan scoped to real executable roots", () => {
-    expect(scriptExportsKnipConfig.workspaces["."].entry).toEqual(
+    expect(scriptRootWorkspace.entry).toEqual(
       expect.arrayContaining([
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        ".github/actions/register-bind-mount-cleanup/main.cjs!",
+        "apps/android/scripts/build-release-artifacts.ts!",
+        "security/opengrep/check-rule-metadata.mjs!",
+        "skills/meme-maker/scripts/meme.mjs!",
         "scripts/check-live-cache.ts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "src/plugin-sdk/api-baseline.ts!",
       ]),
     );
-    expect(scriptExportsKnipConfig.workspaces["."].entry).not.toContain(
-      "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
-    );
+    expect(scriptRootWorkspace.entry).not.toContain("scripts/**/*.{js,mjs,cjs,ts,mts,cts}!");
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty("src/**");
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
@@ -97,6 +137,35 @@ describe("check-deadcode-exports", () => {
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/secret-provider-integrations.mjs",
     );
+  });
+
+  it("audits executable code outside the main source trees", () => {
+    expect(knipConfig.workspaces["."].project).toEqual(
+      expect.arrayContaining([
+        ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "config/**/*.{ts,mts,cts}!",
+        "docs/**/*.js!",
+        "security/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
+      ]),
+    );
+    expect(knipConfig.workspaces["."].entry).toContain("docs/nav-tabs-underline.js!");
+    expect(knipConfig.workspaces["."].entry).toEqual(
+      expect.arrayContaining([
+        "config/knip.config.ts!",
+        "config/knip.all-exports.config.ts!",
+        "config/knip.scripts-exports.config.ts!",
+      ]),
+    );
+    expect(knipConfig.workspaces["examples/ai-chat"]).toEqual({
+      entry: ["index.mjs!"],
+      project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
+    });
+    expect(knipConfig.workspaces["qa/convex-credential-broker"].project).toContain(
+      "convex/**/*.ts!",
+    );
+    expect(knipConfig.workspaces["qa/convex-credential-broker"].ignoreBinaries).toEqual(["convex"]);
   });
 
   it("tracks production script consumers of plugin exports", () => {
@@ -216,11 +285,12 @@ describe("check-deadcode-exports", () => {
   it("parses all compact export sections and expands symbol lists", () => {
     expect(
       parseKnipCompactUnusedExports(`
-Unused exports (4)
+Unused exports (2)
 src/b.ts: beta, alpha
-.agents/skills/example/scripts/main.mjs: run
-config/knip.extra.config.ts: configEntry
 /tmp/outside.ts: noise
+C:\\tmp\\outside.ts: noise
+C:outside.ts: noise
+\\\\server\\share\\outside.ts: noise
 
 Unused exported types (1)
 extensions/example/src/types.ts: ExampleType
@@ -241,8 +311,6 @@ Unused files (1)
 src/noise.ts: src/noise.ts
 `),
     ).toEqual([
-      ".agents/skills/example/scripts/main.mjs: run",
-      "config/knip.extra.config.ts: configEntry",
       "extensions/example/src/types.ts: ExampleType",
       "packages/example/src/state.ts: Ready",
       "src/b.ts: alpha",
@@ -250,6 +318,18 @@ src/noise.ts: src/noise.ts
       "src/namespace.ts: runtimeHelper",
       "src/namespace.ts: RuntimeType",
       "src/protocol.ts: Result (v2)",
+    ]);
+  });
+
+  it("keeps findings from dot-directories and root entry files", () => {
+    expect(
+      parseKnipCompactUnusedExports(`Unused exports (2)
+.agents/skills/example/scripts/check.mjs: checkExample
+tsdown.ai.config.ts: default
+`),
+    ).toEqual([
+      ".agents/skills/example/scripts/check.mjs: checkExample",
+      "tsdown.ai.config.ts: default",
     ]);
   });
 
