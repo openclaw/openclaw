@@ -97,7 +97,7 @@ The authenticated live catalog is authoritative. These rows keep setup and model
 | `baseten/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B` | text        |    202k |       202k |
 | `baseten/openai/gpt-oss-120b`                      | text        |    128k |       128k |
 
-All bundled models support tool calling and reasoning. OpenClaw maps its thinking levels to models with native `reasoning_effort`; for GLM, Kimi, and Nemotron models it sends Baseten's `chat_template_args.enable_thinking` control.
+All bundled models support tool calling and reasoning. OpenClaw maps its thinking levels to models with native `reasoning_effort`. Baseten's opt-in GLM, Kimi, and Nemotron models default to thinking off; most expose a binary off/on control, while GLM 5.2 exposes off, high, and max. OpenClaw sends these choices through Baseten's `chat_template_args.enable_thinking` control and, for GLM 5.2, the validated top-level `reasoning_effort` parameter.
 
 <Note>
 Baseten can add, remove, or change Model APIs independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and input, cached-input, and output pricing from the authenticated API while retaining model-specific OpenClaw transport policy.

@@ -31,7 +31,7 @@ function basetenModel(id: string): OpenAICompletionsModel {
   };
 }
 
-function captureThinkingPayload(modelId: string, thinkingLevel: "off" | "high") {
+function captureThinkingPayload(modelId: string, thinkingLevel: "off" | "high" | undefined) {
   let captured: Record<string, unknown> | undefined;
   const streamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]> = (
     model,
@@ -127,6 +127,7 @@ describe("Baseten provider registration", () => {
       docsPath: "/providers/baseten",
       envVars: ["BASETEN_API_KEY"],
       resolveDynamicModel: expect.any(Function),
+      resolveThinkingProfile: expect.any(Function),
       wrapStreamFn: expect.any(Function),
     });
     expect(choice?.provider.id).toBe("baseten");
@@ -156,6 +157,41 @@ describe("Baseten provider registration", () => {
     expect(captureThinkingPayload("moonshotai/Kimi-K2.6", "off")).toMatchObject({
       chat_template_args: { preserve_me: true, enable_thinking: false },
     });
+    expect(captureThinkingPayload("NVIDIA/Nemotron-120B-A12B", undefined)).toMatchObject({
+      chat_template_args: { preserve_me: true, enable_thinking: false },
+    });
+  });
+
+  it("exposes opt-in thinking without duplicate reasoning levels", async () => {
+    const provider = await registerSingleProviderPlugin(basetenPlugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "baseten",
+        modelId: "moonshotai/Kimi-K2.6",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low", label: "on" }],
+      defaultLevel: "off",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "baseten",
+        modelId: "zai-org/GLM-5.2",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+      defaultLevel: "off",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "baseten",
+        modelId: "thinkingmachines/inkling",
+        reasoning: true,
+      } as never),
+    ).toBeUndefined();
   });
 
   it("leaves default-thinking models untouched", () => {

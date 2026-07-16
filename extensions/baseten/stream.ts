@@ -6,7 +6,7 @@ import { usesBasetenChatTemplateThinking } from "./models.js";
 const BASETEN_DEEPSEEK_V4_MODEL_ID = "deepseek-ai/deepseek-v4-pro";
 
 function isThinkingEnabled(level: ProviderWrapStreamFnContext["thinkingLevel"]): boolean {
-  return level !== "off";
+  return level !== undefined && level !== "off";
 }
 
 function isBasetenDeepSeekV4ModelId(modelId: string): boolean {

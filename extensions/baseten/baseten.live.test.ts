@@ -92,10 +92,11 @@ describeLive("Baseten plugin live", () => {
       const failures: string[] = [];
       for (const model of models) {
         try {
+          const thinkingLevel = model.id === "moonshotai/Kimi-K2.6" ? "low" : "off";
           const wrappedStream = provider.wrapStreamFn?.({
             provider: "baseten",
             modelId: model.id,
-            thinkingLevel: "off",
+            thinkingLevel,
             streamFn: streamSimple,
           } as never);
           if (!wrappedStream) {
@@ -137,7 +138,7 @@ describeLive("Baseten plugin live", () => {
           }
           if (usesBasetenChatTemplateThinking(model.id)) {
             expect(payload?.chat_template_args, model.id).toMatchObject({
-              enable_thinking: false,
+              enable_thinking: thinkingLevel !== "off",
             });
           }
           console.info(`[baseten:live] ${model.id}: ok`);

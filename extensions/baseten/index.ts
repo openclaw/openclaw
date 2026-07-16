@@ -6,6 +6,7 @@ import { BASETEN_DEFAULT_MODEL_REF, resolveBasetenDynamicModel } from "./models.
 import { applyBasetenConfig } from "./onboard.js";
 import { buildBasetenProvider, buildStaticBasetenProvider } from "./provider-catalog.js";
 import { createBasetenThinkingWrapper } from "./stream.js";
+import { resolveBasetenThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "baseten";
 
@@ -60,6 +61,7 @@ export default defineSingleProviderPluginEntry({
       dropReasoningFromHistory: false,
     }),
     wrapStreamFn: (ctx) => createBasetenThinkingWrapper(ctx),
+    resolveThinkingProfile: ({ modelId }) => resolveBasetenThinkingProfile(modelId),
     isModernModelRef: () => true,
   },
 });

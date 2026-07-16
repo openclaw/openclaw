@@ -21,15 +21,15 @@ const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
 const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
-  "zai-org/GLM-4.7",
-  "zai-org/GLM-5",
-  "zai-org/GLM-5.1",
-  "zai-org/GLM-5.2",
-  "moonshotai/Kimi-K2.5",
-  "moonshotai/Kimi-K2.6",
-  "moonshotai/Kimi-K2.7-Code",
-  "nvidia/Nemotron-120B-A12B",
-  "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
+  "zai-org/glm-4.7",
+  "zai-org/glm-5",
+  "zai-org/glm-5.1",
+  "zai-org/glm-5.2",
+  "moonshotai/kimi-k2.5",
+  "moonshotai/kimi-k2.6",
+  "moonshotai/kimi-k2.7-code",
+  "nvidia/nemotron-120b-a12b",
+  "nvidia/nvidia-nemotron-3-ultra-550b-a55b",
 ]);
 
 const FULL_REASONING_EFFORT_MODEL_IDS = new Set([
@@ -60,7 +60,7 @@ export const BASETEN_MODEL_CATALOG = BASETEN_MANIFEST_CATALOG.models;
 
 /** Whether Baseten requires chat-template thinking control for this model. */
 export function usesBasetenChatTemplateThinking(modelId: string): boolean {
-  return CHAT_TEMPLATE_THINKING_MODEL_IDS.has(modelId);
+  return CHAT_TEMPLATE_THINKING_MODEL_IDS.has(modelId.trim().toLowerCase());
 }
 
 function buildBasetenReasoningCompat(modelId: string): ModelCompatConfig {
