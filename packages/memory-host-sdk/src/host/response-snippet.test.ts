@@ -96,4 +96,32 @@ describe("readMemoryHostResponseTextSnippet", () => {
     await expect(read).rejects.toThrow("json aborted");
     expect(canceled).toBe(true);
   });
+
+  it("accepts matching repeated content-length values on JSON responses", async () => {
+    await expect(
+      readResponseJsonWithLimit(
+        new Response("{}", {
+          headers: { "content-length": "0002, 0002" },
+        }),
+        {
+          errorPrefix: "remote memory",
+          maxBytes: 8,
+        },
+      ),
+    ).resolves.toEqual({});
+  });
+
+  it("rejects mismatched repeated content-length values on JSON responses", async () => {
+    await expect(
+      readResponseJsonWithLimit(
+        new Response("{}", {
+          headers: { "content-length": "0002, 2" },
+        }),
+        {
+          errorPrefix: "remote memory",
+          maxBytes: 8,
+        },
+      ),
+    ).rejects.toThrow("remote memory: invalid content-length header: 0002, 2");
+  });
 });
