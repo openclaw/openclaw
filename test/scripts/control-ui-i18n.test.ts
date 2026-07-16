@@ -74,7 +74,8 @@ describe("control-ui-i18n process runner", () => {
     expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en.ts")).toBe(false);
   });
 
-  it("merges translation memory by cache key with the replayed side winning", () => {
+  it("uses the replayed entry when both sides change the same cache key", () => {
+    const base = [{ cache_key: "shared", translated: "base" }];
     const ours = [
       { cache_key: "b", translated: "upstream-only" },
       { cache_key: "shared", translated: "upstream" },
@@ -84,6 +85,7 @@ describe("control-ui-i18n process runner", () => {
       { cache_key: "shared", translated: "branch" },
     ];
     const merged = mergeControlUiTranslationMemory(
+      `${base.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
       `${ours.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
       `${theirs.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     )
@@ -98,12 +100,58 @@ describe("control-ui-i18n process runner", () => {
     ]);
   });
 
+  it("preserves one-sided translation-memory changes and deletions", () => {
+    const base = [
+      { cache_key: "branch-change", translated: "base" },
+      { cache_key: "branch-delete", translated: "base" },
+      { cache_key: "upstream-change", translated: "base" },
+      { cache_key: "upstream-delete", translated: "base" },
+    ];
+    const ours = [
+      { cache_key: "branch-change", translated: "base" },
+      { cache_key: "branch-delete", translated: "base" },
+      { cache_key: "upstream-add", translated: "upstream" },
+      { cache_key: "upstream-change", translated: "upstream" },
+    ];
+    const theirs = [
+      { cache_key: "branch-add", translated: "branch" },
+      { cache_key: "branch-change", translated: "branch" },
+      { cache_key: "upstream-change", translated: "base" },
+      { cache_key: "upstream-delete", translated: "base" },
+    ];
+    const encode = (entries: Array<{ cache_key: string; translated: string }>) =>
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+    const merged = mergeControlUiTranslationMemory(encode(base), encode(ours), encode(theirs))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { cache_key: string; translated: string });
+
+    expect(merged).toEqual([
+      { cache_key: "branch-add", translated: "branch" },
+      { cache_key: "branch-change", translated: "branch" },
+      { cache_key: "upstream-add", translated: "upstream" },
+      { cache_key: "upstream-change", translated: "upstream" },
+    ]);
+  });
+
   it("preserves replayed-side generated-file deletion before regeneration", () => {
     expect(
       resolveControlUiGeneratedConflict(
         "ui/src/i18n/.i18n/de.tm.jsonl",
         '{"cache_key":"stale"}\n',
+        '{"cache_key":"stale"}\n',
         null,
+      ),
+    ).toBeNull();
+  });
+
+  it("preserves stage-2 translation-memory deletion when no records survive", () => {
+    expect(
+      resolveControlUiGeneratedConflict(
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+        '{"cache_key":"a"}\n{"cache_key":"b"}\n',
+        null,
+        '{"cache_key":"a"}\n',
       ),
     ).toBeNull();
   });

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const GENERATED_CONFLICT_RE =
   /^(?:ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks|raw-copy-baseline)\.json|ui\/src\/i18n\/\.i18n\/[^/]+\.(?:meta\.json|tm\.jsonl)|ui\/src\/i18n\/locales\/(?!en\.ts$)[^/]+\.ts)$/u;
@@ -34,15 +35,50 @@ function parseTranslationMemory(raw: string, label: string): TranslationMemoryEn
     });
 }
 
-export function mergeControlUiTranslationMemory(ours: string, theirs: string): string {
-  const merged = new Map<string, TranslationMemoryEntry>();
-  for (const entry of parseTranslationMemory(ours, "stage 2 translation memory")) {
-    merged.set(entry.cache_key, entry);
+function indexTranslationMemory(raw: string, label: string): Map<string, TranslationMemoryEntry> {
+  const indexed = new Map<string, TranslationMemoryEntry>();
+  for (const entry of parseTranslationMemory(raw, label)) {
+    if (indexed.has(entry.cache_key)) {
+      throw new Error(`${label} has duplicate cache_key ${entry.cache_key}`);
+    }
+    indexed.set(entry.cache_key, entry);
   }
-  // During rebase, stage 3 is the replayed branch. Preserve its choice when a
-  // cache key exists on both sides while retaining unique entries from both.
-  for (const entry of parseTranslationMemory(theirs, "stage 3 translation memory")) {
-    merged.set(entry.cache_key, entry);
+  return indexed;
+}
+
+export function mergeControlUiTranslationMemory(
+  base: string,
+  ours: string,
+  theirs: string,
+): string {
+  const baseEntries = indexTranslationMemory(base, "stage 1 translation memory");
+  const oursEntries = indexTranslationMemory(ours, "stage 2 translation memory");
+  const theirsEntries = indexTranslationMemory(theirs, "stage 3 translation memory");
+  const cacheKeys = new Set([
+    ...baseEntries.keys(),
+    ...oursEntries.keys(),
+    ...theirsEntries.keys(),
+  ]);
+  const merged = new Map<string, TranslationMemoryEntry>();
+  for (const cacheKey of cacheKeys) {
+    const baseEntry = baseEntries.get(cacheKey);
+    const oursEntry = oursEntries.get(cacheKey);
+    const theirsEntry = theirsEntries.get(cacheKey);
+    let resolved: TranslationMemoryEntry | undefined;
+    if (isDeepStrictEqual(oursEntry, theirsEntry)) {
+      resolved = oursEntry;
+    } else if (isDeepStrictEqual(oursEntry, baseEntry)) {
+      resolved = theirsEntry;
+    } else if (isDeepStrictEqual(theirsEntry, baseEntry)) {
+      resolved = oursEntry;
+    } else {
+      // Both sides changed the same cache key. During rebase, stage 3 is the
+      // replayed branch; keep its deliberate value or deletion.
+      resolved = theirsEntry;
+    }
+    if (resolved) {
+      merged.set(cacheKey, resolved);
+    }
   }
   const ordered = [...merged.values()].toSorted((left, right) =>
     left.cache_key.localeCompare(right.cache_key),
@@ -54,15 +90,18 @@ export function mergeControlUiTranslationMemory(ours: string, theirs: string): s
 
 export function resolveControlUiGeneratedConflict(
   filePath: string,
+  base: string | null,
   ours: string | null,
   theirs: string | null,
 ): string | null {
   if (theirs === null) {
     return null;
   }
-  return TRANSLATION_MEMORY_RE.test(filePath)
-    ? mergeControlUiTranslationMemory(ours ?? "", theirs)
-    : theirs;
+  if (!TRANSLATION_MEMORY_RE.test(filePath)) {
+    return theirs;
+  }
+  const merged = mergeControlUiTranslationMemory(base ?? "", ours ?? "", theirs);
+  return ours === null && base !== null && !merged ? null : merged;
 }
 
 function runCapture(cwd: string, executable: string, args: string[]): string {
@@ -98,7 +137,7 @@ function runPnpm(cwd: string, args: string[]): void {
   runInherited(cwd, "pnpm", args);
 }
 
-function readIndexStage(cwd: string, stage: 2 | 3, filePath: string): string | null {
+function readIndexStage(cwd: string, stage: 1 | 2 | 3, filePath: string): string | null {
   const result = spawnSync("git", ["show", `:${stage}:${filePath}`], {
     cwd,
     encoding: "utf8",
@@ -123,12 +162,13 @@ function writeResolvedFile(root: string, filePath: string, contents: string): vo
 }
 
 function resolveGeneratedConflict(root: string, filePath: string): void {
+  const base = readIndexStage(root, 1, filePath);
   const ours = readIndexStage(root, 2, filePath);
   const theirs = readIndexStage(root, 3, filePath);
   if (ours === null && theirs === null) {
     throw new Error(`cannot read either conflict stage for ${filePath}`);
   }
-  const resolved = resolveControlUiGeneratedConflict(filePath, ours, theirs);
+  const resolved = resolveControlUiGeneratedConflict(filePath, base, ours, theirs);
   if (resolved === null) {
     rmSync(path.join(root, filePath), { force: true });
     return;
