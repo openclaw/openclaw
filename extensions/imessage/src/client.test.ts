@@ -96,10 +96,15 @@ describe("IMessageRpcClient child stream error handling", () => {
       const { IMessageRpcClient } = await import("./client.js");
       const client = new IMessageRpcClient({ cliPath: "imsg" });
       await client.start();
-      child.stdin.end = () => child.emit("close", 0, null);
+      const endMock = vi.fn(() => {
+        child.emit("close", 0, null);
+        return child.stdin;
+      });
+      child.stdin.end = endMock;
 
       await client.stop();
 
+      expect(endMock).toHaveReturnedWith(child.stdin);
       expect(setTimeoutSpy).toHaveBeenCalledOnce();
       scheduledTimer = setTimeoutSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
       expect(scheduledTimer).toBeDefined();
