@@ -168,7 +168,9 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   );
   const refresh = vi.fn(() => Promise.resolve());
   const refreshReplacement = vi.fn(() => Promise.resolve());
-  const list = vi.fn(() => Promise.resolve<SessionsListResult | null>(null));
+  const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
+    Promise.resolve<SessionsListResult | null>(null),
+  );
   const sessions = {
     get state() {
       return state;
