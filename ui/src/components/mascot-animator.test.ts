@@ -102,6 +102,22 @@ describe("MascotAnimator", () => {
     expect(effects).toContain("sweat");
   });
 
+  it("cancels stale gestures when the mood changes", () => {
+    // Begin as idle (queues the hello wave at +0.9s), then switch mood before
+    // it fires — mirrors the element lifecycle where firstUpdated precedes the
+    // first `updated()` mood application.
+    const animator = new MascotAnimator(9);
+    animator.poseAt(0);
+    animator.setMood("thinking", 0.1);
+
+    for (let frame = 3; frame <= 4 * 30; frame += 1) {
+      const pose = animator.poseAt(frame / 30);
+      // The wave raises the right claw far past anything thinking's base loop
+      // (claw ~0°) or a scheduled claw snap (-8°) can produce.
+      expect(pose.rightClawDegrees).toBeGreaterThan(-15);
+    }
+  });
+
   it("keeps sleepy z's visible through its yawn entrance", () => {
     const animator = new MascotAnimator(7);
     animator.setMood("sleepy", 0);

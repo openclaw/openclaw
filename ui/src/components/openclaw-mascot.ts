@@ -104,6 +104,9 @@ class OpenClawMascot extends LitElement {
   }
 
   protected override firstUpdated(): void {
+    // Seed the animator's mood before the first pose so `begin()` schedules
+    // for the real mood; `updated()` runs after this and would be too late.
+    this.animator.setMood(this.resolvedMood, currentSeconds());
     this.drawCurrentFrame(currentSeconds());
     this.syncPlayback();
   }

@@ -125,6 +125,10 @@ export class MascotAnimator {
       return;
     }
     this.currentMood = mood;
+    // A queued hello-wave or a mid-flight gesture from the previous mood would
+    // otherwise keep animating into the new mood's body language.
+    this.pendingGesture = null;
+    this.activeGesture = null;
     this.rescheduleMoodBeat(time);
     const entrance = this.entranceGesture(mood);
     if (entrance) {
