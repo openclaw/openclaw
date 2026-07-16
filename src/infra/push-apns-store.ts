@@ -15,7 +15,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { normalizeApnsRelayBaseUrl } from "./push-apns.relay.js";
+import {
+  normalizeApnsRelayBaseUrl,
+  normalizePersistedApnsRelayBaseUrl,
+} from "./push-apns.relay.js";
 
 export type ApnsEnvironment = "sandbox" | "production";
 
@@ -179,6 +182,18 @@ function normalizeRelayOrigin(
   return normalized.ok ? normalized.value : undefined;
 }
 
+function normalizePersistedRelayOrigin(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = normalizePersistedApnsRelayBaseUrl(trimmed);
+  return normalized.ok ? normalized.value : undefined;
+}
+
 /** Normalizes the APNs environment string accepted by registration inputs. */
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
   if (typeof value !== "string") {
@@ -232,7 +247,7 @@ function normalizeRelayRegistration(
     relayHandle?: unknown;
     sendGrant?: unknown;
   },
-  env: NodeJS.ProcessEnv = process.env,
+  normalizeOrigin: (value: unknown) => string | undefined,
 ): RelayApnsRegistration | null {
   if (
     typeof record.nodeId !== "string" ||
@@ -249,7 +264,7 @@ function normalizeRelayRegistration(
   const topic = normalizeApnsTopic(typeof record.topic === "string" ? record.topic : "");
   const environment = normalizeApnsEnvironment(record.environment);
   const distribution = normalizeDistribution(record.distribution);
-  const relayOrigin = normalizeRelayOrigin(record.relayOrigin, env);
+  const relayOrigin = normalizeOrigin(record.relayOrigin);
   const updatedAtMs =
     typeof record.updatedAtMs === "number" &&
     Number.isSafeInteger(record.updatedAtMs) &&
@@ -283,10 +298,9 @@ function normalizeRelayRegistration(
   };
 }
 
-/** Normalizes one canonical registration with an explicit transport discriminator. */
-export function normalizeCanonicalApnsRegistration(
+function normalizeCanonicalApnsRegistrationWithRelayOrigin(
   record: unknown,
-  env: NodeJS.ProcessEnv = process.env,
+  normalizeOrigin: (value: unknown) => string | undefined,
 ): ApnsRegistration | null {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     return null;
@@ -294,7 +308,7 @@ export function normalizeCanonicalApnsRegistration(
   const candidate = record as Record<string, unknown>;
   const transport = normalizeLowercaseStringOrEmpty(candidate.transport);
   if (transport === "relay") {
-    return normalizeRelayRegistration(candidate as Partial<RelayApnsRegistration>, env);
+    return normalizeRelayRegistration(candidate as Partial<RelayApnsRegistration>, normalizeOrigin);
   }
   if (transport === "direct") {
     return normalizeDirectRegistration(candidate as Partial<DirectApnsRegistration>);
@@ -302,12 +316,19 @@ export function normalizeCanonicalApnsRegistration(
   return null;
 }
 
-export function apnsRegistrationFromRow(
-  row: ApnsRegistrationRow,
+/** Normalizes one canonical registration with an explicit transport discriminator. */
+export function normalizeCanonicalApnsRegistration(
+  record: unknown,
   env: NodeJS.ProcessEnv = process.env,
-): ApnsRegistration {
+): ApnsRegistration | null {
+  return normalizeCanonicalApnsRegistrationWithRelayOrigin(record, (value) =>
+    normalizeRelayOrigin(value, env),
+  );
+}
+
+export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistration {
   const { token } = row;
-  const normalized = normalizeCanonicalApnsRegistration(
+  const normalized = normalizeCanonicalApnsRegistrationWithRelayOrigin(
     {
       nodeId: row.node_id,
       transport: row.transport,
@@ -322,7 +343,7 @@ export function apnsRegistrationFromRow(
       tokenDebugSuffix: row.token_debug_suffix ?? undefined,
       updatedAtMs: row.updated_at_ms,
     },
-    env,
+    normalizePersistedRelayOrigin,
   );
   if (!normalized) {
     throw new Error(`invalid APNs registration row for node ${row.node_id}`);

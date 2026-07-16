@@ -9,7 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   clearApnsRegistrationIfCurrent,
@@ -38,7 +38,7 @@ describe("legacy APNs Doctor migration", () => {
 
   function useStateDir(): string {
     const stateDir = tempDirs.make("openclaw-apns-migration-");
-    envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+    envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_APNS_RELAY_ALLOW_HTTP"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     return stateDir;
   }
@@ -256,6 +256,11 @@ describe("legacy APNs Doctor migration", () => {
       .db.prepare("SELECT relay_origin FROM apns_registrations WHERE node_id = ?")
       .get("legacy-relay");
     expect(row).toEqual({ relay_origin: "http://127.0.0.1:18791" });
+    closeOpenClawStateDatabaseForTest();
+    deleteTestEnvValue("OPENCLAW_APNS_RELAY_ALLOW_HTTP");
+    await expect(loadApnsRegistration("legacy-relay", stateDir)).resolves.toMatchObject({
+      relayOrigin: "http://127.0.0.1:18791",
+    });
   });
 
   it.each([

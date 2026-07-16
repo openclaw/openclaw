@@ -279,7 +279,7 @@ function importAndRecordReceipt(params: {
         if (existing) {
           // SQLite is already canonical. Never let a stale retired file replace a
           // registration created or invalidated by the current runtime.
-          apnsRegistrationFromRow(existing, params.env);
+          apnsRegistrationFromRow(existing);
           preserved += 1;
           expectedNodeIds.push(nodeId);
         } else if (tombstone) {
@@ -302,7 +302,7 @@ function importAndRecordReceipt(params: {
         if (!verified) {
           throw new Error(`SQLite verification failed for APNs node ${nodeId}`);
         }
-        apnsRegistrationFromRow(verified, params.env);
+        apnsRegistrationFromRow(verified);
       }
 
       const reportJson = JSON.stringify({
