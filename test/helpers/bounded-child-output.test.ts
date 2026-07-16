@@ -22,4 +22,21 @@ describe("bounded child output", () => {
 
     expect(output.text()).toBe("x-recent");
   });
+
+  it("drops split UTF-8 prefixes after buffered output overflow", () => {
+    const output = createBoundedChildOutput(7);
+
+    output.append(Buffer.from("prefix 😀"));
+    output.append(Buffer.from("tail"));
+
+    expect(output.text()).toBe("tail");
+  });
+
+  it("drops split UTF-8 prefixes from single oversized chunks", () => {
+    const output = createBoundedChildOutput(7);
+
+    output.append(Buffer.from("prefix 😀tail"));
+
+    expect(output.text()).toBe("tail");
+  });
 });
