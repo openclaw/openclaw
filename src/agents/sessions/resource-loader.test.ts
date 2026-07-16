@@ -31,5 +31,4 @@ describe("DefaultResourceLoader", () => {
       consoleError.mockRestore();
     }
   });
-
 });

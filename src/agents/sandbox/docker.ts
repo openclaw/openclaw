@@ -7,10 +7,7 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
-import {
-  sanitizeEnvVars,
-  sanitizeExplicitSandboxEnvVars,
-} from "./sanitize-env-vars.js";
+import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
