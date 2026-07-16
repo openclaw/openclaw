@@ -6,7 +6,9 @@ Android release builds use pinned app metadata instead of auto-bumping `build.gr
 
 - `apps/android/version.json` is the source of truth.
 - `version` is the Play `versionName` and uses CalVer: `YYYY.M.D`.
-- `versionCode` uses `YYYYMMDDNN`, where `NN` is a two-digit build number for that pinned app version.
+- the phone `versionCode` uses `YYYYMMDDNN`, where `NN` is a two-digit build number for that pinned app version.
+- the generated Wear `versionCode` uses the independent `YYMMDDNN1` range. The final `1` identifies the Wear
+  form factor, so phone and watch artifacts never reuse a Play version code.
 - `apps/android/Config/Version.properties` is generated from `version.json` and read by Gradle.
 - `apps/android/CHANGELOG.md` is the Android-only changelog and release-note source.
 - `apps/android/fastlane/metadata/android/en-US/release_notes.txt` is generated from the changelog.
@@ -14,8 +16,13 @@ Android release builds use pinned app metadata instead of auto-bumping `build.gr
 Examples:
 
 - `version = 2026.6.2`
-- `versionCode = 2026060201`
-- another upload on the same release train: `versionCode = 2026060202`
+- phone `versionCode = 2026060201`
+- Wear `versionCode = 260602011`
+- another upload on the same release train: phone `2026060202`, Wear `260602021`
+
+The separate Wear range follows the
+[Wear OS packaging requirement](https://developer.android.com/training/wearables/packaging#version-code)
+that watch artifacts use version codes unique across form factors.
 
 ## Commands
 

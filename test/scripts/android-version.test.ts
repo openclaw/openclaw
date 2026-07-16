@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalAndroidWearVersionCode,
   canonicalAndroidVersionCode,
   extractChangelogSection,
   normalizeGatewayVersionToPinnedAndroidVersion,
@@ -176,6 +177,11 @@ describe("gateway version normalization", () => {
     expect(canonicalAndroidVersionCode("2026.6.2")).toBe(2026060201);
   });
 
+  it("derives a dedicated Play-compatible Wear versionCode range", () => {
+    expect(canonicalAndroidWearVersionCode(2026060201, "2026.6.2")).toBe(260602011);
+    expect(canonicalAndroidWearVersionCode(2026060202, "2026.6.2")).toBe(260602021);
+  });
+
   it("rejects pinned versions that cannot derive Play-compatible version codes", () => {
     expect(() => canonicalAndroidVersionCode("2026.6.100")).toThrow(
       "Unable to derive Android versionCode from 2026.6.100",
@@ -219,6 +225,9 @@ describe("renderAndroidVersionProperties", () => {
     );
     expect(renderAndroidVersionProperties(version)).toContain(
       "OPENCLAW_ANDROID_VERSION_CODE=2026060201",
+    );
+    expect(renderAndroidVersionProperties(version)).toContain(
+      "OPENCLAW_ANDROID_WEAR_VERSION_CODE=260602011",
     );
   });
 });
