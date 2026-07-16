@@ -64,13 +64,6 @@ const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Set<string>();
 
-function waitForRequesterSettleWakeRetry(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
-}
-
 function runIntervalsOverlap(a: SettledRunSummary, b: SettledRunSummary): boolean {
   const aEnd = typeof a.endedAt === "number" ? a.endedAt : Number.MAX_SAFE_INTEGER;
   const bEnd = typeof b.endedAt === "number" ? b.endedAt : Number.MAX_SAFE_INTEGER;
@@ -255,128 +248,124 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   activeRequesterSettleWakeBatches.add(wakeKeyBase);
 
   try {
-    while (!params.signal?.aborted) {
-      let state = readSharedBatchState(settledBatch);
-      if (!settledBatch.some((entry) => entry.requesterSettleWake)) {
-        return false;
-      }
-      if (state.nextAttemptAt !== undefined) {
-        const waitMs = Math.max(0, state.nextAttemptAt - Date.now());
-        if (waitMs > 0) {
-          await waitForRequesterSettleWakeRetry(waitMs);
-          if (params.signal?.aborted) {
-            return false;
-          }
-          state = readSharedBatchState(settledBatch);
-        }
-      }
-      // A requester may spawn more work while this durable batch is waiting
-      // or replaying. Keep the frozen batch pending until the new work drains.
-      if (requesterHasUnsettledDescendants()) {
-        deferRequesterSettleWakeBatch({
-          batchRunIds,
-          state,
-          transitionBatch: params.transitionBatch,
-        });
-        return false;
-      }
+    if (params.signal?.aborted) {
+      return false;
+    }
+    let state = readSharedBatchState(settledBatch);
+    if (!settledBatch.some((entry) => entry.requesterSettleWake)) {
+      return false;
+    }
+    if ((state.nextAttemptAt ?? 0) > Date.now()) {
+      // Lifecycle owns the durable deadline timer and re-admits root work.
+      // Returning here keeps restart/suspend drains free during backoff.
+      return false;
+    }
+    // A requester may spawn more work while this durable batch is waiting
+    // or replaying. Keep the frozen batch pending until the new work drains.
+    if (requesterHasUnsettledDescendants()) {
+      deferRequesterSettleWakeBatch({
+        batchRunIds,
+        state,
+        transitionBatch: params.transitionBatch,
+      });
+      return false;
+    }
 
-      let attemptIndex: number;
-      if (state.status === "dispatching") {
-        // Restart after admission replays the same idempotency key. The gateway
-        // can return the already-completed turn without creating a duplicate.
-        attemptIndex = Math.max(0, state.attemptCount - 1);
-      } else {
-        if (state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
-          params.completeBatch(batchRunIds);
-          return false;
-        }
-        attemptIndex = state.attemptCount;
-        state = {
-          status: "dispatching",
-          attemptCount: state.attemptCount + 1,
-          batchRunIds,
-        };
-        params.transitionBatch(batchRunIds, state);
-      }
-
-      let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
-      try {
-        delivery = await deliverSubagentAnnouncement({
-          requesterSessionKey,
-          triggerMessage: wakeMessage,
-          steerMessage: wakeMessage,
-          summaryLine: "all spawned subagents settled",
-          requesterSessionOrigin,
-          requesterOrigin: requesterSessionOrigin,
-          directOrigin,
-          sourceSessionKey: currentSettledEntry.childSessionKey,
-          sourceChannel: INTERNAL_MESSAGE_CHANNEL,
-          sourceTool: "subagent_announce",
-          targetRequesterSessionKey: requesterSessionKey,
-          requesterIsSubagent: false,
-          expectsCompletionMessage: false,
-          directIdempotencyKey: buildAnnounceIdempotencyKey(
-            attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
-          ),
-          signal: params.signal,
-        });
-      } catch (error) {
-        // A transport exception can arrive after gateway admission. Replay the
-        // same persisted idempotency key; only a known no-turn result may rotate it.
-        const lastError = error instanceof Error ? error.message : String(error);
-        const replayCount = (state.replayCount ?? 0) + 1;
-        const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[replayCount - 1];
-        if (
-          replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
-          retryDelayMs === undefined
-        ) {
-          params.completeBatch(batchRunIds);
-          return false;
-        }
-        const nextAttemptAt = Date.now() + retryDelayMs;
-        state = {
-          status: "dispatching",
-          attemptCount: state.attemptCount,
-          replayCount,
-          nextAttemptAt,
-          batchRunIds,
-          lastError,
-        };
-        params.transitionBatch(batchRunIds, state);
-        logWarn(
-          `requester settle wake transport replay ${replayCount} scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
-        );
-        continue;
-      }
-      if (delivery.delivered) {
-        params.completeBatch(batchRunIds);
-        return true;
-      }
-      if (delivery.terminal === true || delivery.reason === "requester_abandoned") {
+    let attemptIndex: number;
+    if (state.status === "dispatching") {
+      // Restart after admission replays the same idempotency key. The gateway
+      // can return the already-completed turn without creating a duplicate.
+      attemptIndex = Math.max(0, state.attemptCount - 1);
+    } else {
+      if (state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS) {
         params.completeBatch(batchRunIds);
         return false;
       }
+      attemptIndex = state.attemptCount;
+      state = {
+        status: "dispatching",
+        attemptCount: state.attemptCount + 1,
+        batchRunIds,
+      };
+      params.transitionBatch(batchRunIds, state);
+    }
 
-      const attemptCount = attemptIndex + 1;
-      const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptIndex];
-      if (attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS || retryDelayMs === undefined) {
+    let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
+    try {
+      delivery = await deliverSubagentAnnouncement({
+        requesterSessionKey,
+        triggerMessage: wakeMessage,
+        steerMessage: wakeMessage,
+        summaryLine: "all spawned subagents settled",
+        requesterSessionOrigin,
+        requesterOrigin: requesterSessionOrigin,
+        directOrigin,
+        sourceSessionKey: currentSettledEntry.childSessionKey,
+        sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+        sourceTool: "subagent_announce",
+        targetRequesterSessionKey: requesterSessionKey,
+        requesterIsSubagent: false,
+        expectsCompletionMessage: false,
+        directIdempotencyKey: buildAnnounceIdempotencyKey(
+          attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
+        ),
+        signal: params.signal,
+      });
+    } catch (error) {
+      // A transport exception can arrive after gateway admission. Replay the
+      // same persisted idempotency key; only a known no-turn result may rotate it.
+      const lastError = error instanceof Error ? error.message : String(error);
+      const replayCount = (state.replayCount ?? 0) + 1;
+      const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[replayCount - 1];
+      if (
+        replayCount >= REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS ||
+        retryDelayMs === undefined
+      ) {
         params.completeBatch(batchRunIds);
         return false;
       }
-      const lastError = delivery.error ?? delivery.reason ?? "undelivered";
       const nextAttemptAt = Date.now() + retryDelayMs;
-      params.transitionBatch(batchRunIds, {
-        status: "pending",
-        attemptCount,
+      state = {
+        status: "dispatching",
+        attemptCount: state.attemptCount,
+        replayCount,
         nextAttemptAt,
         batchRunIds,
         lastError,
-      });
+      };
+      params.transitionBatch(batchRunIds, state);
       logWarn(
-        `requester settle wake attempt ${attemptCount} failed; retrying in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
+        `requester settle wake transport replay ${replayCount} scheduled in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
       );
+      return false;
     }
+    if (delivery.delivered) {
+      params.completeBatch(batchRunIds);
+      return true;
+    }
+    if (delivery.terminal === true || delivery.reason === "requester_abandoned") {
+      params.completeBatch(batchRunIds);
+      return false;
+    }
+
+    const attemptCount = attemptIndex + 1;
+    const retryDelayMs = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptIndex];
+    if (attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS || retryDelayMs === undefined) {
+      params.completeBatch(batchRunIds);
+      return false;
+    }
+    const lastError = delivery.error ?? delivery.reason ?? "undelivered";
+    const nextAttemptAt = Date.now() + retryDelayMs;
+    params.transitionBatch(batchRunIds, {
+      status: "pending",
+      attemptCount,
+      nextAttemptAt,
+      batchRunIds,
+      lastError,
+    });
+    logWarn(
+      `requester settle wake attempt ${attemptCount} failed; retrying in ${Math.round(retryDelayMs / 1000)}s: ${lastError}`,
+    );
     return false;
   } finally {
     activeRequesterSettleWakeBatches.delete(wakeKeyBase);

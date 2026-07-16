@@ -416,10 +416,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     deliverSpy.mockResolvedValueOnce({ delivered: false, path: "direct" });
 
     vi.useFakeTimers();
+    vi.setSystemTime(0);
     try {
-      const wakePromise = maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(deliverSpy).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(30_000);
-      const woke = await wakePromise;
+      const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
       expect(woke).toBe(true);
       expect(deliverSpy).toHaveBeenCalledTimes(2);
@@ -439,10 +441,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
-      const wakePromise = maybeWakeRequesterAfterAllChildrenSettled(
-        wakeParams({ settledEntry: children[1] }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+      ).toBe(false);
       expect(children[0].requesterSettleWake).toMatchObject({
         status: "dispatching",
         attemptCount: 1,
@@ -452,7 +453,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       });
 
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(await wakePromise).toBe(true);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+      ).toBe(true);
       expect(deliverSpy).toHaveBeenCalledTimes(2);
       expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
         `announce:requester-settle:${REQUESTER}:run-a,run-b`,
@@ -475,14 +478,15 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
-      const wakePromise = maybeWakeRequesterAfterAllChildrenSettled(
-        wakeParams({ settledEntry: children[1] }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+      ).toBe(false);
       expect(deliverSpy).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(await wakePromise).toBe(false);
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+      ).toBe(false);
       expect(deliverSpy).toHaveBeenCalledTimes(1);
       expect(children[0].requesterSettleWake?.status).toBe("pending");
     } finally {
@@ -498,11 +502,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     deliverSpy.mockResolvedValue({ delivered: false, path: "direct" });
 
     vi.useFakeTimers();
+    vi.setSystemTime(0);
     try {
-      const wakePromise = maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
       await vi.advanceTimersByTimeAsync(30_000);
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
       await vi.advanceTimersByTimeAsync(120_000);
-      const woke = await wakePromise;
+      const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
       expect(woke).toBe(false);
       expect(deliverSpy).toHaveBeenCalledTimes(3);
@@ -523,6 +529,23 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(woke).toBe(false);
     expect(deliverSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume retry budget when aborted before dispatch", async () => {
+    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
+    const abortController = new AbortController();
+    registryRuntimeMock.listSubagentRunsForRequester.mockImplementation(() => {
+      abortController.abort();
+      return children;
+    });
+
+    expect(
+      await maybeWakeRequesterAfterAllChildrenSettled(
+        wakeParams({ settledEntry: children[1], signal: abortController.signal }),
+      ),
+    ).toBe(false);
+    expect(transitionBatchSpy).not.toHaveBeenCalled();
+    expect(deliverSpy).not.toHaveBeenCalled();
   });
 
   describe("restart-persistent outbox", () => {
@@ -694,13 +717,19 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       vi.useFakeTimers();
       vi.setSystemTime(0);
       try {
-        const wake = maybeWakeRequesterAfterAllChildrenSettled(
-          wakeParams({ settledEntry: children[0] }),
-        );
+        expect(
+          await maybeWakeRequesterAfterAllChildrenSettled(
+            wakeParams({ settledEntry: children[0] }),
+          ),
+        ).toBe(false);
         await vi.advanceTimersByTimeAsync(29_999);
         expect(deliverSpy).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
-        expect(await wake).toBe(true);
+        expect(
+          await maybeWakeRequesterAfterAllChildrenSettled(
+            wakeParams({ settledEntry: children[0] }),
+          ),
+        ).toBe(true);
         expect(deliveredCallArg().directIdempotencyKey).toBe(
           `announce:requester-settle:${REQUESTER}:run-a,run-b:retry-1`,
         );
