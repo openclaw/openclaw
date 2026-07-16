@@ -1,38 +1,69 @@
-import { describe, expect, it } from "vitest";
-import { shouldFireFirstReplyConfetti } from "./confetti.ts";
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { fireFirstReplyConfetti } from "./confetti.ts";
 
-function createStorage(initial: Record<string, string> = {}) {
-  const values = new Map(Object.entries(initial));
-  return {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
-    values,
-  };
+const FLAG_KEY = "openclaw.confetti.firstReply";
+
+function stubMatchMedia(reducedMotion: boolean): void {
+  vi.stubGlobal(
+    "matchMedia",
+    (query: string) =>
+      ({
+        matches: reducedMotion && query.includes("prefers-reduced-motion"),
+        media: query,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+      }) as unknown as MediaQueryList,
+  );
 }
 
-describe("shouldFireFirstReplyConfetti", () => {
-  it("claims the first reply once", () => {
-    const storage = createStorage();
+describe("fireFirstReplyConfetti", () => {
+  let storage: Storage;
 
-    expect(shouldFireFirstReplyConfetti(storage)).toBe(true);
-    expect(storage.values.get("openclaw.confetti.firstReply")).toBe("1");
-    expect(shouldFireFirstReplyConfetti(storage)).toBe(false);
+  beforeEach(() => {
+    storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage);
+    stubMatchMedia(false);
+    // jsdom canvases have no 2d context; stub a minimal drawing surface so the
+    // burst path runs deterministically.
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      setTransform: () => undefined,
+      clearRect: () => undefined,
+      save: () => undefined,
+      restore: () => undefined,
+      translate: () => undefined,
+      rotate: () => undefined,
+      fillRect: () => undefined,
+    } as unknown as CanvasRenderingContext2D);
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+  });
+
+  afterEach(() => {
+    document.querySelectorAll("canvas").forEach((canvas) => canvas.remove());
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("celebrates the first reply exactly once", () => {
+    fireFirstReplyConfetti();
+    expect(storage.getItem(FLAG_KEY)).toBe("1");
+    expect(document.querySelectorAll("canvas")).toHaveLength(1);
+
+    fireFirstReplyConfetti();
+    expect(document.querySelectorAll("canvas")).toHaveLength(1);
   });
 
   it("skips a browser profile that already celebrated", () => {
-    const storage = createStorage({ "openclaw.confetti.firstReply": "1" });
-
-    expect(shouldFireFirstReplyConfetti(storage)).toBe(false);
+    storage.setItem(FLAG_KEY, "1");
+    fireFirstReplyConfetti();
+    expect(document.querySelectorAll("canvas")).toHaveLength(0);
   });
 
-  it("fails closed when storage is unavailable", () => {
-    const storage = {
-      getItem: () => {
-        throw new Error("blocked");
-      },
-      setItem: () => undefined,
-    };
-
-    expect(shouldFireFirstReplyConfetti(storage)).toBe(false);
+  it("skips reduced-motion users without burning the once-flag", () => {
+    stubMatchMedia(true);
+    fireFirstReplyConfetti();
+    expect(document.querySelectorAll("canvas")).toHaveLength(0);
+    expect(storage.getItem(FLAG_KEY)).toBeNull();
   });
 });

@@ -14,7 +14,7 @@ type ConfettiParticle = {
   rotation: number;
 };
 
-export function shouldFireFirstReplyConfetti(storage: ConfettiStorage): boolean {
+function shouldFireFirstReplyConfetti(storage: ConfettiStorage): boolean {
   try {
     if (storage.getItem(FIRST_REPLY_CONFETTI_KEY) !== null) {
       return false;
@@ -28,7 +28,8 @@ export function shouldFireFirstReplyConfetti(storage: ConfettiStorage): boolean 
 
 function createParticles(): ConfettiParticle[] {
   return Array.from({ length: PARTICLE_COUNT }, (_, index) => ({
-    color: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
+    // noUncheckedIndexedAccess cannot see the modulo bound; index 0 is typed.
+    color: CONFETTI_COLORS[index % CONFETTI_COLORS.length] ?? CONFETTI_COLORS[0],
     angle: -Math.PI * (0.2 + Math.random() * 0.6),
     speed: 260 + Math.random() * 360,
     size: 4 + Math.random() * 5,
