@@ -1,7 +1,14 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
+import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
-import { ReefRelayError, ReefTransportClient } from "./transport.js";
+import {
+  ReefInboxConnection,
+  ReefRelayError,
+  ReefTransportClient,
+  createReefWebSocket,
+} from "./transport.js";
 import type { ReefKeys, RelayFriend } from "./types.js";
 
 const ts = 1_752_300_000;
@@ -316,5 +323,93 @@ describe("ReefTransportClient response body bounds", () => {
       status: 502,
       message: "relay HTTP 502",
     });
+  });
+});
+
+const INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
+
+function inboxFrameAtSize(bytes: number): string {
+  const prefix =
+    '{"type":"entry","entry":{"seq":1,"peer":"bob","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","kind":"receipt","receipt":{"pad":"';
+  const suffix = '"},"ts":1752300000}}';
+  return `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
+}
+
+async function deliverInboxFrame(frame: string): Promise<{
+  entries: unknown[];
+  states: string[];
+}> {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("WebSocket test server did not bind a TCP port");
+  }
+  const entries: unknown[] = [];
+  const states: string[] = [];
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), 2_000);
+  server.once("connection", (socket) => socket.send(frame));
+  const client = new ReefTransportClient(
+    `http://127.0.0.1:${address.port}`,
+    "alice",
+    keys,
+    async () => Response.json({ entries: [], cursor: 0 }),
+    () => ts,
+  );
+  const inbox = new ReefInboxConnection(
+    client,
+    async (received) => {
+      entries.push(...received);
+      abort.abort();
+    },
+    createReefWebSocket,
+    (state) => {
+      states.push(state);
+      if (state === "disconnected") {
+        abort.abort();
+      }
+    },
+  );
+
+  try {
+    await inbox.start(abort.signal);
+  } finally {
+    clearTimeout(timeout);
+    for (const socket of server.clients) {
+      socket.terminate();
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+  return { entries, states };
+}
+
+describe("ReefInboxConnection response frame bounds", () => {
+  it("accepts a relay frame exactly at the payload limit", async () => {
+    const frame = inboxFrameAtSize(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES);
+
+    const result = await deliverInboxFrame(frame);
+
+    expect(Buffer.byteLength(frame)).toBe(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES);
+    expect(result.entries).toHaveLength(1);
+    expect(result.states).toContain("connected");
+  });
+
+  it("rejects a relay frame above the payload limit before dispatch", async () => {
+    const frame = inboxFrameAtSize(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES + 1);
+
+    const result = await deliverInboxFrame(frame);
+
+    expect(Buffer.byteLength(frame)).toBe(INBOX_WEBSOCKET_MAX_PAYLOAD_BYTES + 1);
+    expect(result.entries).toEqual([]);
+    expect(result.states).toEqual(["connected", "disconnected"]);
   });
 });
