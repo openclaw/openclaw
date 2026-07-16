@@ -45,10 +45,11 @@ function traceSkillCommandOnce(
   skillsLogger.trace(message, meta);
 }
 
-/** Test-only: resets the skill command debug dedupe cache. */
-export function resetSkillCommandDebugCacheForTest() {
+function resetSkillCommandDebugCacheForTest(): void {
   skillCommandDebugOnce.clear();
 }
+
+export const testing = { resetSkillCommandDebugCacheForTest } as const;
 
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(raw)

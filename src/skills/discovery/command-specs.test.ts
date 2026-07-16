@@ -2,10 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
-import {
-  buildWorkspaceSkillCommandSpecs,
-  resetSkillCommandDebugCacheForTest,
-} from "./command-specs.js";
+import { buildWorkspaceSkillCommandSpecs, testing } from "./command-specs.js";
 
 const bundleCommandState = vi.hoisted(() => ({
   entries: [] as Array<{
@@ -36,7 +33,7 @@ vi.mock("../loading/workspace.js", () => ({
 }));
 
 beforeEach(() => {
-  resetSkillCommandDebugCacheForTest();
+  testing.resetSkillCommandDebugCacheForTest();
   skillsLoggerMock.debug.mockClear();
   skillsLoggerMock.trace.mockClear();
 });
@@ -122,7 +119,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     buildWorkspaceSkillCommandSpecs("/workspace", { entries: [] });
     expect(skillsLoggerMock.debug).toHaveBeenCalledTimes(1025);
 
-    bundleCommandState.entries = [entries[0]];
+    bundleCommandState.entries = [entries[0]!];
     buildWorkspaceSkillCommandSpecs("/workspace", { entries: [] });
     expect(skillsLoggerMock.debug).toHaveBeenCalledTimes(1026);
   });
