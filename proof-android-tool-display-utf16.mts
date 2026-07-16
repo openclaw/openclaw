@@ -23,8 +23,13 @@ let failed = 0;
 
 function assert(description: string, fn: () => boolean) {
   try {
-    if (fn()) { passed++; console.log("  ok: %s", description); }
-    else { failed++; console.log("  FAIL: %s", description); }
+    if (fn()) {
+      passed++;
+      console.log("  ok: %s", description);
+    } else {
+      failed++;
+      console.log("  FAIL: %s", description);
+    }
   } catch (err) {
     failed++;
     console.log("  FAIL: %s — %s", description, (err as Error).message);
@@ -75,7 +80,11 @@ console.log("input[157]=U+%s (low surrogate)", boundaryInput.charCodeAt(157).toS
 
   assert("take(157) returns 157 code units", () => bad.length === 157);
   assert("take(157) ends on a high surrogate (malformed Unicode)", () => isHighSurrogate(badLast));
-  assert("take(157) drops the low surrogate", () => boundaryInput.charCodeAt(157) === 0xde00 && bad.indexOf(String.fromCharCode(0xde00)) === -1);
+  assert(
+    "take(157) drops the low surrogate",
+    () =>
+      boundaryInput.charCodeAt(157) === 0xde00 && bad.indexOf(String.fromCharCode(0xde00)) === -1,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +100,11 @@ console.log("input[157]=U+%s (low surrogate)", boundaryInput.charCodeAt(157).toS
   assert("takeUtf16Safe(157) returns ≤157 code units", () => safe.length <= 157);
   assert("takeUtf16Safe(157) does NOT end on a high surrogate", () => !isHighSurrogate(safeLast));
   // Split case: the emoji is dropped entirely (156 chars)
-  console.log("  info: dropped emoji=%s safe_len=%d", boundaryInput.length > 160 && safe.length === 156, safe.length);
+  console.log(
+    "  info: dropped emoji=%s safe_len=%d",
+    boundaryInput.length > 160 && safe.length === 156,
+    safe.length,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +117,9 @@ console.log("input[157]=U+%s (low surrogate)", boundaryInput.charCodeAt(157).toS
   console.log("  result.length=%d", complete.length);
   console.log("  contains emoji=%s", complete.includes("\uD83D\uDE00"));
 
-  assert("takeUtf16Safe(157) keeps the emoji when it fits", () => complete.includes("\uD83D\uDE00"));
+  assert("takeUtf16Safe(157) keeps the emoji when it fits", () =>
+    complete.includes("\uD83D\uDE00"),
+  );
   assert("result starts with 155 a's prefix", () => complete.startsWith(completePrefix));
 }
 
@@ -180,7 +195,11 @@ console.log("input[157]=U+%s (low surrogate)", boundaryInput.charCodeAt(157).toS
   }
 
   // Cleanup HTML
-  try { unlinkSync(htmlPath); } catch { /* ok */ }
+  try {
+    unlinkSync(htmlPath);
+  } catch {
+    /* ok */
+  }
 }
 
 // ---------------------------------------------------------------------------
