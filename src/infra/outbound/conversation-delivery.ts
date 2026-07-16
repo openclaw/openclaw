@@ -1,6 +1,8 @@
 /** Shared external-conversation delivery and transcript correlation helpers. */
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import type { ConversationRecord } from "../../config/sessions/conversation-registry.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   appendAssistantMessageToSessionTranscript,
   type SessionTranscriptAssistantMessage,
@@ -14,6 +16,7 @@ type AppendAssistantMessageParams = Parameters<typeof appendAssistantMessageToSe
 export type ConversationDeliveryDeps = {
   appendAssistantMessage: typeof appendAssistantMessageToSessionTranscript;
   beforeMessageWrite: NonNullable<AppendAssistantMessageParams["beforeMessageWrite"]>;
+  loadSessionEntry: typeof loadSessionEntry;
   runMessageAction: typeof runMessageAction;
 };
 
@@ -41,6 +44,29 @@ function buildConversationDeliveryMirror(params: {
     ...(replayInBackingSession ? { replay: "backing-session" } : {}),
     ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
   };
+}
+
+function resolveConversationDeliveryContext(params: {
+  deps: ConversationDeliveryDeps;
+  context: ConversationDeliveryContext;
+}): ConversationDeliveryContext {
+  if (params.context.sourceSessionId || !params.context.sourceSessionKey) {
+    return params.context;
+  }
+  const configuredStore = params.context.config.session?.store;
+  const sourceSessionId = params.deps.loadSessionEntry({
+    agentId: params.context.agentId,
+    sessionKey: params.context.sourceSessionKey,
+    ...(configuredStore
+      ? {
+          storePath: resolveStorePath(configuredStore, {
+            agentId: params.context.agentId,
+          }),
+        }
+      : {}),
+    readConsistency: "latest",
+  })?.sessionId;
+  return sourceSessionId ? { ...params.context, sourceSessionId } : params.context;
 }
 
 function readMessageIdFromActionResult(result: MessageActionRunResult): string | undefined {
@@ -107,9 +133,13 @@ export async function sendConversationMessage(params: {
   deliveredMessage?: string;
   messageId?: string;
 }> {
+  const context = resolveConversationDeliveryContext({
+    deps: params.deps,
+    context: params.context,
+  });
   const idempotencyKey = `conversation-outbound:${params.turnId}`;
   const pendingMirror = buildConversationDeliveryMirror({
-    context: params.context,
+    context,
     conversation: params.conversation,
     status: "pending",
     ...(params.preparedMessageId ? { messageId: params.preparedMessageId } : {}),
@@ -139,7 +169,7 @@ export async function sendConversationMessage(params: {
     throw new Error(`Conversation delivery intent was not persisted: ${pending.reason}`);
   }
   const deliveredMirror = buildConversationDeliveryMirror({
-    context: params.context,
+    context,
     conversation: params.conversation,
     status: "delivered",
     ...(params.preparedMessageId ? { messageId: params.preparedMessageId } : {}),
@@ -169,6 +199,7 @@ export async function sendConversationMessage(params: {
     },
     ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
     ...(params.gatewayOwnedDelivery ? { gatewayOwnedDelivery: true } : {}),
+    skipDeliveryQueue: true,
     ...(params.signal ? { abortSignal: params.signal } : {}),
   });
   if (action.kind !== "send") {
@@ -195,10 +226,14 @@ export async function recordConversationDelivery(params: {
   outboundMessageId?: string;
 }): Promise<boolean> {
   try {
+    const context = resolveConversationDeliveryContext({
+      deps: params.deps,
+      context: params.context,
+    });
     // Same-session sends are redundant with their tool call. Cross-session
     // sends are the backing conversation's only outbound model context.
     const deliveryMirror = buildConversationDeliveryMirror({
-      context: params.context,
+      context,
       conversation: params.conversation,
       status: "delivered",
       ...(params.outboundMessageId ? { messageId: params.outboundMessageId } : {}),

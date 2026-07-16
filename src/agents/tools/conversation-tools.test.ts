@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -98,6 +99,7 @@ function createDeps() {
     callGateway: callGatewayMock as never,
     callGatewayMock,
     listConversations: vi.fn(() => [conversation]),
+    loadSessionEntry: vi.fn<typeof loadSessionEntry>(() => undefined),
     resolveConversation: vi.fn((): typeof conversation | undefined => conversation),
     runMessageAction: vi.fn(async () => sentResult()),
   };
@@ -161,6 +163,7 @@ describe("conversation tools", () => {
       expect.objectContaining({
         action: "send",
         agentId: "main",
+        skipDeliveryQueue: true,
         sessionKey: "agent:main:telegram:direct:operator",
         transcriptMirror: expect.objectContaining({
           expectedSessionId: conversation.sessionId,
@@ -267,6 +270,34 @@ describe("conversation tools", () => {
           conversationRef: conversation.conversationRef,
           messageId: "reef-outbound-1",
         },
+      }),
+    );
+  });
+
+  it("resolves a key-only source alias before choosing transcript replay behavior", async () => {
+    const deps = createDeps();
+    deps.loadSessionEntry.mockReturnValue({ sessionId: conversation.sessionId } as never);
+
+    await createConversationsSendTool(
+      {
+        agentId: "main",
+        agentSessionKey: "agent:main:alias-for-main",
+        config: {},
+      },
+      deps,
+    ).execute("send", {
+      conversationRef: conversation.conversationRef,
+      message: "same-session hello",
+    });
+
+    expect(deps.loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:alias-for-main",
+      readConsistency: "latest",
+    });
+    expect(deps.appendAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryMirror: expect.not.objectContaining({ replay: "backing-session" }),
       }),
     );
   });

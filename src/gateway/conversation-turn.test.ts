@@ -87,6 +87,7 @@ describe("runGatewayConversationTurn", () => {
       expect(params).toMatchObject({
         preparedMessageId: "reef-outbound-1",
         gatewayOwnedDelivery: true,
+        skipDeliveryQueue: true,
       });
       return sentResult();
     });

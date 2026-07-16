@@ -171,6 +171,8 @@ export type RunMessageActionParams = {
   preparedMessageId?: string;
   /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
   gatewayOwnedDelivery?: boolean;
+  /** @internal Caller owns retry semantics and requires a synchronous platform outcome. */
+  skipDeliveryQueue?: boolean;
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -1446,6 +1448,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
       preparedMessageId: input.preparedMessageId,
       gatewayOwnedDelivery: input.gatewayOwnedDelivery,
+      skipQueue: input.skipDeliveryQueue,
       mirror:
         !dryRun && input.transcriptMirror
           ? {

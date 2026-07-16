@@ -1104,6 +1104,40 @@ describe("executeSendAction", () => {
     });
   });
 
+  it("forwards caller-owned retry semantics to core delivery", async () => {
+    const prepareSendPayload = vi.fn(({ payload }) => payload);
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        prepareSendPayload,
+        handleAction: async () => ({ content: [], details: { ok: true } }),
+      },
+      outbound: { deliveryMode: "direct" },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+        skipQueue: true,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expectSingleCallFields(mocks.sendMessage, { skipQueue: true });
+  });
+
   it("forwards poll args to sendPoll on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendPoll.mockResolvedValue({

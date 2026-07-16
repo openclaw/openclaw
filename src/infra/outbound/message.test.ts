@@ -337,6 +337,18 @@ describe("sendMessage", () => {
     );
   });
 
+  it("forwards caller-owned retry semantics into outbound delivery", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "synchronous delivery",
+      skipQueue: true,
+    });
+
+    expectDeliveryCallFields({ skipQueue: true });
+  });
+
   it("rejects required durable sends before enqueue when replay safety is unsupported", async () => {
     mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValueOnce({
       ok: false,

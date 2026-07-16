@@ -77,6 +77,8 @@ type OutboundSendContext = {
   preparedMessageId?: string;
   /** The Gateway owns this call and may use its active gateway-mode adapter directly. */
   gatewayOwnedDelivery?: boolean;
+  /** Caller owns retry semantics and requires a synchronous platform outcome. */
+  skipQueue?: boolean;
 };
 
 type PluginHandledResult = {
@@ -163,6 +165,7 @@ async function sendCoreMessage(params: {
     mediaAccess: params.ctx.mediaAccess,
     preparedMessageId: params.ctx.preparedMessageId,
     gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
+    skipQueue: params.ctx.skipQueue,
     onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });
   const deliveredText =

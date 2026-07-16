@@ -94,6 +94,8 @@ type MessageSendParams = {
   preparedMessageId?: string;
   /** @internal Use the active adapter directly when already executing inside the Gateway. */
   gatewayOwnedDelivery?: boolean;
+  /** @internal Skip the generic delivery queue when the caller owns retry semantics. */
+  skipQueue?: boolean;
   mirror?: OutboundMirror;
   /** @internal Reports the effective payload only after an identified direct send. */
   onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
@@ -430,6 +432,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaAccess: params.mediaAccess,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       preparedMessageId: params.preparedMessageId,
+      ...(params.skipQueue ? { skipQueue: true } : {}),
       ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
       mirror: params.mirror
         ? {

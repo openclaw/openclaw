@@ -10,6 +10,7 @@ import {
   type ConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -77,6 +78,7 @@ const defaultDeps: ConversationToolDeps = {
   beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
   callGateway,
   listConversations,
+  loadSessionEntry,
   resolveConversation,
   runMessageAction,
 };
