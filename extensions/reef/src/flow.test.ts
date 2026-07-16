@@ -516,7 +516,7 @@ describe("ReefMessageFlow delivery receipts", () => {
 
     expect(onOwnerNotice).toHaveBeenCalledOnce();
     expect(onOwnerNotice).toHaveBeenCalledWith({
-      text: expect.stringMatching(/rejected by the peer's inbound guard.*Rephrase it once/),
+      text: expect.stringMatching(/rejected by the peer's inbound guard.*at most once/),
       peer: "alice",
       contextKey: `reef:delivery-rejected:${id}`,
       wakeAgent: true,
