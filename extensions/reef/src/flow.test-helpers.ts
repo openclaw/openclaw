@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -7,6 +6,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import {
   base64url,
@@ -35,7 +35,7 @@ export function resetFlowStoresForTests(): void {
 }
 
 export function flowStores() {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-flow-"));
+  const stateDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "reef-flow-"));
   stateDirs.push(stateDir);
   const runtime = createPluginRuntimeMock();
   runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
