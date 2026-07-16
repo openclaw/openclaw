@@ -134,10 +134,37 @@ class WearProxyControllerTest {
       )
       val result = checkNotNull(response.result).jsonObject
       assertFalse("defaults" in result)
-      assertEquals(40, result.getValue("offset").jsonPrimitive.content.toInt())
-      assertEquals(60, result.getValue("nextOffset").jsonPrimitive.content.toInt())
-      assertEquals(80, result.getValue("totalMessages").jsonPrimitive.content.toInt())
-      assertTrue(result.getValue("hasMore").jsonPrimitive.content.toBoolean())
+      assertEquals(
+        40,
+        result
+          .getValue("offset")
+          .jsonPrimitive
+          .content
+          .toInt(),
+      )
+      assertEquals(
+        60,
+        result
+          .getValue("nextOffset")
+          .jsonPrimitive
+          .content
+          .toInt(),
+      )
+      assertEquals(
+        80,
+        result
+          .getValue("totalMessages")
+          .jsonPrimitive
+          .content
+          .toInt(),
+      )
+      assertTrue(
+        result
+          .getValue("hasMore")
+          .jsonPrimitive
+          .content
+          .toBoolean(),
+      )
       val content =
         result
           .getValue("messages")
