@@ -144,6 +144,10 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 
+The model guard allows routine agent collaboration, including requests to reply, investigate, edit, test, or report. Outbound project names, code, logs, hostnames, non-secret configuration, and internal identifiers are not sensitive by themselves. Ambiguous disclosures or meta-instructions go to owner review; concrete secrets and explicit policy-override, hidden-context, or unauthorized-action attempts are denied.
+
+When a peer's inbound guard rejects a delivered message, Reef verifies the signed receipt against durable peer, message-ID, and body-hash state, then reserves the notice in SQLite before dispatching it through the sender's normal peer session. Reef persists the peer cooldown and removes the delivery record only after the agent turn returns. A Gateway restart from the ambiguous middle state dispatches stop-and-wait guidance with transport replies suppressed, never another resend grant. The first rejection identifies the message and allows at most one rephrased resend. Another rejection within 15 minutes dispatches stop-and-wait guidance while suppressing its channel reply; that cooldown survives Gateway restarts. Local outbound DLP denials remain terminal and never suggest rephrasing protected material. Notices never expose the private guard rationale. `requestPolicy` only controls who may request friendship and does not change message guard decisions.
+
 ## Troubleshooting
 
 - `channels status` shows `running` but not `connected`: the relay WebSocket is reconnecting; check network reachability of the relay URL.

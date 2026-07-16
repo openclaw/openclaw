@@ -21,6 +21,12 @@ import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
+import {
+  createReefOwnerNoticeHandler,
+  processReefInboxEntriesInOrder,
+  ReefReceiptNotifier,
+} from "./owner-notice.js";
+import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./state.js";
@@ -55,6 +61,15 @@ function listTrustedPeers(config: ReefAccount["config"]): string[] {
         .list()
         .map((entry) => entry.peer)
     : [];
+}
+
+function replyText(payload: unknown): string {
+  if (!payload || typeof payload !== "object" || !("text" in payload)) {
+    return "";
+  }
+  return typeof (payload as { text?: unknown }).text === "string"
+    ? (payload as { text: string }).text
+    : "";
 }
 
 export const reefPlugin: ChannelPlugin<ReefAccount> = {
@@ -209,9 +224,11 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           defaultEnabled: true,
         });
         if (loop.suppressed) {
-          await ownerNotice(
-            `Reef auto-reply budget exhausted for @${message.peer}; delivery paused until cooldown.`,
-          );
+          await ownerNotice({
+            text: `Reef auto-reply budget exhausted for @${message.peer}; delivery paused until cooldown.`,
+            peer: message.peer,
+            contextKey: `reef:budget:${message.peer}`,
+          });
           return;
         }
         await dispatchInboundDirectDmWithRuntime({
@@ -229,12 +246,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           messageId: message.id,
           commandAuthorized: false,
           deliver: async (payload) => {
-            const text =
-              payload && typeof payload === "object" && "text" in payload
-                ? typeof (payload as { text?: unknown }).text === "string"
-                  ? (payload as { text: string }).text
-                  : ""
-                : "";
+            const text = replyText(payload);
             if (text.trim()) {
               await flow.send(message.peer, text, {
                 thread: message.thread ?? message.id,
@@ -248,18 +260,12 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             ctx.log?.error?.(`reef inbound dispatch failed: ${String(error)}`),
         });
       };
-      const ownerNotice = async (text: string) => {
-        const route = runtime.channel.routing.resolveAgentRoute({
-          cfg: ctx.cfg,
-          channel: "reef",
-          accountId: "default",
-          peer: { kind: "direct", id: ctx.account.config.handle! },
-        });
-        runtime.system.enqueueSystemEvent(text, {
-          sessionKey: route.sessionKey,
-          contextKey: `reef:${ctx.account.config.handle}`,
-        });
-      };
+      const ownerNotice = createReefOwnerNoticeHandler({
+        runtime,
+        cfg: ctx.cfg,
+        accountId: "default",
+        handle: ctx.account.config.handle!,
+      });
       const flow: ReefMessageFlow = new ReefMessageFlow({
         config: ctx.account.config,
         trust,
@@ -271,10 +277,90 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         replay: stores.replay,
         reviews,
         onIngress,
-        onOwnerNotice: ownerNotice,
+        onOwnerNotice: async (text) =>
+          ownerNotice({
+            text,
+            contextKey: `reef:${ctx.account.config.handle}`,
+          }),
       });
-      setActiveReef({ flow, friends, reviews });
-
+      const receiptNotifier = new ReefReceiptNotifier(
+        async (notice) => {
+          let resendText = "";
+          let dispatchFailure: Error | undefined;
+          await dispatchInboundDirectDmWithRuntime({
+            cfg: ctx.cfg,
+            runtime,
+            channel: "reef",
+            channelLabel: "Reef",
+            accountId: "default",
+            peer: { kind: "direct", id: notice.peer },
+            senderId: notice.peer,
+            senderAddress: `reef:${notice.peer}`,
+            recipientAddress: `reef:${ctx.account.config.handle}`,
+            conversationLabel: `Reef delivery receipt for @${notice.peer}`,
+            rawBody: notice.text,
+            bodyForAgent: notice.text,
+            messageId: `rejection-${notice.messageId}`,
+            commandAuthorized: false,
+            extraContext: {
+              ReefDeliveryRejected: true,
+              ReefEnvelopeId: notice.messageId,
+              SenderIsBot: true,
+            },
+            deliver: async (payload) => {
+              if (!notice.allowResend) {
+                return;
+              }
+              const text = replyText(payload);
+              if (text.trim()) {
+                resendText = text;
+              }
+            },
+            onRecordError: (error) =>
+              ctx.log?.error?.(`reef rejection notice record failed: ${String(error)}`),
+            onDispatchError: (error) => {
+              dispatchFailure ??= new Error("Reef rejection notice dispatch failed", {
+                cause: error,
+              });
+              ctx.log?.error?.(`reef rejection notice dispatch failed: ${String(error)}`);
+            },
+          });
+          if (dispatchFailure) {
+            throw dispatchFailure;
+          }
+          if (notice.allowResend && isRephrasedReefResend(resendText, notice.originalTextHash)) {
+            // A guard-recovery send gets one attempt. Its own rejection must
+            // notify the agent but never open another automatic resend turn.
+            await flow.send(notice.peer, resendText, {
+              replyTo: notice.messageId,
+              expectedRecipient: notice.recipient,
+              resendDisabled: true,
+            });
+          }
+        },
+        {
+          loadState: (peer) => trust.rejectionNoticeState(peer),
+          reserve: (rejection, noticeState) =>
+            trust.reserveOutboundRejectionNotice(
+              rejection.peer,
+              rejection.id,
+              rejection.recipient,
+              noticeState,
+            ),
+          complete: (rejection, noticeState) => {
+            // Persist cooldown before deleting the reservation. A crash between
+            // those writes leaves stop-only recovery, never another resend grant.
+            if (!trust.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
+              throw new Error(`Reef rejection ${rejection.id} lost its durable delivery state`);
+            }
+          },
+        },
+        {
+          onError: (error, receiptId) =>
+            ctx.log?.error?.(`reef rejection notice failed for ${receiptId}: ${String(error)}`),
+          signal: ctx.abortSignal,
+        },
+      );
       const reconcile = async () => {
         await friends.reconcile();
         await friends.surfacePairingCandidates(async ({ peer, fingerprint, approvalToken }) => {
@@ -286,11 +372,22 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           });
         });
       };
+      // Refresh peer keys before recovery can dispatch an agent turn. Activate
+      // only after reconciliation, but before that turn can use Reef outbound.
       await reconcile();
+      setActiveReef({ flow, friends, reviews });
+      await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
       ctx.setStatus({ accountId: "default", running: true, connected: false });
       const inbox = new ReefInboxConnection(
         transport,
-        (entries) => flow.processEntries(entries),
+        (entries) =>
+          processReefInboxEntriesInOrder({
+            entries,
+            processEntries: (batch) => flow.processEntries(batch),
+            notifyRejections: (rejections) => receiptNotifier.notifyRejections(rejections),
+            onNoticeError: (error) =>
+              ctx.log?.error?.(`reef rejection notice processing failed: ${String(error)}`),
+          }),
         createReefWebSocket,
         (state) => {
           if (ctx.abortSignal.aborted) {
