@@ -1319,9 +1319,9 @@ async function processResponsesStream(
     if (outputIndex !== undefined) {
       const indexed = toolCallsByOutputIndex.get(outputIndex);
       if (indexed) {
-        return !identitiesConflict(indexed, identity)
-          ? adoptToolCallIdentity(indexed, identity)
-          : undefined;
+        // Once the stream binds an output index, it is authoritative for later
+        // indexed events. Compatible providers may rotate item ids between events.
+        return adoptToolCallIdentity(indexed, identity);
       }
       // A compatibility stream may add calls without indices, then start
       // including them. Bind only the one identity-matched (or sole) candidate.

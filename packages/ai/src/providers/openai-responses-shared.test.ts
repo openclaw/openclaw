@@ -1492,6 +1492,66 @@ describe("processResponsesStream", () => {
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
   });
 
+  it("routes indexed argument events when providers rotate item ids", async () => {
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+    const item = {
+      type: "function_call",
+      id: "fc_rotating",
+      call_id: "call_rotating",
+      name: "read",
+    };
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...item, arguments: "" },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_rotating_delta_1",
+          delta: '{"path":',
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "fc_rotating_delta_2",
+          delta: '"README.md"}',
+        },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 0,
+          item_id: "fc_rotating_done",
+          arguments: '{"path":"README.md"}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: { ...item, arguments: "" },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_rotating_item_ids", status: "completed" },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_rotating|fc_rotating",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+    ]);
+  });
+
   it("rejects a completed Responses tool call whose function name changed", async () => {
     const output = createAssistantOutput();
 
