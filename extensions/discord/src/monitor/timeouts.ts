@@ -38,6 +38,7 @@ export function isAbortError(error: unknown): boolean {
   return "name" in error && String((error as { name?: unknown }).name) === "AbortError";
 }
 
+/** @deprecated Use native `AbortSignal.any` after filtering optional signals at the call site. */
 export function mergeAbortSignals(
   signals: Array<AbortSignal | undefined>,
 ): AbortSignal | undefined {
