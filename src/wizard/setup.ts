@@ -252,18 +252,26 @@ async function runSetupWizardOnce(
         hint: t("wizard.setup.flowKeepModelHint"),
       }
     : undefined;
+  // Import flags are import intent. Non-interactive setup already routes them
+  // to the migration import; showing the mode prompt here would let the answer
+  // silently drop the requested import.
+  const importIntent = Boolean(
+    opts.importFrom?.trim() || opts.importSource?.trim() || opts.importSecrets,
+  );
   let flow: SetupFlowChoice =
     explicitFlow ??
-    (await prompter.select({
-      message: t("wizard.setup.setupMode"),
-      options: [
-        ...(keepModelOption ? [keepModelOption] : []),
-        { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
-        { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
-        ...importOptions,
-      ],
-      initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
-    }));
+    (importIntent
+      ? "import"
+      : await prompter.select({
+          message: t("wizard.setup.setupMode"),
+          options: [
+            ...(keepModelOption ? [keepModelOption] : []),
+            { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
+            { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
+            ...importOptions,
+          ],
+          initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
+        }));
 
   let keepExistingModelConfig = flow === "keep-model";
   if (keepExistingModelConfig) {
@@ -592,6 +600,11 @@ async function runSetupWizardOnce(
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
+
+  if (!usedImportFlow) {
+    const { runSetupMemoryImportStep } = await import("./setup.memory-import.js");
+    await runSetupMemoryImportStep({ config: nextConfig, prompter, runtime });
+  }
 
   if (opts.skipSearch) {
     await prompter.note(t("wizard.setup.skipSearch"), t("wizard.setup.searchTitle"));

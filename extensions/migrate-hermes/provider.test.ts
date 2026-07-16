@@ -1,4 +1,5 @@
 // Migrate Hermes tests cover provider plugin behavior.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -79,6 +80,153 @@ describe("Hermes migration provider", () => {
     expect(detected?.confidence).toBe("high");
   });
 
+  it("detects only memory files in memory-only mode", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    await writeFile(path.join(source, "SOUL.md"), "# Hermes soul\n");
+    const provider = buildHermesMigrationProvider();
+    const context = makeContext({
+      source,
+      stateDir: path.join(root, "state"),
+      workspaceDir,
+      itemKinds: ["memory"],
+    });
+
+    expect((await provider.detect?.(context))?.found).toBe(false);
+    await expect(provider.plan(context)).resolves.toMatchObject({
+      items: [],
+      summary: { total: 0 },
+    });
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
+    expect((await provider.detect?.(context))?.found).toBe(true);
+  });
+
+  it("plans only copy items under the Hermes memory import directory", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
+    await writeFile(path.join(source, "memories", "USER.md"), "user detail\n");
+    await writeFile(path.join(source, "SOUL.md"), "# Must not be planned\n");
+    const provider = buildHermesMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir,
+        itemKinds: ["memory"],
+      }),
+    );
+
+    expect(provider.supportedItemKinds).toEqual(["memory"]);
+    expect(plan.items).toHaveLength(2);
+    expect(plan.items).toEqual([
+      expect.objectContaining({
+        id: "memory:MEMORY.md",
+        kind: "memory",
+        action: "copy",
+        status: "planned",
+        target: path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md"),
+        details: {
+          sourceType: "hermes-memory",
+          sourceLabel: "Hermes MEMORY.md",
+          collectionId: "hermes",
+          collectionLabel: "Hermes",
+          relativePath: "MEMORY.md",
+        },
+      }),
+      expect.objectContaining({
+        id: "memory:USER.md",
+        kind: "memory",
+        action: "copy",
+        status: "planned",
+        target: path.join(workspaceDir, "memory", "imports", "hermes", "USER.md"),
+      }),
+    ]);
+  });
+
+  it("targets the selected agent workspace for memory-only imports", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const defaultWorkspace = path.join(root, "workspace-main");
+    const targetWorkspace = path.join(root, "workspace-research");
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "research memory\n");
+    const provider = buildHermesMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir: defaultWorkspace,
+        config: {
+          agents: {
+            defaults: { workspace: defaultWorkspace },
+            list: [{ id: "research", workspace: targetWorkspace }],
+          },
+        },
+        targetAgentId: "research",
+        itemKinds: ["memory"],
+      }),
+    );
+
+    expect(plan.items[0]?.target).toBe(
+      path.join(targetWorkspace, "memory", "imports", "hermes", "MEMORY.md"),
+    );
+  });
+
+  it("marks existing memory import targets as conflicts", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    await writeFile(path.join(source, "memories", "MEMORY.md"), "remember this\n");
+    await writeFile(
+      path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md"),
+      "existing\n",
+    );
+    const provider = buildHermesMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source,
+        stateDir: path.join(root, "state"),
+        workspaceDir,
+        itemKinds: ["memory"],
+      }),
+    );
+
+    expect(itemById(plan.items, "memory:MEMORY.md")).toMatchObject({
+      status: "conflict",
+      reason: "target exists",
+    });
+  });
+
+  it("copies memory bytes through the memory migration runtime", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "missing-workspace");
+    const stateDir = path.join(root, "state");
+    const sourceBytes = "remember exact bytes\n";
+    await writeFile(path.join(source, "memories", "MEMORY.md"), sourceBytes);
+    const provider = buildHermesMigrationProvider();
+    const context = makeContext({
+      source,
+      stateDir,
+      workspaceDir,
+      itemKinds: ["memory"],
+    });
+    const plan = await provider.plan(context);
+
+    const result = await provider.apply(context, plan);
+    const target = path.join(workspaceDir, "memory", "imports", "hermes", "MEMORY.md");
+
+    expect(await fs.readFile(target, "utf8")).toBe(sourceBytes);
+    expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
+    expect(itemById(result.items, "memory:MEMORY.md")?.status).toBe("migrated");
+    expect(result.summary.migrated).toBe(1);
+  });
+
   it("rejects missing Hermes sources before planning", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "missing-hermes");
@@ -121,6 +269,7 @@ describe("Hermes migration provider", () => {
       }),
     );
 
+    expect(provider.supportedItemKinds).toEqual(["memory"]);
     expect(plan.summary.total).toBe(7);
     expect(plan.summary.conflicts).toBe(2);
     expect(plan.summary.sensitive).toBe(1);

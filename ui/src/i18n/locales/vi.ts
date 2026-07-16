@@ -27,6 +27,7 @@ export const vi: TranslationMap = {
     close: "Đóng",
     previous: "Trước",
     next: "Tiếp theo",
+    continue: "Tiếp tục",
     back: "Quay lại",
     create: "Tạo",
     copy: "Sao chép",
@@ -1862,6 +1863,28 @@ export const vi: TranslationMap = {
     replaceExisting: "Thay thế các mục đã nhập hiện có",
     replaceHint:
       "Xem trước lại các xung đột và giữ lại bản sao lưu của từng mục trước khi thay thế.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Mang theo bộ nhớ của trợ lý",
+      body: "OpenClaw đã tìm thấy bộ nhớ từ các trợ lý lập trình khác. Nhập bộ nhớ đó vào không gian làm việc của tác nhân?",
+      plannedCount: "{count} mục sẵn sàng để nhập",
+      alreadyImported: "Đã nhập: {count}",
+      sourceUnavailable: "Đường dẫn nguồn không khả dụng",
+      import: "Nhập",
+      skip: "Bỏ qua",
+      reviewDetails: "Xem lại chi tiết",
+      importingProvider: "Đang nhập…",
+      providerResult: "Đã di chuyển {migrated}, bỏ qua {skipped}",
+      providerIncomplete:
+        "Đã di chuyển {migrated}, bỏ qua {skipped}, {errors} thất bại, {conflicts} xung đột",
+      providerError: "Nhập thất bại: {error}",
+      connectionChanged: "Đã bỏ qua: kết nối Gateway đã thay đổi trong quá trình nhập",
+      unknownError: "Yêu cầu thất bại",
+      doneTitle: "Đã hoàn tất nhập bộ nhớ",
+      doneBody:
+        "Đã di chuyển {migrated}, bỏ qua {skipped}. Bạn có thể tiếp tục thiết lập OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Quản lý máy chủ trên trang Plugins.",

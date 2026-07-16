@@ -103,6 +103,16 @@ start without working inference. After that live check passes, OpenClaw becomes
 available to help configure the remaining workspace, Gateway, channels, and
 other optional features; it is also available later under Settings → OpenClaw.
 </Step>
+<Step title="Import memories (shown when detected)">
+For a local Gateway, onboarding checks the Mac for memories from supported AI
+tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
+files. When any are found, this page lists each source with its memory count
+and lets you import the selected sources into the agent workspace under
+`memory/imports/` for indexed recall. Already-imported files are skipped, and
+the page never appears when there is nothing to import. Skipping is safe; the
+dashboard's Memory import page offers the same import later with per-file
+control.
+</Step>
 <Step title="Permissions">
 
 <Frame caption="Choose what permissions do you want to give OpenClaw">

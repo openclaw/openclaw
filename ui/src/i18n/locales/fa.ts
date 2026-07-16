@@ -27,6 +27,7 @@ export const fa: TranslationMap = {
     close: "بستن",
     previous: "قبلی",
     next: "بعدی",
+    continue: "ادامه",
     back: "بازگشت",
     create: "ایجاد",
     copy: "کپی",
@@ -1858,6 +1859,28 @@ export const fa: TranslationMap = {
     replaceExisting: "جایگزینی موارد واردشده موجود",
     replaceHint:
       "تداخل‌ها را دوباره پیش‌نمایش کنید و پیش از جایگزینی، نسخه‌های پشتیبان موارد را حفظ کنید.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "حافظه دستیار خود را همراه بیاورید",
+      body: "OpenClaw حافظه‌ای از دستیارهای کدنویسی دیگر پیدا کرد. آن را به فضای کاری عامل خود وارد می‌کنید؟",
+      plannedCount: "{count} مورد آماده وارد کردن",
+      alreadyImported: "قبلاً واردشده: {count}",
+      sourceUnavailable: "مسیر منبع در دسترس نیست",
+      import: "وارد کردن",
+      skip: "رد کردن",
+      reviewDetails: "بررسی جزئیات",
+      importingProvider: "در حال وارد کردن…",
+      providerResult: "{migrated} مورد منتقل شد، {skipped} مورد نادیده گرفته شد",
+      providerIncomplete:
+        "{migrated} مورد منتقل شد، {skipped} مورد نادیده گرفته شد، {errors} مورد ناموفق بود، {conflicts} مورد تداخل داشت",
+      providerError: "وارد کردن ناموفق بود: {error}",
+      connectionChanged: "نادیده گرفته شد: اتصال Gateway هنگام وارد کردن تغییر کرد",
+      unknownError: "درخواست ناموفق بود",
+      doneTitle: "وارد کردن حافظه پایان یافت",
+      doneBody:
+        "{migrated} مورد منتقل شد، {skipped} مورد نادیده گرفته شد. می‌توانید راه‌اندازی OpenClaw را ادامه دهید.",
+    },
   },
   mcpPage: {
     manageServersLink: "مدیریت سرورها در صفحه Plugins.",

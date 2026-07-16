@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
+  copyMemoryMigrationFileItem,
   copyMigrationFileItem,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
@@ -27,6 +28,7 @@ import {
   HERMES_REASON_MODEL_PROVIDER_CONFLICT,
   readHermesModelDetails,
 } from "./items.js";
+import { isMemoryOnlyMigration } from "./memory.js";
 import { applyModelItem } from "./model.js";
 import { buildHermesPlan } from "./plan.js";
 import { applySecretItem } from "./secrets.js";
@@ -171,6 +173,11 @@ export async function applyHermesPlan(params: {
       appliedItem = await applySecretItem(applyCtx, item, targets);
     } else if (item.action === "append") {
       appliedItem = await appendItem(item);
+    } else if (isMemoryOnlyMigration(params.ctx) && item.kind === "memory") {
+      appliedItem = await copyMemoryMigrationFileItem(item, reportDir, {
+        workspaceDir: targets.workspaceDir,
+        overwrite: params.ctx.overwrite,
+      });
     } else {
       appliedItem = await copyMigrationFileItem(item, reportDir, {
         overwrite: params.ctx.overwrite,

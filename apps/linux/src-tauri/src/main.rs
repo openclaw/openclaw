@@ -24,6 +24,7 @@ struct NavigationState {
     // One lock owns both fields so the intent check and WebView navigation cannot interleave.
     remote_dashboard: bool,
     watch_generation: u64,
+    onboarding_pending: bool,
 }
 
 impl NavigationState {
@@ -60,6 +61,21 @@ impl NavigationState {
 
     fn watchdog_is_current(&self, generation: u64) -> bool {
         !self.remote_dashboard && self.watch_generation == generation
+    }
+
+    fn mark_onboarding_pending(&mut self) {
+        self.onboarding_pending = true;
+    }
+
+    fn prepare_dashboard_url(&mut self, target: &str) -> Result<Url, String> {
+        let mut url =
+            Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
+        if self.onboarding_pending {
+            // Dashboard auth lives in the fragment, so the marker must be added through URL pairs.
+            url.query_pairs_mut().append_pair("onboarding", "1");
+            self.onboarding_pending = false;
+        }
+        Ok(url)
     }
 }
 
@@ -111,7 +127,7 @@ impl DesktopState {
             Err(error) => return Err(error.to_string()),
         };
         let ready = gateway::ensure_ready(&cli)?;
-        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true)?;
+        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
             self.start_watchdog(app.clone());
@@ -130,10 +146,15 @@ impl DesktopState {
             .lock()
             .map_err(|_| "Installer lock is unavailable.".to_string())?;
         installer::install(app, channel)?;
+        self.inner
+            .navigation
+            .lock()
+            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?
+            .mark_onboarding_pending();
         let cli = OpenClawCli::discover().map_err(|error| error.to_string())?;
         *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
         let ready = gateway::ensure_ready(&cli)?;
-        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true)?;
+        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
             self.start_watchdog(app.clone());
@@ -163,7 +184,7 @@ impl DesktopState {
         }
 
         let ready = gateway::dashboard(&cli, snapshot)?;
-        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true)?;
+        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
             self.start_watchdog(app.clone());
@@ -217,11 +238,9 @@ impl DesktopState {
     fn navigate_locked(
         &self,
         app: &AppHandle,
-        target: &str,
+        url: Url,
         reveal_window: bool,
     ) -> Result<(), String> {
-        let url =
-            Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
         main_window(app)?
             .navigate(url)
             .map_err(|error| format!("Could not open dashboard: {error}"))?;
@@ -238,6 +257,7 @@ impl DesktopState {
         force: bool,
         expected_generation: Option<u64>,
         reveal_window: bool,
+        dashboard: bool,
     ) -> Result<bool, String> {
         let mut navigation = self
             .inner
@@ -247,7 +267,18 @@ impl DesktopState {
         if !navigation.permit_local(force, expected_generation) {
             return Ok(false);
         }
-        self.navigate_locked(app, target, reveal_window)?;
+        let onboarding_was_pending = dashboard && navigation.onboarding_pending;
+        let url = if dashboard {
+            navigation.prepare_dashboard_url(target)?
+        } else {
+            Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?
+        };
+        if let Err(error) = self.navigate_locked(app, url, reveal_window) {
+            if onboarding_was_pending {
+                navigation.mark_onboarding_pending();
+            }
+            return Err(error);
+        }
         Ok(true)
     }
 
@@ -277,7 +308,7 @@ impl DesktopState {
         let mut url = self.inner.local_url.clone();
         url.query_pairs_mut().clear().append_pair("mode", mode);
         // Status/watchdog updates may change the hidden WebView, but must not reveal it.
-        self.navigate_local(app, url.as_str(), force, expected_generation, false)
+        self.navigate_local(app, url.as_str(), force, expected_generation, false, false)
     }
 
     fn cancel_watchdog(&self) {
@@ -351,6 +382,7 @@ impl DesktopState {
                                 false,
                                 Some(generation),
                                 false,
+                                true,
                             ) {
                                 Ok(true) => {
                                     state.update_tray(&ready.snapshot);
@@ -421,6 +453,47 @@ mod navigation_tests {
 
         assert!(!navigation.permit_local(false, None));
         assert!(navigation.remote_dashboard);
+    }
+
+    #[test]
+    fn onboarding_url_preserves_existing_query_and_fragment() {
+        let mut navigation = NavigationState::default();
+        navigation.mark_onboarding_pending();
+
+        let url = navigation
+            .prepare_dashboard_url("http://127.0.0.1:18789/?foo=bar#token=secret")
+            .expect("dashboard URL");
+
+        assert_eq!(url.query(), Some("foo=bar&onboarding=1"));
+        assert_eq!(url.fragment(), Some("token=secret"));
+    }
+
+    #[test]
+    fn onboarding_flag_is_consumed_once() {
+        let mut navigation = NavigationState::default();
+        navigation.mark_onboarding_pending();
+
+        let first = navigation
+            .prepare_dashboard_url("http://127.0.0.1:18789/#token=secret")
+            .expect("first dashboard URL");
+        let second = navigation
+            .prepare_dashboard_url("http://127.0.0.1:18789/#token=secret")
+            .expect("second dashboard URL");
+
+        assert_eq!(first.query(), Some("onboarding=1"));
+        assert_eq!(second.query(), None);
+    }
+
+    #[test]
+    fn regular_navigation_has_no_onboarding_marker() {
+        let mut navigation = NavigationState::default();
+
+        let url = navigation
+            .prepare_dashboard_url("http://127.0.0.1:18789/?foo=bar#token=secret")
+            .expect("dashboard URL");
+
+        assert_eq!(url.query(), Some("foo=bar"));
+        assert_eq!(url.fragment(), Some("token=secret"));
     }
 }
 

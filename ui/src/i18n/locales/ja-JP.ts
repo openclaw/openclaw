@@ -27,6 +27,7 @@ export const ja_JP: TranslationMap = {
     close: "閉じる",
     previous: "前へ",
     next: "次回",
+    continue: "続ける",
     back: "戻る",
     create: "作成",
     copy: "コピー",
@@ -1868,6 +1869,28 @@ export const ja_JP: TranslationMap = {
     agent: "コピー先エージェント",
     replaceExisting: "既存のインポートを置き換える",
     replaceHint: "競合を再度プレビューし、置き換える前に各項目のバックアップを保持します。",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "アシスタントのメモリを引き継ぐ",
+      body: "OpenClaw が他のコーディングアシスタントのメモリを検出しました。エージェントのワークスペースにインポートしますか？",
+      plannedCount: "{count} 件をインポートできます",
+      alreadyImported: "インポート済み: {count} 件",
+      sourceUnavailable: "ソースパスを利用できません",
+      import: "インポート",
+      skip: "スキップ",
+      reviewDetails: "詳細を確認",
+      importingProvider: "インポート中…",
+      providerResult: "{migrated} 件を移行、{skipped} 件をスキップ",
+      providerIncomplete:
+        "{migrated} 件を移行、{skipped} 件をスキップ、{errors} 件が失敗、{conflicts} 件が競合",
+      providerError: "インポートに失敗しました: {error}",
+      connectionChanged: "スキップしました: インポート中に Gateway の接続が変更されました",
+      unknownError: "リクエストに失敗しました",
+      doneTitle: "メモリのインポートが完了しました",
+      doneBody:
+        "{migrated} 件を移行し、{skipped} 件をスキップしました。OpenClaw のセットアップを続行できます。",
+    },
   },
   mcpPage: {
     manageServersLink: "プラグインページでサーバーを管理します。",

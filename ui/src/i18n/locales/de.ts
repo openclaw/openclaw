@@ -27,6 +27,7 @@ export const de: TranslationMap = {
     close: "Schließen",
     previous: "Zurück",
     next: "Nächste",
+    continue: "Weiter",
     back: "Zurück",
     create: "Erstellen",
     copy: "Kopieren",
@@ -1877,6 +1878,28 @@ export const de: TranslationMap = {
     replaceExisting: "Vorhandene Importe ersetzen",
     replaceHint:
       "Konflikte erneut in der Vorschau prüfen und Sicherungen einzelner Elemente vor dem Ersetzen aufbewahren.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Nehmen Sie den Speicher Ihres Assistenten mit",
+      body: "OpenClaw hat Speicher anderer Programmierassistenten gefunden. Möchten Sie ihn in den Arbeitsbereich Ihres Agenten importieren?",
+      plannedCount: "{count} bereit zum Importieren",
+      alreadyImported: "Bereits importiert: {count}",
+      sourceUnavailable: "Quellpfad nicht verfügbar",
+      import: "Importieren",
+      skip: "Überspringen",
+      reviewDetails: "Details prüfen",
+      importingProvider: "Wird importiert…",
+      providerResult: "{migrated} migriert, {skipped} übersprungen",
+      providerIncomplete:
+        "{migrated} migriert, {skipped} übersprungen, {errors} fehlgeschlagen, {conflicts} Konflikte",
+      providerError: "Import fehlgeschlagen: {error}",
+      connectionChanged: "Übersprungen: Die Gateway-Verbindung wurde während des Imports geändert",
+      unknownError: "Anfrage fehlgeschlagen",
+      doneTitle: "Speicherimport abgeschlossen",
+      doneBody:
+        "{migrated} migriert, {skipped} übersprungen. Sie können mit der Einrichtung von OpenClaw fortfahren.",
+    },
   },
   mcpPage: {
     manageServersLink: "Server auf der Plugins-Seite verwalten.",

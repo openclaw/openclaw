@@ -61,7 +61,6 @@ type ResolveDriveCommentEventParams = {
   verificationTimeoutMs?: number;
   logger?: (message: string) => void;
   abortSignal?: AbortSignal;
-  waitMs?: (ms: number, abortSignal?: AbortSignal) => Promise<boolean>;
 };
 
 type ResolvedDriveCommentEventTurn = {
@@ -729,7 +728,6 @@ async function fetchDriveCommentContext(params: {
   logger?: (message: string) => void;
   accountId: string;
   abortSignal?: AbortSignal;
-  waitMs: (ms: number, abortSignal?: AbortSignal) => Promise<boolean>;
 }): Promise<{
   documentTitle?: string;
   documentUrl?: string;
@@ -832,7 +830,7 @@ async function fetchDriveCommentContext(params: {
             `requested_reply=${params.replyId} attempt=${attempt}/${FEISHU_COMMENT_REPLY_MISS_RETRY_LIMIT} ` +
             `delay_ms=${FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS}`,
         );
-        const delayElapsed = await params.waitMs(
+        const delayElapsed = await waitForAbortableDelay(
           FEISHU_COMMENT_REPLY_MISS_RETRY_DELAY_MS,
           params.abortSignal,
         );
@@ -1238,7 +1236,6 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     verificationTimeoutMs = FEISHU_COMMENT_VERIFY_TIMEOUT_MS,
     logger,
     abortSignal,
-    waitMs = waitForAbortableDelay,
   } = params;
   const eventId = event.event_id?.trim();
   const commentId = event.comment_id?.trim();
@@ -1288,7 +1285,6 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     logger,
     accountId,
     abortSignal,
-    waitMs,
   });
   return {
     eventId,

@@ -27,6 +27,7 @@ export const id: TranslationMap = {
     close: "Tutup",
     previous: "Sebelumnya",
     next: "Berikutnya",
+    continue: "Lanjutkan",
     back: "Kembali",
     create: "Buat",
     copy: "Salin",
@@ -1858,6 +1859,28 @@ export const id: TranslationMap = {
     agent: "Agen tujuan",
     replaceExisting: "Ganti hasil impor yang ada",
     replaceHint: "Pratinjau kembali konflik dan simpan cadangan item sebelum penggantian.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Bawa memori asisten Anda",
+      body: "OpenClaw menemukan memori dari asisten coding lain. Impor memori tersebut ke ruang kerja agen Anda?",
+      plannedCount: "{count} siap diimpor",
+      alreadyImported: "Sudah diimpor: {count}",
+      sourceUnavailable: "Jalur sumber tidak tersedia",
+      import: "Impor",
+      skip: "Lewati",
+      reviewDetails: "Tinjau detail",
+      importingProvider: "Mengimpor…",
+      providerResult: "Berhasil memigrasikan {migrated}, melewati {skipped}",
+      providerIncomplete:
+        "Berhasil memigrasikan {migrated}, melewati {skipped}, {errors} gagal, {conflicts} konflik",
+      providerError: "Impor gagal: {error}",
+      connectionChanged: "Dilewati: koneksi Gateway berubah selama proses impor",
+      unknownError: "Permintaan gagal",
+      doneTitle: "Impor memori selesai",
+      doneBody:
+        "Berhasil memigrasikan {migrated}, melewati {skipped}. Anda dapat melanjutkan penyiapan OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Kelola server di halaman Plugins.",

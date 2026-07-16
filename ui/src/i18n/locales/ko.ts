@@ -27,6 +27,7 @@ export const ko: TranslationMap = {
     close: "닫기",
     previous: "이전",
     next: "다음",
+    continue: "계속",
     back: "뒤로",
     create: "만들기",
     copy: "복사",
@@ -1849,6 +1850,28 @@ export const ko: TranslationMap = {
     agent: "대상 에이전트",
     replaceExisting: "기존 가져오기 항목 교체",
     replaceHint: "충돌을 다시 미리 보고 교체 전에 항목 백업을 보존합니다.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "어시스턴트 메모리 가져오기",
+      body: "OpenClaw에서 다른 코딩 어시스턴트의 메모리를 찾았습니다. 에이전트 작업 공간으로 가져오시겠습니까?",
+      plannedCount: "{count}개 가져오기 준비 완료",
+      alreadyImported: "이미 가져옴: {count}개",
+      sourceUnavailable: "소스 경로를 사용할 수 없음",
+      import: "가져오기",
+      skip: "건너뛰기",
+      reviewDetails: "세부 정보 검토",
+      importingProvider: "가져오는 중…",
+      providerResult: "{migrated}개 마이그레이션됨, {skipped}개 건너뜀",
+      providerIncomplete:
+        "{migrated}개 마이그레이션됨, {skipped}개 건너뜀, {errors}개 실패, {conflicts}개 충돌",
+      providerError: "가져오기 실패: {error}",
+      connectionChanged: "건너뜀: 가져오는 동안 Gateway 연결이 변경되었습니다",
+      unknownError: "요청 실패",
+      doneTitle: "메모리 가져오기 완료",
+      doneBody:
+        "{migrated}개 마이그레이션됨, {skipped}개 건너뜀. OpenClaw 설정을 계속할 수 있습니다.",
+    },
   },
   mcpPage: {
     manageServersLink: "플러그인 페이지에서 서버를 관리하세요.",
