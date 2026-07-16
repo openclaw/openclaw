@@ -967,12 +967,16 @@ async function buildTestPlan(params: {
     ) {
       return { error: "That detected provider is no longer available on this Gateway." };
     }
-    const enableResult = (params.deps.enablePluginInConfig ?? enablePluginInConfig)(
-      cfg,
-      choice.pluginId,
-    );
+    const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
+    const enableResult = enablePlugin(cfg, choice.pluginId);
     if (!enableResult.enabled) {
       return { error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).` };
+    }
+    const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
+    if (!sourceEnableResult.enabled) {
+      return {
+        error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
+      };
     }
     const providers = (params.deps.resolvePluginProviders ?? resolvePluginProviders)({
       config: enableResult.config,
@@ -1063,7 +1067,8 @@ async function buildTestPlan(params: {
         persistModelRef: modelRef,
         manualAuth: {
           profiles: prepared.profiles,
-          configBase: enableResult.config,
+          runtimeConfigBase: enableResult.config,
+          sourceConfigBase: sourceEnableResult.config,
           configPatch: createMergePatch(enableResult.config, prepared.config),
           pluginId: choice.pluginId,
         },
