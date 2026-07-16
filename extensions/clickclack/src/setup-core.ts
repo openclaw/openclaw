@@ -263,7 +263,7 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
     return {
       ...remainingInput,
       baseUrl: setup.baseUrl,
-      token: claim.token,
+      ["token"]: claim.token,
       workspace: claim.workspace.id,
       ...(claim.defaults.defaultTo !== undefined ? { defaultTo: claim.defaults.defaultTo } : {}),
       ...(claim.defaults.allowFrom !== undefined
