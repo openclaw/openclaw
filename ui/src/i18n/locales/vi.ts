@@ -2484,6 +2484,12 @@ export const vi: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "No data to chart.",
+        invalid: "This chart has invalid data or options.",
+        label: "Chart",
+        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

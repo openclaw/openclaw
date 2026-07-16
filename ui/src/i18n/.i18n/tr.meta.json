@@ -1,11 +1,16 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-16T18:34:42.178Z",
+  "fallbackKeys": [
+    "workspaces.widget.chart.empty",
+    "workspaces.widget.chart.invalid",
+    "workspaces.widget.chart.label",
+    "workspaces.widget.chart.summary"
+  ],
+  "generatedAt": "2026-07-16T22:59:37.491Z",
   "locale": "tr",
   "model": "",
   "provider": "",
-  "sourceHash": "2a8d8bed07ad2f32fcef297cbab2da6995f922acab15cece4d1cf6ba5c07bbeb",
-  "totalKeys": 3490,
+  "sourceHash": "c455ef8325f76f412d5bc1970efd05880d141385ad2fcccd2a07dfec93549dee",
+  "totalKeys": 3494,
   "translatedKeys": 3490,
   "workflow": 1
 }
