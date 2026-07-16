@@ -61,6 +61,19 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    actor CanvasReconnectProbe {
+        private var surfaceURL = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
+
+        func current() -> String? {
+            self.surfaceURL
+        }
+
+        func reconnectDuringRefresh() -> String? {
+            self.surfaceURL = "http://127.0.0.1:18789/__openclaw__/cap/new-token"
+            return nil
+        }
+    }
+
     @MainActor
     final class ScreenSnapshotProbeServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
         var snapshotCallCount = 0
@@ -280,6 +293,18 @@ struct MacNodeRuntimeTests {
         let external = try await resolver.resolveTarget("https://example.com/")
         #expect(external == nil)
         #expect(await probe.calls == 1)
+    }
+
+    @Test func `hosted Canvas commands use replacement route after refresh fails`() async throws {
+        let probe = CanvasReconnectProbe()
+        let resolver = MacNodeCanvasHostedSurfaceResolver(
+            currentSurfaceURL: { await probe.current() },
+            refreshSurfaceURL: { _ in await probe.reconnectDuringRefresh() })
+
+        let resolved = try await resolver.resolveTarget("/__openclaw__/canvas/demo.html")
+
+        #expect(resolved?.url.absoluteString ==
+            "http://127.0.0.1:18789/__openclaw__/cap/new-token/__openclaw__/canvas/demo.html")
     }
 
     @Test func `handle invoke rejects empty notification`() async throws {

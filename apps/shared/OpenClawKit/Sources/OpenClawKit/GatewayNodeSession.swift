@@ -286,13 +286,13 @@ public actor GatewayNodeSession {
         let id: UUID
         let channelGeneration: UInt64
         let admissionGeneration: UInt64
-        let timeoutMs: Double
         let task: Task<String?, Never>
     }
 
     /// Surface tokens belong to the shared session. A second rotation can invalidate
     /// the URL returned to another chat before its web view has loaded it.
     private var pluginSurfaceRefreshes: [String: PluginSurfaceRefresh] = [:]
+    private var pluginSurfaceRefreshOperationTimeoutMs = GatewayNodeSession.pluginSurfaceRefreshTimeoutMs
 
     private struct PluginSurfaceRefreshResponse: Decodable {
         let pluginSurfaceUrls: [String: AnyCodable]?
@@ -662,34 +662,51 @@ public actor GatewayNodeSession {
         let admissionGeneration = self.admissionGeneration
         if let refresh = self.pluginSurfaceRefreshes[trimmedSurface],
            refresh.channelGeneration == channelGeneration,
-           refresh.admissionGeneration == admissionGeneration,
-           refresh.timeoutMs == timeoutMs
+           refresh.admissionGeneration == admissionGeneration
         {
-            return await refresh.task.value
+            return await self.awaitPluginSurfaceRefresh(refresh.task, timeoutMs: timeoutMs)
         }
 
         let id = UUID()
         let task = Task<String?, Never> { [weak self] in
             guard let self else { return nil }
-            return await self.requestPluginSurfaceRefresh(
+            let refreshed = await self.requestPluginSurfaceRefresh(
                 channel: channel,
                 channelGeneration: channelGeneration,
                 admissionGeneration: admissionGeneration,
                 surface: trimmedSurface,
-                observedURL: observedURL,
-                timeoutMs: timeoutMs)
+                observedURL: observedURL)
+            await self.finishPluginSurfaceRefresh(surface: trimmedSurface, id: id)
+            return refreshed
         }
         self.pluginSurfaceRefreshes[trimmedSurface] = PluginSurfaceRefresh(
             id: id,
             channelGeneration: channelGeneration,
             admissionGeneration: admissionGeneration,
-            timeoutMs: timeoutMs,
             task: task)
-        let refreshed = await task.value
-        if self.pluginSurfaceRefreshes[trimmedSurface]?.id == id {
-            self.pluginSurfaceRefreshes[trimmedSurface] = nil
+        return await self.awaitPluginSurfaceRefresh(task, timeoutMs: timeoutMs)
+    }
+
+    private func awaitPluginSurfaceRefresh(_ task: Task<String?, Never>, timeoutMs: Double) async -> String? {
+        do {
+            return try await AsyncTimeout.withTimeout(
+                seconds: max(0, timeoutMs) / 1000,
+                onTimeout: {
+                    NSError(
+                        domain: "Gateway",
+                        code: 8,
+                        userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
+                },
+                operation: { await task.value })
+        } catch {
+            return nil
         }
-        return refreshed
+    }
+
+    private func finishPluginSurfaceRefresh(surface: String, id: UUID) {
+        if self.pluginSurfaceRefreshes[surface]?.id == id {
+            self.pluginSurfaceRefreshes[surface] = nil
+        }
     }
 
     @discardableResult
@@ -1049,15 +1066,18 @@ extension GatewayNodeSession {
         channelGeneration: UInt64,
         admissionGeneration: UInt64,
         surface: String,
-        observedURL: String?,
-        timeoutMs: Double) async -> String?
+        observedURL: String?) async -> String?
     {
         let method = "node.pluginSurface.refresh"
         do {
+            // One server-side rotation owns the surface until it responds or the
+            // canonical operation deadline expires. Callers keep independent,
+            // shorter deadlines without issuing a second rotation that could
+            // invalidate the first result.
             let data = try await channel.request(
                 method: method,
                 params: ["surface": AnyCodable(surface)],
-                timeoutMs: timeoutMs)
+                timeoutMs: self.pluginSurfaceRefreshOperationTimeoutMs)
             let decoded = try decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
             let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
             guard let refreshed = urls[surface] else { return nil }
@@ -1294,6 +1314,11 @@ extension GatewayNodeSession {
     // periphery:ignore - package tests verify event stream filtering without a live gateway.
     func _test_broadcastServerEvent(_ event: EventFrame) {
         self.broadcastServerEvent(event)
+    }
+
+    // periphery:ignore - package tests prove a stalled surface rotation releases for retry.
+    func _test_setPluginSurfaceRefreshOperationTimeoutMs(_ timeoutMs: Double) {
+        self.pluginSurfaceRefreshOperationTimeoutMs = max(1, timeoutMs)
     }
     #endif
 

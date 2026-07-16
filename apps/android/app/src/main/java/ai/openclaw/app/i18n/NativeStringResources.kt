@@ -1327,6 +1327,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session." to R.string.native_1dbf9d5979606697,
     "Where do I get a setup code?" to R.string.native_c34dd5eb8b0af56e,
     "While Using" to R.string.native_44173ba2044fb22f,
+    "Widget unavailable" to R.string.native_41659b48f2dc4c36,
     "Working" to R.string.native_a92f0449a9f7235b,
     "Working directory" to R.string.native_865e85c6fbf9d3b2,
     "Working · \$pendingRunCount active runs" to R.string.native_75c4bbf668b72cbf,

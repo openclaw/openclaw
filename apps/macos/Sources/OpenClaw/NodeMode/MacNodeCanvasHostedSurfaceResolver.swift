@@ -31,7 +31,10 @@ struct MacNodeCanvasHostedSurfaceResolver: Sendable {
         {
             return resolved
         }
-        if let resolved = CanvasHostedURLResolver.resolve(surfaceURL: observedSurface, target: target) {
+        // A failed refresh can mean the route changed while it was in flight.
+        // Re-read so the replacement gateway's capability wins over the stale observation.
+        let currentSurface = await currentSurfaceURL()
+        if let resolved = CanvasHostedURLResolver.resolve(surfaceURL: currentSurface, target: target) {
             return resolved
         }
         throw NSError(domain: "Canvas", code: 32, userInfo: [
