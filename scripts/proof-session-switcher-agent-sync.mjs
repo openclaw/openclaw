@@ -68,4 +68,6 @@ console.log(`  can re-select previous agent after switch: ${after.canReselectMai
 
 const fixed = !before.canReselectMain && after.canReselectMain;
 console.log(`\nRESULT: ${fixed ? "PASS — session switch keeps agent chip in sync" : "FAIL"}`);
-if (!fixed) process.exit(1);
+if (!fixed) {
+  process.exit(1);
+}
