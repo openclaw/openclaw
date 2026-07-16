@@ -212,38 +212,43 @@ export function resolveConversationCapabilityProfile(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  // Owner WebChat intentionally has no external sender identity. Its trusted
-  // owner state must not fall through to the wildcard policy for guests.
-  const isOwnerInternalSession =
-    params.senderIsOwner === true &&
-    normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
-  const senderPolicy = isOwnerInternalSession
-    ? undefined
-    : resolveSenderToolPolicy({
-        config: params.config,
-        agentId: effective.agentId,
-        messageProvider,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      });
-  const profilePolicy = resolveToolProfilePolicy(effective.profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
     cfg: params.config,
   });
-  const subagentPolicy =
+  const isSubagentSession =
     subagentSessionKey &&
     isSubagentEnvelopeSession(subagentSessionKey, {
       cfg: params.config,
       store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, subagentSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
+    });
+  // Owner WebChat intentionally has no external sender identity. Its trusted
+  // owner state must not fall through to the wildcard policy for guests.
+  // Spawned subagents inherit the parent's already-resolved sender policy and
+  // must not re-resolve without a sender identity, which would match the
+  // wildcard "*" entry and strip filesystem/runtime tools.
+  const isOwnerInternalSession =
+    params.senderIsOwner === true &&
+    normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
+  const senderPolicy =
+    isOwnerInternalSession || isSubagentSession
+      ? undefined
+      : resolveSenderToolPolicy({
+          config: params.config,
+          agentId: effective.agentId,
+          messageProvider,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        });
+  const profilePolicy = resolveToolProfilePolicy(effective.profile);
+  const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
+  const subagentPolicy = isSubagentSession
+    ? resolveSubagentToolPolicyForSession(params.config, subagentSessionKey, {
+        store: subagentStore,
+      })
+    : undefined;
   const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
     params.config,
     subagentSessionKey,
