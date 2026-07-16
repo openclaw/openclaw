@@ -1,9 +1,8 @@
 import { createDedupeCache, type DedupeCache } from "../infra/dedupe.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 
-export const MAX_LOGGED_INVALID_CONFIGS = 4096;
+const MAX_LOGGED_INVALID_CONFIGS = 4096;
 export const MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS = 4096;
-export const MAX_WARNED_FUTURE_TOUCHED_VERSIONS = 4096;
+const MAX_WARNED_FUTURE_TOUCHED_VERSIONS = 4096;
 export const MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH = 4096;
 
 // Warning state spans fresh config snapshots; bounding it means evicted paths can re-warn.

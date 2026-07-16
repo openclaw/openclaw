@@ -12,8 +12,9 @@ describe("config IO state caches", () => {
 
   describe("loggedInvalidConfigs dedupe cache", () => {
     it("caps at MAX_LOGGED_INVALID_CONFIGS and re-warns evicted paths", async () => {
-      const { loggedInvalidConfigs, MAX_LOGGED_INVALID_CONFIGS } = await import("./io.state.js");
+      const { loggedInvalidConfigs } = await import("./io.state.js");
       const { throwInvalidConfig } = await import("./io.invalid-config.js");
+      const MAX_LOGGED_INVALID_CONFIGS = 4096;
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
       for (let i = 0; i < MAX_LOGGED_INVALID_CONFIGS; i++) {
@@ -66,9 +67,9 @@ describe("config IO state caches", () => {
 
   describe("warnedFutureTouchedVersions dedupe cache", () => {
     it("caps at MAX_WARNED_FUTURE_TOUCHED_VERSIONS and re-warns evicted versions", async () => {
-      const { warnedFutureTouchedVersions, MAX_WARNED_FUTURE_TOUCHED_VERSIONS } =
-        await import("./io.state.js");
+      const { warnedFutureTouchedVersions } = await import("./io.state.js");
       const { warnIfConfigFromFuture } = await import("./io.warnings.js");
+      const MAX_WARNED_FUTURE_TOUCHED_VERSIONS = 4096;
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
       for (let i = 0; i < MAX_WARNED_FUTURE_TOUCHED_VERSIONS; i++) {
