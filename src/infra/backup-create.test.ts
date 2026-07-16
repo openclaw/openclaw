@@ -1465,28 +1465,44 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("preserves a configured workspace nested under a managed runtime root", async () => {
+  it("preserves configured state paths nested under managed runtime roots", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
         prefix: "openclaw-backup-managed-root-workspace-",
         scenario: "minimal",
+        env: { OPENCLAW_OAUTH_DIR: undefined },
       },
       async (state) => {
         const stateDir = state.stateDir;
         const workspaceDir = path.join(stateDir, "dev", "workspace");
         const runtimeDir = path.join(stateDir, "dev", "openclaw");
+        const configPath = path.join(stateDir, "git", "config", "openclaw.json");
+        const oauthDir = path.join(stateDir, "tools", "oauth");
+        const toolRuntimeDir = path.join(stateDir, "tools", "runtime");
         const workspaceDbPath = path.join(workspaceDir, "workspace.sqlite");
         const outputDir = state.path("backups");
-        await state.writeConfig({
-          agents: {
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
-          },
-        });
+        state.envVars.OPENCLAW_CONFIG_PATH = configPath;
+        state.envVars.OPENCLAW_OAUTH_DIR = oauthDir;
+        state.applyEnv();
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(runtimeDir, { recursive: true });
+        await fs.mkdir(path.dirname(configPath), { recursive: true });
+        await fs.mkdir(oauthDir, { recursive: true });
+        await fs.mkdir(toolRuntimeDir, { recursive: true });
+        await fs.writeFile(
+          configPath,
+          `${JSON.stringify({
+            agents: {
+              list: [{ id: "main", default: true, workspace: workspaceDir }],
+            },
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(path.join(oauthDir, "credentials.json"), "{}\n", "utf8");
         await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "durable workspace\n", "utf8");
         await fs.writeFile(path.join(runtimeDir, "package.json"), "{}\n", "utf8");
+        await fs.writeFile(path.join(toolRuntimeDir, "tool.bin"), "runtime\n", "utf8");
         const sqlite = requireNodeSqlite();
         const workspaceDb = new sqlite.DatabaseSync(workspaceDbPath);
         try {
@@ -1511,7 +1527,14 @@ describe("createBackupArchive", () => {
         expect(
           entries.some((entry) => entry.endsWith("/state/dev/workspace/workspace.sqlite")),
         ).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/state/git/config/openclaw.json"))).toBe(
+          true,
+        );
+        expect(entries.some((entry) => entry.endsWith("/state/tools/oauth/credentials.json"))).toBe(
+          true,
+        );
         expect(entries.some((entry) => entry.includes("/state/dev/openclaw/"))).toBe(false);
+        expect(entries.some((entry) => entry.includes("/state/tools/runtime/"))).toBe(false);
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(

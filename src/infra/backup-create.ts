@@ -713,9 +713,13 @@ export async function createBackupArchive(
   const tempArchivePath = buildTempArchivePath(outputPath);
   const tempArchiveCleanupPaths = resolveBackupTarAttemptTempPaths(tempArchivePath);
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
-  const preservedStatePaths = plan.skipped
-    .filter((asset) => asset.kind === "workspace" && asset.reason === "covered")
-    .map((asset) => asset.sourcePath);
+  const preservedStatePaths = [
+    plan.configPath,
+    plan.oauthDir,
+    ...plan.skipped
+      .filter((asset) => asset.kind === "workspace" && asset.reason === "covered")
+      .map((asset) => asset.sourcePath),
+  ].filter((entry) => stateAsset && isPathWithin(entry, stateAsset.sourcePath));
   try {
     const stateSqliteBackup = stateAsset
       ? await createStateSqliteBackupPlan({
