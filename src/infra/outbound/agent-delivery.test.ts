@@ -114,14 +114,12 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-let resolveAgentDeliveryPlan: typeof import("./agent-delivery.js").resolveAgentDeliveryPlan;
 let resolveAgentDeliveryPlanWithSessionRoute: typeof import("./agent-delivery.js").resolveAgentDeliveryPlanWithSessionRoute;
 let resolveAgentExplicitRecipientSession: typeof import("./agent-delivery.js").resolveAgentExplicitRecipientSession;
 let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
 
 beforeAll(async () => {
   ({
-    resolveAgentDeliveryPlan,
     resolveAgentDeliveryPlanWithSessionRoute,
     resolveAgentExplicitRecipientSession,
     resolveAgentOutboundTarget,
@@ -148,8 +146,14 @@ beforeEach(() => {
   mocks.resolveSessionDeliveryTarget.mockClear();
 });
 
-function expectDeliveryPlan(params: Parameters<typeof resolveAgentDeliveryPlan>[0]) {
-  return resolveAgentDeliveryPlan(params);
+async function buildDeliveryPlan(
+  params: Omit<Parameters<typeof resolveAgentDeliveryPlanWithSessionRoute>[0], "cfg" | "agentId">,
+) {
+  return await resolveAgentDeliveryPlanWithSessionRoute({
+    cfg: {} as OpenClawConfig,
+    agentId: "agent",
+    ...params,
+  });
 }
 
 describe("agent delivery helpers", () => {
@@ -223,15 +227,15 @@ describe("agent delivery helpers", () => {
         resolvedTo: undefined,
       },
     },
-  ])("builds delivery plan for %j", ({ params, expected }) => {
-    const plan = expectDeliveryPlan(params);
+  ])("builds delivery plan for %j", async ({ params, expected }) => {
+    const plan = await buildDeliveryPlan(params);
     for (const [key, value] of Object.entries(expected)) {
       expect((plan as Record<string, unknown>)[key]).toEqual(value);
     }
   });
 
-  it("resolves fallback targets when no explicit destination is provided", () => {
-    const plan = resolveAgentDeliveryPlan({
+  it("resolves fallback targets when no explicit destination is provided", async () => {
+    const plan = await buildDeliveryPlan({
       sessionEntry: {
         sessionId: "s2",
         updatedAt: 2,
@@ -254,8 +258,8 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBe("+1999");
   });
 
-  it("skips outbound target resolution when explicit target validation is disabled", () => {
-    const plan = expectDeliveryPlan({
+  it("skips outbound target resolution when explicit target validation is disabled", async () => {
+    const plan = await buildDeliveryPlan({
       sessionEntry: {
         sessionId: "s3",
         updatedAt: 3,

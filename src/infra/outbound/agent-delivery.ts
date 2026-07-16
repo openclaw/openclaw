@@ -60,7 +60,7 @@ function rebaseOutboundSessionRoute(
   };
 }
 
-export function resolveAgentDeliveryPlan(params: {
+function resolveAgentDeliveryPlan(params: {
   sessionEntry?: SessionEntry;
   requestedChannel?: string;
   explicitTo?: string;

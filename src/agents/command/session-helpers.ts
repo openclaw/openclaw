@@ -57,7 +57,7 @@ export function clearPendingFinalDeliveryFields(
   };
 }
 
-export type PreparedCurrentRunDelivery = {
+type PreparedCurrentRunDelivery = {
   context: DeliveryContext;
   targetMode: ChannelOutboundTargetMode;
 };
