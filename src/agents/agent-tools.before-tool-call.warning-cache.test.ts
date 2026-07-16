@@ -17,21 +17,31 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-import {
-  resetDeprecatedTimeoutBehaviorWarningsForTest,
-  warnDeprecatedApprovalTimeoutBehaviorForTest,
-} from "./agent-tools.before-tool-call.js";
+type DeprecatedTimeoutBehaviorTestApi = {
+  reset: () => void;
+  warn: (pluginId: string) => void;
+};
+
+async function loadTestApi(): Promise<DeprecatedTimeoutBehaviorTestApi> {
+  await import("./agent-tools.before-tool-call.js");
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.warnDeprecatedApprovalTimeoutBehaviorTestApi")
+  ];
+  return api as DeprecatedTimeoutBehaviorTestApi;
+}
 
 describe("deprecated approval timeout behavior warning cache", () => {
   beforeEach(() => {
-    resetDeprecatedTimeoutBehaviorWarningsForTest();
+    vi.resetModules();
     warnMock.mockClear();
   });
 
-  it("deduplicates warnings for the same plugin id", () => {
-    warnDeprecatedApprovalTimeoutBehaviorForTest("plugin-a");
-    warnDeprecatedApprovalTimeoutBehaviorForTest("plugin-a");
-    warnDeprecatedApprovalTimeoutBehaviorForTest("plugin-a");
+  it("deduplicates warnings for the same plugin id", async () => {
+    const api = await loadTestApi();
+    api.reset();
+    api.warn("plugin-a");
+    api.warn("plugin-a");
+    api.warn("plugin-a");
 
     expect(warnMock).toHaveBeenCalledTimes(1);
     expect(warnMock).toHaveBeenCalledWith(
@@ -39,24 +49,27 @@ describe("deprecated approval timeout behavior warning cache", () => {
     );
   });
 
-  it("caps the cache at 1024 entries and re-warns evicted plugin ids", () => {
+  it("caps the cache at 1024 entries and re-warns evicted plugin ids", async () => {
+    const api = await loadTestApi();
+    api.reset();
+
     // Fill the cache to exactly its max size.
     for (let i = 0; i < 1024; i += 1) {
-      warnDeprecatedApprovalTimeoutBehaviorForTest(`plugin-${i}`);
+      api.warn(`plugin-${i}`);
     }
     expect(warnMock).toHaveBeenCalledTimes(1024);
 
     // A recent plugin should still be deduplicated.
     warnMock.mockClear();
-    warnDeprecatedApprovalTimeoutBehaviorForTest("plugin-1023");
+    api.warn("plugin-1023");
     expect(warnMock).not.toHaveBeenCalled();
 
     // Overflow the cache by one entry, evicting the oldest plugin.
-    warnDeprecatedApprovalTimeoutBehaviorForTest("plugin-1024");
+    api.warn("plugin-1024");
     expect(warnMock).toHaveBeenCalledTimes(1);
 
     // The oldest plugin should now be warned again.
-    warnDeprecatedApprovalTimeoutBehaviorForTest("plugin-0");
+    api.warn("plugin-0");
     expect(warnMock).toHaveBeenCalledTimes(2);
     expect(warnMock).toHaveBeenLastCalledWith(
       expect.stringContaining("plugin 'plugin-0' sets deprecated requireApproval.timeoutBehavior"),

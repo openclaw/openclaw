@@ -863,17 +863,20 @@ function warnDeprecatedApprovalTimeoutBehavior(approval: PluginApprovalRequest):
   );
 }
 
-/** Test-only seam to reset the deprecation warning cache. */
-export function resetDeprecatedTimeoutBehaviorWarningsForTest(): void {
-  warnedDeprecatedTimeoutBehaviorPluginIds.clear();
-}
-
-/** Test-only seam to trigger the deprecation warning for a plugin id. */
-export function warnDeprecatedApprovalTimeoutBehaviorForTest(pluginId: string): void {
-  warnDeprecatedApprovalTimeoutBehavior({
-    pluginId,
-    timeoutBehavior: "allow",
-  } as PluginApprovalRequest);
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.warnDeprecatedApprovalTimeoutBehaviorTestApi")
+  ] = {
+    reset(): void {
+      warnedDeprecatedTimeoutBehaviorPluginIds.clear();
+    },
+    warn(pluginId: string): void {
+      warnDeprecatedApprovalTimeoutBehavior({
+        pluginId,
+        timeoutBehavior: "allow",
+      } as PluginApprovalRequest);
+    },
+  };
 }
 
 function notifyPluginApprovalResolution(
