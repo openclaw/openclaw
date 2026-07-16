@@ -344,10 +344,10 @@ describe("qa-bus client", () => {
       });
     });
 
-    const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeout = new AbortController();
     const timeoutSpy = vi
       .spyOn(AbortSignal, "timeout")
-      .mockImplementationOnce(() => realAbortSignalTimeout(100));
+      .mockReturnValueOnce(timeout.signal);
     const request = sendQaBusMessage({
       baseUrl: `http://127.0.0.1:${port}`,
       accountId: "acct-a",
@@ -359,6 +359,7 @@ describe("qa-bus client", () => {
     ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
 
     await withTimeout(bodyStarted, 500, "server did not start the response body");
+    timeout.abort(new DOMException("qa-bus request timed out", "TimeoutError"));
     await rejection;
     expect(timeoutSpy).toHaveBeenCalledTimes(1);
     expect(timeoutSpy).toHaveBeenCalledWith(10_000);
