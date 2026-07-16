@@ -1376,7 +1376,7 @@ async function buildTestPlan(params: {
       };
     }
     default:
-      return { error: `Unknown inference choice "${String(kind)}".` };
+      return { error: `Unknown inference choice "${kind}".` };
   }
 }
 
