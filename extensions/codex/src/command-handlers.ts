@@ -38,6 +38,7 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import { CodexSessionGenerationNotCurrentError } from "./app-server/thread-lifecycle-errors.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import {
@@ -911,7 +912,7 @@ async function resumeThread(
       config: ctx.config,
     });
     if (!reclaimed) {
-      throw new Error(`Codex session generation is no longer current: ${identity.sessionId}`);
+      throw new CodexSessionGenerationNotCurrentError(identity);
     }
     const currentBinding = await deps.bindingStore.read(identity);
     assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
