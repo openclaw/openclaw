@@ -267,7 +267,7 @@ describe("openclaw path CLI", () => {
 
       await pathResolveCommand("oc://oversized.json/value", { cwd: workspaceDir, json: true }, rt);
 
-      expect(rt.exitCode).toBe(1);
+      expect(rt.exitCode).toBe(2);
       expect(stdoutText(rt)).toBe("");
       expect(JSON.parse(stderrText(rt))).toMatchObject({
         error: { code: "OC_JSONC_INPUT_TOO_LARGE" },

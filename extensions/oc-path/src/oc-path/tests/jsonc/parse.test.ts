@@ -159,8 +159,8 @@ describe("parseJsonc — soft errors", () => {
   });
 
   it("measures the input cap in UTF-8 bytes", () => {
-    const oversized = `"${"界".repeat(Math.floor(MAX_JSONC_INPUT_BYTES / 3) + 1)}"`;
-    expect(oversized.length).toBeLessThan(MAX_JSONC_INPUT_BYTES);
+    const oversized = `"${"\u754c".repeat(Math.floor(JSONC_INPUT_LIMIT_BYTES / 3) + 1)}"`;
+    expect(oversized.length).toBeLessThan(JSONC_INPUT_LIMIT_BYTES);
 
     const { ast, diagnostics } = parseJsonc(oversized);
     expect(diagnostics).toHaveLength(1);

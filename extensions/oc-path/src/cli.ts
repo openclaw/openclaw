@@ -175,7 +175,7 @@ async function loadAst(
     );
     if (sizeDiagnostic) {
       emitError(runtime, mode, sizeDiagnostic.message, sizeDiagnostic.code);
-      runtime.exit(1);
+      runtime.exit(2);
       return null;
     }
     return result.ast;
