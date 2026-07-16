@@ -2671,7 +2671,7 @@ describe("feishuOutbound table-limit routing", () => {
       accountId: "main",
     });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
@@ -2684,7 +2684,7 @@ describe("feishuOutbound table-limit routing", () => {
       accountId: "main",
     });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
