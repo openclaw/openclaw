@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   collectEntrySpoolPaths,
-  reclaimDeadGenerationSpoolArtifacts,
+  pruneOrphanedDeliveryQueueMedia,
 } from "./delivery-queue-media-spool.js";
 import { ackDelivery, loadPendingDeliveries } from "./delivery-queue-storage.js";
 
@@ -93,16 +93,10 @@ describe("delivery queue media crash boundary", () => {
       artifact,
     ]);
 
-    // A fresh process reclaims the dead owner's generation, but a pending row
-    // still needs this artifact, so it must survive its owner's death.
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () =>
-        new Set(
-          (await loadPendingDeliveries(stateDir)).flatMap((entry) =>
-            collectEntrySpoolPaths(entry.payloads, stateDir),
-          ),
-        ),
+    // Even beyond the orphan grace, the pending row keeps its exact artifact.
+    await pruneOrphanedDeliveryQueueMedia({
       stateDir,
+      nowMs: Date.now() + 2 * 24 * 60 * 60_000,
     });
     await expect(fs.readFile(artifact, "utf8")).resolves.toBe("opus-bytes");
 
@@ -116,24 +110,5 @@ describe("delivery queue media crash boundary", () => {
     await ackDelivery(id, stateDir);
     expect(await loadPendingDeliveries(stateDir)).toEqual([]);
     await expect(fs.readFile(artifact, "utf8")).rejects.toThrow();
-  }, 90_000);
-
-  it("reclaims a dead producer's artifact once no row references it", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-
-    const { id, artifacts } = await enqueueThenKillChild(source);
-    const artifact = artifacts[0] as string;
-    await ackDelivery(id, stateDir);
-
-    // Ack already released it; a later sweep with no retain set is a no-op that
-    // also clears the dead generation directory itself.
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
-      stateDir,
-    });
-
-    await expect(fs.readFile(artifact, "utf8")).rejects.toThrow();
-    await expect(fs.readdir(path.dirname(artifact))).rejects.toThrow();
   }, 90_000);
 });

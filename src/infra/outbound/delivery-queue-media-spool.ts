@@ -1,30 +1,28 @@
-// Delivery queue media spool owns undelivered outbound attachments whose source
-// dies with its producer. TTS synthesizes into a producer-owned temp that is
-// removed on producer exit, so a durable row referencing that temp replays
-// against a missing file and the voice is silently dropped. Artifacts are
-// grouped by producing process generation: a fresh process can then reclaim
-// exactly what is provably ownerless without a lease table or owner marker.
+// Delivery queue media spool owns replayable copies of outbound attachments
+// whose producer-owned source may disappear before retry.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveDeliveryQueueMediaDir } from "../../config/paths.js";
-import { logVerbose } from "../../globals.js";
 import {
   buildOutboundMediaLoadOptions,
   type OutboundMediaAccess,
 } from "../../media/load-options.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { fileStore } from "../file-store.js";
-import { readProcessStartTimeForOwnerIdentity } from "../process-owner-identity.js";
-import { generateSecureHex, generateSecureUuid } from "../secure-random.js";
+import { generateSecureUuid } from "../secure-random.js";
+import {
+  cancelDeliveryQueueMediaStage,
+  createDeliveryQueueMediaStage,
+  loadDeliveryQueueMediaRetentionSnapshot,
+} from "./delivery-queue-media-staging.js";
 
-// <pid>-<processStartTime|unknown>-<nonce>. The nonce keeps generations distinct
-// when a PID is recycled inside one host uptime; the start time proves identity.
-const GENERATION_DIR_RE = /^(\d+)-(\d+|unknown)-([0-9a-f]{32})$/;
 const ARTIFACT_EXT_RE = /^\.[A-Za-z0-9]{1,10}$/;
+const ARTIFACT_NAME_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.[A-Za-z0-9]{1,10})?(?:\.part)?$/;
 const PART_SUFFIX = ".part";
+const ORPHAN_GRACE_MS = 24 * 60 * 60_000;
 
 function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
   return fileStore({
@@ -35,94 +33,49 @@ function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
   });
 }
 
-let currentGenerationDir: string | undefined;
-
-/** Directory name identifying artifacts owned by this process incarnation. */
-function resolveCurrentGenerationDir(): string {
-  if (!currentGenerationDir) {
-    const startTime = readProcessStartTimeForOwnerIdentity(process.pid);
-    currentGenerationDir = `${process.pid}-${startTime ?? "unknown"}-${generateSecureHex(16)}`;
-  }
-  return currentGenerationDir;
-}
-
-type Generation = { pid: number; startTime: number | null };
-
-function parseGenerationDirName(name: string): Generation | null {
-  const match = GENERATION_DIR_RE.exec(name);
-  if (!match) {
-    return null;
-  }
-  const pid = Number(match[1]);
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return null;
-  }
-  const startTime = match[2] === "unknown" ? null : Number(match[2]);
-  if (startTime !== null && (!Number.isInteger(startTime) || startTime < 0)) {
-    return null;
-  }
-  return { pid, startTime };
-}
-
-type GenerationOwner = "alive" | "dead" | "unknown";
-
-/**
- * Only a provably absent owner releases custody. A `kill(0)` EPERM, an
- * unreadable identity, or an identity we could not record all resolve to
- * `unknown` and retain: leaking a spool file costs disk, deleting a live
- * owner's file costs the user their message.
- */
-function resolveGenerationOwner(generation: Generation): GenerationOwner {
-  if (isPidDefinitelyDead(generation.pid)) {
-    return "dead";
-  }
-  if (generation.startTime === null) {
-    return "unknown";
-  }
-  const currentStartTime = readProcessStartTimeForOwnerIdentity(generation.pid);
-  if (currentStartTime === null) {
-    return "unknown";
-  }
-  // A live PID whose start time moved is a recycled id, not our producer.
-  return currentStartTime === generation.startTime ? "alive" : "dead";
-}
-
 function resolveArtifactExtension(source: string): string {
   const extension = path.extname(source.split("?")[0] ?? "");
   return ARTIFACT_EXT_RE.test(extension) ? extension.toLowerCase() : "";
 }
 
+function isNonEmptyMediaSource(source: unknown): source is string {
+  return typeof source === "string" && Boolean(source.trim());
+}
+
 function payloadMediaSources(payload: ReplyPayload): string[] {
   const sources: string[] = [];
-  if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()) {
+  if (isNonEmptyMediaSource(payload.mediaUrl)) {
     sources.push(payload.mediaUrl);
   }
   for (const mediaUrl of payload.mediaUrls ?? []) {
-    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
+    if (isNonEmptyMediaSource(mediaUrl)) {
       sources.push(mediaUrl);
     }
   }
   return sources;
 }
 
-/** Remote and data sources carry their own bytes; only local paths die with the producer. */
+/** Remote and data sources carry their own bytes; only local paths need queue custody. */
 function isSpoolableSource(source: string): boolean {
   return !isPassThroughRemoteMediaSource(source) && !/^data:/i.test(source);
 }
 
 function isSensitivePayload(payload: ReplyPayload): boolean {
-  // The flag only blocks durability when there is actually a media reference to persist.
   return payload.sensitiveMedia === true && payloadMediaSources(payload).length > 0;
 }
 
-export type StageQueueMediaResult =
-  | { status: "staged"; payloads: ReplyPayload[]; artifacts: string[] }
+type StageQueueMediaResult =
+  | {
+      status: "staged";
+      payloads: ReplyPayload[];
+      artifacts: string[];
+      mediaStageId?: string;
+    }
   | { status: "not-durable"; reason: "sensitive-media" };
 
 /**
- * Copies producer-owned local media into this process's generation and rewrites
- * the queue-only payloads to the copies. Throws when a source cannot be
- * authorized, read, or published; the caller maps that onto its queue policy.
+ * Copies local media into queue custody and rewrites only the queue payloads.
+ * The same loader and capability as the live send authorize every source.
  */
 export async function stageQueuePayloadMedia(params: {
   payloads: readonly ReplyPayload[];
@@ -133,19 +86,33 @@ export async function stageQueuePayloadMedia(params: {
   if (params.payloads.some(isSensitivePayload)) {
     return { status: "not-durable", reason: "sensitive-media" };
   }
-  const spoolRoot = resolveDeliveryQueueMediaDir(params.stateDir);
-  const stagedBySource = new Map<string, string>();
-  const artifacts: string[] = [];
+
+  const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(params.stateDir));
+  const artifactsBySource = new Map<string, string>();
+  for (const source of params.payloads.flatMap(payloadMediaSources)) {
+    if (isSpoolableSource(source) && !artifactsBySource.has(source)) {
+      artifactsBySource.set(
+        source,
+        path.join(spoolRoot, `${generateSecureUuid()}${resolveArtifactExtension(source)}`),
+      );
+    }
+  }
+  const artifacts = [...artifactsBySource.values()];
+  // The SQLite stage row is visible before any artifact. GC either preserves it
+  // or expires it; enqueue then consumes it atomically or fails closed.
+  const mediaStageId =
+    artifacts.length > 0 ? createDeliveryQueueMediaStage(artifacts, params.stateDir) : undefined;
   const store = openSpoolStore(params.stateDir, params.maxBytes);
-  const generationDir = resolveCurrentGenerationDir();
+  const publishedSources = new Set<string>();
 
   const stageSource = async (source: string): Promise<string> => {
-    const cached = stagedBySource.get(source);
-    if (cached) {
-      return cached;
+    const stagedPath = artifactsBySource.get(source);
+    if (!stagedPath) {
+      throw new Error(`Delivery queue media source was not planned: ${source}`);
     }
-    // Authorize and read through the same loader the live send uses, so the
-    // spool copy can never widen what this send was already allowed to read.
+    if (publishedSources.has(source)) {
+      return stagedPath;
+    }
     const media = await loadWebMedia(
       source,
       buildOutboundMediaLoadOptions({
@@ -155,18 +122,18 @@ export async function stageQueuePayloadMedia(params: {
         mediaReadFile: params.mediaAccess?.readFile,
       }),
     );
-    const artifactId = generateSecureUuid();
-    const finalRelative = `${generationDir}/${artifactId}${resolveArtifactExtension(source)}`;
+    const finalRelative = path.basename(stagedPath);
     const partRelative = `${finalRelative}${PART_SUFFIX}`;
-    // Publish by rename: fs-safe's copy/write helpers create the destination
-    // before streaming into it, so writing the final name directly would expose
-    // an empty artifact to a concurrent reclaim or read.
-    await store.write(partRelative, media.buffer, { maxBytes: params.maxBytes });
-    const root = await store.root();
-    await root.move(partRelative, finalRelative, { overwrite: false });
-    const stagedPath = path.join(spoolRoot, finalRelative);
-    stagedBySource.set(source, stagedPath);
-    artifacts.push(stagedPath);
+    try {
+      // Queue rows only see the final name after the complete copy is published.
+      await store.write(partRelative, media.buffer, { maxBytes: params.maxBytes });
+      const root = await store.root();
+      await root.move(partRelative, finalRelative, { overwrite: false });
+      publishedSources.add(source);
+    } catch (err) {
+      await store.remove(partRelative).catch(() => undefined);
+      throw err;
+    }
     return stagedPath;
   };
 
@@ -179,17 +146,17 @@ export async function stageQueuePayloadMedia(params: {
         continue;
       }
       const staged = { ...payload };
-      if (typeof payload.mediaUrl === "string" && isSpoolableSource(payload.mediaUrl)) {
+      if (isNonEmptyMediaSource(payload.mediaUrl) && isSpoolableSource(payload.mediaUrl)) {
         staged.mediaUrl = await stageSource(payload.mediaUrl);
       }
       if (payload.mediaUrls) {
-        // Sequential, not concurrent: a rejected copy must leave no sibling copy
-        // still in flight, or the cleanup below would run before that sibling
-        // lands and orphan it. Also bounds peak memory to one source at a time.
+        // Sequential copies keep cleanup complete when a later source fails.
         const stagedMediaUrls: string[] = [];
         for (const mediaUrl of payload.mediaUrls) {
           stagedMediaUrls.push(
-            isSpoolableSource(mediaUrl) ? await stageSource(mediaUrl) : mediaUrl,
+            isNonEmptyMediaSource(mediaUrl) && isSpoolableSource(mediaUrl)
+              ? await stageSource(mediaUrl)
+              : mediaUrl,
           );
         }
         staged.mediaUrls = stagedMediaUrls;
@@ -197,23 +164,32 @@ export async function stageQueuePayloadMedia(params: {
       stagedPayloads.push(staged);
     }
   } catch (err) {
-    // A later source failed after earlier ones were published. No row will ever
-    // reference them, and reclaim never touches a live owner's generation, so
-    // they would accumulate for this process's lifetime unless dropped here.
+    cancelDeliveryQueueMediaStage(mediaStageId, params.stateDir);
     await releaseSpoolArtifacts(artifacts, params.stateDir);
     throw err;
   }
-  return { status: "staged", payloads: stagedPayloads, artifacts };
+  return {
+    status: "staged",
+    payloads: stagedPayloads,
+    artifacts,
+    ...(mediaStageId ? { mediaStageId } : {}),
+  };
+}
+
+function spoolRelativePath(absolutePath: string, stateDir: string | undefined): string | null {
+  const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
+  const candidate = path.resolve(absolutePath);
+  const relative = path.relative(spoolRoot, candidate);
+  return relative && !relative.includes(path.sep) && ARTIFACT_NAME_RE.test(relative)
+    ? relative
+    : null;
 }
 
 async function removeArtifact(absolutePath: string, stateDir: string | undefined): Promise<void> {
-  const spoolRoot = resolveDeliveryQueueMediaDir(stateDir);
-  const relative = path.relative(spoolRoot, absolutePath);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+  const relative = spoolRelativePath(absolutePath, stateDir);
+  if (!relative) {
     return;
   }
-  // Root-scoped removal: the store rejects traversal and refuses to follow a
-  // symlink out of the spool even if an artifact name was tampered with.
   await openSpoolStore(stateDir)
     .remove(relative)
     .catch(() => undefined);
@@ -234,12 +210,11 @@ export function collectEntrySpoolPaths(
   payloads: readonly ReplyPayload[],
   stateDir?: string,
 ): string[] {
-  const spoolRoot = resolveDeliveryQueueMediaDir(stateDir);
   const paths: string[] = [];
   for (const payload of payloads) {
     for (const source of payloadMediaSources(payload)) {
-      if (path.isAbsolute(source) && source.startsWith(`${spoolRoot}${path.sep}`)) {
-        paths.push(source);
+      if (path.isAbsolute(source) && spoolRelativePath(source, stateDir)) {
+        paths.push(path.resolve(source));
       }
     }
   }
@@ -247,77 +222,68 @@ export function collectEntrySpoolPaths(
 }
 
 /**
- * Reclaims artifacts in generations whose producer is provably gone. Live and
- * unverifiable owners are skipped whole — wall-clock age is never an ownership
- * signal, so a long-idle gateway keeps its own undelivered media.
- *
- * `loadRetainPaths` is re-read after each death proof rather than snapshotted up
- * front: a short-lived producer (`openclaw message send`) can stage, commit, and
- * exit while this pass runs, and a snapshot taken before that commit would not
- * name the artifact its now-pending row still needs. Reading after the owner is
- * proven dead is sufficient, because a process only ever stages into its own
- * generation, so a dead owner can produce no further references.
+ * Removes old unreferenced spool files. Pending-row references always win over
+ * age; the grace covers the stage-before-row-commit crash window and bounds all
+ * final and partial artifacts that never acquire a row.
  */
-export async function reclaimDeadGenerationSpoolArtifacts(params: {
-  loadRetainPaths: () => Promise<ReadonlySet<string>>;
+export async function pruneDeliveryQueueMedia(params: {
+  retainPaths: ReadonlySet<string>;
   stateDir?: string;
+  nowMs?: number;
+  orphanGraceMs?: number;
 }): Promise<void> {
-  const spoolRoot = resolveDeliveryQueueMediaDir(params.stateDir);
-  const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch(() => null);
+  const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(params.stateDir));
+  const retainPaths = new Set([...params.retainPaths].map((entry) => path.resolve(entry)));
+  const cutoffMs = (params.nowMs ?? Date.now()) - (params.orphanGraceMs ?? ORPHAN_GRACE_MS);
+  const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch((err: unknown) => {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
   if (!entries) {
     return;
   }
+
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    // Unknown files and symlinks are not spool artifacts; never follow them.
+    if (!entry.isFile() || !ARTIFACT_NAME_RE.test(entry.name)) {
       continue;
     }
-    const generation = parseGenerationDirName(entry.name);
-    if (!generation) {
+    const artifactPath = path.join(spoolRoot, entry.name);
+    if (retainPaths.has(artifactPath)) {
       continue;
     }
-    if (resolveGenerationOwner(generation) !== "dead") {
-      continue;
-    }
-    await reclaimGeneration({
-      generationDir: entry.name,
-      generationPath: path.join(spoolRoot, entry.name),
-      retainPaths: await params.loadRetainPaths(),
-      stateDir: params.stateDir,
+    const stats = await fs.stat(artifactPath).catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw err;
     });
+    if (!stats || stats.mtimeMs > cutoffMs) {
+      continue;
+    }
+    await removeArtifact(artifactPath, params.stateDir);
   }
 }
 
-async function reclaimGeneration(params: {
-  generationDir: string;
-  generationPath: string;
-  retainPaths: ReadonlySet<string>;
-  stateDir: string | undefined;
+/** Reclaims queue media using the complete pending inventory as the retain set. */
+export async function pruneOrphanedDeliveryQueueMedia(params?: {
+  stateDir?: string;
+  nowMs?: number;
 }): Promise<void> {
-  const artifacts = await fs
-    .readdir(params.generationPath, { withFileTypes: true })
-    .catch(() => null);
-  if (!artifacts) {
-    return;
-  }
-  let retained = 0;
-  for (const artifact of artifacts) {
-    // Only regular files are ours; a symlink or directory here was not written
-    // by the spool and is left untouched rather than followed.
-    if (!artifact.isFile()) {
-      retained += 1;
-      continue;
-    }
-    const absolutePath = path.join(params.generationPath, artifact.name);
-    if (params.retainPaths.has(absolutePath)) {
-      retained += 1;
-      continue;
-    }
-    await removeArtifact(absolutePath, params.stateDir);
-  }
-  if (retained === 0) {
-    await fs.rmdir(params.generationPath).catch(() => undefined);
-  }
-  logVerbose(
-    `delivery-queue media spool: reclaimed dead generation ${params.generationDir} (${retained} retained)`,
-  );
+  const nowMs = params?.nowMs ?? Date.now();
+  const snapshot = loadDeliveryQueueMediaRetentionSnapshot({
+    expireBeforeMs: nowMs - ORPHAN_GRACE_MS,
+    stateDir: params?.stateDir,
+  });
+  await pruneDeliveryQueueMedia({
+    retainPaths: new Set(
+      snapshot.stagedArtifacts.concat(
+        snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, params?.stateDir)),
+      ),
+    ),
+    stateDir: params?.stateDir,
+    nowMs,
+  });
 }

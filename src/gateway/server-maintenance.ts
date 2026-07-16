@@ -10,10 +10,7 @@ import {
 import type { HealthSummary } from "../commands/health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
-import {
-  collectEntrySpoolPaths,
-  reclaimDeadGenerationSpoolArtifacts,
-} from "../infra/outbound/delivery-queue-media-spool.js";
+import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia } from "../media/store.js";
 import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
@@ -37,8 +34,8 @@ import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shar
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 
-// Owner liveness, not age, decides spool custody; hourly matches the other
-// filesystem reclaim sweeps and bounds how long a dead owner's media lingers.
+// Hourly sweep plus a one-day grace bounds orphan storage without racing the
+// stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
@@ -93,7 +90,6 @@ export function startGatewayMaintenanceTimers(params: {
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
-  deliveryQueueMediaCleanup: ReturnType<typeof setInterval>;
   worktreeCleanup: ReturnType<typeof setInterval>;
   skillCuratorCleanup: () => void;
 } {
@@ -146,33 +142,29 @@ export function startGatewayMaintenanceTimers(params: {
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
   void performWorktreeGc();
 
-  // Reclaim queue media owned by processes that are provably gone. Independent of
-  // the media TTL sweep below: this custody is proven by owner liveness, not
-  // age, so it must run even when media cleanup is disabled.
+  // Queue media has its own reference-aware retention policy and runs even when
+  // the general media TTL sweep is disabled.
   const runDeliveryQueueMediaGc =
-    params.runDeliveryQueueMediaGc ??
-    (async () => {
-      // Lazy: the queue runtime already loads on demand for recovery, and the
-      // maintenance timers must not pull it into gateway startup.
-      const { loadPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
-      await reclaimDeadGenerationSpoolArtifacts({
-        // Re-read per death proof rather than snapshotted: a CLI producer can
-        // commit a row and exit mid-sweep. Only pending rows still replay, so
-        // only their exact paths are retained.
-        loadRetainPaths: async () => {
-          const pending = await loadPendingDeliveries();
-          return new Set(pending.flatMap((entry) => collectEntrySpoolPaths(entry.payloads)));
-        },
+    params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
+  let deliveryQueueMediaGcInFlight: Promise<void> | null = null;
+  let deliveryQueueMediaGcStartedAtMs = 0;
+  const performDeliveryQueueMediaGc = () => {
+    if (deliveryQueueMediaGcInFlight) {
+      return deliveryQueueMediaGcInFlight;
+    }
+    deliveryQueueMediaGcStartedAtMs = Date.now();
+    deliveryQueueMediaGcInFlight = Promise.resolve()
+      .then(async () => {
+        await runDeliveryQueueMediaGc();
+      })
+      .catch((err: unknown) => {
+        params.logHealth.error(`delivery queue media cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        deliveryQueueMediaGcInFlight = null;
       });
-    });
-  const performDeliveryQueueMediaGc = () =>
-    runDeliveryQueueMediaGc().catch((err: unknown) => {
-      params.logHealth.error(`delivery queue media cleanup failed: ${formatError(err)}`);
-    });
-  const deliveryQueueMediaCleanup = setInterval(
-    () => void performDeliveryQueueMediaGc(),
-    DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
-  );
+    return deliveryQueueMediaGcInFlight;
+  };
   void performDeliveryQueueMediaGc();
 
   let skillCuratorCleanup = () => {};
@@ -188,6 +180,9 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
+      void performDeliveryQueueMediaGc();
+    }
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return undefined;
@@ -376,7 +371,6 @@ export function startGatewayMaintenanceTimers(params: {
       healthInterval,
       dedupeCleanup,
       mediaCleanup: null,
-      deliveryQueueMediaCleanup,
       worktreeCleanup,
       skillCuratorCleanup,
     };
@@ -411,7 +405,6 @@ export function startGatewayMaintenanceTimers(params: {
     healthInterval,
     dedupeCleanup,
     mediaCleanup,
-    deliveryQueueMediaCleanup,
     worktreeCleanup,
     skillCuratorCleanup,
   };

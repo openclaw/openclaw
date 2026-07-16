@@ -11,14 +11,16 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
-import { isPidAlive } from "../shared/pid-alive.js";
+import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
 import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { readProcessStartTimeForOwnerIdentity } from "./process-owner-identity.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
-import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
+import {
+  readWindowsProcessArgsSync,
+  readWindowsProcessStartTimeSync,
+} from "./windows-port-pids.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -166,7 +168,9 @@ function readProcessStartTime(pid: number, platform: NodeJS.Platform): number | 
   if (platform !== process.platform) {
     return null;
   }
-  return readProcessStartTimeForOwnerIdentity(pid);
+  return platform === "win32"
+    ? readWindowsProcessStartTimeSync(pid, CMDLINE_EXEC_TIMEOUT_MS)
+    : getFileLockProcessStartTime(pid);
 }
 
 function defaultReadProcessCmdline(pid: number, platform: NodeJS.Platform): string[] | null {

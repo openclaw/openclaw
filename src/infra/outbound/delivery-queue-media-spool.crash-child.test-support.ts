@@ -26,6 +26,7 @@ async function main(): Promise<void> {
       payloads: staged.payloads,
     },
     stateDir,
+    staged.mediaStageId,
   );
   process.stdout.write(
     `${JSON.stringify({ id, pid: process.pid, artifacts: staged.artifacts })}\n`,

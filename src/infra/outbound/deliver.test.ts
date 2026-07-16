@@ -4527,6 +4527,10 @@ describe("deliverOutboundPayloads", () => {
     const sourceDir = await fsPromises.realpath(
       await fsPromises.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "deliver-spool-")),
     );
+    const stateDir = await fsPromises.realpath(
+      await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-deliver-spool-state-")),
+    );
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     // Real MPEG-1 Layer III frames: host-local media sends are buffer-verified,
     // so placeholder text would be rejected before staging is even exercised.
     const source = path.join(sourceDir, "voice.mp3");
@@ -4542,6 +4546,7 @@ describe("deliverOutboundPayloads", () => {
     const payload = { mediaUrl: source, audioAsVoice: true };
 
     try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
       await deliverOutboundPayloads({
         cfg: matrixChunkConfig,
         channel: "matrix",
@@ -4563,7 +4568,13 @@ describe("deliverOutboundPayloads", () => {
       expect(payload.mediaUrl).toBe(source);
       expect(sendMatrix.mock.calls[0]?.[0]?.mediaUrl ?? source).toBe(source);
     } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       await fsPromises.rm(sourceDir, { recursive: true, force: true });
+      await fsPromises.rm(stateDir, { recursive: true, force: true });
     }
   });
 

@@ -4,27 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const pidAlive = vi.hoisted(() => ({
-  isPidDefinitelyDead: vi.fn<(pid: number) => boolean>(),
-}));
-const ownerIdentity = vi.hoisted(() => ({
-  readProcessStartTimeForOwnerIdentity: vi.fn<(pid: number) => number | null>(),
-}));
-
-// Only the ownership probes are stubbed; siblings (session locks, gateway lock)
-// import the rest of these modules and must keep the real implementations.
-vi.mock("../../shared/pid-alive.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../shared/pid-alive.js")>()),
-  ...pidAlive,
-}));
-
-vi.mock("../process-owner-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../process-owner-identity.js")>()),
-  ...ownerIdentity,
-}));
-
-// Observes the publish step without changing it: wraps the real store so a test
-// can inspect the filesystem at the instant the rename is issued.
 const storeSpy = vi.hoisted(() => ({
   onMove: null as ((from: string, to: string, rootDir: string) => void) | null,
 }));
@@ -58,32 +37,21 @@ vi.mock("../file-store.js", async (importOriginal) => {
 
 const {
   collectEntrySpoolPaths,
-  reclaimDeadGenerationSpoolArtifacts,
+  pruneDeliveryQueueMedia,
+  pruneOrphanedDeliveryQueueMedia,
   releaseSpoolArtifacts,
   stageQueuePayloadMedia,
 } = await import("./delivery-queue-media-spool.js");
+const { enqueueDelivery, loadPendingDeliveries } = await import("./delivery-queue-storage.js");
 
-const NONCE = "0".repeat(32);
-const OTHER_NONCE = "1".repeat(32);
+const DAY_MS = 24 * 60 * 60_000;
+const ARTIFACT_A = "00000000-0000-4000-8000-000000000001.ogg";
+const ARTIFACT_B = "00000000-0000-4000-8000-000000000002.ogg";
+const PART_ARTIFACT = "00000000-0000-4000-8000-000000000003.ogg.part";
 
 let stateDir: string;
 let sourceDir: string;
 let spoolRoot: string;
-
-/** Materializes a generation directory holding one artifact, as a producer would. */
-async function seedGeneration(params: {
-  pid: number;
-  startTime: number | "unknown";
-  nonce?: string;
-  artifact?: string;
-}): Promise<{ generationPath: string; artifactPath: string }> {
-  const name = `${params.pid}-${params.startTime}-${params.nonce ?? NONCE}`;
-  const generationPath = path.join(spoolRoot, name);
-  await fs.mkdir(generationPath, { recursive: true });
-  const artifactPath = path.join(generationPath, params.artifact ?? "voice.ogg");
-  await fs.writeFile(artifactPath, "audio-bytes");
-  return { generationPath, artifactPath };
-}
 
 const exists = (target: string) =>
   fs
@@ -91,14 +59,19 @@ const exists = (target: string) =>
     .then(() => true)
     .catch(() => false);
 
+async function seedArtifact(name: string, ageMs: number): Promise<string> {
+  await fs.mkdir(spoolRoot, { recursive: true });
+  const artifactPath = path.join(spoolRoot, name);
+  await fs.writeFile(artifactPath, "audio-bytes");
+  const timestamp = new Date(Date.now() - ageMs);
+  await fs.utimes(artifactPath, timestamp, timestamp);
+  return artifactPath;
+}
+
 beforeEach(async () => {
-  // Prod resolvers realpath their roots; macOS /var -> /private/var would break
-  // raw mkdtemp comparisons.
   stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "spool-state-")));
   sourceDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "spool-src-")));
   spoolRoot = path.join(stateDir, "delivery-queue-media");
-  pidAlive.isPidDefinitelyDead.mockReset();
-  ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReset();
   storeSpy.onMove = null;
 });
 
@@ -107,211 +80,90 @@ afterEach(async () => {
   await fs.rm(sourceDir, { recursive: true, force: true });
 });
 
-describe("generation reclaim", () => {
-  it("keeps a live owner's artifacts even when they look ancient", async () => {
-    const { artifactPath } = await seedGeneration({ pid: 4242, startTime: 900 });
-    const ancient = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000);
-    await fs.utimes(artifactPath, ancient, ancient);
-    pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-    ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(900);
+describe("retention", () => {
+  it("keeps pending media regardless of age and removes only old unreferenced artifacts", async () => {
+    const retained = await seedArtifact(ARTIFACT_A, 30 * DAY_MS);
+    const orphan = await seedArtifact(ARTIFACT_B, 30 * DAY_MS);
+    const fresh = await seedArtifact(PART_ARTIFACT, DAY_MS / 2);
 
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
+    await pruneDeliveryQueueMedia({
+      retainPaths: new Set([retained]),
       stateDir,
     });
 
-    // Age is never an ownership signal: a gateway idle for a year still owns its
-    // undelivered media.
-    expect(await exists(artifactPath)).toBe(true);
+    expect(await exists(retained)).toBe(true);
+    expect(await exists(orphan)).toBe(false);
+    // Grace protects stage-before-row-commit and bounds crash leftovers.
+    expect(await exists(fresh)).toBe(true);
   });
 
-  it("retains a generation whose owner cannot be verified", async () => {
-    const { artifactPath } = await seedGeneration({ pid: 4243, startTime: 900 });
-    // kill(0) did not prove absence (e.g. EPERM) and the identity is unreadable.
-    pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-    ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(null);
-
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
-      stateDir,
-    });
-
-    expect(await exists(artifactPath)).toBe(true);
-  });
-
-  it("retains a generation recorded without a process identity", async () => {
-    const { artifactPath } = await seedGeneration({ pid: 4244, startTime: "unknown" });
-    pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-    ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1500);
-
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
-      stateDir,
-    });
-
-    expect(await exists(artifactPath)).toBe(true);
-  });
-
-  it("reclaims an orphan whose owner is gone and whose row never appeared", async () => {
-    const { generationPath, artifactPath } = await seedGeneration({ pid: 4245, startTime: 900 });
-    pidAlive.isPidDefinitelyDead.mockReturnValue(true);
-
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
-      stateDir,
-    });
-
-    expect(await exists(artifactPath)).toBe(false);
-    expect(await exists(generationPath)).toBe(false);
-  });
-
-  it("keeps the exact path a pending row still references in a dead generation", async () => {
-    const { generationPath, artifactPath } = await seedGeneration({ pid: 4246, startTime: 900 });
-    const abandoned = path.join(generationPath, "abandoned.ogg");
-    await fs.writeFile(abandoned, "no-row");
-    pidAlive.isPidDefinitelyDead.mockReturnValue(true);
-
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set([artifactPath]),
-      stateDir,
-    });
-
-    // The owner is gone, but a pending row still has to replay this artifact.
-    expect(await exists(artifactPath)).toBe(true);
-    expect(await exists(abandoned)).toBe(false);
-    expect(await exists(generationPath)).toBe(true);
-  });
-
-  it("retains an artifact whose row is committed after the sweep begins", async () => {
-    const { generationPath, artifactPath } = await seedGeneration({ pid: 4260, startTime: 900 });
-    // Models a CLI producer that stages, commits its row, and exits while this
-    // sweep is already running: the row lands exactly as the sweep proves the
-    // owner dead, so a retain set read before that proof cannot name it.
-    let committed = false;
-    pidAlive.isPidDefinitelyDead.mockImplementation(() => {
-      committed = true;
-      return true;
-    });
-    const loadRetainPaths = async () => (committed ? new Set([artifactPath]) : new Set<string>());
-
-    await reclaimDeadGenerationSpoolArtifacts({ loadRetainPaths, stateDir });
-
-    expect(await exists(artifactPath)).toBe(true);
-    expect(await exists(generationPath)).toBe(true);
-  });
-
-  it("reclaims a generation whose PID was recycled by a different process", async () => {
-    const { artifactPath } = await seedGeneration({ pid: 4247, startTime: 900 });
-    // The PID is live, but it belongs to a process that booted later.
-    pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-    ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(999_000);
-
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
-      stateDir,
-    });
-
-    expect(await exists(artifactPath)).toBe(false);
-  });
-
-  // Windows resolves owner identity through Win32_Process CreationDate rather
-  // than procfs, so the same three outcomes are proven for the value it yields.
-  describe("windows owner identity", () => {
-    it("retains a generation whose Windows start time still matches", async () => {
-      const { artifactPath } = await seedGeneration({ pid: 5001, startTime: 1_752_000_000_000 });
-      pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-      ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1_752_000_000_000);
-
-      await reclaimDeadGenerationSpoolArtifacts({
-        loadRetainPaths: async () => new Set<string>(),
-        stateDir,
-      });
-
-      expect(await exists(artifactPath)).toBe(true);
-    });
-
-    it("reclaims a generation whose Windows start time no longer matches", async () => {
-      const { artifactPath } = await seedGeneration({ pid: 5002, startTime: 1_752_000_000_000 });
-      pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-      // Same PID, different incarnation: Windows recycles PIDs aggressively.
-      ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(1_752_999_999_000);
-
-      await reclaimDeadGenerationSpoolArtifacts({
-        loadRetainPaths: async () => new Set<string>(),
-        stateDir,
-      });
-
-      expect(await exists(artifactPath)).toBe(false);
-    });
-
-    it("retains a generation when Windows identity cannot be read", async () => {
-      const { artifactPath } = await seedGeneration({ pid: 5003, startTime: 1_752_000_000_000 });
-      pidAlive.isPidDefinitelyDead.mockReturnValue(false);
-      // PowerShell/WMIC unavailable or timed out: unreadable is never "dead".
-      ownerIdentity.readProcessStartTimeForOwnerIdentity.mockReturnValue(null);
-
-      await reclaimDeadGenerationSpoolArtifacts({
-        loadRetainPaths: async () => new Set<string>(),
-        stateDir,
-      });
-
-      expect(await exists(artifactPath)).toBe(true);
-    });
-  });
-
-  it("collects a partial publish left by a crash between write and rename", async () => {
-    const { artifactPath } = await seedGeneration({
-      pid: 4248,
-      startTime: 900,
-      artifact: "half.ogg.part",
-    });
-    pidAlive.isPidDefinitelyDead.mockReturnValue(true);
-
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
-      stateDir,
-    });
-
-    expect(await exists(artifactPath)).toBe(false);
-  });
-
-  it("ignores directories that do not carry a generation identity", async () => {
-    const foreign = path.join(spoolRoot, "not-a-generation");
-    await fs.mkdir(foreign, { recursive: true });
-    const stranger = path.join(foreign, "keep.bin");
-    await fs.writeFile(stranger, "not ours");
-    pidAlive.isPidDefinitelyDead.mockReturnValue(true);
-
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
-      stateDir,
-    });
-
-    expect(await exists(stranger)).toBe(true);
-  });
-
-  it("does not follow a symlink planted inside a dead generation", async () => {
+  it("reclaims stale partial writes but ignores foreign files and symlinks", async () => {
+    const partial = await seedArtifact(PART_ARTIFACT, 2 * DAY_MS);
+    const foreign = await seedArtifact("operator-note.txt", 2 * DAY_MS);
     const outside = path.join(sourceDir, "precious.txt");
-    await fs.writeFile(outside, "must survive");
-    const { generationPath } = await seedGeneration({
-      pid: 4249,
-      startTime: 900,
-      nonce: OTHER_NONCE,
-    });
-    await fs.symlink(outside, path.join(generationPath, "escape.ogg"));
-    pidAlive.isPidDefinitelyDead.mockReturnValue(true);
+    await fs.writeFile(outside, "keep");
+    await fs.symlink(outside, path.join(spoolRoot, ARTIFACT_A));
 
-    await reclaimDeadGenerationSpoolArtifacts({
-      loadRetainPaths: async () => new Set<string>(),
+    await pruneDeliveryQueueMedia({ retainPaths: new Set(), stateDir });
+
+    expect(await exists(partial)).toBe(false);
+    expect(await exists(foreign)).toBe(true);
+    expect(await fs.readFile(outside, "utf8")).toBe("keep");
+  });
+
+  it("expires abandoned stages and rejects a producer that resumes too late", async () => {
+    const source = path.join(sourceDir, "voice.ogg");
+    await fs.writeFile(source, "opus-bytes");
+    const staged = await stageQueuePayloadMedia({
+      payloads: [{ mediaUrl: source, audioAsVoice: true }],
+      mediaAccess: { localRoots: [sourceDir] },
+      maxBytes: 1024 * 1024,
       stateDir,
     });
+    expect(staged.status).toBe("staged");
+    if (staged.status !== "staged") {
+      return;
+    }
 
-    expect(await exists(outside)).toBe(true);
+    // Simulate a producer suspended beyond the one-day staging lease. GC wins
+    // the SQLite transaction, so the resumed producer cannot publish a broken row.
+    await pruneOrphanedDeliveryQueueMedia({
+      stateDir,
+      nowMs: Date.now() + 2 * DAY_MS,
+    });
+
+    await expect(fs.stat(staged.artifacts[0] as string)).rejects.toThrow();
+    await expect(
+      enqueueDelivery(
+        {
+          channel: "matrix",
+          to: "!room:example",
+          payloads: staged.payloads,
+        },
+        stateDir,
+        staged.mediaStageId,
+      ),
+    ).rejects.toThrow("media stage expired before enqueue");
+    expect(await loadPendingDeliveries(stateDir)).toEqual([]);
   });
 });
 
-describe("release", () => {
-  it("refuses to unlink a path outside the spool root", async () => {
+describe("ownership helpers", () => {
+  it("collects only spool-owned references", () => {
+    const spoolPath = path.join(spoolRoot, ARTIFACT_A);
+    expect(
+      collectEntrySpoolPaths(
+        [
+          { mediaUrl: spoolPath },
+          { mediaUrl: "https://example.com/a.ogg" },
+          { mediaUrl: path.join(sourceDir, "b.ogg") },
+        ],
+        stateDir,
+      ),
+    ).toEqual([spoolPath]);
+  });
+
+  it("refuses to release paths outside the spool", async () => {
     const outside = path.join(sourceDir, "not-ours.ogg");
     await fs.writeFile(outside, "bytes");
 
@@ -321,26 +173,10 @@ describe("release", () => {
   });
 });
 
-describe("collectEntrySpoolPaths", () => {
-  it("returns only spool-owned references", async () => {
-    const spoolPath = path.join(spoolRoot, `1-2-${NONCE}`, "a.ogg");
-    const paths = collectEntrySpoolPaths(
-      [
-        { mediaUrl: spoolPath },
-        { mediaUrl: "https://example.com/a.ogg" },
-        { mediaUrl: path.join(sourceDir, "b.ogg") },
-      ],
-      stateDir,
-    );
-
-    expect(paths).toEqual([spoolPath]);
-  });
-});
-
 describe("staging", () => {
   const mediaAccessFor = (roots: string[]) => ({ localRoots: roots });
 
-  it("copies a producer-owned source and rewrites only the queue payload", async () => {
+  it("copies a local source for the queue and survives producer cleanup", async () => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");
     const livePayload = { text: "hi", mediaUrl: source };
@@ -351,40 +187,20 @@ describe("staging", () => {
       maxBytes: 1024 * 1024,
       stateDir,
     });
+    await fs.rm(source);
 
     expect(result.status).toBe("staged");
     if (result.status !== "staged") {
       return;
     }
-    const staged = result.payloads[0]?.mediaUrl;
-    expect(staged).toMatch(new RegExp(`^${spoolRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`));
-    expect(await fs.readFile(staged as string, "utf8")).toBe("opus-bytes");
-    // The live send keeps the original path and stays copy-free.
+    const staged = result.payloads[0]?.mediaUrl as string;
+    expect(path.dirname(staged)).toBe(spoolRoot);
+    expect(await fs.readFile(staged, "utf8")).toBe("opus-bytes");
     expect(livePayload.mediaUrl).toBe(source);
     expect(result.artifacts).toEqual([staged]);
   });
 
-  it("survives deletion of the producer's source", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ mediaUrl: source }],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-    // Stand in for the producer's 5-minute temp cleanup / process exit.
-    await fs.rm(source, { force: true });
-
-    expect(result.status).toBe("staged");
-    if (result.status !== "staged") {
-      return;
-    }
-    expect(await fs.readFile(result.payloads[0]?.mediaUrl as string, "utf8")).toBe("opus-bytes");
-  });
-
-  it("leaves remote sources untouched", async () => {
+  it("leaves replayable remote media untouched without creating the spool", async () => {
     const result = await stageQueuePayloadMedia({
       payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
       maxBytes: 1024 * 1024,
@@ -399,7 +215,7 @@ describe("staging", () => {
     expect(await exists(spoolRoot)).toBe(false);
   });
 
-  it("never persists sensitive media as bytes or as a path", async () => {
+  it("does not make sensitive media durable", async () => {
     const source = path.join(sourceDir, "secret.ogg");
     await fs.writeFile(source, "private");
 
@@ -411,28 +227,16 @@ describe("staging", () => {
     });
 
     expect(result).toEqual({ status: "not-durable", reason: "sensitive-media" });
-    // Nothing was written: no bytes to find and no path to hand to a row.
     expect(await exists(spoolRoot)).toBe(false);
   });
 
-  it("stages a sensitive-flagged payload that carries no media reference", async () => {
-    const result = await stageQueuePayloadMedia({
-      payloads: [{ text: "no media here", sensitiveMedia: true }],
-      maxBytes: 1024 * 1024,
-      stateDir,
-    });
-
-    expect(result.status).toBe("staged");
-  });
-
-  it("throws when the source is outside the send's authorized roots", async () => {
+  it("uses the live send's local-read capability", async () => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");
 
     await expect(
       stageQueuePayloadMedia({
         payloads: [{ mediaUrl: source }],
-        // The spool may never widen what the live send was allowed to read.
         mediaAccess: mediaAccessFor([path.join(stateDir, "elsewhere")]),
         maxBytes: 1024 * 1024,
         stateDir,
@@ -440,14 +244,11 @@ describe("staging", () => {
     ).rejects.toThrow();
   });
 
-  it("never exposes the final artifact until the copy is complete", async () => {
+  it("publishes the final path only after the copy is complete", async () => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");
     const atMove: { finalExisted: boolean; partSize: number }[] = [];
     storeSpy.onMove = (from, to, rootDir) => {
-      // Sampled at the publish instant: the bytes are already whole in the part
-      // file and the final name does not exist yet, so no reader or reclaim can
-      // observe a truncated artifact under the published path.
       atMove.push({
         finalExisted: existsSync(path.join(rootDir, to)),
         partSize: statSync(path.join(rootDir, from)).size,
@@ -462,44 +263,27 @@ describe("staging", () => {
     });
 
     expect(result.status).toBe("staged");
-    if (result.status !== "staged") {
-      return;
-    }
     expect(atMove).toEqual([{ finalExisted: false, partSize: "opus-bytes".length }]);
-    // The publish leaves no scratch behind.
-    const generation = path.dirname(result.artifacts[0] as string);
-    expect(await fs.readdir(generation)).toHaveLength(1);
+    expect(await fs.readdir(spoolRoot)).toHaveLength(1);
   });
 
-  it("drops earlier copies when a later source in the same entry fails", async () => {
+  it("cleans earlier copies when a later source fails", async () => {
     const good = path.join(sourceDir, "first.ogg");
     await fs.writeFile(good, "opus-bytes");
-    const missing = path.join(sourceDir, "second.ogg");
 
     await expect(
       stageQueuePayloadMedia({
-        payloads: [{ mediaUrls: [good, missing] }],
+        payloads: [{ mediaUrls: [good, path.join(sourceDir, "missing.ogg")] }],
         mediaAccess: mediaAccessFor([sourceDir]),
         maxBytes: 1024 * 1024,
         stateDir,
       }),
     ).rejects.toThrow();
 
-    // No row will ever reference the first copy, and reclaim never touches a
-    // live owner's generation, so a partial stage must clean up after itself.
-    const generations = await fs.readdir(spoolRoot).catch(() => []);
-    const leaked = (
-      await Promise.all(
-        generations.map(
-          async (generation) =>
-            (await fs.readdir(path.join(spoolRoot, generation)).catch(() => [])).length,
-        ),
-      )
-    ).reduce((total, count) => total + count, 0);
-    expect(leaked).toBe(0);
+    expect(await fs.readdir(spoolRoot).catch(() => [])).toEqual([]);
   });
 
-  it("copies a repeated source once per entry", async () => {
+  it("copies a repeated source once", async () => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");
 
@@ -516,5 +300,27 @@ describe("staging", () => {
     }
     expect(result.artifacts).toHaveLength(1);
     expect(result.payloads[0]?.mediaUrl).toBe(result.payloads[1]?.mediaUrl);
+  });
+
+  it("preserves blank media slots while staging valid local media", async () => {
+    const source = path.join(sourceDir, "voice.ogg");
+    await fs.writeFile(source, "opus-bytes");
+
+    const result = await stageQueuePayloadMedia({
+      payloads: [{ mediaUrl: " ", mediaUrls: ["", source, "  "] }],
+      mediaAccess: mediaAccessFor([sourceDir]),
+      maxBytes: 1024 * 1024,
+      stateDir,
+    });
+
+    expect(result.status).toBe("staged");
+    if (result.status !== "staged") {
+      return;
+    }
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.payloads[0]).toEqual({
+      mediaUrl: " ",
+      mediaUrls: ["", result.artifacts[0], "  "],
+    });
   });
 });

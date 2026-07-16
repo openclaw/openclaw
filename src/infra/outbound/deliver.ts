@@ -69,6 +69,7 @@ import {
   type OutboundDeliveryCommitHook,
 } from "./delivery-commit-hooks.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
+import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   enqueueDelivery,
@@ -1466,7 +1467,7 @@ export async function deliverOutboundPayloadsInternal(
       return null;
     }
     try {
-      return await enqueueDelivery({
+      const delivery = {
         channel,
         to,
         accountId: params.accountId,
@@ -1487,10 +1488,12 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
-      });
+      };
+      return staged.mediaStageId
+        ? await enqueueDelivery(delivery, undefined, staged.mediaStageId)
+        : await enqueueDelivery(delivery);
     } catch (err) {
-      // The row never became visible, so no reclaim pass will ever see these as
-      // owned. Drop them here rather than wait for the owner process to die.
+      cancelDeliveryQueueMediaStage(staged.mediaStageId);
       await releaseSpoolArtifacts(staged.artifacts);
       throw err;
     }

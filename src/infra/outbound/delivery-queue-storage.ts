@@ -6,6 +6,7 @@ import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
+  commitStagedDeliveryQueueEntry,
   deleteDeliveryQueueEntry,
   failPendingDeliveryQueueEntry,
   loadDeliveryQueueEntries,
@@ -17,13 +18,15 @@ import {
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
+import {
+  DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
+} from "./delivery-queue-media-staging.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
-
-const QUEUE_NAME = "outbound";
 
 export type QueuedRenderedMessageBatchPlan = {
   payloadCount: number;
@@ -104,6 +107,7 @@ function queuedDeliveryMetadata(entry: QueuedDelivery): DeliveryQueueRowMetadata
 export async function enqueueDelivery(
   params: QueuedDeliveryPayload,
   stateDir?: string,
+  mediaStageId?: string,
 ): Promise<string> {
   const id = generateSecureUuid();
   const entry: QueuedDelivery = {
@@ -131,28 +135,47 @@ export async function enqueueDelivery(
     gatewayClientScopes: params.gatewayClientScopes,
     retryCount: 0,
   };
-  upsertDeliveryQueueEntry({
-    queueName: QUEUE_NAME,
-    entry,
-    metadata: queuedDeliveryMetadata(entry),
-    stateDir,
-  });
+  const metadata = queuedDeliveryMetadata(entry);
+  if (mediaStageId) {
+    const committed = commitStagedDeliveryQueueEntry({
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      entry,
+      metadata,
+      stagingId: mediaStageId,
+      stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+      stateDir,
+    });
+    if (!committed) {
+      throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
+    }
+  } else {
+    upsertDeliveryQueueEntry({
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      entry,
+      metadata,
+      stateDir,
+    });
+  }
   return id;
 }
 
 /** Spool artifacts a pending row still references; empty once it is gone or unreadable. */
 function loadEntrySpoolPaths(id: string, stateDir: string | undefined): string[] {
-  const entry = loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedDelivery | null;
+  const entry = loadDeliveryQueueEntry(
+    OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    stateDir,
+  ) as QueuedDelivery | null;
   return entry ? collectEntrySpoolPaths(entry.payloads, stateDir) : [];
 }
 
 /** Remove a successfully delivered entry from the queue. */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
   // Read the media references before the row goes, then unlink only after the
-  // delete commits. A crash in between leaves an orphan for generation reclaim;
+  // delete commits. A crash in between leaves an orphan for the retention sweep;
   // unlinking first could strip media from a row that still has to replay.
   const spoolPaths = loadEntrySpoolPaths(id, stateDir);
-  deleteDeliveryQueueEntry(QUEUE_NAME, id, stateDir);
+  deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
   await releaseSpoolArtifacts(spoolPaths, stateDir);
 }
 
@@ -204,7 +227,9 @@ function updateQueuedDelivery(
   stateDir: string | undefined,
   update: (entry: QueuedDelivery) => QueuedDelivery,
 ): void {
-  updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => update(entry as QueuedDelivery));
+  updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, (entry) =>
+    update(entry as QueuedDelivery),
+  );
 }
 
 export async function markDeliveryPlatformSendAttemptStarted(
@@ -250,12 +275,16 @@ export async function loadPendingDelivery(
   id: string,
   stateDir?: string,
 ): Promise<QueuedDelivery | null> {
-  return loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedDelivery | null;
+  return loadDeliveryQueueEntry(
+    OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    stateDir,
+  ) as QueuedDelivery | null;
 }
 
 /** Load all pending delivery entries from the queue. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
-  return loadDeliveryQueueEntries(QUEUE_NAME, stateDir) as QueuedDelivery[];
+  return loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir) as QueuedDelivery[];
 }
 
 /** Move a queue entry out of the pending retry set. */
@@ -263,7 +292,7 @@ export async function moveToFailed(id: string, stateDir?: string): Promise<void>
   // Dead-lettered rows are retained but never replayed: recovery loads the
   // pending set only, so a failed row's media has no remaining reader.
   const spoolPaths = loadEntrySpoolPaths(id, stateDir);
-  moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
+  moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
   await releaseSpoolArtifacts(spoolPaths, stateDir);
 }
 
@@ -280,7 +309,7 @@ export async function failPendingDelivery(
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
   const result = failPendingDeliveryQueueEntry({
-    queueName: QUEUE_NAME,
+    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
     ...params,
     stateDir,
   });

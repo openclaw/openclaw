@@ -118,7 +118,6 @@ function createGatewayCloseTestDeps(
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: null,
-    deliveryQueueMediaCleanup: null,
     worktreeCleanup: null,
     skillCuratorCleanup: vi.fn(),
     agentUnsub: null,
