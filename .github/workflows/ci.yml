@@ -1833,6 +1833,38 @@ jobs:
         with:
           install-bun: "false"
 
+      # check-lint's shard runner rebuilds the same plugin-sdk boundary
+      # artifacts the boundary lane snapshots (~72s cold); restore them from
+      # the shared sticky. Strictly read-only (commit: false): if this lane
+      # could commit a freshly formatted disk, a cold-key race with the
+      # boundary lane would permanently seed an empty, marker-less snapshot
+      # that if-missing then refuses to repair.
+      - name: Mount extension boundary sticky disk
+        if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        with:
+          key: ${{ github.repository }}-ext-boundary-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          path: /var/tmp/openclaw-ext-boundary
+          commit: "false"
+
+      - name: Restore extension boundary artifacts from sticky disk
+        if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sticky_root=/var/tmp/openclaw-ext-boundary
+          if [ ! -f "$sticky_root/.snapshot-ready" ]; then
+            echo "boundary artifact snapshot not seeded yet; lint prepares cold"
+            exit 0
+          fi
+          # rsync -a preserves snapshot mtimes; fresh checkout sources stay
+          # newer, so the prepare script always takes its incremental path.
+          for payload in dist packages extensions; do
+            if [ -d "$sticky_root/$payload" ]; then
+              rsync -a "$sticky_root/$payload/" "$payload/"
+            fi
+          done
+
       - name: Run check shard
         env:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -1977,6 +2009,46 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
+      # the GitHub cache below is evicted so quickly under the repo quota that
+      # its prefix restore never hits, leaving every run to rebuild ~113s of
+      # plugin-sdk declarations. Fork PRs must never produce writable
+      # repository-global snapshots, so they keep the GitHub cache path.
+      - name: Mount extension boundary sticky disk
+        if: matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        with:
+          # Coarse toolchain key only: source changes are meant to hit a stale
+          # snapshot, whose restored artifacts rebuild incrementally. PR scope
+          # keeps feature snapshots separate from protected pushes.
+          key: ${{ github.repository }}-ext-boundary-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          path: /var/tmp/openclaw-ext-boundary
+          # v1.4.0 skips commit after failed/cancelled steps, so an incomplete
+          # first hydration cannot seed this key.
+          commit: if-missing
+
+      - name: Restore extension boundary artifacts from sticky disk
+        id: boundary-sticky-restore
+        if: matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sticky_root=/var/tmp/openclaw-ext-boundary
+          if [ ! -f "$sticky_root/.snapshot-ready" ]; then
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # rsync -a preserves the snapshotting run's artifact mtimes; the
+          # fresh checkout's newer source mtimes force the prepare script down
+          # its incremental-rebuild path, so a stale snapshot can never
+          # false-skip the boundary compile.
+          for payload in dist packages extensions; do
+            if [ -d "$sticky_root/$payload" ]; then
+              rsync -a "$sticky_root/$payload/" "$payload/"
+            fi
+          done
+          echo "restored=true" >> "$GITHUB_OUTPUT"
 
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
@@ -2131,6 +2203,26 @@ jobs:
           esac
 
           exit "$failures"
+
+      # commit: if-missing snapshots only the first run per key; seed the
+      # payload before the sticky post-action flushes. rsync -aR mirrors the
+      # repo-relative layout the restore step replays.
+      - name: Seed extension boundary sticky disk
+        if: success() && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sticky_root=/var/tmp/openclaw-ext-boundary
+          rm -rf "$sticky_root/dist" "$sticky_root/packages" "$sticky_root/extensions" "$sticky_root/.snapshot-ready"
+          if [ -d dist/plugin-sdk ]; then
+            rsync -aR dist/plugin-sdk "$sticky_root/"
+          fi
+          if [ -d packages/plugin-sdk/dist ]; then
+            rsync -aR packages/plugin-sdk/dist "$sticky_root/"
+          fi
+          find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
+            -exec rsync -aR {} "$sticky_root/" \;
+          touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
