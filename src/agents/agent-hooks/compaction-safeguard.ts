@@ -301,7 +301,8 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
 
   const tailMessage = messages.at(-1);
   const endsWithTerminalAssistantText =
-    tailMessage?.role === "assistant" &&
+    tailMessage !== undefined &&
+    tailMessage.role === "assistant" &&
     Boolean(extractMessageText(tailMessage).trim()) &&
     (!Array.isArray(tailMessage.content) ||
       !tailMessage.content.some((block) => {
