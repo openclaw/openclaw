@@ -232,9 +232,7 @@ export function applyModelDefaults(
         const providerMaxTokens = isPositiveNumber(normalizedProvider.maxTokens)
           ? normalizedProvider.maxTokens
           : DEFAULT_MODEL_MAX_TOKENS;
-        const rawMaxTokens = isPositiveNumber(raw.maxTokens)
-          ? raw.maxTokens
-          : providerMaxTokens;
+        const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : providerMaxTokens;
         const maxTokens = resolveNormalizedProviderModelMaxTokens({
           providerId,
           modelId: id,
