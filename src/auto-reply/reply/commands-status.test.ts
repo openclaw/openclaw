@@ -1,9 +1,9 @@
-// Tests status command rendering for sessions, agents, and diagnostics.
+// Tests status command rendering for sessions, agents, diagnostics, and model defaults.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
@@ -13,6 +13,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.test-helpers.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   completeTaskRunByRunId,
@@ -28,6 +29,8 @@ import {
   buildCommandTestParams,
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
+
+// Tests status command rendering for sessions, agents, and diagnostics.
 
 type LoadProviderUsageSummary =
   typeof import("../../infra/provider-usage.js").loadProviderUsageSummary;
@@ -2308,3 +2311,179 @@ describe("buildStatusReply subagent summary", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+async function buildKiraStatusReply(cfg: OpenClawConfig) {
+  return await buildStatusReply({
+    cfg,
+    command: {
+      isAuthorizedSender: true,
+      channel: "whatsapp",
+    } as never,
+    sessionKey: "agent:kira:main",
+    provider: "openai",
+    model: "gpt-5.4",
+    contextTokens: 0,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+  });
+}
+
+describe("buildStatusReply", () => {
+  beforeAll(async () => {
+    await buildKiraStatusReply({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig);
+  });
+
+  it("shows per-agent thinkingDefault in the status card", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+        list: [
+          {
+            id: "kira",
+            model: "openai/gpt-5.4",
+            thinkingDefault: "xhigh",
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Think: xhigh");
+  });
+
+  it("shows per-agent fallback overrides in the status card", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["google/gemini-2.5-flash"],
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Fallbacks: google/gemini-2.5-flash");
+    expect(reply?.text).not.toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps default fallback config when the agent has no explicit model", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps agent primary strict when the agent has no explicit fallback override", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).not.toContain("Fallbacks:");
+  });
+
+  it("treats an explicit empty per-agent fallback override as disabling inherited fallbacks", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: [],
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).not.toContain("Fallbacks:");
+  });
+});
