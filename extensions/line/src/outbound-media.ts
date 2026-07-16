@@ -30,10 +30,10 @@ export async function validateLineMediaUrl(url: string): Promise<void> {
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`LINE outbound media URL must be a valid URL: ${url}`);
+    throw new Error("LINE outbound media URL must be a valid URL");
   }
   if (parsed.protocol !== "https:") {
-    throw new Error(`LINE outbound media URL must use HTTPS: ${url}`);
+    throw new Error("LINE outbound media URL must use HTTPS");
   }
   if (url.length > 2000) {
     throw new Error(`LINE outbound media URL must be 2000 chars or less (got ${url.length})`);
@@ -98,7 +98,7 @@ export async function resolveLineOutboundMedia(
   try {
     const parsed = new URL(trimmedUrl);
     if (parsed.protocol !== "https:") {
-      throw new Error(`LINE outbound media URL must use HTTPS: ${trimmedUrl}`);
+      throw new Error("LINE outbound media URL must use HTTPS");
     }
   } catch (e) {
     if (e instanceof Error && e.message.startsWith("LINE outbound")) {

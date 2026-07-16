@@ -21,6 +21,18 @@ import {
   validateLineMediaUrl,
 } from "./outbound-media.js";
 
+async function captureError(run: () => Promise<unknown>): Promise<Error> {
+  try {
+    await run();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("expected operation to reject");
+}
+
 describe("validateLineMediaUrl", () => {
   beforeEach(() => {
     ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
@@ -49,6 +61,20 @@ describe("validateLineMediaUrl", () => {
       /must use HTTPS/i,
     );
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
+  });
+
+  it("does not include credential-bearing URLs in validation errors", async () => {
+    const credentialMarker = "line-media-secret";
+    const invalidUrl = `not a url?token=${credentialMarker}#${credentialMarker}`;
+    const insecureUrl = `http://user:${credentialMarker}@example.com/image.jpg?token=${credentialMarker}#${credentialMarker}`;
+
+    const invalidError = await captureError(() => validateLineMediaUrl(invalidUrl));
+    expect(invalidError.message).toMatch(/must be a valid URL/i);
+    expect(invalidError.message).not.toContain(credentialMarker);
+
+    const insecureError = await captureError(() => validateLineMediaUrl(insecureUrl));
+    expect(insecureError.message).toMatch(/must use HTTPS/i);
+    expect(insecureError.message).not.toContain(credentialMarker);
   });
 
   it("rejects URL longer than 2000 chars", async () => {
@@ -167,9 +193,14 @@ describe("resolveLineOutboundMedia", () => {
   });
 
   it("rejects non-HTTPS URL explicitly", async () => {
-    await expect(resolveLineOutboundMedia("http://example.com/image.jpg")).rejects.toThrow(
-      /must use HTTPS/i,
+    const credentialMarker = "line-media-secret";
+    const error = await captureError(() =>
+      resolveLineOutboundMedia(
+        `http://user:${credentialMarker}@example.com/image.jpg?token=${credentialMarker}`,
+      ),
     );
+    expect(error.message).toMatch(/must use HTTPS/i);
+    expect(error.message).not.toContain(credentialMarker);
   });
 });
 
