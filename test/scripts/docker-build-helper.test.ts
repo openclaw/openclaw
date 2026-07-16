@@ -2745,6 +2745,11 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES");
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES");
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES");
+    expect(assertions).toContain(
+      "COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS transcript_bytes",
+    );
+    expect(assertions).toContain('db.exec("BEGIN")');
+    expect(assertions).toContain('db.exec("ROLLBACK")');
     expect(assertions).toContain("const AGENT_TURN_TIMEOUT_SECONDS = readPositiveIntEnv(");
     expect(assertions).toContain('"OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS"');
     expect(assertions).toContain("requestTimeoutMs: AGENT_TURN_TIMEOUT_SECONDS * 1000");
@@ -2768,6 +2773,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).toContain("assert-followthrough");
     expect(runner).toContain("followthrough-turn.mjs");
     expect(followthrough).toContain('"dist",\n  "plugin-sdk",\n  "agent-runtime.js"');
+    expect(followthrough).toContain("agentCommandFromIngress");
     expect(followthrough).toContain('sourceReplyDeliveryMode: "message_tool_only"');
     expect(followthrough).toContain('thinking: "medium"');
     expect(runner).toContain("without passing final");
@@ -2824,7 +2830,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     writeFileSync(
       join(runtimeDir, "agent-runtime.js"),
       [
-        "export async function agentCommand(opts, runtime) {",
+        "export async function agentCommandFromIngress(opts, runtime) {",
         '  runtime.log("unexpected runtime output");',
         '  console.log("unexpected subsystem output");',
         "  return { captured: opts };",
@@ -2858,6 +2864,8 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
         timeout: "90",
         json: true,
         sourceReplyDeliveryMode: "message_tool_only",
+        senderIsOwner: true,
+        allowModelOverride: true,
         cleanupBundleMcpOnRunEnd: true,
         cleanupCliLiveSessionOnRunEnd: true,
         oneShotCliRun: true,

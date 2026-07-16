@@ -134,6 +134,7 @@ function runCodexNpmPluginLiveFollowthroughAssertions(params: {
   modelRef: string;
   artifactPath: string;
   inputPaths: string[];
+  assertionEnv?: Record<string, string>;
 }) {
   return spawnSync(
     process.execPath,
@@ -155,6 +156,7 @@ function runCodexNpmPluginLiveFollowthroughAssertions(params: {
         NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
         OPENCLAW_STATE_DIR: path.join(params.root, "state"),
         OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: "sqlite",
+        ...params.assertionEnv,
       },
     },
   );
@@ -670,6 +672,35 @@ describe("Codex install helpers", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
   });
+
+  it.each([
+    [
+      "event count",
+      "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES",
+      "2",
+      "exceeded 2 events",
+    ],
+    [
+      "aggregate bytes",
+      "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES",
+      "128",
+      "exceeded 128 bytes",
+    ],
+  ] as const)(
+    "rejects an oversized SQLite transcript by %s before assertions",
+    (_label, envName, limit, errorText) => {
+      const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-bounded-");
+      const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root });
+
+      const result = runCodexNpmPluginLiveFollowthroughAssertions({
+        ...fixture,
+        assertionEnv: { [envName]: limit },
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(errorText);
+    },
+  );
 
   it("rejects a Codex live turn that stops after its progress message", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-progress-only-");

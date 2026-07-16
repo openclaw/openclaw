@@ -172,57 +172,84 @@ function readSessionEntry(sessionId) {
   }
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const row = db
-      .prepare(
-        `SELECT se.session_key, se.entry_json, s.agent_harness_id
-           FROM sessions AS s
-           INNER JOIN session_entries AS se ON se.session_id = s.session_id
-          WHERE s.session_id = ?
-          ORDER BY se.updated_at DESC, se.session_key
-          LIMIT 1`,
-      )
-      .get(sessionId);
-    if (!row || typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
-      throw new Error(`missing session store entry for ${sessionId}`);
-    }
-    const transcriptRows = db
-      .prepare(
-        `SELECT event_json
-           FROM transcript_events
-          WHERE session_id = ?
-          ORDER BY seq`,
-      )
-      .all(sessionId);
-    if (transcriptRows.length > MAX_TRANSCRIPT_WALK_ENTRIES) {
-      throw new Error(
-        `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_WALK_ENTRIES} events for ${sessionId}`,
-      );
-    }
-    let transcriptBytes = 0;
-    const transcriptEvents = transcriptRows.map((transcriptRow) => {
-      if (typeof transcriptRow.event_json !== "string") {
-        throw new Error(`invalid OpenClaw transcript event for ${sessionId}`);
+    // Keep the aggregate check and row materialization on one SQLite snapshot.
+    // The release runner never loads transcript JSON until SQL proves the whole set is bounded.
+    db.exec("BEGIN");
+    try {
+      const row = db
+        .prepare(
+          `SELECT se.session_key, se.entry_json, s.agent_harness_id
+             FROM sessions AS s
+             INNER JOIN session_entries AS se ON se.session_id = s.session_id
+            WHERE s.session_id = ?
+            ORDER BY se.updated_at DESC, se.session_key
+            LIMIT 1`,
+        )
+        .get(sessionId);
+      if (!row || typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
+        throw new Error(`missing session store entry for ${sessionId}`);
       }
-      transcriptBytes += Buffer.byteLength(transcriptRow.event_json);
-      if (transcriptBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
+      const transcriptSummary = db
+        .prepare(
+          `SELECT COUNT(*) AS event_count,
+                  COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS transcript_bytes
+             FROM transcript_events
+            WHERE session_id = ?`,
+        )
+        .get(sessionId);
+      if (
+        !transcriptSummary ||
+        !Number.isSafeInteger(transcriptSummary.event_count) ||
+        !Number.isSafeInteger(transcriptSummary.transcript_bytes)
+      ) {
+        throw new Error(`invalid OpenClaw transcript summary for ${sessionId}`);
+      }
+      if (transcriptSummary.event_count > MAX_TRANSCRIPT_WALK_ENTRIES) {
+        throw new Error(
+          `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_WALK_ENTRIES} events for ${sessionId}`,
+        );
+      }
+      if (transcriptSummary.transcript_bytes > MAX_TRANSCRIPT_SCAN_BYTES) {
         throw new Error(
           `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_SCAN_BYTES} bytes for ${sessionId}`,
         );
       }
-      return JSON.parse(transcriptRow.event_json);
-    });
-    const entry = JSON.parse(row.entry_json);
-    return {
-      entry: {
-        ...entry,
-        agentHarnessId:
-          typeof row.agent_harness_id === "string" ? row.agent_harness_id : entry.agentHarnessId,
-        sessionId,
-      },
-      sessionKey: row.session_key,
-      transcriptEventCount: transcriptEvents.length,
-      transcriptEvents,
-    };
+      const transcriptRows = db
+        .prepare(
+          `SELECT event_json
+             FROM transcript_events
+            WHERE session_id = ?
+            ORDER BY seq`,
+        )
+        .all(sessionId);
+      let transcriptBytes = 0;
+      const transcriptEvents = transcriptRows.map((transcriptRow) => {
+        if (typeof transcriptRow.event_json !== "string") {
+          throw new Error(`invalid OpenClaw transcript event for ${sessionId}`);
+        }
+        transcriptBytes += Buffer.byteLength(transcriptRow.event_json);
+        if (transcriptBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
+          throw new Error(
+            `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_SCAN_BYTES} bytes for ${sessionId}`,
+          );
+        }
+        return JSON.parse(transcriptRow.event_json);
+      });
+      const entry = JSON.parse(row.entry_json);
+      return {
+        entry: {
+          ...entry,
+          agentHarnessId:
+            typeof row.agent_harness_id === "string" ? row.agent_harness_id : entry.agentHarnessId,
+          sessionId,
+        },
+        sessionKey: row.session_key,
+        transcriptEventCount: transcriptEvents.length,
+        transcriptEvents,
+      };
+    } finally {
+      db.exec("ROLLBACK");
+    }
   } finally {
     db.close();
   }

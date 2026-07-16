@@ -21,9 +21,11 @@ const agentRuntimePath = path.join(
   "plugin-sdk",
   "agent-runtime.js",
 );
-const { agentCommand } = await import(pathToFileURL(agentRuntimePath).href);
-if (typeof agentCommand !== "function") {
-  throw new Error(`package agent runtime did not export agentCommand: ${agentRuntimePath}`);
+const { agentCommandFromIngress } = await import(pathToFileURL(agentRuntimePath).href);
+if (typeof agentCommandFromIngress !== "function") {
+  throw new Error(
+    `package agent runtime did not export agentCommandFromIngress: ${agentRuntimePath}`,
+  );
 }
 
 const quietRuntime = {
@@ -33,7 +35,7 @@ const quietRuntime = {
     throw new Error(`agent runtime exited with code ${code}`);
   },
 };
-const result = await agentCommand(
+const result = await agentCommandFromIngress(
   {
     agentId: "main",
     sessionId,
@@ -45,6 +47,8 @@ const result = await agentCommand(
     messageChannel: "webchat",
     channel: "webchat",
     sourceReplyDeliveryMode: "message_tool_only",
+    senderIsOwner: true,
+    allowModelOverride: true,
     // The embedded one-shot path retires bundled runtime resources; the Codex
     // harness uses this signal to close its shared app-server client and child.
     cleanupBundleMcpOnRunEnd: true,
