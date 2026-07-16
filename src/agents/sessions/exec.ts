@@ -44,7 +44,7 @@ type OutputCapture = {
 };
 
 function decodeCapturedOutput(decoder: StringDecoder, chunk: Buffer | string): string {
-  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : `${decoder.end()}${chunk}`;
+  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : chunk;
 }
 
 function clampMaxOutputChars(value: number | undefined): number {
