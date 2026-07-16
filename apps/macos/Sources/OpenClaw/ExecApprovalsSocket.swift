@@ -855,6 +855,26 @@ enum ExecApprovalsPromptPresenter {
 #if DEBUG
 extension ExecApprovalsPromptPresenter {
     @MainActor
+    static func respondToActivePromptForTesting(
+        _ decision: ExecApprovalDecision) -> (
+        messageText: String,
+        informativeText: String,
+        buttonTitles: [String])?
+    {
+        guard let alert = self.activePrompt?.alert,
+              NSApp.modalWindow === alert.window,
+              let button = alert.buttons.first(where: { $0.title == self.buttonTitle(for: decision) })
+        else { return nil }
+
+        let observation = (
+            messageText: alert.messageText,
+            informativeText: alert.informativeText,
+            buttonTitles: alert.buttons.map(\.title))
+        button.performClick(nil)
+        return observation
+    }
+
+    @MainActor
     static func reservePromptForTesting() -> UUID? {
         guard self.activePrompt == nil else { return nil }
         let id = UUID()
@@ -1205,6 +1225,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     private var socketFD: Int32 = -1
     private var socketIdentity: ExecApprovalsSocketPathIdentity?
     private var socketLifecycleLease: ExecApprovalsSocketLifecycleLease?
+    private let replayGuard = ExecHostReplayGuard()
     private var acceptTask: Task<Void, Never>?
     private var isRunning = false
 
@@ -1591,6 +1612,17 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 ok: false,
                 payload: nil,
                 error: ExecHostError(code: "INVALID_REQUEST", message: "invalid auth", reason: "hmac"))
+        }
+        guard self.replayGuard.consume(nonce: request.nonce, nowMs: nowMs) else {
+            return ExecHostResponse(
+                type: "exec-res",
+                id: request.id,
+                ok: false,
+                payload: nil,
+                error: ExecHostError(
+                    code: "INVALID_REQUEST",
+                    message: "replayed request",
+                    reason: "replay"))
         }
         guard let requestData = request.requestJson.data(using: .utf8),
               let payload = try? JSONDecoder().decode(ExecHostRequest.self, from: requestData)

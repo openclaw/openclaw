@@ -2743,6 +2743,29 @@ jobs:
           done
           exit 1
 
+      - name: Exec approvals integrated macOS proof
+        env:
+          OPENCLAW_MACOS_INTEGRATION_PROOF: "1"
+          PROOF_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.preflight.outputs.checkout_revision }}
+        run: |
+          set -euo pipefail
+          proof_log="$RUNNER_TEMP/macos-exec-approvals-proof.log"
+          printf 'MACOS_EXEC_APPROVALS_PROOF candidate-head=%s tested-sha=%s macos=%s arch=%s\n' \
+            "$PROOF_HEAD_SHA" "$(git rev-parse HEAD)" \
+            "$(sw_vers -productVersion)" "$(uname -m)" | tee "$proof_log"
+          swift test --package-path apps/macos \
+            --filter ExecApprovalsIntegratedProofTests 2>&1 | tee -a "$proof_log"
+          for receipt in \
+            'native-prompt=observed' \
+            'allow-once=accepted marker-count=1' \
+            'durable-grant=absent' \
+            'replay=rejected marker-count=1' \
+            'hot-stop-revocation=rejected' \
+            'final-marker-count=1 result=pass'; do
+            grep -Fq "MACOS_EXEC_APPROVALS_PROOF $receipt" "$proof_log"
+          done
+          grep -F 'MACOS_EXEC_APPROVALS_PROOF' "$proof_log"
+
   ios-build:
     permissions:
       contents: read
