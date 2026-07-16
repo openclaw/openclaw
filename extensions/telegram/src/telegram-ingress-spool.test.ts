@@ -7,7 +7,8 @@ import {
   createChannelIngressQueueForTests as createChannelIngressQueue,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import { isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess } from "./telegram-ingress-claim-owner.js";
 import {

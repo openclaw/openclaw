@@ -18,8 +18,8 @@ scenario:
     channel: whatsapp
     suiteIsolation: isolated
     summary: Verify WhatsApp dmPolicy open behavior through the canonical adapter.
+    driver: live
     config:
-      requiredChannelDriver: live
       policyKey: dmPolicy
       policyValue: open
       conversationKind: direct

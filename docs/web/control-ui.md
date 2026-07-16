@@ -391,7 +391,8 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
   </Accordion>
   <Accordion title="Stop and abort">
     - Click **Stop** (calls `chat.abort`).
-    - While a run is active, normal follow-ups queue. Click **Steer** on a queued message to inject that follow-up into the running turn.
+    - While a run is active, normal follow-ups steer into the running turn by default. Messages fall back to the queue when steering is unavailable; click **Steer** on a queued message to inject it into the running turn.
+    - **Settings → Appearance → Chat → Follow-ups while the agent is working** changes that default: `Steer into the active run` (default) sends follow-ups into the running turn immediately, while `Queue until the run ends` holds them until the run finishes. Either way, queued rows keep their per-message **Steer** and remove controls, and messages fall back to the queue when steering is unavailable.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
     - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
 
@@ -427,12 +428,14 @@ The Control UI ships a `manifest.webmanifest` and a service worker, so modern br
 
 If the page shows **Protocol mismatch** right after an OpenClaw update, first reopen the dashboard with `openclaw dashboard` and hard-refresh. If it still fails, clear site data for the dashboard origin or test in a private browser window; an old tab or browser service-worker cache can keep running a pre-update Control UI bundle against the newer Gateway.
 
-| Surface                                               | What it does                                                       |
-| ----------------------------------------------------- | ------------------------------------------------------------------ |
-| `ui/public/manifest.webmanifest`                      | PWA manifest. Browsers offer "Install app" once it is reachable.   |
-| `ui/public/sw.js`                                     | Service worker that handles `push` events and notification clicks. |
-| `push/vapid-keys.json` (under the OpenClaw state dir) | Auto-generated VAPID keypair used to sign Web Push payloads.       |
-| `push/web-push-subscriptions.json`                    | Persisted browser subscription endpoints.                          |
+| Surface                                            | What it does                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `ui/public/manifest.webmanifest`                   | PWA manifest. Browsers offer "Install app" once it is reachable.             |
+| `ui/public/sw.js`                                  | Service worker that handles `push` events and notification clicks.           |
+| `state/openclaw.sqlite` → `web_push_vapid_keys`    | Auto-generated VAPID keypair used to sign Web Push payloads.                 |
+| `state/openclaw.sqlite` → `web_push_subscriptions` | Persisted browser subscription endpoints, keys, and registration timestamps. |
+
+Upgrades from the retired `push/vapid-keys.json` and `push/web-push-subscriptions.json` stores are imported by `openclaw doctor --fix`. Stop the Gateway before running that repair so an older process cannot recreate retired state during import. Run the repair before using Web Push after an upgrade; registration, delivery, deletion, and key resolution refuse to proceed while either retired source or an interrupted Doctor claim remains. The Gateway runtime reads and writes SQLite only.
 
 Override the VAPID keypair through env vars on the Gateway process when you want to pin keys (multi-host deployments, secrets rotation, or tests):
 

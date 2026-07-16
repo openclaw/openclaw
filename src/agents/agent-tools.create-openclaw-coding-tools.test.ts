@@ -200,7 +200,7 @@ describe("createOpenClawCodingTools", () => {
     resetGlobalHookRunner();
   });
 
-  it("exposes gateway config and restart actions to owner sessions", () => {
+  it("exposes only gateway config reads to owner sessions", () => {
     const tools = createOpenClawCodingTools({ config: testConfig });
     const gateway = requireTool(tools, "gateway");
 
@@ -213,7 +213,7 @@ describe("createOpenClawCodingTools", () => {
     const values = new Set<string>();
     collectActionValues(action, values);
 
-    expectListIncludes([...values], ["restart", "config.get", "config.patch", "config.apply"]);
+    expect([...values]).toEqual(["config.get", "config.schema.lookup"]);
   });
 
   it("does not add Tool Search control tools from the shared factory by default", () => {

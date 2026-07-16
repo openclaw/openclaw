@@ -266,6 +266,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };

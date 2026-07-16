@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
+- **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
 - **TUI fuzzy selectors:** delegate list matching to pi-tui, adding slash-token and alpha-number matching while removing the local matcher fork.
 - **macOS paired-node terminals:** advertise duplex Codex and Claude terminal resume commands from the embedded node host and forward interactive input and cancellation through the native app bridge. (#107335)
@@ -39,6 +41,19 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
+- **LINE reply-token media kinds:** honor video and audio metadata on inbound replies, share the canonical media builder with proactive sends, and fail visibly instead of recording empty media-only deliveries. (#106515) Thanks @edenfunf.
+- **Mattermost websocket connection deadlines:** bound opening handshakes so stalled TCP peers cannot hang channel startup indefinitely and reconnect control resumes after timeout. (#105553) Thanks @hugenshen.
+- **Feishu app registration deadlines:** bound OAuth device-registration requests to 10 seconds through the guarded fetch boundary so setup cannot hang indefinitely on stalled response headers. (#105549) Thanks @hugenshen.
+- **LINE control-command mentions:** detect authorized slash commands before mention stripping so inline group and direct-message controls preserve the original ingress metadata. (#107230) Thanks @edenfunf.
+- **Feishu document image reads:** bound remote document-image headers and stalled bodies with the selected account timeout, parse document Markdown through the plugin's MDAST pipeline, preserve image/block alignment, and reject failed upload input before creating empty image blocks. Thanks @Alix-007.
+- **ClawHub registry reads:** retry bounded HTTP 500 responses alongside other transient gateway failures so multi-package release scans survive isolated registry errors.
+- **Slack Socket Mode health:** report connected Socket Mode transports as degraded when `auth.test` fails or the configured bot token resolves to a user without `bot_id`, while preserving healthy enterprise-org installs. Thanks @zw-xysk.
+- **Synology Chat response limits:** bound user-list response reads, stop oversized streams immediately, and retain stale cached identities when a NAS exceeds the supported envelope. Thanks @zw-xysk.
+- **Usage date ranges:** exclude legacy transcript rows without timestamps from finite session ranges while preserving them in all-time totals, and rebuild older usage caches before serving the new semantics. Fixes #89709. Thanks @TurboTheTurtle.
+- **Mattermost progress command details:** accept the documented `streaming.preview.commandText` and `streaming.progress.commandText` modes in channel config validation and bundled metadata. Thanks @shakkernerd.
+- **1Password authorization handoff:** persist nonce-bound pending approvals in shared plugin state so hook and tool execution across broker instances remain single-use and fail closed.
+- **Control UI chat transcripts:** preserve loaded history across session and pane returns, bound automatic backscroll loading, virtualize long transcripts, retain hidden native run boundaries, and keep prepends, streaming, and responsive layouts from flickering or jumping. Thanks @shakkernerd.
 - **Codex dynamic tool outcomes:** use the shared tool-result failure contract for arbitrary lifecycle metadata, preventing successful Skill Workshop results from being displayed and persisted as failed calls. Fixes #107684. Thanks @shakkernerd.
 - **Nested resource ignores:** honor slash-free patterns and escaped literal exclamation marks in nested ignore files during skill and resource discovery. Thanks @moguangyu5-design.
 - **Proxy bypass precedence:** honor blank lower-case `no_proxy` values shadowing upper-case `NO_PROXY` consistently with Undici, and reuse the canonical matcher for Telegram fallback selection.

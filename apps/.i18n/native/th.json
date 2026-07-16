@@ -20584,36 +20584,6 @@
       "translated": "กำลังตรวจสอบแอป Mac และ Gateway…"
     },
     {
-      "id": "native.apple.3a2e38e488490964",
-      "source": "The Mac app is updated. Gateway setup is not configured on this Mac.",
-      "translated": "อัปเดตแอป Mac แล้ว แต่ยังไม่ได้กำหนดค่าการตั้งค่า Gateway บน Mac เครื่องนี้"
-    },
-    {
-      "id": "native.apple.3abafcfb64b362fb",
-      "source": "The Gateway could not be checked.",
-      "translated": "ไม่สามารถตรวจสอบ Gateway ได้"
-    },
-    {
-      "id": "native.apple.00e3d2037782506c",
-      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
-      "translated": "OpenClaw ไม่สามารถอ่านบันทึกความเป็นเจ้าของบริการ Gateway ได้ โปรดลองอีกครั้งหลังจากตรวจสอบ Gateway LaunchAgent"
-    },
-    {
-      "id": "native.apple.c4b8806a570dad31",
-      "source": "The Mac node could not be checked.",
-      "translated": "ไม่สามารถตรวจสอบโหนด Mac ได้"
-    },
-    {
-      "id": "native.apple.0483bf19d612560b",
-      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
-      "translated": "OpenClaw ไม่สามารถอ่านบันทึกความเป็นเจ้าของบริการโหนดได้ โปรดลองอีกครั้งหลังจากตรวจสอบ node LaunchAgent"
-    },
-    {
-      "id": "native.apple.1c57b3fcc10eabe7",
-      "source": "The Mac app is updated. Gateway \\(found) is newer than app \\(required), so OpenClaw left it unchanged.",
-      "translated": "อัปเดตแอป Mac แล้ว Gateway \\(found) ใหม่กว่าแอป \\(required) ดังนั้น OpenClaw จึงไม่ได้เปลี่ยนแปลง Gateway"
-    },
-    {
       "id": "native.apple.e9b1899627402a15",
       "source": "Gateway recovery failed.",
       "translated": "กู้คืน Gateway ไม่สำเร็จ"
@@ -20622,11 +20592,6 @@
       "id": "native.apple.91debe404bb7affc",
       "source": "The managed OpenClaw runtime could not be reinstalled.",
       "translated": "ไม่สามารถติดตั้งรันไทม์ OpenClaw ที่มีการจัดการใหม่ได้"
-    },
-    {
-      "id": "native.apple.3522be8112301d9f",
-      "source": "The Mac app is updated. This Gateway is managed separately, so OpenClaw left it unchanged.",
-      "translated": "อัปเดตแอป Mac แล้ว Gateway นี้ได้รับการจัดการแยกต่างหาก ดังนั้น OpenClaw จึงไม่ได้เปลี่ยนแปลง Gateway"
     },
     {
       "id": "native.apple.1cc391ec928070c4",
@@ -20734,14 +20699,34 @@
       "translated": "OpenClaw ติดตั้งการอัปเดตแล้ว แต่ไม่สามารถตรวจสอบการเชื่อมต่อ Gateway ได้"
     },
     {
-      "id": "native.apple.8bf292892311882e",
-      "source": "Mac app updated",
-      "translated": "อัปเดตแอป Mac แล้ว"
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "ไม่สามารถตรวจสอบ Gateway ได้"
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw ไม่สามารถอ่านบันทึกความเป็นเจ้าของบริการ Gateway ได้ โปรดลองอีกครั้งหลังจากตรวจสอบ Gateway LaunchAgent"
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "ไม่สามารถตรวจสอบโหนด Mac ได้"
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw ไม่สามารถอ่านบันทึกความเป็นเจ้าของบริการโหนดได้ โปรดลองอีกครั้งหลังจากตรวจสอบ node LaunchAgent"
     },
     {
       "id": "native.apple.d0f712a2ed470a3e",
       "source": "Gateway update needs help",
       "translated": "การอัปเดต Gateway ต้องการความช่วยเหลือ"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "คู่มือการอัปเดต"
     },
     {
       "id": "native.apple.3a6aaa0aa0be82e7",
@@ -20752,11 +20737,6 @@
       "id": "native.apple.11b9ee23142b1060",
       "source": "Retry",
       "translated": "ลองอีกครั้ง"
-    },
-    {
-      "id": "native.apple.e2ffc7753f75e1b8",
-      "source": "Update guide",
-      "translated": "คู่มือการอัปเดต"
     },
     {
       "id": "native.apple.144b21229f65f2a4",

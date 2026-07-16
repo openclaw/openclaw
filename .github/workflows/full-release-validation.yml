@@ -75,7 +75,7 @@ on:
         default: true
         type: boolean
       live_suite_filter:
-        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
+        description: Optional exact live/E2E suite id, or comma-separated QA live lane ids (qa-live-matrix, qa-live-telegram, qa-live-discord, qa-live-whatsapp, qa-live-slack); blank runs all selected live suites
         required: false
         default: ""
         type: string
@@ -1053,6 +1053,9 @@ jobs:
             -f allow_unreleased_changelog="$ALLOW_UNRELEASED_CHANGELOG"
             -f rerun_group="$child_rerun_group"
           )
+          if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
+            args+=(-f allow_frozen_target_scenario_omissions=true)
+          fi
           if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
             args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")
           fi
@@ -1248,7 +1251,9 @@ jobs:
     name: Run product performance evidence
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ubuntu-24.04
+    # Keep this monitor off the four-slot GitHub-hosted pool so performance starts
+    # with the other child workflows instead of extending the critical path.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: ${{ inputs.release_profile == 'full' && 360 || 120 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}

@@ -730,6 +730,22 @@ beforeAll(async () => {
 });
 
 describe("installPluginFromNpmSpec", () => {
+  it("classifies npm metadata command failures", async () => {
+    runCommandWithTimeoutMock.mockResolvedValue(failedSpawn("registry unavailable"));
+
+    await expect(
+      installPluginFromNpmSpec({
+        spec: "@openclaw/voice-call@0.0.1",
+        npmDir: path.join(suiteTempRootTracker.makeTempDir(), "npm"),
+        logger: { info: () => {}, warn: () => {} },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "npm view failed: registry unavailable",
+      code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE,
+    });
+  });
+
   it("installs npm pack archives through the managed npm root", async () => {
     const { archivePath, calls, dependencySpec, npmRoot, result, stagedArchiveContents } =
       npmPackArchiveInstallCase;

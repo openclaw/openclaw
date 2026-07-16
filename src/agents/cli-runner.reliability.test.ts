@@ -7,11 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import {
-  testing as replyRunTesting,
-  createReplyOperation,
-  replyRunRegistry,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadTranscriptEvents, upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -48,7 +45,7 @@ import {
   requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
-import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.js";
+import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   resolveCliNoOutputTimeoutMs,
@@ -62,6 +59,23 @@ import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
 
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+
+// Gateway unit coverage owns quiet-admission timing. These reliability cases only
+// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
+vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/mcp-http.loopback-runtime.js")>();
+  return {
+    ...actual,
+    waitForMcpLoopbackToolCallCaptureIdle: (
+      captureKey: string,
+      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
+    ) =>
+      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+        ...options,
+        admissionGraceMs: 0,
+      }),
+  };
+});
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
