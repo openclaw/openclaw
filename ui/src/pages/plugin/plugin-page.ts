@@ -198,7 +198,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private isExternalTabAuthSupported(): boolean {
     // Secure cross-site cookies work on HTTPS and browser-trusted loopback.
     // Insecure LAN HTTP must not fall back to an ambient bearer substitute.
-    return window.isSecureContext !== false;
+    return window.isSecureContext;
   }
 
   protected probeExternalTabAuth(path: string, signal: AbortSignal): Promise<boolean> {

@@ -66,8 +66,18 @@ function cookieNameForPlugin(pluginId: string): string {
   return `${CONTROL_UI_PLUGIN_AUTH_COOKIE_PREFIX}_${pluginKey}`;
 }
 
+function hasInvalidCookiePathCharacter(path: string): boolean {
+  for (const character of path) {
+    const code = character.charCodeAt(0);
+    if (character === ";" || code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function normalizeCookiePath(path: string): string | undefined {
-  if (!path.startsWith("/") || path.startsWith("//") || /[;\u0000-\u001f\u007f]/.test(path)) {
+  if (!path.startsWith("/") || path.startsWith("//") || hasInvalidCookiePathCharacter(path)) {
     return undefined;
   }
   try {

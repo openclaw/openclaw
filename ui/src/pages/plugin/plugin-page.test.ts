@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
-import type { ApplicationConfig, ApplicationConfigCapability } from "../../app/config.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { getLogbookState, stopLogbookPolling } from "./logbook-controller.ts";
 import { renderLogbook } from "./logbook-view.ts";
@@ -12,6 +12,8 @@ type TestBundledView = {
   render: (props: Parameters<typeof renderLogbook>[0]) => unknown;
   stop: (host: object) => void;
 };
+
+type ApplicationConfig = ApplicationConfigCapability["current"];
 
 const logbookBundledView = {
   render: renderLogbook,
@@ -147,6 +149,14 @@ function createExternalPluginPage(
 }
 
 describe("PluginPage", () => {
+  beforeEach(() => {
+    vi.stubGlobal("isSecureContext", true);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("refreshes parent auth before mounting an external plugin frame", async () => {
     const pendingRefresh = deferred<ApplicationConfig | null>();
     const pendingProbe = deferred<boolean>();

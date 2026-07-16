@@ -50,7 +50,7 @@ const REAL_PNG = Buffer.from(
   "base64",
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
-const avatarTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
@@ -397,28 +397,24 @@ describe("handleControlUiHttpRequest", () => {
     scopes: string[];
     fn: (bearer: string) => Promise<T>;
   }) {
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-scoped-device-"));
-    try {
-      return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
-        const deviceId = `control-ui-device-${randomUUID()}`;
-        const requested = await requestDevicePairing({
-          deviceId,
-          publicKey: "test-public-key",
-          role: "operator",
-          scopes: params.scopes,
-        });
-        const approved = await approveDevicePairing(requested.request.requestId, {
-          callerScopes: params.scopes,
-        });
-        expect(approved).toMatchObject({ status: "approved" });
-        const operatorBearer =
-          approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
-        expect(typeof operatorBearer).toBe("string");
-        return await params.fn(operatorBearer ?? "");
+    const tempHome = testTempDirs.make("openclaw-ui-scoped-device-");
+    return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      const deviceId = `control-ui-device-${randomUUID()}`;
+      const requested = await requestDevicePairing({
+        deviceId,
+        publicKey: "test-public-key",
+        role: "operator",
+        scopes: params.scopes,
       });
-    } finally {
-      await fs.rm(tempHome, { recursive: true, force: true });
-    }
+      const approved = await approveDevicePairing(requested.request.requestId, {
+        callerScopes: params.scopes,
+      });
+      expect(approved).toMatchObject({ status: "approved" });
+      const operatorBearer =
+        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      expect(typeof operatorBearer).toBe("string");
+      return await params.fn(operatorBearer ?? "");
+    });
   }
 
   it("sets security headers for Control UI responses", async () => {
@@ -1438,7 +1434,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(cookies.every((cookie) => String(cookie).includes("Secure"))).toBe(true);
         expect(cookies.every((cookie) => String(cookie).includes("SameSite=None"))).toBe(true);
         const payloads = cookies.map((cookie) => {
-          const encoded = String(cookie).match(/=v1\.([^.]+)\./)?.[1];
+          const encoded = String(cookie).match(new RegExp("=v1\\.([^.]+)\\."))?.[1];
           return JSON.parse(Buffer.from(encoded ?? "", "base64url").toString("utf8"));
         });
         expect(payloads).toMatchObject([
@@ -1805,7 +1801,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("serves local avatar bytes through hardened avatar handler", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-");
     try {
       const avatarPath = path.join(tmp, "main.png");
       await fs.writeFile(avatarPath, "avatar-bytes\n");
@@ -1830,7 +1826,7 @@ describe("handleControlUiHttpRequest", () => {
   ] as const)(
     "validates %s avatar requests without reading bytes and closes the descriptor",
     async (_name, url, method) => {
-      const tmp = avatarTempDirs.make("openclaw-avatar-no-read-");
+      const tmp = testTempDirs.make("openclaw-avatar-no-read-");
       const read = vi.spyOn(fsSync, "read");
       const closeSync = vi.spyOn(fsSync, "closeSync");
       try {
@@ -1854,7 +1850,7 @@ describe("handleControlUiHttpRequest", () => {
   );
 
   it("rejects hardlinked avatar bytes and reports matching metadata", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-hardlink-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-hardlink-");
     try {
       await fs.writeFile(path.join(tmp, "original.png"), REAL_PNG);
       await fs.link(path.join(tmp, "original.png"), path.join(tmp, "avatar.png"));
@@ -1882,7 +1878,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("bounds an avatar route file that grows after its descriptor is pinned", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-growth-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-growth-");
     const avatarPath = path.join(tmp, "avatar.png");
     try {
       await fs.writeFile(avatarPath, REAL_PNG);

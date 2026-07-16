@@ -1001,9 +1001,9 @@ export async function handleControlUiHttpRequest(
       seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
       terminalEnabled,
-      pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path, match }) => ({
+      pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,
-        path,
+        path: grantPath,
         match,
       })),
     } satisfies ControlUiBootstrapConfig);

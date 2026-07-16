@@ -29,7 +29,7 @@ const SEAM_COLOR_CSS_VARIABLES = [
   "--focus-glow",
 ] as const;
 
-export type ApplicationConfig = {
+type ApplicationConfig = {
   assistantIdentity: {
     agentId: string | null;
     name: string;
