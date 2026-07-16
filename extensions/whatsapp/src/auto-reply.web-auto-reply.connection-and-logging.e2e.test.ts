@@ -1042,6 +1042,62 @@ describe("web auto-reply connection", () => {
     expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
+  it("resolves per-conversation WhatsApp debounce overrides", async () => {
+    const capture = createWebListenerFactoryCapture();
+    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          debounceMs: 250,
+          direct: {
+            "+15551234567": { debounceMs: 0 },
+            "*": { debounceMs: 1_000 },
+          },
+          groups: {
+            "120363@g.us": { debounceMs: 30_000 },
+            "*": { debounceMs: 2_000 },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+      text: "ok",
+    }));
+    const resolveDebounceMs = capture.getLastOptions()?.resolveDebounceMs;
+    expect(resolveDebounceMs).toBeTypeOf("function");
+
+    const direct = createTestWebInboundMessage({
+      admission: {
+        accountId: "default",
+        account: { accountId: "default" },
+        conversation: { id: "+15551234567", kind: "direct" },
+        sender: { id: "+15551234567" },
+        ingress: { admission: "dispatch", decision: "allow" },
+      },
+      platform: { chatJid: "+15551234567", sendComposing, reply, sendMedia },
+    });
+    const otherDirect = createTestWebInboundMessage({
+      ...direct,
+      admission: {
+        ...direct.admission,
+        conversation: { id: "+15550000000", kind: "direct" },
+      },
+    });
+    const group = createTestWebInboundMessage({
+      ...direct,
+      admission: {
+        ...direct.admission,
+        conversation: { id: "120363@g.us", kind: "group", groupSessionId: "120363@g.us" },
+      },
+    });
+
+    expect(resolveDebounceMs?.(direct)).toBe(0);
+    expect(resolveDebounceMs?.(otherDirect)).toBe(1_000);
+    expect(resolveDebounceMs?.(group)).toBe(30_000);
+  });
+
   it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
     const capture = createWebListenerFactoryCapture();
     const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();

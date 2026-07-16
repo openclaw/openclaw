@@ -105,6 +105,7 @@ function resolveWebMonitorConfigSnapshot(params: {
         streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
         groups: account.groups,
+        direct: account.direct,
       },
     },
   } satisfies WhatsAppRuntimeConfig;
@@ -142,6 +143,53 @@ function resolveExplicitWhatsAppDebounceOverride(params: {
   }
 
   return channel.debounceMs;
+}
+
+type WhatsAppConversationDebounceEntry = {
+  debounceMs?: number;
+};
+
+function normalizeDebounceMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function resolveWhatsAppScopedDebounceMs(params: {
+  entries?: Record<string, WhatsAppConversationDebounceEntry | undefined>;
+  id?: string | null;
+}): number | undefined {
+  const specific = params.id
+    ? normalizeDebounceMs(params.entries?.[params.id]?.debounceMs)
+    : undefined;
+  if (specific !== undefined) {
+    return specific;
+  }
+  return normalizeDebounceMs(params.entries?.["*"]?.debounceMs);
+}
+
+function resolveWhatsAppConversationDebounceMs(params: {
+  cfg: ReturnType<typeof getRuntimeConfig>;
+  msg: WebInboundMessageInput;
+  defaultMs: number;
+}): number {
+  const normalized = normalizeWebInboundMessage(params.msg);
+  const admission = normalized.admission;
+  if (!admission || admission.ingress.decision !== "allow") {
+    return params.defaultMs;
+  }
+  const channel = params.cfg.channels?.whatsapp;
+  const scoped =
+    admission.conversation.kind === "group"
+      ? resolveWhatsAppScopedDebounceMs({
+          entries: channel?.groups,
+          id: admission.conversation.id,
+        })
+      : resolveWhatsAppScopedDebounceMs({
+          entries: channel?.direct,
+          id: admission.conversation.id,
+        });
+  return scoped ?? params.defaultMs;
 }
 
 function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnstableError {
@@ -378,6 +426,12 @@ export async function monitorWebChannel(
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
               debounceMs: inboundDebounceMs,
+              resolveDebounceMs: (msg) =>
+                resolveWhatsAppConversationDebounceMs({
+                  cfg,
+                  msg,
+                  defaultMs: inboundDebounceMs,
+                }),
               appendReplyWindow: connectionLocal.openedAfterRecentInbound
                 ? {
                     afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,

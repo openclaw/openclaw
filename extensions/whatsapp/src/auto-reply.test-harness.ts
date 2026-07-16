@@ -248,6 +248,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
     | {
         onMessage: (msg: WebInboundMessageInput) => Promise<void>;
         shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+        resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
         resolveDebounceDecision?: (
           msg: WebInboundMessageInput,
         ) => Promise<InboundDebounceDecision | undefined>;
@@ -259,6 +260,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessageInput) => Promise<void>;
     shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+    resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
     resolveDebounceDecision?: (
       msg: WebInboundMessageInput,
     ) => Promise<InboundDebounceDecision | undefined>;

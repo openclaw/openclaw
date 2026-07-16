@@ -342,6 +342,8 @@ type MonitorWebInboxOptions = {
   appendReplyWindow?: AppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
+  /** Optional per-message debounce window override. */
+  resolveDebounceMs?: (msg: AdmittedWebInboundCallbackMessage) => number | undefined;
   /** Optional policy decision. An explicit result overrides shouldDebounce. */
   resolveDebounceDecision?: (
     msg: AdmittedWebInboundCallbackMessage,
@@ -369,11 +371,12 @@ type MonitorWebInboxOptions = {
 
 type AttachWebInboxToSocketOptions = Omit<
   MonitorWebInboxOptions,
-  "onMessage" | "resolveDebounceDecision" | "shouldDebounce" | "socketTiming"
+  "onMessage" | "resolveDebounceDecision" | "resolveDebounceMs" | "shouldDebounce" | "socketTiming"
 > & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
   onMessage: (msg: WebInboundMessageInput) => Promise<void>;
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
   resolveDebounceDecision?: (
     msg: WebInboundMessageInput,
   ) => InboundDebounceDecision | undefined | Promise<InboundDebounceDecision | undefined>;
@@ -505,6 +508,10 @@ export async function attachWebInboxToSocket(
   };
   const shouldDebounceInboundMessage = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
+  const resolveInboundDebounceWindowMs = (msg: AdmittedWebInboundCallbackMessage): number => {
+    const resolved = options.resolveDebounceMs?.(msg);
+    return Math.max(0, Math.trunc(resolved ?? inboundDebounceMs));
+  };
   const resolveInboundDebounceDecision = (msg: AdmittedWebInboundCallbackMessage) =>
     options.resolveDebounceDecision?.(msg);
   const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
@@ -559,6 +566,7 @@ export async function attachWebInboxToSocket(
     debounceMs: inboundDebounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
     shouldDebounce: shouldDebounceInboundMessage,
+    resolveDebounceMs: resolveInboundDebounceWindowMs,
     resolveDecision: resolveInboundDebounceDecision,
     canCombine: (entries, next) =>
       (!next.quote || !entries.some((entry) => Boolean(entry.quote))) &&
@@ -1922,6 +1930,7 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     throw err;
   }
   const shouldDebounce = options.shouldDebounce;
+  const resolveDebounceMs = options.resolveDebounceMs;
   const resolveDebounceDecision = options.resolveDebounceDecision;
   const normalizeAdmittedWebInboundMessage = (
     msg: WebInboundMessageInput,
@@ -1936,6 +1945,9 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     },
     shouldDebounce: shouldDebounce
       ? (msg) => shouldDebounce(normalizeAdmittedWebInboundMessage(msg))
+      : undefined,
+    resolveDebounceMs: resolveDebounceMs
+      ? (msg) => resolveDebounceMs(normalizeAdmittedWebInboundMessage(msg))
       : undefined,
     resolveDebounceDecision: resolveDebounceDecision
       ? (msg) => resolveDebounceDecision(normalizeAdmittedWebInboundMessage(msg))
