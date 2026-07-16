@@ -851,6 +851,16 @@ internal fun localizedUppercase(
   fallbackLocale: Locale = Locale.getDefault(),
 ): String = value.uppercase(languageTag?.let(Locale::forLanguageTag) ?: fallbackLocale)
 
+internal fun localizedInitial(
+  value: String,
+  languageTag: String?,
+  fallbackLocale: Locale = Locale.getDefault(),
+): String? {
+  if (value.isEmpty()) return null
+  val initial = value.substring(0, value.offsetByCodePoints(0, 1))
+  return localizedUppercase(initial, languageTag, fallbackLocale)
+}
+
 @Composable
 private fun OverviewProgressBar(
   progress: Float,
@@ -1198,7 +1208,7 @@ private fun agentInitials(name: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { part -> part.firstOrNull()?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) } }
+    .mapNotNull { part -> localizedInitial(part, currentAppLanguage().languageTag) }
     .joinToString("")
     .ifBlank { "OC" }
 
@@ -1956,10 +1966,7 @@ private fun ProfilePanel(
         Box(contentAlignment = Alignment.Center) {
           Text(
             text =
-              displayName
-                .firstOrNull()
-                ?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) }
-                ?: "O",
+              localizedInitial(displayName, currentAppLanguage().languageTag) ?: "O",
             style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp),
             color = ClawTheme.colors.text,
             textAlign = TextAlign.Center,

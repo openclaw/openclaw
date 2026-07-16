@@ -40,6 +40,13 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun localizedInitialPreservesCodePointsAndLocale() {
+    assertEquals("🧭", localizedInitial("🧭 Scout", languageTag = "en", fallbackLocale = Locale.US))
+    assertEquals("İ", localizedInitial("istanbul", languageTag = "tr", fallbackLocale = Locale.US))
+    assertEquals(null, localizedInitial("", languageTag = "en", fallbackLocale = Locale.US))
+  }
+
+  @Test
   fun settingsDisclosureUsesTheLocalizedTitle() {
     assertEquals("Open Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = true))
     assertEquals("Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = false))
@@ -666,6 +673,13 @@ class ShellScreenLogicTest {
 
     assertEquals("🦾", overviewAgentBadgeText(agents = agents, defaultAgentId = "scout"))
     assertEquals("MA", overviewAgentBadgeText(agents = agents, defaultAgentId = "main"))
+    assertEquals(
+      "🧭S",
+      overviewAgentBadgeText(
+        agents = listOf(GatewayAgentSummary(id = "emoji", name = "🧭 Scout", emoji = null)),
+        defaultAgentId = "emoji",
+      ),
+    )
     assertEquals("OC", overviewAgentBadgeText(agents = emptyList(), defaultAgentId = null))
   }
 
