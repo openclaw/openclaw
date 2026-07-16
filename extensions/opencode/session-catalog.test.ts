@@ -633,7 +633,9 @@ describe("OpenCode session catalog", () => {
         await expect(listing).rejects.toThrow(
           `OpenCode ${streamName} stream failed: ${streamName} EPIPE`,
         );
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         expect(uncaughtException).not.toHaveBeenCalled();
         expect(isProcessRunning(child!.pid)).toBe(false);
       } finally {
