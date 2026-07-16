@@ -161,6 +161,7 @@ runs:
       if: inputs.vitest-fs-cache == 'true' && runner.os != 'Windows'
       env:
         CACHE_GENERATION: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**') }}
+        CACHE_WRITER: ${{ inputs.save-vitest-fs-cache == 'true' && '1' || '0' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -188,7 +189,7 @@ runs:
         # The shard runner treats this as a persistent root and assigns one
         # isolated subdirectory per concurrent Vitest worker.
         echo "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root" >> "$GITHUB_ENV"
-        echo "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=${{ inputs.save-vitest-fs-cache == 'true' && '1' || '0' }}" >> "$GITHUB_ENV"
+        echo "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=$CACHE_WRITER" >> "$GITHUB_ENV"
 
     - name: Mount Node compile cache sticky disk
       if: inputs.node-compile-cache == 'true' && (inputs.sticky-disk == 'true' || inputs.runtime-cache-sticky-disk == 'true') && runner.os != 'Windows'
@@ -221,6 +222,8 @@ runs:
 
     - name: Configure Node compile cache
       if: inputs.node-compile-cache == 'true' && runner.os != 'Windows'
+      env:
+        CACHE_WRITER: ${{ inputs.save-node-compile-cache == 'true' && ((inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true') || github.event_name != 'pull_request') && '1' || '0' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -228,7 +231,7 @@ runs:
         mkdir -p "$cache_root"
         echo "NODE_COMPILE_CACHE=$cache_root" >> "$GITHUB_ENV"
         echo "NODE_COMPILE_CACHE_PORTABLE=1" >> "$GITHUB_ENV"
-        echo "OPENCLAW_NODE_COMPILE_CACHE_WRITER=${{ inputs.save-node-compile-cache == 'true' && ((inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true') || github.event_name != 'pull_request') && '1' || '0' }}" >> "$GITHUB_ENV"
+        echo "OPENCLAW_NODE_COMPILE_CACHE_WRITER=$CACHE_WRITER" >> "$GITHUB_ENV"
 
     # Post actions run last-in-first-out. Register after stickydisk so this bind
     # is gone before stickydisk flushes, unmounts, and snapshots its filesystem.
