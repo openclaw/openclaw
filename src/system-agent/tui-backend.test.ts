@@ -228,7 +228,7 @@ describe("runSystemAgentTui", () => {
           };
 
           await expect(backend.listSessions()).resolves.toMatchObject({
-            sessions: [{ model: "gpt-5.6-sol", thinkingLevel: "low" }],
+            sessions: [{ model: "gpt-5.6-sol", thinkingLevel: "medium" }],
           });
           return { exitReason: "exit" };
         },
