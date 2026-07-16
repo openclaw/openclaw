@@ -203,20 +203,18 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(jobOf("agentic-agents-core-runner-embedded")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast")).toBeGreaterThanOrEqual(0);
     expect(jobOf("agentic-agents-core-runner-embedded")).not.toBe(jobOf("core-unit-fast"));
-    // Spawn/signal-timing suites flake next to a concurrent sibling Vitest
-    // run; their bins must force the shard runner to concurrency 1 and never
-    // mix with regular groups.
+    // Spawn/signal-timing suites never mix with regular groups, and every
+    // compact bin runs serially: overlapping Vitest runs flake timing-
+    // sensitive tests on both runner classes.
     const exclusiveGroupRe = /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$/u;
     for (const shard of compact) {
       const exclusiveCount = shard.groups.filter((group) =>
         exclusiveGroupRe.test(group.shard_name),
       ).length;
       if (exclusiveCount > 0) {
-        expect(shard.planConcurrency).toBe(1);
         expect(exclusiveCount).toBe(shard.groups.length);
-      } else {
-        expect(shard.planConcurrency).toBeUndefined();
       }
+      expect(shard.planConcurrency).toBe(1);
     }
     expect(
       compact.filter((shard) =>
@@ -314,6 +312,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         configs: [
           "test/vitest/vitest.unit-fast.config.ts",
+          "test/vitest/vitest.unit-fast-isolated.config.ts",
           "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         ],
         requiresDist: false,

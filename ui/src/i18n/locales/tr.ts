@@ -660,6 +660,8 @@ export const tr: TranslationMap = {
     archiveSession: "Oturumu arşivle",
     archiveSessionCount: "{count} arşivle",
     restoreSession: "Oturumu geri yükle",
+    stopCloudWorker: "Bulut çalışanını durdur…",
+    stopCloudWorkerConfirm: '"{session}" için bulut çalışanı durdurulsun mu?',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "{count} sil…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

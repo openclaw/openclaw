@@ -718,7 +718,7 @@ async function loadConfigFromSnapshotForInstall(
   };
 }
 
-export async function loadConfigForInstall(
+async function loadConfigForInstall(
   request: PluginInstallRequestContext,
 ): Promise<ConfigSnapshotForInstallExecution> {
   const prepared = await tracePluginLifecyclePhaseAsync(
@@ -747,6 +747,12 @@ export async function loadConfigForInstall(
     };
   }
   return loadConfigFromSnapshotForInstall(request, prepared);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.pluginsInstallCommandTestApi")
+  ] = { loadConfigForInstall };
 }
 
 export async function runPluginInstallCommand(params: {

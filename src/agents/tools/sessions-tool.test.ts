@@ -11,7 +11,7 @@ import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patc
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
-import { testing as sessionsResolutionTesting } from "./sessions-resolution.js";
+import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
 describe("sessions tool", () => {

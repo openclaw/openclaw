@@ -257,7 +257,6 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/process-runtime` | Process exec helpers |
     | `plugin-sdk/node-host` | Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/cli-runtime` | Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
-    | `plugin-sdk/qa-live-transport-scenarios` | Shared live transport QA scenario ids, baseline coverage helpers, and scenario-selection helper |
     | `plugin-sdk/qa-runner-runtime` | Supported facade exposing plugin QA scenarios through the CLI command surface |
     | `plugin-sdk/tts-runtime` | Supported facade for text-to-speech config schemas and runtime helpers |
     | `plugin-sdk/gateway-method-runtime` | Reserved Gateway method dispatch helper for plugin HTTP routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |

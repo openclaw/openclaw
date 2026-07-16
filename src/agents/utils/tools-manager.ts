@@ -417,6 +417,12 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   }
 }
 
-export const testing = {
+const testing = {
   downloadFile,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolsManagerTestApi")] = {
+    testing,
+  };
+}

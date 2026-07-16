@@ -2754,7 +2754,11 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(assertions).not.toContain('const content = fs.readFileSync(filePath, "utf8")');
     expect(runner).toContain("docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log");
     expect(runner).not.toContain("cat /tmp/openclaw-codex-plugin-pack.log");
-    expect(runner).toContain("tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err");
+    expect(assertions).toContain(
+      'readTextFileTail(\n        "/tmp/openclaw-codex-agent-after-uninstall.err",',
+    );
+    expect(runner).toContain('assert-agent-error "$post_uninstall_status"');
+    expect(runner).not.toContain("tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err");
     expect(runner).not.toContain("cat /tmp/openclaw-codex-agent-after-uninstall.err");
     const earlyAgentTimeoutEnvIndex = runner.indexOf(
       "docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS 420",
@@ -3929,11 +3933,13 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     const openWebUiRunner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
 
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120"',
     );
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local"',
     );
+    expect(scenarios).toContain('"test-install-sh-e2e-docker.sh"');
+    expect(scenarios).not.toContain("pnpm test:install:e2e");
     expect(scenarios).toContain(
       '"OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui"',
     );
@@ -4023,7 +4029,10 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain('if [ "$UPDATE_FAILED" -ne 0 ]; then');
     expect(runner).toContain('if [ "$GATEWAY_START_FAILED" -ne 0 ]; then');
     expect(runner).toContain('if [ "$GATEWAY_HEALTH_FAILED" -ne 0 ]; then');
-    expect(runner).toContain("ActiveState=active");
+    expect(runner).toContain('printf "%s\\n" "\\$!" >"$GATEWAY_PID_FILE"');
+    expect(runner).toContain('printf "ActiveState=active\\nSubState=running');
+    expect(runner).toContain('status.service?.runtime?.status !== "running"');
+    expect(runner).toContain("FAIL: gateway service was not running before update");
     expect(runner).toContain("OPENCLAW_NO_RESPAWN=1");
     expect(runner).toContain("is-enabled)");
     expect(runner).toContain("/healthz");
@@ -4319,6 +4328,23 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(helper).not.toContain('require("node:readline")');
     expect(helper).not.toContain("fs.readFileSync");
     expect(helper).not.toContain('.split("\\n")');
+  });
+
+  it("exports SQLite-backed installer E2E sessions before scanning tools", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+    const start = runner.indexOf("assert_session_used_tools() {");
+    const end = runner.indexOf("\nsession_jsonl_path()", start);
+    const helper = runner.slice(start, end);
+
+    expect(helper).toContain('jsonl="$(session_jsonl_path "$profile" "$session_id")"');
+    expect(helper).toContain('if [[ ! -f "$jsonl" ]]');
+    expect(helper).toContain('openclaw --profile "$profile" sessions export-trajectory');
+    expect(helper).toContain('--session-key "agent:main:explicit:${session_id}"');
+    expect(helper).toContain('--workspace "$export_workspace"');
+    expect(helper).toContain(
+      'jsonl="$export_workspace/.openclaw/trajectory-exports/scan/events.jsonl"',
+    );
+    expect(helper).toContain('rm -rf "$export_workspace"');
   });
 
   it("keeps OpenAI web search smoke on one gateway agent connection", () => {
