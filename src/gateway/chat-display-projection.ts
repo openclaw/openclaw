@@ -642,16 +642,16 @@ function sanitizeChatHistoryMessage(
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   if (typeof entry.content === "string") {
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.content)
-      : entry.content;
-    const stripped = stripInlineDirectiveTagsForDisplay(controlStripped);
-    changed ||= controlStripped !== entry.content;
+      ? stripSuppressedControlReplyToken(stripped.text)
+      : stripped.text;
+    changed ||= controlStripped !== stripped.text;
     if (preserveExactToolPayload) {
-      entry.content = stripped.text;
+      entry.content = controlStripped;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.content = res.text;
       changed ||= stripped.changed || res.truncated;
     }
@@ -701,16 +701,16 @@ function sanitizeChatHistoryMessage(
   }
 
   if (typeof entry.text === "string") {
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.text)
-      : entry.text;
-    const stripped = stripInlineDirectiveTagsForDisplay(controlStripped);
-    changed ||= controlStripped !== entry.text;
+      ? stripSuppressedControlReplyToken(stripped.text)
+      : stripped.text;
+    changed ||= controlStripped !== stripped.text;
     if (preserveExactToolPayload) {
-      entry.text = stripped.text;
+      entry.text = controlStripped;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.text = res.text;
       changed ||= stripped.changed || res.truncated;
     }
@@ -816,7 +816,9 @@ function shouldPreserveAssistantControlReplyText(message: Record<string, unknown
         : [];
   return (
     texts.length > 0 &&
-    texts.every((text) => isSuppressedControlReplyText(text)) &&
+    texts.every((text) =>
+      isSuppressedControlReplyText(stripInlineDirectiveTagsForDisplay(text).text),
+    ) &&
     hasAssistantDisplayableNonTextContent(message)
   );
 }
@@ -1325,7 +1327,11 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSuppressedControlReplyText(text)) {
+  // Classify after removing UI-only directives, before sanitization can erase
+  // the control token and leave a blank assistant row behind.
+  const displayText =
+    text === undefined ? undefined : stripInlineDirectiveTagsForDisplay(text).text;
+  if (displayText === undefined || !isSuppressedControlReplyText(displayText)) {
     return false;
   }
   return !hasAssistantDisplayableNonTextContent(message);
