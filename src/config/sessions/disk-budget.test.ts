@@ -378,6 +378,9 @@ describe("enforceSessionDiskBudget", () => {
           highWaterBytes: 1,
         },
         warnOnly: false,
+        commitEvictedIndex: async () => {
+          await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+        },
       });
 
       expectBudgetResult(result);
@@ -719,6 +722,36 @@ describe("enforceSessionDiskBudget", () => {
         }),
       ).rejects.toBe(commitFailure);
 
+      await expectPathExists(oldTranscript);
+    });
+  });
+
+  it("retains evicted artifacts when no durable index commit is available", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-missing-commit-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const oldKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const oldTranscript = path.join(dir, "old.jsonl");
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [activeKey]: { sessionId: "active", updatedAt: 2 },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(oldTranscript, "t".repeat(10 * 1024), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(result.removedFiles).toBe(0);
+      expect(result.totalBytesAfter).toBeGreaterThan(result.highWaterBytes);
+      expect(store[oldKey]).toBeUndefined();
       await expectPathExists(oldTranscript);
     });
   });

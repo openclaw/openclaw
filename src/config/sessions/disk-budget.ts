@@ -638,6 +638,7 @@ export async function enforceSessionDiskBudget(params: {
   let removedFiles = 0;
   let removedEntries = 0;
   let freedBytes = 0;
+  const commitEvictedIndex = params.commitEvictedIndex;
 
   const referencedPaths = resolveReferencedSessionArtifactPaths({
     sessionsDir,
@@ -707,6 +708,11 @@ export async function enforceSessionDiskBudget(params: {
 
   const deferredEvictedArtifactPaths: string[] = [];
   const planEvictedArtifactRemoval = (rawPath: string, canonicalPathHint?: string): number => {
+    // An evicted artifact may only be unlinked after its reduced index is durable.
+    // Callers without that boundary retain the artifact as a reclaimable orphan.
+    if (!dryRun && !commitEvictedIndex) {
+      return 0;
+    }
     const resolvedPath = path.resolve(rawPath);
     const canonicalPath = canonicalPathHint ?? canonicalizePathForComparison(resolvedPath);
     if (simulatedRemovedPaths.has(canonicalPath)) {
@@ -820,8 +826,8 @@ export async function enforceSessionDiskBudget(params: {
     }
   }
 
-  if (!dryRun && deferredEvictedArtifactPaths.length > 0) {
-    await params.commitEvictedIndex?.();
+  if (!dryRun && commitEvictedIndex && deferredEvictedArtifactPaths.length > 0) {
+    await commitEvictedIndex();
     for (const filePath of deferredEvictedArtifactPaths) {
       const deletedBytes = await removeFileForBudget({
         filePath,
