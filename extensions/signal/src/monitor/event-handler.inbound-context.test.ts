@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  resetSignalReplyAuthorsForTests,
   resolveSignalReplyContextWithPersistence,
+  testing as replyAuthorsTesting,
 } from "../reply-authors.js";
 import type { SignalReactionMessage } from "./event-handler.types.js";
 vi.useRealTimers();
@@ -134,7 +134,7 @@ describe("signal createSignalEventHandler inbound context", () => {
 
   beforeEach(() => {
     vi.useRealTimers();
-    resetSignalReplyAuthorsForTests();
+    replyAuthorsTesting.resetSignalReplyAuthorsForTests();
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
