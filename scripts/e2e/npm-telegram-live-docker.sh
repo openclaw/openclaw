@@ -417,6 +417,7 @@ run_logged docker_e2e_run_with_harness \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
   -v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER" \
   -v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro" \
+  -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
