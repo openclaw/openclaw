@@ -2800,7 +2800,9 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test-play)
-              ./gradlew --no-daemon --build-cache :app:testPlayDebugUnitTest
+              ./gradlew --no-daemon --build-cache \
+                :app:testPlayDebugUnitTest \
+                :wear-shared:testDebugUnitTest
               ;;
             test-third-party)
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
@@ -2811,7 +2813,9 @@ jobs:
                 :app:assembleThirdPartyDebug \
                 :app:lintPlayDebug \
                 :app:lintThirdPartyDebug \
-                :benchmark:assembleDebug
+                :benchmark:assembleDebug \
+                :wear-shared:assembleDebug \
+                :wear-shared:lintDebug
               ;;
             build-play-compat)
               # Frozen targets keep their target-owned Android build contract. New lint rules
@@ -2820,7 +2824,10 @@ jobs:
               ;;
             ktlint)
               # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
-              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
+              ./gradlew --no-daemon --build-cache \
+                :app:ktlintCheck \
+                :benchmark:ktlintCheck \
+                :wear-shared:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

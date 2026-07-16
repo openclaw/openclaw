@@ -1,0 +1,188 @@
+package ai.openclaw.wear.shared
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import java.nio.charset.CharacterCodingException
+
+object WearProtocol {
+  const val VERSION = 1
+  const val REQUEST_PATH = "/openclaw/wear/v1/request"
+  const val RESPONSE_PATH = "/openclaw/wear/v1/response"
+  const val EVENT_PATH = "/openclaw/wear/v1/event"
+
+  // MessageClient has a 100 KiB ceiling. Keep headroom for transport metadata and
+  // force transcript pagination instead of depending on an edge-sized message.
+  const val MAX_MESSAGE_BYTES = 64 * 1024
+}
+
+@Serializable
+enum class WearRpcMethod {
+  @SerialName("proxy.status")
+  ProxyStatus,
+
+  @SerialName("sessions.list")
+  SessionsList,
+
+  @SerialName("chat.history")
+  ChatHistory,
+
+  @SerialName("chat.send")
+  ChatSend,
+
+  @SerialName("chat.abort")
+  ChatAbort,
+}
+
+@Serializable
+enum class WearEventType {
+  @SerialName("chat")
+  Chat,
+
+  @SerialName("connection")
+  Connection,
+}
+
+@Serializable
+sealed interface WearMessage {
+  val version: Int
+
+  @Serializable
+  @SerialName("request")
+  data class Request(
+    override val version: Int = WearProtocol.VERSION,
+    val requestId: String,
+    val method: WearRpcMethod,
+    val params: JsonObject = buildJsonObject {},
+  ) : WearMessage
+
+  @Serializable
+  @SerialName("response")
+  data class Response(
+    override val version: Int = WearProtocol.VERSION,
+    val requestId: String,
+    val ok: Boolean,
+    val result: JsonElement? = null,
+    val error: WearRpcError? = null,
+  ) : WearMessage
+
+  @Serializable
+  @SerialName("event")
+  data class Event(
+    override val version: Int = WearProtocol.VERSION,
+    val sequence: Long,
+    val event: WearEventType,
+    val payload: JsonElement? = null,
+  ) : WearMessage
+}
+
+@Serializable
+data class WearRpcError(
+  val code: String,
+  val message: String,
+)
+
+enum class WearDecodeFailureReason {
+  Empty,
+  TooLarge,
+  Malformed,
+  UnsupportedVersion,
+  InvalidEnvelope,
+}
+
+sealed interface WearDecodeResult {
+  data class Success(
+    val message: WearMessage,
+  ) : WearDecodeResult
+
+  data class Failure(
+    val reason: WearDecodeFailureReason,
+  ) : WearDecodeResult
+}
+
+object WearProtocolCodec {
+  private val json =
+    Json {
+      classDiscriminator = "type"
+      encodeDefaults = true
+      explicitNulls = false
+      ignoreUnknownKeys = true
+    }
+
+  fun encode(message: WearMessage): ByteArray {
+    requireValid(message)
+    val bytes =
+      json
+        .encodeToString(WearMessage.serializer(), message)
+        .encodeToByteArray(throwOnInvalidSequence = true)
+    require(bytes.size <= WearProtocol.MAX_MESSAGE_BYTES) {
+      "Wear message exceeds ${WearProtocol.MAX_MESSAGE_BYTES} bytes"
+    }
+    return bytes
+  }
+
+  fun decode(bytes: ByteArray): WearDecodeResult {
+    if (bytes.isEmpty()) return WearDecodeResult.Failure(WearDecodeFailureReason.Empty)
+    if (bytes.size > WearProtocol.MAX_MESSAGE_BYTES) {
+      return WearDecodeResult.Failure(WearDecodeFailureReason.TooLarge)
+    }
+
+    val text =
+      try {
+        bytes.decodeToString(throwOnInvalidSequence = true)
+      } catch (_: CharacterCodingException) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      }
+    val root =
+      try {
+        json.parseToJsonElement(text).jsonObject
+      } catch (_: SerializationException) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      } catch (_: IllegalArgumentException) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      }
+    val version =
+      (root["version"] as? JsonPrimitive)?.intOrNull
+        ?: return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+    if (version != WearProtocol.VERSION) {
+      return WearDecodeResult.Failure(WearDecodeFailureReason.UnsupportedVersion)
+    }
+    val message =
+      try {
+        json.decodeFromJsonElement(WearMessage.serializer(), root)
+      } catch (_: SerializationException) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      } catch (_: IllegalArgumentException) {
+        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
+      }
+    if (!isValid(message)) {
+      return WearDecodeResult.Failure(WearDecodeFailureReason.InvalidEnvelope)
+    }
+    return WearDecodeResult.Success(message)
+  }
+
+  private fun requireValid(message: WearMessage) {
+    require(message.version == WearProtocol.VERSION) { "Unsupported Wear protocol version: ${message.version}" }
+    require(isValid(message)) { "Invalid Wear protocol envelope" }
+  }
+
+  private fun isValid(message: WearMessage): Boolean =
+    when (message) {
+      is WearMessage.Request -> message.requestId.isNotBlank()
+      is WearMessage.Response ->
+        message.requestId.isNotBlank() &&
+          if (message.ok) {
+            message.error == null
+          } else {
+            message.error != null && message.result == null && message.error.code.isNotBlank()
+          }
+      is WearMessage.Event -> message.sequence >= 0
+    }
+}
