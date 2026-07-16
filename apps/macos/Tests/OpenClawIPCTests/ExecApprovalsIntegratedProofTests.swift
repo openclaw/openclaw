@@ -59,22 +59,21 @@ struct ExecApprovalsIntegratedProofTests {
                 sessionKey: "integration-proof",
                 approvalDecision: nil)
             let initialEnvelope = try Self.makeEnvelope(token: token, request: initialRequest)
-            let promptResponder = Task { @MainActor in
-                await self.respondToAllowOncePrompt()
-            }
+            let promptObservation = PromptObservationRecorder()
+            Self.scheduleAllowOnceResponse(recorder: promptObservation)
 
             let initialResponse = try await Self.sendEnvelope(
                 socketPath: socketPath,
                 payload: initialEnvelope)
-            let promptObservation = try #require(await promptResponder.value)
+            let observedPrompt = try #require(promptObservation.value)
             let initialPayload = try #require(initialResponse.payload)
 
             #expect(initialResponse.ok)
             #expect(initialPayload.success)
             #expect(initialPayload.exitCode == 0)
-            #expect(promptObservation.messageText == "Allow this command?")
-            #expect(promptObservation.informativeText == "Review the command details before allowing.")
-            #expect(promptObservation.buttonTitles == ["Allow Once", "Don't Allow"])
+            #expect(observedPrompt.messageText == "Allow this command?")
+            #expect(observedPrompt.informativeText == "Review the command details before allowing.")
+            #expect(observedPrompt.buttonTitles == ["Allow Once", "Don't Allow"])
             #expect(try Self.markerCount(at: markerURL) == 1)
             print("MACOS_EXEC_APPROVALS_PROOF native-prompt=observed")
             print("MACOS_EXEC_APPROVALS_PROOF allow-once=accepted marker-count=1")
@@ -135,26 +134,29 @@ struct ExecApprovalsIntegratedProofTests {
         return false
     }
 
-    private func respondToAllowOncePrompt() async -> (
-        messageText: String,
-        informativeText: String,
-        buttonTitles: [String])?
+    private static func scheduleAllowOnceResponse(
+        recorder: PromptObservationRecorder,
+        attemptsRemaining: Int = 500)
     {
-        for _ in 0..<500 {
-            if let alert = ExecApprovalsPromptPresenter.activeAlertForTesting,
-               NSApp.modalWindow === alert.window,
-               let button = alert.buttons.first(where: { $0.title == "Allow Once" })
-            {
-                let observation = (
-                    messageText: alert.messageText,
-                    informativeText: alert.informativeText,
-                    buttonTitles: alert.buttons.map(\.title))
-                button.performClick(nil)
-                return observation
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(10)) {
+            MainActor.assumeIsolated {
+                if let alert = ExecApprovalsPromptPresenter.activeAlertForTesting,
+                   NSApp.modalWindow === alert.window,
+                   let button = alert.buttons.first(where: { $0.title == "Allow Once" })
+                {
+                    recorder.value = PromptObservation(
+                        messageText: alert.messageText,
+                        informativeText: alert.informativeText,
+                        buttonTitles: alert.buttons.map(\.title))
+                    button.performClick(nil)
+                    return
+                }
+                guard attemptsRemaining > 1 else { return }
+                Self.scheduleAllowOnceResponse(
+                    recorder: recorder,
+                    attemptsRemaining: attemptsRemaining - 1)
             }
-            try? await Task.sleep(for: .milliseconds(10))
         }
-        return nil
     }
 
     private nonisolated static func makeShortSocketRoot() throws -> URL {
@@ -300,6 +302,17 @@ struct ExecApprovalsIntegratedProofTests {
         askFallback: .deny,
         autoAllowSkills: false,
         allowlistRules: [])
+
+    private struct PromptObservation: Sendable {
+        let messageText: String
+        let informativeText: String
+        let buttonTitles: [String]
+    }
+
+    @MainActor
+    private final class PromptObservationRecorder {
+        var value: PromptObservation?
+    }
 
     private struct TestExecEnvelope: Codable, Sendable {
         let type: String
