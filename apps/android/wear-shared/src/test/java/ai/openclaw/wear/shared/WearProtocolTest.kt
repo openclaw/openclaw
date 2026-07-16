@@ -77,6 +77,7 @@ class WearProtocolTest {
     assertEquals("/openclaw/wear/v1/request", WearProtocol.REQUEST_PATH)
     assertEquals("/openclaw/wear/v1/response", WearProtocol.RESPONSE_PATH)
     assertEquals("/openclaw/wear/v1/event", WearProtocol.EVENT_PATH)
+    assertEquals("openclaw_phone_proxy_v1", WearProtocol.PHONE_CAPABILITY)
   }
 
   @Test

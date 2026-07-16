@@ -1245,6 +1245,37 @@ describe("package acceptance workflow", () => {
     );
   });
 
+  it("keeps performance evidence advisory for beta releases", () => {
+    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const performanceStep = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance"),
+      "Dispatch and monitor OpenClaw Performance",
+    );
+    const summaryStep = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"),
+      "Verify child workflow results",
+    );
+
+    expect(performanceStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
+    expectTextToIncludeAll(performanceStep.run, [
+      'if [[ "$RELEASE_PROFILE" == "beta" ]]',
+      "Release impact: advisory",
+      "advisory for beta",
+    ]);
+    expect(summaryStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
+    expectTextToIncludeAll(summaryStep.run, [
+      '[[ "$RELEASE_PROFILE" == "beta" ]] && performance_advisory=1',
+      'check_child "product_performance" "$PERFORMANCE_RUN_ID" "$performance_required" "$performance_advisory"',
+    ]);
+    expect(workflow).toContain('performanceBlocking: ($releaseProfile != "beta")');
+    expect(workflow).toContain('blocking: ($releaseProfile != "beta")');
+  });
+
+  it("keeps child-job fail-fast polling best-effort", () => {
+    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    expect(workflow.match(/continuing with authoritative workflow conclusion\./gu)).toHaveLength(3);
+  });
+
   it("adopts exact full-release child runs without retrying ambiguous dispatch posts", () => {
     const childDispatches = [
       ["normal_ci", "Dispatch and monitor CI"],

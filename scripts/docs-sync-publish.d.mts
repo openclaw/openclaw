@@ -12,6 +12,8 @@ export function pruneOrphanLocaleDocs(targetDocsDir: string): void;
  * Resolves the local ClawHub repository path used for docs mirroring.
  */
 export function resolveClawHubRepoPath(value?: string, options?: Record<string, unknown>): string;
+/** Removes locale pages whose canonical source page no longer exists. */
+export function pruneOrphanLocaleDocs(targetDocsDir: string): void;
 /**
  * Mirrors ClawHub docs into the target docs tree.
  */

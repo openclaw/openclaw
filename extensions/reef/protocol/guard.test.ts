@@ -169,17 +169,39 @@ describe("provider adapters", () => {
     });
   });
 
-  it("fails closed on non-200 provider responses", async () => {
-    const guard = createOpenAiGuard({
-      apiKey: "test",
-      pinnedModel: model,
-      fetch: async () => jsonResponse({ error: "no" }, 500),
-    });
-    await expect(guard.classify(request)).resolves.toMatchObject({
-      decision: "deny",
-      category: "guard_failure",
-    });
-  });
+  it.each([
+    [
+      "OpenAI",
+      (fetch: FetchLike) => createOpenAiGuard({ apiKey: "test", pinnedModel: model, fetch }),
+    ],
+    [
+      "Anthropic",
+      (fetch: FetchLike) => createAnthropicGuard({ apiKey: "test", pinnedModel: model, fetch }),
+    ],
+  ])(
+    "cancels %s non-200 provider response bodies before failing closed",
+    async (_name, createGuard) => {
+      let cancelled = false;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("partial error body"));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status: 503 },
+      );
+      const guard = createGuard(async () => response);
+
+      await expect(guard.classify(request)).resolves.toMatchObject({
+        decision: "deny",
+        category: "guard_failure",
+      });
+      expect(cancelled).toBe(true);
+    },
+  );
 
   it("cancels oversized provider response streams before buffering them fully", async () => {
     const maxBytes = 256 * 1024;

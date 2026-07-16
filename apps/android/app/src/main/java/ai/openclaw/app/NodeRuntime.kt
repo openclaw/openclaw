@@ -94,6 +94,10 @@ import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
+import ai.openclaw.app.wear.WearProxyBridge
+import ai.openclaw.app.wear.WearProxyController
+import ai.openclaw.app.wear.WearProxyGatewayException
+import ai.openclaw.wear.shared.WearMessage
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -1060,6 +1064,7 @@ class NodeRuntime private constructor(
           operatorStatusText = "Connected"
         }
         micCapture.onGatewayConnectionChanged(true)
+        wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
         scope.launch {
           subscribeOperatorSessionEvents()
           refreshWakeWordsFromGateway()
@@ -1080,17 +1085,59 @@ class NodeRuntime private constructor(
           operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
         }
         micCapture.onGatewayConnectionChanged(false)
+        wearProxyBridge()?.publishConnection(connected = false, status = message)
       },
       onConnectFailure = { error, pauseReconnect ->
+        val problem = gatewayConnectionProblem(error, pauseReconnect)
         updateStatus {
-          operatorConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+          operatorConnected = false
+          operatorStatusText = problem.message
+          operatorConnectionProblem = problem
         }
+        micCapture.onGatewayConnectionChanged(false)
+        wearProxyBridge()?.publishConnection(connected = false, status = problem.message)
       },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
+
+  private val wearProxyController by lazy {
+    WearProxyController(
+      requestGateway = ::requestWearGateway,
+      isGatewayConnected = operatorSession::isReady,
+      gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+    )
+  }
+
+  internal suspend fun handleWearProxyRequest(request: WearMessage.Request): WearMessage.Response = wearProxyController.handle(request)
+
+  private suspend fun requestWearGateway(
+    method: String,
+    params: JsonObject,
+  ): JsonElement {
+    val lease =
+      operatorSession.captureRequestLease()
+        ?: throw WearProxyGatewayException("unavailable", "Phone gateway is offline")
+    val response =
+      try {
+        lease.request(method, params.toString())
+      } catch (err: GatewayRequestRejected) {
+        throw WearProxyGatewayException(err.gatewayError.code, err.gatewayError.message)
+      } catch (_: GatewayRequestNotEnqueued) {
+        throw WearProxyGatewayException("unavailable", "Phone gateway is offline")
+      } catch (_: GatewayRequestOutcomeUnknown) {
+        throw WearProxyGatewayException("unavailable", "Phone gateway request outcome is unknown")
+      }
+    return try {
+      json.parseToJsonElement(response)
+    } catch (_: Throwable) {
+      throw WearProxyGatewayException("invalid_response", "$method returned invalid JSON")
+    }
+  }
+
+  private fun wearProxyBridge(): WearProxyBridge? = (appContext as? NodeApp)?.wearProxyBridge
 
   private fun clearOperatorGatewayState(retirePendingCronRuns: Boolean) {
     invalidateNodeCapabilityApprovalState()
@@ -4197,6 +4244,11 @@ class NodeRuntime private constructor(
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+    if (event == "chat" && !payloadJson.isNullOrBlank()) {
+      runCatching { json.parseToJsonElement(payloadJson) }
+        .getOrNull()
+        ?.let { wearProxyBridge()?.publishChat(it) }
+    }
   }
 
   private fun handleNodeGatewayEvent(

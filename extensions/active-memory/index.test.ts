@@ -12,7 +12,7 @@ import {
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 
@@ -172,6 +172,8 @@ describe("active-memory plugin", () => {
       },
     };
   });
+  let fixtureRoot = "";
+  let pluginStateDir = "";
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
   let pluginConfig: Record<string, unknown> = {
@@ -278,7 +280,7 @@ describe("active-memory plugin", () => {
         openKeyedStore: (options: OpenKeyedStoreOptions) =>
           createPluginStateKeyedStoreForTests("active-memory", {
             ...options,
-            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+            env: { ...process.env, OPENCLAW_STATE_DIR: pluginStateDir },
           }),
       },
       config: {
@@ -474,11 +476,23 @@ describe("active-memory plugin", () => {
     return call;
   };
 
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
+    pluginStateDir = path.join(fixtureRoot, "plugin-state");
+    stateDir = path.join(fixtureRoot, "state");
+  });
+
   beforeEach(async () => {
     vi.clearAllMocks();
-    resetPluginStateStoreForTests();
+    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    // Keep the SQLite file/schema warm, but clear the plugin's only real namespace.
+    await createPluginStateKeyedStoreForTests("active-memory", {
+      namespace: "session-toggles",
+      maxEntries: 10_000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: pluginStateDir },
+    }).clear();
     runEmbeddedAgent.mockReset();
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
     configFile = {
       plugins: {
         entries: {
@@ -581,14 +595,18 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     testing.resetActiveRecallCacheForTests();
-    if (stateDir) {
-      await fs.rm(stateDir, { recursive: true, force: true });
-      stateDir = "";
-    }
+  });
+
+  afterAll(async () => {
+    resetPluginStateStoreForTests();
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
+    pluginStateDir = "";
+    stateDir = "";
   });
 
   it("registers a before_prompt_build hook", () => {

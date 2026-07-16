@@ -18,6 +18,7 @@ object WearProtocol {
   const val REQUEST_PATH = "/openclaw/wear/v1/request"
   const val RESPONSE_PATH = "/openclaw/wear/v1/response"
   const val EVENT_PATH = "/openclaw/wear/v1/event"
+  const val PHONE_CAPABILITY = "openclaw_phone_proxy_v1"
 
   // MessageClient has a 100 KiB ceiling. Keep headroom for transport metadata and
   // force transcript pagination instead of depending on an edge-sized message.
