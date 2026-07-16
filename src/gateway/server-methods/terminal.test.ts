@@ -7,6 +7,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createTerminalLaunchPolicy } from "../terminal/launch.js";
+import type { TerminalSessionSummary } from "../terminal/session-types.js";
 import { terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
 
 const policyMocks = vi.hoisted(() => ({
@@ -65,6 +66,7 @@ function makeOpts(
       seq: 6,
     })),
     snapshot: vi.fn(() => "10%\r100%"),
+    list: vi.fn((): TerminalSessionSummary[] => []),
     upload: vi.fn(async () => ({ path: "/tmp/upload/report.pdf", size: 4 })),
   };
   const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
@@ -115,6 +117,38 @@ afterEach(() => {
 });
 
 describe("terminal gateway policy", () => {
+  it("lists agent-owned sessions with their owner marker", async () => {
+    const { opts, sessions, respond } = makeOpts({}, { enabled: true });
+    sessions.list.mockReturnValue([
+      {
+        sessionId: "terminal-agent",
+        agentId: "main",
+        shell: "/bin/zsh",
+        cwd: "/work",
+        attached: true,
+        owner: "agent:agent:main:main",
+        createdAtMs: 42,
+      },
+    ]);
+
+    await expectDefined(terminalHandlers["terminal.list"], "terminal.list")(opts);
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      sessions: [
+        {
+          sessionId: "terminal-agent",
+          agentId: "main",
+          shell: "/bin/zsh",
+          cwd: "/work",
+          confined: false,
+          attached: true,
+          owner: "agent:agent:main:main",
+          createdAtMs: 42,
+        },
+      ],
+    });
+  });
+
   it("returns the attach snapshot offset to capable clients", async () => {
     const { opts, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
     opts.client!.connect.caps = [GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ];

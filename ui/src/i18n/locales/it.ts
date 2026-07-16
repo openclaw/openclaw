@@ -1639,6 +1639,7 @@ export const it: TranslationMap = {
     connectionTimedOut: "La sessione non si è connessa entro 30 secondi.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "agente",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "scollegato",

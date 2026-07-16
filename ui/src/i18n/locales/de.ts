@@ -1637,6 +1637,7 @@ export const de: TranslationMap = {
       "Die Verbindung zur Sitzung wurde nicht innerhalb von 30 Sekunden hergestellt.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "Agent",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "getrennt",

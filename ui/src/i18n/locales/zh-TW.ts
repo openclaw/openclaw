@@ -1596,6 +1596,7 @@ export const zh_TW: TranslationMap = {
     connectionTimedOut: "工作階段未能在 30 秒內連線。",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "代理程式",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "已分離",

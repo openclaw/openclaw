@@ -427,10 +427,14 @@ h3.plugins-subheader {
   text-align: center;
 }
 
+.plugins-empty__icon,
+.plugins-empty__mascot {
+  margin-bottom: var(--space-3);
+}
+
 .plugins-empty__icon {
   width: 32px;
   height: 32px;
-  margin-bottom: var(--space-3);
   color: var(--border-hover);
 }
 

@@ -29,6 +29,7 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
@@ -472,7 +473,7 @@ function isOpenClawBridgeCommand(command: string | undefined): boolean {
 
 function isCodexAcpCommand(command: string | undefined): boolean {
   return isAcpCommand(command, {
-    packageName: "@zed-industries/codex-acp",
+    packageName: CODEX_ACP_PACKAGE,
     executableName: "codex-acp",
   });
 }
@@ -619,14 +620,14 @@ function quoteShellArg(value: string): string {
 }
 
 function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelOverride): string {
-  const configArgs = override.model ? [`model=${override.model}`] : [];
-  if (override.reasoningEffort) {
-    configArgs.push(`model_reasoning_effort=${override.reasoningEffort}`);
-  }
-  if (configArgs.length === 0) {
+  const config = {
+    ...(override.model ? { model: override.model } : {}),
+    ...(override.reasoningEffort ? { model_reasoning_effort: override.reasoningEffort } : {}),
+  };
+  if (Object.keys(config).length === 0) {
     return command;
   }
-  return `${command} ${configArgs.map((arg) => `-c ${quoteShellArg(arg)}`).join(" ")}`;
+  return `${command} ${OPENCLAW_CODEX_CONFIG_ARG} ${quoteShellArg(JSON.stringify(config))}`;
 }
 
 function createModelScopedAgentRegistry(params: {

@@ -1618,6 +1618,7 @@ export const ko: TranslationMap = {
     connectionTimedOut: "30초 이내에 세션에 연결하지 못했습니다.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "에이전트",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "분리됨",

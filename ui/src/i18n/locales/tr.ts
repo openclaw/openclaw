@@ -1631,6 +1631,7 @@ export const tr: TranslationMap = {
     connectionTimedOut: "Oturum bağlantısı 30 saniye içinde kurulamadı.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "aracı",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "ayrıldı",
