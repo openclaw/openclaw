@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
@@ -636,6 +637,34 @@ describe("deliverLineAutoReply", () => {
         deps,
       }),
     ).rejects.toThrow(/require previewImageUrl/i);
+
+    expect(replyMessageLine).not.toHaveBeenCalled();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("does not expose credentials from media-only validation failures", async () => {
+    const lineData = { mediaKind: "image" as const };
+    const mediaUrl = new URL("http://example.com/image.jpg");
+    mediaUrl.username = ["line", "user"].join("-");
+    mediaUrl.password = ["line", "fixture"].join("-");
+    mediaUrl.searchParams.set("auth", ["line", "query"].join("-"));
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      chunkMarkdownText: () => [],
+      buildMediaMessage: buildLineMediaMessage,
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: {
+          mediaUrls: [mediaUrl.href],
+          channelData: { line: lineData },
+        },
+        lineData,
+        deps,
+      }),
+    ).rejects.toThrow(new Error("LINE outbound media URL must use HTTPS"));
 
     expect(replyMessageLine).not.toHaveBeenCalled();
     expect(pushMessagesLine).not.toHaveBeenCalled();
