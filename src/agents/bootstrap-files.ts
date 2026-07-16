@@ -9,6 +9,7 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.j
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readFileWindowFully } from "../infra/file-read.js";
+import { isSharedChannelSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
@@ -24,6 +25,7 @@ import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-syste
 import {
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
@@ -242,6 +244,19 @@ function shouldExcludeHeartbeatBootstrapFile(params: {
   });
 }
 
+function enforcePrivateMemoryBoundary(
+  files: WorkspaceBootstrapFile[],
+  sessionKey?: string,
+): WorkspaceBootstrapFile[] {
+  if (!isSharedChannelSessionKey(sessionKey)) {
+    return files;
+  }
+  return files.filter((file) => {
+    const name = file.name as string;
+    return name !== DEFAULT_MEMORY_FILENAME && name !== "memory.md";
+  });
+}
+
 function filterHeartbeatBootstrapFile(
   files: WorkspaceBootstrapFile[],
   excludeHeartbeatBootstrapFile: boolean,
@@ -325,10 +340,9 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
-  const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
-    updated,
-    workspaceSetupCompleted,
-    params.workspaceDir,
+  const filteredUpdated = enforcePrivateMemoryBoundary(
+    filterCompletedWorkspaceBootstrapFile(updated, workspaceSetupCompleted, params.workspaceDir),
+    sessionKey,
   );
   return sanitizeBootstrapFiles(
     filterHeartbeatBootstrapFile(filteredUpdated, excludeHeartbeatBootstrapFile),

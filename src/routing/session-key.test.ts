@@ -16,6 +16,7 @@ import {
   buildAgentPeerSessionKey,
   buildGroupHistoryKey,
   classifySessionKeyShape,
+  isSharedChannelSessionKey,
   isValidAgentId,
   parseAgentSessionKey,
   resolveEventSessionKey,
@@ -147,6 +148,34 @@ describe("isCronSessionKey", () => {
     { key: undefined, expected: false },
   ] as const)("matches cron key %j => $expected", ({ key, expected }) => {
     expect(isCronSessionKey(key)).toBe(expected);
+  });
+});
+
+describe("isSharedChannelSessionKey", () => {
+  it.each([
+    { key: "agent:main:telegram:group:g1", expected: true },
+    { key: "agent:main:discord:group:dev", expected: true },
+    { key: "agent:main:discord:channel:c1", expected: true },
+    { key: "agent:main:discord:guild-123:channel-456", expected: true },
+    { key: "agent:main:slack:group:general", expected: true },
+    { key: "agent:main:feishu:group:oc-group", expected: true },
+    { key: "agent:main:matrix:channel:!Room:example.org", expected: true },
+    { key: "agent:main:whatsapp:123@g.us", expected: true },
+    { key: "agent:main:signal:group:AbC123", expected: true },
+    { key: "agent:main:channel:legacy-room", expected: true },
+    { key: "agent:main:group:room:part", expected: true },
+    { key: "agent:main:telegram:group:-100123:thread:456", expected: true },
+    { key: "agent:main:feishu:group:oc_chat:topic:om_root:sender:ou_user", expected: true },
+    { key: "agent:main:main", expected: false },
+    { key: "agent:main:chat:main", expected: false },
+    { key: "agent:main:direct:user1", expected: false },
+    { key: "agent:main:discord:direct:user1", expected: false },
+    { key: "agent:main:telegram:dm:123456", expected: false },
+    { key: "agent:main:subagent:task-1", expected: false },
+    { key: "agent:main:cron:job-1", expected: false },
+    { key: undefined, expected: false },
+  ] as const)("returns $expected for %j", ({ key, expected }) => {
+    expect(isSharedChannelSessionKey(key)).toBe(expected);
   });
 });
 
