@@ -12,6 +12,10 @@ export function parseArgs(argv: unknown): {
  */
 export function resolveClawHubRepoPath(value?: string, options?: Record<string, unknown>): string;
 /**
+ * Deletes localized docs that no longer have a matching English source file.
+ */
+export function pruneOrphanLocaleDocs(targetDocsDir: unknown): void;
+/**
  * Mirrors ClawHub docs into the target docs tree.
  */
 export function syncClawHubDocsTree(
