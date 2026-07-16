@@ -8,6 +8,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "./lib/tsdown-config-groups.mjs";
 import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
@@ -597,16 +601,35 @@ export function resolveTsdownBuildInvocation(params = {}) {
   };
 }
 
-/** Builds AI package declarations first, then consumes them from the main graph. */
+/** Builds declarations in dependency order without overlapping the largest graphs. */
 export function resolveTsdownBuildInvocations(params = {}) {
   const forwardedArgs = params.args ?? [];
-  return [
+  const env = params.env ?? process.env;
+  const hasForwardedFilter = forwardedArgs.some(
+    (arg) =>
+      arg === "--filter" || arg.startsWith("--filter=") || arg === "-F" || arg.startsWith("-F="),
+  );
+  const invocations = [
     resolveTsdownBuildInvocation({
       ...params,
       args: ["--config", "tsdown.ai.config.ts", ...forwardedArgs],
     }),
-    resolveTsdownBuildInvocation(params),
   ];
+
+  if (env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1" || hasForwardedFilter) {
+    invocations.push(resolveTsdownBuildInvocation(params));
+    return invocations;
+  }
+
+  for (const group of [TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP]) {
+    invocations.push(
+      resolveTsdownBuildInvocation({
+        ...params,
+        args: ["--filter", group, ...forwardedArgs],
+      }),
+    );
+  }
+  return invocations;
 }
 
 function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {

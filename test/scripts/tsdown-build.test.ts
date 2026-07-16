@@ -134,7 +134,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
   });
 
-  it("builds AI package declarations before the main graph", () => {
+  it("builds AI, package, and unified declarations without overlapping the main graphs", () => {
     const results = resolveTsdownBuildInvocations({
       args: ["--format", "esm"],
       platform: "linux",
@@ -144,11 +144,49 @@ describe("resolveTsdownBuildInvocation", () => {
       ...NO_MEMORY_LIMIT,
     });
 
-    expect(results).toHaveLength(2);
+    expect(results).toHaveLength(3);
     expect(results[0]?.args).toEqual(
       expect.arrayContaining(["--config", "tsdown.ai.config.ts", "--format", "esm"]),
     );
-    expect(results[1]?.args).not.toContain("tsdown.ai.config.ts");
+    expect(results[1]?.args).toEqual(
+      expect.arrayContaining(["--filter", "openclaw-packages", "--format", "esm"]),
+    );
+    expect(results[2]?.args).toEqual(
+      expect.arrayContaining(["--filter", "openclaw-unified", "--format", "esm"]),
+    );
+  });
+
+  it("keeps no-DTS builds in one main invocation", () => {
+    const results = resolveTsdownBuildInvocations({
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results[0]?.args).toEqual(expect.arrayContaining(["--config", "tsdown.ai.config.ts"]));
+    expect(results[1]?.args).not.toContain("--filter");
+  });
+
+  it.each([
+    ["long filter", ["--filter", "openclaw-unified"]],
+    ["long assigned filter", ["--filter=openclaw-unified"]],
+    ["short filter", ["-F", "openclaw-unified"]],
+    ["short assigned filter", ["-F=openclaw-unified"]],
+  ])("keeps a caller-provided %s in one main invocation", (_label, args) => {
+    const results = resolveTsdownBuildInvocations({
+      args,
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results[1]?.args.slice(-args.length)).toEqual(args);
   });
 
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
