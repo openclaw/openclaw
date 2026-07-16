@@ -163,13 +163,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          ${this.renderSessionState(session)}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${label}</span>
             ${subtitle
               ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
+          ${this.renderSessionState(session)}
           ${session.isChild ? nothing : renderSessionRowBadges(session)}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
