@@ -33,6 +33,9 @@ const APNS_DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const MIGRATION_KIND = "legacy-apns-registrations-json";
 const MIGRATION_LOCK_TIMEOUT_MS = 250;
 const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
+// Legacy values are wall-clock timestamps. Bounding them to ECMAScript Date's
+// finite range rejects hostile counters with ~367 trillion successor values left.
+const MAX_LEGACY_APNS_UPDATED_AT_MS = 8_640_000_000_000_000;
 const DIRECT_REGISTRATION_KEYS = new Set([
   "nodeId",
   "transport",
@@ -152,6 +155,15 @@ function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<str
   }
 }
 
+function isValidLegacyApnsTimestamp(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_LEGACY_APNS_UPDATED_AT_MS
+  );
+}
+
 function parseLegacyApnsRegistration(
   rawNodeId: string,
   rawRegistration: unknown,
@@ -171,6 +183,9 @@ function parseLegacyApnsRegistration(
   const normalizedNodeId = normalizeApnsNodeId(rawNodeId);
   if (!isValidApnsNodeId(normalizedNodeId)) {
     throw new Error("legacy APNs registration has an invalid node id");
+  }
+  if (!isValidLegacyApnsTimestamp(rawRegistration.updatedAtMs)) {
+    throw new Error("legacy APNs registration has an invalid updated timestamp");
   }
   const candidate =
     transport === "direct"

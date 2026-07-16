@@ -24,7 +24,6 @@ import {
 
 const APNS_DEVICE_FIELD = "token";
 const APNS_DEVICE_IDENTIFIER = "abcd1234abcd1234abcd1234abcd1234";
-const TERMINAL_APNS_REGISTRATION_VERSION = 8_640_000_000_000_000;
 
 describe("legacy APNs Doctor migration", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -279,22 +278,22 @@ describe("legacy APNs Doctor migration", () => {
       { registrationsByNodeId: { "legacy-relay": relayRegistration({ distribution: "beta" }) } },
     ],
     [
-      "exhausted direct timestamp",
+      "out-of-range direct timestamp",
       {
         registrationsByNodeId: {
           node: directRegistration({
             nodeId: "node",
-            updatedAtMs: TERMINAL_APNS_REGISTRATION_VERSION,
+            updatedAtMs: Number.MAX_SAFE_INTEGER,
           }),
         },
       },
     ],
     [
-      "exhausted relay timestamp",
+      "out-of-range relay timestamp",
       {
         registrationsByNodeId: {
           "legacy-relay": relayRegistration({
-            updatedAtMs: TERMINAL_APNS_REGISTRATION_VERSION,
+            updatedAtMs: Number.MAX_SAFE_INTEGER,
           }),
         },
       },

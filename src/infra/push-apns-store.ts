@@ -85,9 +85,6 @@ const MAX_TOPIC_LENGTH = 255;
 const MAX_APNS_TOKEN_HEX_LENGTH = 512;
 const MAX_RELAY_IDENTIFIER_LENGTH = 256;
 const MAX_SEND_GRANT_LENGTH = 1024;
-// ECMAScript Date's finite timestamp range. Keeping versions inside this bound
-// rejects hostile legacy counters while leaving centuries of monotonic headroom.
-const MAX_APNS_REGISTRATION_VERSION = 8_640_000_000_000_000;
 const APNS_REGISTRATION_LOOKUP_CHUNK_SIZE = 500;
 
 function apnsStateDatabaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
@@ -222,8 +219,7 @@ function normalizeDirectRegistration(
   const updatedAtMs =
     typeof record.updatedAtMs === "number" &&
     Number.isSafeInteger(record.updatedAtMs) &&
-    record.updatedAtMs >= 0 &&
-    record.updatedAtMs < MAX_APNS_REGISTRATION_VERSION
+    record.updatedAtMs >= 0
       ? record.updatedAtMs
       : null;
   if (
@@ -272,8 +268,7 @@ function normalizeRelayRegistration(
   const updatedAtMs =
     typeof record.updatedAtMs === "number" &&
     Number.isSafeInteger(record.updatedAtMs) &&
-    record.updatedAtMs >= 0 &&
-    record.updatedAtMs < MAX_APNS_REGISTRATION_VERSION
+    record.updatedAtMs >= 0
       ? record.updatedAtMs
       : null;
   if (
@@ -439,7 +434,7 @@ function nextApnsRegistrationVersion(nodeId: string, previousVersions: readonly 
     }
     latest = Math.max(latest, version);
   }
-  if (latest >= MAX_APNS_REGISTRATION_VERSION) {
+  if (latest === Number.MAX_SAFE_INTEGER) {
     throw new Error(`APNs registration version exhausted for node ${nodeId}`);
   }
   return Math.max(Date.now(), latest + 1);
