@@ -42,6 +42,7 @@ import {
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { installedPackageNeedsOpenClawPeerLinkRepair } from "../infra/package-update-utils.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -1171,7 +1172,7 @@ async function listManagedNpmPackageDirsForPackage(params: {
   try {
     entries = await fs.readdir(projectsDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isNotFoundPathError(error)) {
       return packageDirs;
     }
     throw error;
