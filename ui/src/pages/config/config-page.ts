@@ -14,12 +14,14 @@ import {
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
+  loadLocalUserIdentity,
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   patchSettings,
+  saveLocalUserIdentity,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -273,6 +275,8 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private customThemeImportFocusToken = 0;
   private customThemeImportSelectOnSuccess = false;
   private configViewState: ConfigViewState = createConfigViewState();
+  @state() private assistantAvatarOverride: string | null = null;
+  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   private systemInfoGatewaySource: ApplicationContext["gateway"] | null = null;
   private systemInfoClient: GatewayBrowserClient | null = null;
@@ -926,7 +930,18 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantAvatarSource: appConfig.assistantIdentity.avatarSource,
       assistantAvatarStatus: appConfig.assistantIdentity.avatarStatus,
       assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
-      assistantAvatarOverride: null,
+      assistantAvatarOverride: this.assistantAvatarOverride,
+      onAssistantAvatarOverrideChange: (avatar: string | null) => {
+        this.assistantAvatarOverride = avatar;
+      },
+      onAssistantAvatarClearOverride: () => {
+        this.assistantAvatarOverride = null;
+      },
+      userAvatar: this.userAvatar,
+      onUserAvatarChange: (avatar: string | null) => {
+        this.userAvatar = avatar;
+        saveLocalUserIdentity({ avatar });
+      },
       basePath: this.context.basePath,
     });
   }
