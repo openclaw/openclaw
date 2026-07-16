@@ -43,14 +43,17 @@ type InboundRunInput = {
 };
 
 describe("monitorTwitchProvider", () => {
+  let replyText: string;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    replyText = "**Hello** Twitch";
     mocks.getClient.mockResolvedValue({});
     mocks.sendMessage.mockResolvedValue({ ok: true, messageId: "message-id" });
     mocks.runInbound.mockImplementation(async (input: InboundRunInput) => {
       const ingested = input.adapter.ingest(input.raw);
       const turn = await input.adapter.resolveTurn(ingested);
-      await turn.delivery.deliver({ text: "**Hello** Twitch" });
+      await turn.delivery.deliver({ text: replyText });
     });
     mocks.getRuntime.mockReturnValue({
       logging: {
@@ -90,7 +93,7 @@ describe("monitorTwitchProvider", () => {
     });
   });
 
-  it("delivers fallback replies through the monitor boundary", async () => {
+  async function deliverMonitorReply() {
     let onMessage: ((message: TwitchChatMessage) => void) | undefined;
     mocks.onMessage.mockImplementation(
       (_account: unknown, handler: (message: TwitchChatMessage) => void) => {
@@ -115,6 +118,17 @@ describe("monitorTwitchProvider", () => {
     });
 
     await vi.waitFor(() => {
+      expect(mocks.runInbound).toHaveBeenCalledOnce();
+    });
+    await mocks.runInbound.mock.results[0]?.value;
+
+    return { account, monitor };
+  }
+
+  it("delivers fallback replies through the monitor boundary", async () => {
+    const { account, monitor } = await deliverMonitorReply();
+
+    await vi.waitFor(() => {
       expect(mocks.sendMessage).toHaveBeenCalledWith(
         account,
         "testchannel",
@@ -126,5 +140,39 @@ describe("monitorTwitchProvider", () => {
 
     monitor.stop();
     expect(mocks.unregister).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "tool-trace lines",
+      input: "Done.\n🛠️ git status",
+      expected: "Done.",
+    },
+    {
+      name: "tool-call XML",
+      input: '<tool_call>{"name":"exec"}</tool_call>Stream is live.',
+      expected: "Stream is live.",
+    },
+    {
+      name: "ordinary Markdown",
+      input: "**Hello** Twitch",
+      expected: "Hello Twitch",
+    },
+  ])("sanitizes $name before monitor delivery", async ({ input, expected }) => {
+    replyText = input;
+    const { account, monitor } = await deliverMonitorReply();
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(account, "testchannel", expected, {}, "default");
+
+    monitor.stop();
+  });
+
+  it("does not send trace-only monitor replies", async () => {
+    replyText = "🛠️ git status";
+    const { monitor } = await deliverMonitorReply();
+
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+
+    monitor.stop();
   });
 });

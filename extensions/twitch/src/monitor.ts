@@ -9,6 +9,7 @@ import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/conf
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
@@ -194,7 +195,9 @@ async function deliverTwitchReply(params: {
       runtime.error?.(`No text to send in reply payload`);
       return { visibleReplySent: false };
     }
-    const textToSend = stripMarkdownForTwitch(payload.text);
+    // Monitor replies bypass the outbound adapter, so apply the same user-visible
+    // boundary here before Twitch-specific Markdown cleanup.
+    const textToSend = stripMarkdownForTwitch(sanitizeAssistantVisibleText(payload.text));
     if (!textToSend) {
       return { visibleReplySent: false };
     }
