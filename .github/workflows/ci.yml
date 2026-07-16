@@ -1736,18 +1736,28 @@ jobs:
         run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
-        # Scale the in-process Vitest worker budget with the runner class. Bins
-        # run one Vitest process at a time (planConcurrency 1), so workers are
-        # the only in-job parallelism; import-bound suites scale near-linearly.
+        # Scale the in-process Vitest worker budget with the cores the job
+        # actually received: runner labels over-promise under fleet load
+        # (observed: a 16 vCPU label delivering a 4-CPU cgroup) and dispatch
+        # runs fall back to hosted runners regardless of matrix.runner.
+        # Serial-plan bins (planConcurrency 1) get the full budget; anything
+        # that can overlap Vitest processes keeps the proven 2-worker cap.
         # Timing-sensitive groups stay pinned to 2 via plan-level env.
         env:
-          SHARD_RUNNER: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+          SHARD_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency || '' }}
         run: |
-          if [[ "$SHARD_RUNNER" == *"-8vcpu-"* ]]; then
-            echo "OPENCLAW_VITEST_MAX_WORKERS=6" >> "$GITHUB_ENV"
+          cores="$(nproc)"
+          if [ "$SHARD_PLAN_CONCURRENCY" != "1" ]; then
+            workers=2
+          elif [ "$cores" -ge 12 ]; then
+            workers=6
+          elif [ "$cores" -ge 6 ]; then
+            workers=4
           else
-            echo "OPENCLAW_VITEST_MAX_WORKERS=3" >> "$GITHUB_ENV"
+            workers=3
           fi
+          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
+          echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
       - name: Run Node test shard
         # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
@@ -1866,8 +1876,14 @@ jobs:
             echo "boundary artifact snapshot not seeded yet; lint prepares cold"
             exit 0
           fi
-          # rsync -a preserves snapshot mtimes; fresh checkout sources stay
-          # newer, so the prepare script always takes its incremental path.
+          # Same tree-OID gate as the boundary lane: restore only artifacts
+          # produced from identical generative sources, so stale snapshots can
+          # neither false-skip rebuilds nor leave ghost declarations.
+          current_trees="$(git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types)"
+          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+            echo "boundary source trees changed since snapshot; lint prepares cold"
+            exit 0
+          fi
           for payload in dist packages extensions; do
             if [ -d "$sticky_root/$payload" ]; then
               rsync -a "$sticky_root/$payload/" "$payload/"
@@ -1879,6 +1895,7 @@ jobs:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
+          RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
@@ -1917,9 +1934,10 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              # Control-UI i18n catalogs only change with ui/ sources or the
-              # i18n tooling (manifest-gated); oxlint always runs.
-              if [ "$RUN_CONTROL_UI_I18N" = "true" ]; then
+              # The i18n verify covers keys extracted from every ui/ source,
+              # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
+              # i18n-tooling diff must run it. oxlint always runs.
+              if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
                 pnpm lint --threads=8
               else
                 echo "[skip] changed scope cannot affect control-UI i18n catalogs"
@@ -1943,26 +1961,34 @@ jobs:
                   echo "Current CI targets must provide the deadcode:exports package script." >&2
                   exit 1
                 fi
-                dc_pids=()
-                dc_logs=()
-                for dc in "${dc_scripts[@]}"; do
-                  dc_log="$(mktemp -t deadcode-log.XXXXXX)"
-                  dc_logs+=("$dc_log")
-                  pnpm "$dc" >"$dc_log" 2>&1 &
-                  dc_pids+=($!)
-                done
-                dc_failures=0
-                for i in "${!dc_scripts[@]}"; do
-                  if wait "${dc_pids[$i]}"; then
-                    echo "[ok] ${dc_scripts[$i]}"
-                  else
-                    echo "::error title=${dc_scripts[$i]} failed::${dc_scripts[$i]} failed"
-                    dc_failures=1
+                if [ "$(nproc)" -lt 8 ]; then
+                  # Hosted/dispatch runners are too small for up to seven
+                  # concurrent Knip processes; keep the serial path there.
+                  for dc in "${dc_scripts[@]}"; do
+                    pnpm "$dc"
+                  done
+                else
+                  dc_pids=()
+                  dc_logs=()
+                  for dc in "${dc_scripts[@]}"; do
+                    dc_log="$(mktemp -t deadcode-log.XXXXXX)"
+                    dc_logs+=("$dc_log")
+                    pnpm "$dc" >"$dc_log" 2>&1 &
+                    dc_pids+=($!)
+                  done
+                  dc_failures=0
+                  for i in "${!dc_scripts[@]}"; do
+                    if wait "${dc_pids[$i]}"; then
+                      echo "[ok] ${dc_scripts[$i]}"
+                    else
+                      echo "::error title=${dc_scripts[$i]} failed::${dc_scripts[$i]} failed"
+                      dc_failures=1
+                    fi
+                    cat "${dc_logs[$i]}"
+                  done
+                  if [ "$dc_failures" -ne 0 ]; then
+                    exit 1
                   fi
-                  cat "${dc_logs[$i]}"
-                done
-                if [ "$dc_failures" -ne 0 ]; then
-                  exit 1
                 fi
               elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
@@ -2072,10 +2098,18 @@ jobs:
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # rsync -a preserves the snapshotting run's artifact mtimes; the
-          # fresh checkout's newer source mtimes force the prepare script down
-          # its incremental-rebuild path, so a stale snapshot can never
-          # false-skip the boundary compile.
+          # Restore only when the generative source trees are identical to the
+          # snapshotting run (tree OIDs cover content exactly). This makes the
+          # restored artifacts valid by construction: no clock-skew mtime race
+          # can false-skip a rebuild, and deleted/renamed sources can never
+          # leave ghost declarations because a differing tree skips the
+          # restore entirely and builds cold.
+          current_trees="$(git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types)"
+          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+            echo "boundary source trees changed since snapshot; building cold"
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           for payload in dist packages extensions; do
             if [ -d "$sticky_root/$payload" ]; then
               rsync -a "$sticky_root/$payload/" "$payload/"
@@ -2255,6 +2289,7 @@ jobs:
           fi
           find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
             -exec rsync -aR {} "$sticky_root/" \;
+          git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types > "$sticky_root/.source-trees"
           touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.
