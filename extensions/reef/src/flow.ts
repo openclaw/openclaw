@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  appendAudit,
   appendInboxRead,
   bodyHash as hashMessageBody,
   composeInbound,
@@ -10,6 +11,7 @@ import {
   createMonotonicUlidFactory,
   createOpenAiGuard,
   formatHandleEpoch,
+  InvalidDeliveryReceiptError,
   parseHandleEpoch,
   PipelineError,
   type AuditStore,
@@ -109,43 +111,56 @@ export class ReefMessageFlow {
       return undefined;
     }
     const delivery = this.options.trust.outboundDelivery(entry.peer, entry.id);
-    await confirmDelivery(receipt, friend.ed25519PublicKey, this.options.audit, {
-      id: entry.id,
-      ...(delivery ? { bodyHash: delivery.bodyHash } : {}),
-      ...(delivery?.rejection ? { status: "rejected" as const } : {}),
-    });
-    if (!delivery) {
-      return undefined;
-    }
-    if (receipt.status === "accepted") {
-      if (
-        !this.options.trust.consumeOutboundDelivery(entry.peer, entry.id, receipt.bodyHash) &&
-        this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection
-      ) {
-        throw new Error("invalid delivery receipt");
+    try {
+      await confirmDelivery(receipt, friend.ed25519PublicKey, this.options.audit, {
+        id: entry.id,
+        ...(delivery ? { bodyHash: delivery.bodyHash } : {}),
+        ...(delivery?.rejection ? { status: "rejected" as const } : {}),
+      });
+      if (!delivery) {
+        return undefined;
       }
+      if (receipt.status === "accepted") {
+        if (
+          !this.options.trust.consumeOutboundDelivery(entry.peer, entry.id, receipt.bodyHash) &&
+          this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection
+        ) {
+          throw new InvalidDeliveryReceiptError();
+        }
+        return undefined;
+      }
+      if (
+        !this.options.trust.recordOutboundRejection(
+          entry.peer,
+          entry.id,
+          receipt.bodyHash,
+          receipt.category,
+        )
+      ) {
+        return undefined;
+      }
+      const pending = this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection;
+      if (!pending) {
+        return undefined;
+      }
+      return {
+        id: receipt.id,
+        peer: entry.peer,
+        ...(pending.category ? { category: pending.category } : {}),
+        ...(pending.notice ? { reservedNotice: pending.notice } : {}),
+      };
+    } catch (error) {
+      if (!(error instanceof InvalidDeliveryReceiptError)) {
+        throw error;
+      }
+      // A peer-protocol violation must not poison the relay cursor. Keep the
+      // outbound binding intact so a later valid receipt can still complete it.
+      await appendAudit(this.options.audit, "invalid_delivery_receipt", {
+        id: entry.id,
+        peer: entry.peer,
+      });
       return undefined;
     }
-    if (
-      !this.options.trust.recordOutboundRejection(
-        entry.peer,
-        entry.id,
-        receipt.bodyHash,
-        receipt.category,
-      )
-    ) {
-      return undefined;
-    }
-    const pending = this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection;
-    if (!pending) {
-      return undefined;
-    }
-    return {
-      id: receipt.id,
-      peer: entry.peer,
-      ...(pending.category ? { category: pending.category } : {}),
-      ...(pending.notice ? { reservedNotice: pending.notice } : {}),
-    };
   }
 
   private async processEnvelope(

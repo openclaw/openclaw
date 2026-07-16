@@ -538,6 +538,7 @@ describe("ReefMessageFlow delivery receipts", () => {
     const onOwnerNotice = vi.fn(async () => {});
     const relay = transport();
     const trusted = trust({ alice: peerTrust(alice) });
+    const audit = new MemoryAuditStore(new Uint8Array(32).fill(11));
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trusted.store,
@@ -545,7 +546,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(11)),
+      audit,
       replay: new MemoryReplayStore(),
       reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
       onIngress: async () => {},
@@ -597,21 +598,41 @@ describe("ReefMessageFlow delivery receipts", () => {
       ),
       ts: Math.floor(Date.now() / 1_000),
     };
+    const acceptedId = await flow.send("alice", "later coordination");
+    const acceptedEntry: InboxEntry = {
+      seq: 3,
+      peer: "alice",
+      id: acceptedId,
+      kind: "receipt",
+      receipt: signReceipt(
+        {
+          id: acceptedId,
+          bodyHash: sha256Hex(canonicalBytes({ text: "later coordination" })),
+          auditHead: "e".repeat(64),
+          status: "accepted",
+        },
+        alice.signing.secretKey,
+      ),
+      ts: Math.floor(Date.now() / 1_000),
+    };
 
     await expect(
       processReefInboxEntriesInOrder({
-        entries: [entry, invalidEntry],
+        entries: [entry, invalidEntry, acceptedEntry],
         processEntries: (batch) => flow.processEntries(batch),
         notifyRejections: (rejections) => receiptNotifier.notifyRejections(rejections),
       }),
-    ).rejects.toThrow("invalid delivery receipt");
+    ).resolves.toBeUndefined();
     await expect(
       processReefInboxEntriesInOrder({
-        entries: [{ ...entry, seq: 3 }, invalidEntry],
+        entries: [
+          { ...entry, seq: 4 },
+          { ...invalidEntry, seq: 5 },
+        ],
         processEntries: (batch) => flow.processEntries(batch),
         notifyRejections: (rejections) => receiptNotifier.notifyRejections(rejections),
       }),
-    ).rejects.toThrow("invalid delivery receipt");
+    ).resolves.toBeUndefined();
 
     expect(onOwnerNotice).toHaveBeenCalledOnce();
     expect(onOwnerNotice).toHaveBeenCalledWith({
@@ -621,10 +642,14 @@ describe("ReefMessageFlow delivery receipts", () => {
       allowResend: true,
     });
     expect(trusted.deliveries.has(`alice:${id}`)).toBe(false);
+    expect(trusted.deliveries.has(`alice:${acceptedId}`)).toBe(false);
     expect(trusted.rejectionNotices.get("alice")).toEqual({
       lastRejectionAt: expect.any(Number),
       lastResendAt: expect.any(Number),
     });
+    expect(
+      (await audit.entries()).filter((item) => item.event.type === "invalid_delivery_receipt"),
+    ).toHaveLength(2);
   });
 
   it("does not surface a signed rejection without matching outbound state", async () => {
@@ -661,10 +686,11 @@ describe("ReefMessageFlow delivery receipts", () => {
     ).resolves.toEqual([]);
   });
 
-  it("rejects a peer-signed receipt with the wrong outbound body hash", async () => {
+  it("quarantines peer-signed receipt conflicts without consuming outbound state", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();
     const trusted = trust({ alice: peerTrust(alice) });
+    const audit = new MemoryAuditStore(new Uint8Array(32).fill(13));
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trusted.store,
@@ -672,7 +698,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(13)),
+      audit,
       replay: new MemoryReplayStore(),
       reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
       onIngress: async () => {},
@@ -692,7 +718,7 @@ describe("ReefMessageFlow delivery receipts", () => {
 
     await expect(
       flow.processEntries([{ seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 }]),
-    ).rejects.toThrow("invalid delivery receipt");
+    ).resolves.toEqual([]);
     expect(trusted.deliveries.has(`alice:${id}`)).toBe(true);
 
     const bodyHash = sha256Hex(canonicalBytes({ text: "expected body" }));
@@ -725,7 +751,26 @@ describe("ReefMessageFlow delivery receipts", () => {
       flow.processEntries([
         { seq: 3, peer: "alice", id, kind: "receipt", receipt: conflictingAccepted, ts: 1 },
       ]),
-    ).rejects.toThrow("invalid delivery receipt");
+    ).resolves.toEqual([]);
+    expect(trusted.deliveries.get(`alice:${id}`)?.rejection).toEqual({
+      category: "guard_deny",
+    });
+    expect(
+      (await audit.entries()).filter((item) => item.event.type === "invalid_delivery_receipt"),
+    ).toHaveLength(2);
+
+    const appendEvent = audit.appendEvent.bind(audit);
+    vi.spyOn(audit, "appendEvent").mockImplementation(async (type, payload, ts) => {
+      if (type === "invalid_delivery_receipt") {
+        throw new Error("audit unavailable");
+      }
+      return await appendEvent(type, payload, ts);
+    });
+    await expect(
+      flow.processEntries([
+        { seq: 4, peer: "alice", id, kind: "receipt", receipt: conflictingAccepted, ts: 1 },
+      ]),
+    ).rejects.toThrow("audit unavailable");
     expect(trusted.deliveries.get(`alice:${id}`)?.rejection).toEqual({
       category: "guard_deny",
     });
