@@ -890,7 +890,9 @@ describe("processDiscordMessage ack reactions", () => {
     };
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReplyStart?.();
-      return createNoQueuedDispatchResult();
+      await params?.dispatcher.sendFinalReply({ text: "normal reply" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
     const ctx = await createAutomaticSourceDeliveryContext({
       replyTypingFeedback,
@@ -905,6 +907,99 @@ describe("processDiscordMessage ack reactions", () => {
     expect(replyTypingFeedback.onCleanup).toHaveBeenCalledTimes(1);
     expect(getLastDispatchReplyOptions()?.typingKeepalive).toBe(false);
     expect(typingMocks.sendTyping).not.toHaveBeenCalled();
+  });
+
+  it("starts prepared typing feedback when an allowed fast reply bypasses resolver lifecycle", async () => {
+    const replyTypingFeedback = {
+      onReplyStart: vi.fn(async () => {}),
+      onIdle: vi.fn(),
+      onCleanup: vi.fn(),
+      updateChannelId: vi.fn(),
+      getChannelId: vi.fn(() => "c1"),
+      restartForDispatch: vi.fn(),
+    };
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "fast reply" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      replyTypingFeedback,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start typing for fast replies when typing mode is never", async () => {
+    const replyTypingFeedback = {
+      onReplyStart: vi.fn(async () => {}),
+      onIdle: vi.fn(),
+      onCleanup: vi.fn(),
+      updateChannelId: vi.fn(),
+      getChannelId: vi.fn(() => "c1"),
+      restartForDispatch: vi.fn(),
+    };
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "fast reply" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { session: { typingMode: "never" } },
+      replyTypingFeedback,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(replyTypingFeedback.onReplyStart).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start typing for fast room-event replies", async () => {
+    const replyTypingFeedback = {
+      onReplyStart: vi.fn(async () => {}),
+      onIdle: vi.fn(),
+      onCleanup: vi.fn(),
+      updateChannelId: vi.fn(),
+      getChannelId: vi.fn(() => "c1"),
+      restartForDispatch: vi.fn(),
+    };
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "room event reply" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      inboundEventKind: "room_event",
+      replyTypingFeedback,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchReplyOptions()?.suppressTyping).toBe(true);
+    expect(replyTypingFeedback.onReplyStart).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards repeated resolver typing refresh callbacks", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReplyStart?.();
+      await params?.replyOptions?.onReplyStart?.();
+      await params?.dispatcher.sendFinalReply({ text: "long reply" });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { session: { typingMode: "message" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("does not start prepared typing feedback when reply dispatch stays silent", async () => {
