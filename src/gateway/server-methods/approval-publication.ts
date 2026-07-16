@@ -32,6 +32,10 @@ export type ExecApprovalIosPushDelivery = {
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
 };
 
+export type PluginApprovalIosPushDelivery = {
+  handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+};
+
 function broadcastResolvedEvent(params: {
   context: GatewayRequestContext;
   eventName: "exec.approval.resolved" | "plugin.approval.resolved" | "openclaw.approval.resolved";
@@ -96,6 +100,7 @@ export async function publishAppliedApprovalResolution(params: {
   context: GatewayRequestContext;
   forwarder?: ExecApprovalForwarder;
   iosPushDelivery?: ExecApprovalIosPushDelivery;
+  pluginIosPushDelivery?: PluginApprovalIosPushDelivery;
 }): Promise<void> {
   const decision = params.record.decision ?? "deny";
   const resolvedBy = params.liveRecord.resolvedBy ?? null;
@@ -157,6 +162,14 @@ export async function publishAppliedApprovalResolution(params: {
       approvalKind: "plugin",
       effect: "forwarder",
       run: () => params.forwarder!.handlePluginApprovalResolved!(event as PluginApprovalResolved),
+    });
+  }
+  if (params.record.kind === "plugin" && params.pluginIosPushDelivery?.handleResolved) {
+    await runSideEffect({
+      context: params.context,
+      approvalKind: "plugin",
+      effect: "ios-push",
+      run: () => params.pluginIosPushDelivery!.handleResolved!(event as PluginApprovalResolved),
     });
   }
 }

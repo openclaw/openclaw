@@ -5,14 +5,11 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-models.js";
-import {
-  buildOpenAICodexLiveProviderConfig,
-  buildOpenAILiveProviderConfig,
-  buildOpenAIProvider,
-} from "./openai-provider.js";
+import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
@@ -22,6 +19,87 @@ const mocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(),
   resolveProviderAuthProfileMetadata: vi.fn(),
 }));
+
+async function runCatalogWithFetchGuard(params: {
+  fetchGuard: LiveModelCatalogFetchGuard;
+  auth: {
+    mode: "api_key" | "oauth";
+    apiKey: string;
+    discoveryApiKey?: string;
+    profileId?: string;
+    source: string;
+  };
+  accountId?: string;
+  baseUrl?: string;
+}): Promise<ModelProviderConfig> {
+  if (params.auth.mode === "oauth") {
+    mocks.resolveApiKeyForProvider.mockResolvedValue({
+      ...params.auth,
+      source: params.auth.source,
+    });
+    mocks.resolveProviderAuthProfileMetadata.mockReturnValue({
+      profileId: params.auth.profileId,
+      accountId: params.accountId,
+    });
+  }
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const guarded = await params.fetchGuard({
+      url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      init,
+    });
+    await guarded.release();
+    return guarded.response;
+  });
+  try {
+    const result = await buildOpenAIProvider().catalog?.run({
+      resolveProviderAuth: () => params.auth,
+      resolveProviderApiKey: () => ({
+        apiKey: params.auth.apiKey,
+        discoveryApiKey: params.auth.discoveryApiKey,
+      }),
+      config: params.baseUrl
+        ? { models: { providers: { openai: { baseUrl: params.baseUrl, models: [] } } } }
+        : { auth: { profiles: {} } },
+      agentDir: "/tmp/openai-agent",
+      workspaceDir: "/tmp/openai-workspace",
+    } as never);
+    if (!result || "provider" in result || !result.providers.openai) {
+      throw new Error("expected OpenAI live provider catalog");
+    }
+    return result.providers.openai;
+  } finally {
+    fetchSpy.mockRestore();
+  }
+}
+
+async function buildOpenAILiveProviderConfig(params: {
+  apiKey: string;
+  baseUrl?: string;
+  fetchGuard: LiveModelCatalogFetchGuard;
+}): Promise<ModelProviderConfig> {
+  return await runCatalogWithFetchGuard({
+    fetchGuard: params.fetchGuard,
+    auth: { mode: "api_key", apiKey: params.apiKey, source: "profile" },
+    baseUrl: params.baseUrl,
+  });
+}
+
+async function buildOpenAICodexLiveProviderConfig(params: {
+  discoveryApiKey: string;
+  accountId?: string;
+  fetchGuard: LiveModelCatalogFetchGuard;
+}): Promise<ModelProviderConfig> {
+  return await runCatalogWithFetchGuard({
+    fetchGuard: params.fetchGuard,
+    auth: {
+      mode: "oauth",
+      apiKey: params.discoveryApiKey,
+      profileId: "openai:chatgpt",
+      source: "profile",
+    },
+    accountId: params.accountId,
+  });
+}
 
 vi.mock("./openai-chatgpt-provider.runtime.js", () => ({
   refreshOpenAICodexToken: mocks.refreshOpenAICodexToken,
@@ -1996,6 +2074,33 @@ describe("buildOpenAIProvider", () => {
       { type: "function", name: "read" },
       { type: "web_search" },
     ]);
+  });
+
+  it("keeps one native OpenAI web search tool when the payload is already patched", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [{ type: "web_search" }, { type: "function", name: "web_search" }],
+        reasoning: { effort: "minimal" },
+      },
+    });
+
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+    expect(result.payload.reasoning).toEqual({ effort: "low" });
   });
 
   it("keeps managed OpenAI web_search when agent policy denies native web search", () => {

@@ -183,7 +183,7 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   );
 }
 
-export async function buildOpenAILiveProviderConfig(
+async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<ModelProviderConfig> {
   const baseUrl =
@@ -446,7 +446,7 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
   };
 }
 
-export async function buildOpenAICodexLiveProviderConfig(params: {
+async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;

@@ -33,7 +33,7 @@ type IndexTermShape = {
 };
 
 /** Comparable SQLite schema summary used by generated-schema tests. */
-export type SqliteSchemaShape = Record<
+type SqliteSchemaShape = Record<
   string,
   {
     columns: ColumnShape[];
