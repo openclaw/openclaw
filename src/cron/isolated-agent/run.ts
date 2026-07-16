@@ -155,6 +155,9 @@ const runtimePluginsLoader = createLazyImportLoader(
 const codexNativeWebSearchLoader = createLazyImportLoader(
   () => import("../../agents/codex-native-web-search.js"),
 );
+const webToolRuntimeContextLoader = createLazyImportLoader(
+  () => import("../../agents/tools/web-tool-runtime-context.js"),
+);
 const webSearchRuntimeLoader = createLazyImportLoader(() => import("../../web-search/runtime.js"));
 
 async function loadSessionAccessorRuntime() {
@@ -195,6 +198,10 @@ async function loadRuntimePlugins() {
 
 async function loadCodexNativeWebSearch() {
   return await codexNativeWebSearchLoader.load();
+}
+
+async function loadWebToolRuntimeContext() {
+  return await webToolRuntimeContextLoader.load();
 }
 
 async function loadWebSearchRuntime() {
@@ -389,21 +396,27 @@ async function createCronToolsAllowPreflightDiagnostics(params: {
     ) {
       return undefined;
     }
-    const { listWebSearchProviders, resolveWebSearchProviderId } = await loadWebSearchRuntime();
-    const webSearchProviders = listWebSearchProviders({ config: params.cfg });
+    const { resolveWebSearchToolRuntimeContext } = await loadWebToolRuntimeContext();
+    const { config, preferRuntimeProviders, runtimeWebSearch } = resolveWebSearchToolRuntimeContext(
+      {
+        config: params.cfg,
+        lateBindRuntimeConfig: true,
+      },
+    );
+    const { hasUsableWebSearchProvider } = await loadWebSearchRuntime();
+    const hasWebSearchProvider = hasUsableWebSearchProvider({
+      config,
+      agentDir: params.agentDir,
+      runtimeWebSearch,
+      preferRuntimeProviders,
+    });
     return createCronRunDiagnosticsFromMissingWebSearchProvider({
       toolsAllow,
-      hasWebSearchProvider: Boolean(
-        resolveWebSearchProviderId({
-          config: params.cfg,
-          agentDir: params.agentDir,
-          providers: webSearchProviders,
-        }),
-      ),
+      hasWebSearchProvider,
     });
   } catch (error) {
     logWarn(
-      `[cron:${params.jobId}] Failed to inspect web_search providers for toolsAllow diagnostics: ${String(error)}`,
+      `[cron:${params.jobId}] Failed to inspect web_search provider state for toolsAllow diagnostics: ${String(error)}`,
     );
     return undefined;
   }
