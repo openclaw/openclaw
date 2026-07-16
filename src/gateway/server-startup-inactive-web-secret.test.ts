@@ -1,10 +1,41 @@
 /** Gateway startup coverage for active and inactive web-provider SecretRefs. */
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
+
+const { webSearchProviders } = vi.hoisted(() => {
+  const credentialPath = "plugins.entries.google.config.webSearch.apiKey";
+  return {
+    webSearchProviders: [
+      {
+        pluginId: "google",
+        id: "gemini",
+        label: "Gemini",
+        hint: "Gateway startup test provider",
+        envVars: ["GEMINI_API_KEY"],
+        placeholder: "gemini-...",
+        signupUrl: "https://example.com/gemini",
+        autoDetectOrder: 20,
+        credentialPath,
+        inactiveSecretPaths: [credentialPath],
+        getCredentialValue: (config: { apiKey?: unknown } | undefined) => config?.apiKey,
+        setCredentialValue: (config: { apiKey?: unknown }, value: unknown) => {
+          config.apiKey = value;
+        },
+        getConfiguredCredentialValue: (config: OpenClawConfig | undefined) => {
+          const pluginConfig = config?.plugins?.entries?.google?.config;
+          return pluginConfig && typeof pluginConfig === "object"
+            ? (pluginConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+            : undefined;
+        },
+        setConfiguredCredentialValue: () => {},
+        createTool: () => null,
+      },
+    ],
+  };
+});
 
 vi.mock("./operator-approval-store.js", async () => {
   const actual = await vi.importActual<typeof import("./operator-approval-store.js")>(
@@ -17,10 +48,34 @@ vi.mock("./operator-approval-store.js", async () => {
   };
 });
 
+vi.mock("../secrets/runtime-web-tools-manifest.runtime.js", () => ({
+  resolveManifestContractPluginIds: ({ contract }: { contract: string }) =>
+    contract === "webSearchProviders" ? ["google"] : [],
+  resolveManifestContractOwnerPluginId: ({ value }: { value: string }) =>
+    value === "gemini" ? "google" : undefined,
+  resolveManifestContractPluginIdsByCompatibilityRuntimePath: () => [],
+}));
+
+vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: () => webSearchProviders,
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: () => [],
+}));
+
+vi.mock("../secrets/runtime-web-tools-public-artifacts.runtime.js", () => ({
+  resolveBundledWebSearchProvidersFromPublicArtifacts: () => webSearchProviders,
+  resolveBundledWebFetchProvidersFromPublicArtifacts: () => [],
+}));
+
+vi.mock("../secrets/runtime-web-tools-fallback.runtime.js", () => ({
+  runtimeWebToolsFallbackProviders: {
+    resolvePluginWebSearchProviders: () => webSearchProviders,
+    resolvePluginWebFetchProviders: () => [],
+  },
+}));
+
 const INACTIVE_SECRET_ENV = "OPENCLAW_TEST_INACTIVE_WEB_SEARCH_SECRET";
 const ACTIVE_SECRET_ENV = "OPENCLAW_TEST_ACTIVE_WEB_SEARCH_SECRET";
 const SECRET_PATH = "plugins.entries.google.config.webSearch.apiKey";
-const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions", import.meta.url));
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -78,41 +133,27 @@ describe("gateway startup web-provider SecretRefs", () => {
   });
 
   it("starts and warns when an unresolved web secret is provably inactive", async () => {
-    await withEnvAsync(
-      {
-        [INACTIVE_SECRET_ENV]: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      },
-      async () => {
-        await writeConfig(buildConfig({ enabled: false, envVar: INACTIVE_SECRET_ENV }));
+    await withEnvAsync({ [INACTIVE_SECRET_ENV]: undefined }, async () => {
+      await writeConfig(buildConfig({ enabled: false, envVar: INACTIVE_SECRET_ENV }));
 
-        server = await startGatewayServer(await getFreePort(), { auth: { mode: "none" } });
+      server = await startGatewayServer(await getFreePort(), { auth: { mode: "none" } });
 
-        expect(getActiveSecretsRuntimeSnapshot()?.warnings).toContainEqual(
-          expect.objectContaining({
-            code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-            path: SECRET_PATH,
-          }),
-        );
-      },
-    );
+      expect(getActiveSecretsRuntimeSnapshot()?.warnings).toContainEqual(
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: SECRET_PATH,
+        }),
+      );
+    });
   });
 
   it("fails closed when the unresolved web secret is active", async () => {
-    await withEnvAsync(
-      {
-        [ACTIVE_SECRET_ENV]: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      },
-      async () => {
-        await writeConfig(buildConfig({ enabled: true, envVar: ACTIVE_SECRET_ENV }));
+    await withEnvAsync({ [ACTIVE_SECRET_ENV]: undefined }, async () => {
+      await writeConfig(buildConfig({ enabled: true, envVar: ACTIVE_SECRET_ENV }));
 
-        await expect(
-          startGatewayServer(await getFreePort(), { auth: { mode: "none" } }),
-        ).rejects.toThrow(/Startup failed: required secrets are unavailable/);
-      },
-    );
+      await expect(
+        startGatewayServer(await getFreePort(), { auth: { mode: "none" } }),
+      ).rejects.toThrow(/Startup failed: required secrets are unavailable/);
+    });
   });
 });
