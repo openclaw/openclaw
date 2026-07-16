@@ -71,6 +71,60 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     ]);
   });
 
+  it("keeps earlier reply-tagged steered-turn answers alongside the canonical final answer (#106483)", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "[[reply_to_current]] Answer for the first steered question.",
+        "[[reply_to_current]] Answer for the second steered question.",
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          { type: "text", text: "[[reply_to_current]] Answer for the second steered question." },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads.map((payload) => payload.text)).toStrictEqual([
+      "Answer for the first steered question.",
+      "Answer for the second steered question.",
+    ]);
+    expect(payloads.every((payload) => payload.replyToCurrent === true)).toBe(true);
+  });
+
+  it("does not double-send the final answer when its streamed text diverges from the canonical extract", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "[[reply_to_current]] Answer for the first steered question.",
+        "[[reply_to_current]] Final answer with streamed formatting",
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Final answer, canonical form." }],
+      } as AssistantMessage,
+    });
+
+    expect(payloads.map((payload) => payload.text)).toStrictEqual([
+      "Answer for the first steered question.",
+      "Final answer, canonical form.",
+    ]);
+  });
+
+  it("still collapses untagged interim streamed text into the canonical final answer", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Checking the calendar first.", "Here is your schedule."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Here is your schedule." }],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Here is your schedule.");
+  });
+
   it("keeps media directives while sanitizing streamed assistant text", () => {
     const payloads = buildPayloads({
       assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],

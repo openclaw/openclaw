@@ -776,11 +776,33 @@ export function buildEmbeddedRunPayloads(params: {
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
+  // Steered runs answer several inbound messages in one run: reply-tagged
+  // streamed answers before the last text (the canonical answer's own turn)
+  // are distinct turns' replies the canonical collapse must not swallow.
+  const seenReplyTaggedAnswers = new Set<string>();
+  const earlierReplyTaggedAnswers = shouldUseCanonicalFinalAnswer
+    ? nonEmptyAssistantTexts.slice(0, -1).filter((text) => {
+        const parsed = parseReplyDirectives(text);
+        if (!parsed.replyToTag && !parsed.replyToCurrent && !parsed.replyToId) {
+          return false;
+        }
+        const normalized = normalizeTextForComparison(parsed.text ?? "");
+        if (
+          !normalized ||
+          normalized === normalizedFallbackAnswerSourceText ||
+          seenReplyTaggedAnswers.has(normalized)
+        ) {
+          return false;
+        }
+        seenReplyTaggedAnswers.add(normalized);
+        return true;
+      })
+    : [];
   const answerTexts =
     suppressAssistantArtifacts || runAborted
       ? []
       : (shouldUseCanonicalFinalAnswer
-          ? [fallbackAnswerSourceText]
+          ? [...earlierReplyTaggedAnswers, fallbackAnswerSourceText]
           : shouldPreferRawAnswerText && fallbackRawAnswerText
             ? [fallbackRawAnswerText]
             : hasAssistantTextPayload
