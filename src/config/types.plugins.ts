@@ -56,6 +56,10 @@ export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
   marketplaceName?: string;
   marketplaceSource?: string;
   marketplacePlugin?: string;
+  /** Per-attempt UUID used to tie a surviving SQLite record to the install
+   *  transaction that created it.  Cleanup only removes the target when this
+   *  token matches — a mismatch means another process wrote the record. */
+  installAttemptToken?: string;
 };
 
 export type PluginsConfig = {

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   persistInstall: vi.fn(),
   preflight: vi.fn(),
   providerAuthChoices: vi.fn(),
+  randomUUID: vi.fn<() => string>(),
   readConfig: vi.fn(),
   recommendedInstalls: vi.fn(),
   refreshRegistry: vi.fn(),
@@ -23,6 +24,10 @@ const mocks = vi.hoisted(() => ({
     config,
     warnings: [],
   })),
+}));
+
+vi.mock("node:crypto", () => ({
+  default: { randomUUID: () => mocks.randomUUID() },
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -865,6 +870,7 @@ describe("plugin management service", () => {
   it("retains a failed install target when the durable record already owns it", async () => {
     const persistenceError = new Error("post-commit refresh failed");
     const targetDir = "/tmp/extensions/demo";
+    mocks.randomUUID.mockReturnValue("txn-test-1");
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.clawhubInstall.mockResolvedValue({
       ok: true,
@@ -880,6 +886,8 @@ describe("plugin management service", () => {
       },
     });
     mocks.persistInstall.mockRejectedValue(persistenceError);
+    // Surviving record has no installAttemptToken — it was written by a prior
+    // committed install (or another process).  Token mismatch → preserve.
     mocks.installRecords.mockResolvedValue({
       demo: { source: "clawhub", installPath: targetDir },
     });
@@ -896,6 +904,43 @@ describe("plugin management service", () => {
     });
     expect(mocks.planUninstall).not.toHaveBeenCalled();
     expect(mocks.applyUninstall).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a stale install target when the surviving record carries a matching attempt token", async () => {
+    const persistenceError = new Error("post-commit refresh failed");
+    const targetDir = "/tmp/extensions/demo";
+    const attemptToken = "txn-test-2";
+    mocks.randomUUID.mockReturnValue(attemptToken);
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir,
+      extensions: ["index.js"],
+      packageName: "community/demo",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "community/demo",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockRejectedValue(persistenceError);
+    // Simulate the double-fault: the SQLite record written by this failed
+    // transaction survives the rollback and carries our per-attempt token.
+    mocks.installRecords.mockResolvedValue({
+      demo: { source: "clawhub", installPath: targetDir, installAttemptToken: attemptToken },
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "community/demo" },
+        env: {},
+      }),
+    ).rejects.toBe(persistenceError);
+    // The stale target is removed because the record was created by the current
+    // failed transaction, not by a prior committed install.
+    expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {
