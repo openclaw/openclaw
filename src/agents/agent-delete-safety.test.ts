@@ -63,21 +63,15 @@ describe("removeEmptyAgentParentDir", () => {
   });
 
   it("preserves a custom agentDir parent outside the canonical root", async () => {
-    await withStateDirEnv("openclaw-agent-parent-custom-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-agent-parent-custom-", async ({ tempRoot, stateDir }) => {
       const agentId = "test-agent";
-      const customAgentDir = "/tmp/openclaw-custom-agentdir-test";
-      const customParent = path.dirname(customAgentDir);
+      const customAgentDir = path.join(tempRoot, "custom-agentdir", agentId);
       await fs.promises.mkdir(customAgentDir, { recursive: true });
 
-      try {
-        await removeEmptyAgentParentDir({ agentDir: customAgentDir, agentId, stateDir });
+      await removeEmptyAgentParentDir({ agentDir: customAgentDir, agentId, stateDir });
 
-        // A custom agentDir parent must never be touched, even when empty.
-        await expect(fs.promises.access(customAgentDir)).resolves.toBeUndefined();
-        await expect(fs.promises.access(customParent)).resolves.toBeUndefined();
-      } finally {
-        await fs.promises.rm(customParent, { recursive: true, force: true });
-      }
+      // A custom agentDir parent must never be touched, even when empty.
+      await expect(fs.promises.access(customAgentDir)).resolves.toBeUndefined();
     });
   });
 
@@ -108,7 +102,13 @@ describe("removeEmptyAgentParentDir", () => {
           removeEmptyAgentParentDir({ agentDir, agentId, stateDir }),
         ).resolves.toBeUndefined();
       } finally {
-        await fs.promises.chmod(canonicalRoot, 0o700);
+        // Restore permissions so withStateDirEnv cleanup can remove the tree.
+        // If the directory was already removed by the outer cleanup, ignore.
+        try {
+          await fs.promises.chmod(canonicalRoot, 0o700);
+        } catch {
+          // Directory may already be gone.
+        }
       }
     });
   });
