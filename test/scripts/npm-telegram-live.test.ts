@@ -156,9 +156,12 @@ describe("package Telegram live Docker E2E", () => {
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"',
     );
     expect(script).toContain(
-      'OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"',
+      'OUTPUT_DIR_CONTAINER_RELATIVE=".artifacts/qa-e2e/npm-telegram-live-output"',
     );
-    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
+    expect(script).toContain('OUTPUT_DIR_CONTAINER="/app/$OUTPUT_DIR_CONTAINER_RELATIVE"');
+    expect(script).toContain(
+      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"',
+    );
     expect(script).not.toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
@@ -204,7 +207,10 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain('*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;');
     expect(script).toContain('mkdir -p "$OUTPUT_DIR_HOST"');
-    expect(dockerEnv).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
+    expect(dockerEnv).toContain(
+      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"',
+    );
+    expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
     expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
     expect(script).toContain('-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"');
   });
