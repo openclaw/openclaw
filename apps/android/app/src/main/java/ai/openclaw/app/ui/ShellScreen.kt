@@ -856,9 +856,7 @@ internal fun localizedInitial(
   value: String,
   languageTag: String?,
   fallbackLocale: Locale = Locale.getDefault(),
-): String? {
-  return value.firstGraphemeOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
-}
+): String? = value.firstGraphemeOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
 
 @Composable
 private fun OverviewProgressBar(

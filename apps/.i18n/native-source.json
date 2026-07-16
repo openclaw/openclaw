@@ -8715,7 +8715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 920,
+      "line": 918,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Talk",
       "surface": "android",
@@ -8723,7 +8723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 921,
+      "line": 919,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Open Talk",
       "surface": "android",
@@ -8731,7 +8731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 923,
+      "line": 921,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Talk settings",
       "surface": "android",
@@ -8739,7 +8739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 931,
+      "line": 929,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Recent Sessions",
       "surface": "android",
@@ -8747,7 +8747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 941,
+      "line": 939,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "View all",
       "surface": "android",
@@ -8755,7 +8755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1059,
+      "line": 1057,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Online",
       "surface": "android",
@@ -8763,7 +8763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1060,
+      "line": 1058,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Healthy",
       "surface": "android",
@@ -8771,7 +8771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1064,
+      "line": 1062,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Reconnect to continue",
       "surface": "android",
@@ -8779,7 +8779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1065,
+      "line": 1063,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Review highlighted items",
       "surface": "android",
@@ -8787,7 +8787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1066,
+      "line": 1064,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "All systems nominal",
       "surface": "android",
@@ -8795,7 +8795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1079,
+      "line": 1077,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Nodes",
       "surface": "android",
@@ -8803,7 +8803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1080,
+      "line": 1078,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$onlineNodes/$nodeCount",
       "surface": "android",
@@ -8811,7 +8811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1080,
+      "line": 1078,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "None",
       "surface": "android",
@@ -8819,7 +8819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1083,
+      "line": 1081,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Review node access",
       "surface": "android",
@@ -8827,7 +8827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1085,
+      "line": 1083,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online",
       "surface": "android",
@@ -8835,7 +8835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1113,
+      "line": 1111,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Sessions",
       "surface": "android",
@@ -8843,7 +8843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1115,
+      "line": 1113,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No recent sessions",
       "surface": "android",
@@ -8851,7 +8851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1115,
+      "line": 1113,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Recent conversations",
       "surface": "android",
@@ -8859,7 +8859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1121,
+      "line": 1119,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Files",
       "surface": "android",
@@ -8867,7 +8867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1122,
+      "line": 1120,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Browse",
       "surface": "android",
@@ -8875,7 +8875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1122,
+      "line": 1120,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Offline",
       "surface": "android",
@@ -8883,7 +8883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1123,
+      "line": 1121,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Agent workspace files",
       "surface": "android",
@@ -8891,7 +8891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1181,
+      "line": 1179,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Working · 1 active run",
       "surface": "android",
@@ -8899,7 +8899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1183,
+      "line": 1181,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Working · $pendingRunCount active runs",
       "surface": "android",
@@ -8907,7 +8907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1187,
+      "line": 1185,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Monitoring · 1 session",
       "surface": "android",
@@ -8915,7 +8915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1188,
+      "line": 1186,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Monitoring · $sessionCount sessions",
       "surface": "android",
@@ -8923,7 +8923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1189,
+      "line": 1187,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Monitoring · 1 scheduled job",
       "surface": "android",
@@ -8931,7 +8931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1190,
+      "line": 1188,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Monitoring · $cronJobCount scheduled jobs",
       "surface": "android",
@@ -8939,7 +8939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1240,
+      "line": 1238,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -8947,7 +8947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1272,
+      "line": 1270,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Connect before chat, voice, and live status.",
       "surface": "android",
@@ -8955,7 +8955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1296,
+      "line": 1294,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No ready providers",
       "surface": "android",
@@ -8963,7 +8963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1296,
+      "line": 1294,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Providers",
       "surface": "android",
@@ -8971,7 +8971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1489,
+      "line": 1487,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Open session",
       "surface": "android",
@@ -8979,7 +8979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1607,
+      "line": 1605,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Back",
       "surface": "android",
@@ -8987,7 +8987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1610,
+      "line": 1608,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Settings",
       "surface": "android",
@@ -8995,7 +8995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1613,
+      "line": 1611,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Search settings",
       "surface": "android",
@@ -9003,7 +9003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1626,
+      "line": 1624,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Gateway",
       "surface": "android",
@@ -9011,7 +9011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1632,
+      "line": 1630,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Nodes & Devices",
       "surface": "android",
@@ -9019,7 +9019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1633,
+      "line": 1631,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Channels",
       "surface": "android",
@@ -9027,7 +9027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1634,
+      "line": 1632,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "${agents.size} available",
       "surface": "android",
@@ -9035,7 +9035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1634,
+      "line": 1632,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Agents",
       "surface": "android",
@@ -9043,7 +9043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1634,
+      "line": 1632,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Load from gateway",
       "surface": "android",
@@ -9051,7 +9051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1636,
+      "line": 1634,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Providers & Models",
       "surface": "android",
@@ -9059,7 +9059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1638,
+      "line": 1636,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$readyProviderCount ready",
       "surface": "android",
@@ -9067,7 +9067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1639,
+      "line": 1637,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Availability unknown",
       "surface": "android",
@@ -9075,7 +9075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1640,
+      "line": 1638,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Review readiness",
       "surface": "android",
@@ -9083,7 +9083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1652,
+      "line": 1650,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Approvals",
       "surface": "android",
@@ -9091,7 +9091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1653,
+      "line": 1651,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Automations",
       "surface": "android",
@@ -9099,7 +9099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1654,
+      "line": 1652,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Usage",
       "surface": "android",
@@ -9107,7 +9107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1655,
+      "line": 1653,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Skills",
       "surface": "android",
@@ -9115,7 +9115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1657,
+      "line": 1655,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Skill Workshop",
       "surface": "android",
@@ -9123,7 +9123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1663,
+      "line": 1661,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Dreaming",
       "surface": "android",
@@ -9131,7 +9131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1664,
+      "line": 1662,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Shell in the agent workspace",
       "surface": "android",
@@ -9139,7 +9139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1664,
+      "line": 1662,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Terminal",
       "surface": "android",
@@ -9147,7 +9147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1665,
+      "line": 1663,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Speaker muted",
       "surface": "android",
@@ -9155,7 +9155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1665,
+      "line": 1663,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Speaker on",
       "surface": "android",
@@ -9163,7 +9163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1665,
+      "line": 1663,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Voice",
       "surface": "android",
@@ -9171,7 +9171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1666,
+      "line": 1664,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Canvas",
       "surface": "android",
@@ -9179,7 +9179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1666,
+      "line": 1664,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Screen surface",
       "surface": "android",
@@ -9187,7 +9187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1667,
+      "line": 1665,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Notifications",
       "surface": "android",
@@ -9195,7 +9195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1667,
+      "line": 1665,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Smart delivery",
       "surface": "android",
@@ -9203,7 +9203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1668,
+      "line": 1666,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Camera enabled",
       "surface": "android",
@@ -9211,7 +9211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1668,
+      "line": 1666,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Locked",
       "surface": "android",
@@ -9219,7 +9219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1668,
+      "line": 1666,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Phone Capabilities",
       "surface": "android",
@@ -9227,7 +9227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1670,
+      "line": 1668,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Appearance",
       "surface": "android",
@@ -9235,7 +9235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1678,
+      "line": 1676,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "About",
       "surface": "android",
@@ -9243,7 +9243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1678,
+      "line": 1676,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Version and update",
       "surface": "android",
@@ -9251,7 +9251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1679,
+      "line": 1677,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Health",
       "surface": "android",
@@ -9259,7 +9259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1692,
+      "line": 1690,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Account",
       "surface": "android",
@@ -9267,7 +9267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1696,
+      "line": 1694,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Return to setup",
       "surface": "android",
@@ -9275,7 +9275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1696,
+      "line": 1694,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Sign Out",
       "surface": "android",
@@ -9283,7 +9283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1707,
+      "line": 1705,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Licenses",
       "surface": "android",
@@ -9291,7 +9291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1718,
+      "line": 1716,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
       "surface": "android",
@@ -9299,7 +9299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1721,
+      "line": 1719,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "All systems operational",
       "surface": "android",
@@ -9307,7 +9307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1721,
+      "line": 1719,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Gateway not connected",
       "surface": "android",
@@ -9315,7 +9315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1735,
+      "line": 1733,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No pending approvals",
       "surface": "android",
@@ -9323,7 +9323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1737,
+      "line": 1735,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$count pending",
       "surface": "android",
@@ -9331,7 +9331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1745,
+      "line": 1743,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No scheduled jobs",
       "surface": "android",
@@ -9339,7 +9339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1746,
+      "line": 1744,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "1 scheduled",
       "surface": "android",
@@ -9347,7 +9347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1747,
+      "line": 1745,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$count scheduled",
       "surface": "android",
@@ -9355,7 +9355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1753,
+      "line": 1751,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No provider usage",
       "surface": "android",
@@ -9363,7 +9363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1754,
+      "line": 1752,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "1 provider",
       "surface": "android",
@@ -9371,7 +9371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1755,
+      "line": 1753,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$count providers",
       "surface": "android",
@@ -9379,7 +9379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1765,
+      "line": 1763,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No skills",
       "surface": "android",
@@ -9387,7 +9387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1767,
+      "line": 1765,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$ready/${skills.size} ready",
       "surface": "android",
@@ -9395,7 +9395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1786,
+      "line": 1784,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$pending pending",
       "surface": "android",
@@ -9403,7 +9403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1786,
+      "line": 1784,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "1 pending",
       "surface": "android",
@@ -9411,7 +9411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1790,
+      "line": 1788,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No proposals",
       "surface": "android",
@@ -9419,7 +9419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1791,
+      "line": 1789,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$held held",
       "surface": "android",
@@ -9427,7 +9427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1791,
+      "line": 1789,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "1 held",
       "surface": "android",
@@ -9435,7 +9435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1792,
+      "line": 1790,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$applied applied",
       "surface": "android",
@@ -9443,7 +9443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1792,
+      "line": 1790,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "1 applied",
       "surface": "android",
@@ -9451,7 +9451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1793,
+      "line": 1791,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "${summary.proposals.size} proposals",
       "surface": "android",
@@ -9459,7 +9459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1810,
+      "line": 1808,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "${summary.pendingDevices.size} pending",
       "surface": "android",
@@ -9467,7 +9467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1811,
+      "line": 1809,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Node approval pending",
       "surface": "android",
@@ -9475,7 +9475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1812,
+      "line": 1810,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$online/${summary.nodes.size} online",
       "surface": "android",
@@ -9483,7 +9483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1813,
+      "line": 1811,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$devices paired",
       "surface": "android",
@@ -9491,7 +9491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1814,
+      "line": 1812,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No devices",
       "surface": "android",
@@ -9499,7 +9499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1840,
+      "line": 1838,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "1 issue",
       "surface": "android",
@@ -9507,7 +9507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1841,
+      "line": 1839,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$issueCount issues",
       "surface": "android",
@@ -9515,7 +9515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1842,
+      "line": 1840,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "$connected/${summary.channels.size} connected",
       "surface": "android",
@@ -9523,7 +9523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1843,
+      "line": 1841,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No channels",
       "surface": "android",
@@ -9531,7 +9531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1859,
+      "line": 1857,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Needs attention",
       "surface": "android",
@@ -9539,7 +9539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1860,
+      "line": 1858,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "${summary.shortTermCount} waiting",
       "surface": "android",
@@ -9547,7 +9547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1861,
+      "line": 1859,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Off",
       "surface": "android",
@@ -9555,7 +9555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1905,
+      "line": 1903,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Connection",
       "surface": "android",
@@ -9563,7 +9563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1916,
+      "line": 1914,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Agents & automation",
       "surface": "android",
@@ -9571,7 +9571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1922,
+      "line": 1920,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Phone context & privacy",
       "surface": "android",
@@ -9579,7 +9579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1928,
+      "line": 1926,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Profile & device",
       "surface": "android",
@@ -9587,7 +9587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1931,
+      "line": 1929,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Diagnostics",
       "surface": "android",
@@ -9595,7 +9595,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1977,
+      "line": 1975,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "OpenClaw mobile",
       "surface": "android",
@@ -9603,7 +9603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1981,
+      "line": 1979,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Open profile",
       "surface": "android",
@@ -9611,7 +9611,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2061,
+      "line": 2059,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Open ${row.title}",
       "surface": "android",
@@ -9619,7 +9619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2069,
+      "line": 2067,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "now",
       "surface": "android",
@@ -9627,7 +9627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2070,
+      "line": 2068,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "${minutes}m",
       "surface": "android",
@@ -9635,7 +9635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2072,
+      "line": 2070,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "${hours}h",
       "surface": "android",
@@ -9643,7 +9643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2074,
+      "line": 2072,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "${days}d",
       "surface": "android",
@@ -9651,7 +9651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2077,
+      "line": 2075,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Main session",
       "surface": "android",
@@ -9659,7 +9659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2084,
+      "line": 2082,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Online and ready",
       "surface": "android",
@@ -9667,7 +9667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2087,
+      "line": 2085,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Connecting...",
       "surface": "android",
@@ -9675,7 +9675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2088,
+      "line": 2086,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Waiting for pairing",
       "surface": "android",
@@ -9683,7 +9683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2089,
+      "line": 2087,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Authentication needed",
       "surface": "android",
@@ -9691,7 +9691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2090,
+      "line": 2088,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "TLS timed out",
       "surface": "android",
@@ -9699,7 +9699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2091,
+      "line": 2089,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "No TLS endpoint",
       "surface": "android",
@@ -9707,7 +9707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2092,
+      "line": 2090,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Certificate review needed",
       "surface": "android",
@@ -9715,7 +9715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2093,
+      "line": 2091,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Not connected",
       "surface": "android",
