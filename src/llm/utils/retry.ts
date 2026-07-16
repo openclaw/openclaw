@@ -16,6 +16,9 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 ]);
 
 const RETRYABLE_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+// Match only the adapter-owned prefix; arbitrary "(500)" substrings must stay terminal.
+const PROVIDER_WRAPPED_HTTP_STATUS_RE =
+  /^(?:[a-z][\w.-]*[ \t]+)+api[ \t]+error[ \t]*\((\d{3})\)[ \t]*:/i;
 const RATE_LIMIT_CONTEXT_PATTERN = buildProviderErrorPattern([
   "rate.?limit",
   "too many requests",
@@ -58,6 +61,15 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "please retry your request",
 ]);
 
+function extractRetryHttpStatus(errorMessage: string): number | undefined {
+  const leadingStatus = extractLeadingHttpStatus(errorMessage)?.code;
+  if (leadingStatus !== undefined) {
+    return leadingStatus;
+  }
+  const wrappedStatus = PROVIDER_WRAPPED_HTTP_STATUS_RE.exec(errorMessage)?.[1];
+  return wrappedStatus === undefined ? undefined : Number(wrappedStatus);
+}
+
 /** Classify transient provider/transport failures for outer retry policy. */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (message.stopReason !== "error" || !message.errorMessage) {
@@ -67,7 +79,7 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) {
     return false;
   }
-  const status = extractLeadingHttpStatus(errorMessage)?.code;
+  const status = extractRetryHttpStatus(errorMessage);
   if (status && status !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
     return true;
   }

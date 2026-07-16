@@ -12,8 +12,6 @@ const HTTP_STATUS_CODE_PREFIX_RE = new RegExp(
   `^(?:http\\s*)?(\\d{3})(?:${HTTP_STATUS_DELIMITER_RE.source}([\\s\\S]+))?$`,
   "i",
 );
-/** Provider-wrapped errors embed the status in parentheses (e.g. "OpenAI API error (500): …"). */
-const PARENTHESIZED_STATUS_RE = /\((\d{3})\)/;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
@@ -99,23 +97,14 @@ export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
 
 export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
   const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
-  if (match) {
-    const code = Number(match[1]);
-    if (!Number.isFinite(code)) {
-      return null;
-    }
-    return { code, rest: (match[2] ?? "").trim() };
+  if (!match) {
+    return null;
   }
-  // Provider adapters wrap errors with a label prefix (e.g. "OpenAI API error (500): …"),
-  // so the status code is not at the very beginning of the message.
-  const parenMatch = raw.match(PARENTHESIZED_STATUS_RE);
-  if (parenMatch) {
-    const code = Number(parenMatch[1]);
-    if (Number.isFinite(code)) {
-      return { code, rest: raw.trim() };
-    }
+  const code = Number(match[1]);
+  if (!Number.isFinite(code)) {
+    return null;
   }
-  return null;
+  return { code, rest: (match[2] ?? "").trim() };
 }
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {

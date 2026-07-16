@@ -56,6 +56,22 @@ describe("isRetryableAssistantError", () => {
   });
 
   it.each([
+    "OpenAI API error (500): upstream timeout",
+    "Azure OpenAI API error (502): bad gateway",
+    "Mistral API error (503): service unavailable",
+    "OpenAI API error (504): gateway timeout",
+  ])("retries provider-wrapped transient HTTP statuses: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+  });
+
+  it.each([
+    "OpenAI API error (401): unauthorized",
+    "Request failed after rendering item (500): invalid input",
+  ])("does not retry permanent or unstructured parenthesized statuses: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it.each([
     "429 You exceeded your daily request limit. Please try again in 24 hours.",
     "rate limit reached for requests. Retry after 6h.",
     "429 RPM limit exceeded; Retry-After: 2 hours",
