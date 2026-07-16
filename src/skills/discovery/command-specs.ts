@@ -45,12 +45,6 @@ function traceSkillCommandOnce(
   skillsLogger.trace(message, meta);
 }
 
-function resetSkillCommandDebugCacheForTest(): void {
-  skillCommandDebugOnce.clear();
-}
-
-export const testing = { resetSkillCommandDebugCacheForTest } as const;
-
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^a-z0-9_]+/g, "_")
