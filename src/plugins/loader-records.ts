@@ -4,6 +4,7 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
+import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
 
@@ -119,7 +120,7 @@ export function recordPluginError(params: {
   diagnosticCode?: PluginDiagnosticCode;
 }) {
   const errorText =
-    process.env.OPENCLAW_PLUGIN_LOADER_DEBUG_STACKS === "1" &&
+    isPluginLifecycleTraceEnabled() &&
     params.error instanceof Error &&
     typeof params.error.stack === "string"
       ? params.error.stack

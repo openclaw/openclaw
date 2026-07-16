@@ -132,6 +132,7 @@ import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
   setChannelSourceTurnId,
+  shouldMintChannelSourceTurnId,
 } from "./source-turn-id.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -484,7 +485,6 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
-  beforeAgentReply?: (admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>;
 };
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
@@ -1446,12 +1446,14 @@ export async function runPreparedReply(
     normalizeOptionalString(sessionCtx.MessageSid);
   const sourceTurnId =
     readChannelSourceTurnId(sessionCtx) ??
-    buildChannelSourceTurnId({
-      provider: messageProvider,
-      accountId: replyRoute.accountId,
-      conversationId: replyRoute.to,
-      messageId: sourceMessageId,
-    });
+    (shouldMintChannelSourceTurnId(ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider)
+      ? buildChannelSourceTurnId({
+          provider: messageProvider,
+          accountId: replyRoute.accountId,
+          conversationId: replyRoute.to,
+          messageId: sourceMessageId,
+        })
+      : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
@@ -1706,7 +1708,6 @@ export async function runPreparedReply(
     resetTriggered: effectiveResetTriggered,
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
-    beforeAgentReply: params.beforeAgentReply,
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1654,7 +1654,6 @@ describe("qa cli runtime", () => {
         "auth-profile-codex-mixed-profiles",
         "auth-profile-doctor-migration-safety",
         "codex-plugin-cold-install",
-        "codex-plugin-install-race",
         "codex-plugin-pinned-new",
         "codex-plugin-pinned-old",
         "runtime-first-hour-20-turn",

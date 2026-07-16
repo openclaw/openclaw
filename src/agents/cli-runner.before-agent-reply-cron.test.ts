@@ -3,6 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  getAgentEventLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../infra/agent-events.js";
 import type { CliOutput } from "./cli-output.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 
@@ -121,7 +125,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("runCliAgent cron before_agent_reply seam", () => {
+describe("runCliAgent before_agent_reply seam", () => {
   it("rejects stale lifecycle ownership before CLI preparation", async () => {
     await expect(
       runCliAgent({
@@ -190,6 +194,23 @@ describe("runCliAgent cron before_agent_reply seam", () => {
       logInfoSpy.mockRestore();
     }
   });
+
+  it.each(["manual", "memory", "overflow"] as const)(
+    "does not expose internal %s runs to before_agent_reply hooks",
+    async (trigger) => {
+      hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+      executePreparedCliRunMock.mockResolvedValue({ text: "manual result" });
+
+      await runCliAgent({
+        ...baseRunParams,
+        trigger,
+      });
+
+      expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
+      expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
+      expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("clears stateless CLI bindings when before_agent_reply claims a cron turn", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
@@ -283,14 +304,61 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
   });
 
-  it("does not invoke before_agent_reply for non-cron triggers", async () => {
+  it("lets before_agent_reply claim user runs before CLI preparation", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "user turn claimed" },
+    });
+
+    const result = await runCliAgent({ ...baseRunParams, trigger: "user" });
+
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
+    const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+    expect(hookContext).toMatchObject({ trigger: "user" });
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toBe("user turn claimed");
+  });
+
+  it("lets before_agent_reply claim heartbeat runs before CLI preparation", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "heartbeat claimed" },
+    });
+
+    const result = await runCliAgent({ ...baseRunParams, trigger: "heartbeat" });
+
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
+    const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+    expect(hookContext).toMatchObject({ trigger: "heartbeat" });
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toBe("heartbeat claimed");
+  });
+
+  it("dispatches a declining hook once when model fallback re-enters the CLI runner", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue(undefined);
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+    const onExecutionPhase = vi.fn();
 
-    await runCliAgent({ ...baseRunParams, trigger: "user" });
+    await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async () => {
+      await runCliAgent({ ...baseRunParams, trigger: "user", onExecutionPhase });
+      await runCliAgent({
+        ...baseRunParams,
+        trigger: "user",
+        model: "fallback-model",
+        onExecutionPhase,
+      });
+    });
 
-    expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
+    expect(
+      onExecutionPhase.mock.calls.filter(([event]) => event.phase === "before_agent_reply"),
+    ).toHaveLength(1);
+    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(2);
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls through to the CLI subprocess when no before_agent_reply hook is registered", async () => {

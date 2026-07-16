@@ -44,9 +44,11 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-auth", 32],
   ["agentic-agents-core-isolated", 10],
   ["agentic-agents-core-models", 66],
-  ["agentic-agents-core-runner-cli-1", 60],
-  ["agentic-agents-core-runner-cli-2", 190],
-  ["agentic-agents-core-runner-cli-3", 60],
+  // Cost-aware striping balances the cli-runner and commands stripes; keep
+  // their hints equalized at the old totals split evenly.
+  ["agentic-agents-core-runner-cli-1", 103],
+  ["agentic-agents-core-runner-cli-2", 103],
+  ["agentic-agents-core-runner-cli-3", 103],
   ["agentic-agents-core-runner-commands", 30],
   ["agentic-agents-core-runner-embedded", 20],
   ["agentic-agents-core-runner-sessions", 18],
@@ -85,9 +87,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-plugin-sdk", 50],
   ["auto-reply-core-top-level", 33],
   ["auto-reply-reply-agent-runner", 52],
-  ["auto-reply-reply-commands-1", 220],
-  ["auto-reply-reply-commands-2", 33],
-  ["auto-reply-reply-commands-3", 24],
+  ["auto-reply-reply-commands-1", 92],
+  ["auto-reply-reply-commands-2", 92],
+  ["auto-reply-reply-commands-3", 92],
   ["auto-reply-reply-dispatch", 36],
   ["auto-reply-reply-session", 21],
   ["auto-reply-reply-state-routing", 21],
@@ -112,15 +114,48 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   // lightly packed bin so its lane stays close to solo runtime.
   ["core-runtime-tui-pty", 200],
   ["core-tooling-1", 113],
-  ["core-tooling-2", 111],
-  ["core-tooling-3", 134],
-  ["core-tooling-4", 94],
+  ["core-tooling-2", 113],
+  ["core-tooling-3", 113],
+  ["core-tooling-4", 113],
   ["core-tooling-docker", 6],
   ["core-tooling-isolated", 55],
   ["core-unit-fast", 190],
   ["core-unit-src-security", 138],
   ["core-unit-support", 19],
 ]);
+// Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
+// from single-file local runs (M4 Max) and static import-graph size. Packing
+// only: a stale entry skews stripe balance but never correctness. Unlisted
+// files use the default, which mostly reflects the per-file module-graph
+// re-evaluation cost that dominates these serial suites.
+const STRIPE_FILE_SECONDS_HINTS = new Map([
+  ["src/agents/cli-runner.reliability.test.ts", 7],
+  ["src/agents/cli-runner.spawn.test.ts", 8],
+  ["src/auto-reply/reply/commands-export-session.test.ts", 8],
+  ["src/auto-reply/reply/commands-gating.test.ts", 6],
+  ["src/auto-reply/reply/commands-learn.test.ts", 8],
+  ["src/auto-reply/reply/commands-plugins.install.test.ts", 6],
+  ["src/auto-reply/reply/commands-status.test.ts", 12],
+  ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
+  ["src/scripts/test-projects.test.ts", 21],
+  ["test/scripts/bench-sqlite-reliability.test.ts", 9],
+  ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
+  ["test/scripts/changed-lanes.test.ts", 5],
+  ["test/scripts/ci-workflow-guards.test.ts", 12],
+  ["test/scripts/crabbox-wrapper.test.ts", 19],
+  ["test/scripts/find-reusable-release-validation.test.ts", 8],
+  ["test/scripts/install-sh.test.ts", 6],
+  ["test/scripts/kitchen-sink-rpc-walk.test.ts", 5],
+  ["test/scripts/openclaw-live-updater.test.ts", 18],
+  ["test/scripts/parallels-smoke-model.test.ts", 8],
+  ["test/scripts/plugin-clawhub-release.test.ts", 5],
+  ["test/scripts/plugin-gateway-gauntlet.test.ts", 5],
+  ["test/scripts/plugin-sdk-surface-report.test.ts", 6],
+  ["test/scripts/pr-operation-lock.test.ts", 27],
+  ["test/scripts/test-projects.test.ts", 8],
+]);
+const DEFAULT_STRIPE_FILE_SECONDS = 3;
+
 const DEFAULT_WHOLE_GROUP_SECONDS = 25;
 const DEFAULT_SECONDS_PER_TEST_FILE = 0.5;
 // Spawn/signal-timing suites (process-group waits, PTY smoke) flake when a
@@ -1227,12 +1262,35 @@ function compareFullNodeTestAdmissionOrder(a, b) {
   );
 }
 
+function stripeFileWeight(file) {
+  return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_STRIPE_FILE_SECONDS;
+}
+
+// Deterministic cost-aware striping (greedy LPT): heaviest files first, each
+// into the currently lightest batch. Round-robin by discovery order packed one
+// whale next to another and left sibling stripes ~10x lighter.
 function createStripedBatches(values, batchCount) {
-  const batches = Array.from({ length: batchCount }, () => []);
-  for (const [index, value] of values.entries()) {
-    batches[index % batchCount].push(value);
+  const entries = values.map((value, index) => ({
+    index,
+    value,
+    weight: stripeFileWeight(value),
+  }));
+  entries.sort((a, b) => b.weight - a.weight || a.index - b.index);
+  const batches = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
+  for (const entry of entries) {
+    let target = batches[0];
+    for (const batch of batches) {
+      if (batch.totalWeight < target.totalWeight) {
+        target = batch;
+      }
+    }
+    target.totalWeight += entry.weight;
+    target.entries.push(entry);
   }
-  return batches;
+  // Keep discovery order inside each stripe so include lists stay stable.
+  return batches.map((batch) =>
+    batch.entries.toSorted((a, b) => a.index - b.index).map((entry) => entry.value),
+  );
 }
 
 function listCompactToolingTestFiles() {

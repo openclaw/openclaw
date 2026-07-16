@@ -89,13 +89,16 @@ function createDeliveryFromTypedColumns(
     ...(row.pending_final_delivery_last_error !== null
       ? { lastError: row.pending_final_delivery_last_error }
       : {}),
-    ...(row.completion_announced_at !== null
+    ...(row.completion_announced_at !== null && row.expects_completion_message === 1
       ? {
           status: "delivered",
           announcedAt: row.completion_announced_at,
           deliveredAt: delivery?.deliveredAt ?? row.completion_announced_at,
         }
-      : {}),
+      : row.completion_announced_at !== null
+        ? { announcedAt: row.completion_announced_at }
+        : {}),
+    ...(row.expects_completion_message === 0 ? { status: "not_required" } : {}),
   };
 }
 

@@ -907,29 +907,6 @@ const PLUGIN_COMPAT_RECORDS = [
     ],
   },
   {
-    code: "channel-target-comparable-aliases",
-    status: "deprecated",
-    owner: "sdk",
-    introduced: "2026-04-28",
-    deprecated: "2026-04-28",
-    warningStarts: "2026-04-28",
-    removeAfter: "2026-07-28",
-    replacement:
-      "`ChannelRouteParsedTarget`, `channelRouteTargetsMatchExact`, `channelRouteTargetsShareConversation`, and `messaging.resolveOutboundSessionRoute` for provider-specific target grammar",
-    docsPath: "/plugins/sdk-migration",
-    surfaces: [
-      "src/channels/plugins/target-parsing-loaded ComparableChannelTarget",
-      "src/channels/plugins/target-parsing-loaded resolveComparableTargetForLoadedChannel",
-      "src/channels/plugins/target-parsing-loaded comparableChannelTargetsMatch",
-      "src/channels/plugins/target-parsing-loaded comparableChannelTargetsShareRoute",
-    ],
-    diagnostics: ["plugin SDK compatibility warning"],
-    tests: [
-      "src/channels/plugins/target-parsing.test.ts",
-      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-    ],
-  },
-  {
     code: "channel-explicit-target-parser",
     status: "deprecated",
     owner: "sdk",
@@ -945,9 +922,6 @@ const PLUGIN_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/channel-route ChannelRouteExplicitTarget",
       "openclaw/plugin-sdk/channel-route ChannelRouteExplicitTargetParser",
       "openclaw/plugin-sdk/channel-route resolveChannelRouteTargetWithParser",
-      "src/channels/plugins/target-parsing-loaded ParsedChannelExplicitTarget",
-      "src/channels/plugins/target-parsing-loaded parseExplicitTargetForLoadedChannel",
-      "src/channels/plugins/target-parsing-loaded resolveRouteTargetForLoadedChannel",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
     tests: [

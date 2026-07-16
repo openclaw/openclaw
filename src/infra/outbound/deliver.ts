@@ -44,6 +44,7 @@ import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.j
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
@@ -2082,13 +2083,7 @@ async function deliverOutboundPayloadsCore(
       return Promise.resolve(baseHandler);
     }
     const key = JSON.stringify(mediaSources);
-    const cached = handlerByMediaSources.get(key);
-    if (cached) {
-      return cached;
-    }
-    const created = createHandler(mediaSources);
-    handlerByMediaSources.set(key, created);
-    return created;
+    return getOrCreatePromise(handlerByMediaSources, key, () => createHandler(mediaSources));
   };
   const handler = baseHandler;
   const configuredTextLimit = handler.chunker

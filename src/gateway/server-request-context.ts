@@ -136,9 +136,13 @@ function canDeliverApprovals(
   );
 }
 
+export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
+  getClientConnIds?: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
+};
+
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
-): GatewayRequestContext {
+): GatewayRequestContextWithClientLookup {
   return {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -201,6 +205,19 @@ export function createGatewayRequestContext(
           continue;
         }
         if (opts.filter && !opts.filter(gatewayClient, opts.record)) {
+          continue;
+        }
+        connIds.add(gatewayClient.connId);
+      }
+      return connIds;
+    },
+    getClientConnIds: (filter) => {
+      const connIds = new Set<string>();
+      for (const gatewayClient of params.clients) {
+        if (!gatewayClient.connId || gatewayClient.invalidated) {
+          continue;
+        }
+        if (filter && !filter(gatewayClient)) {
           continue;
         }
         connIds.add(gatewayClient.connId);

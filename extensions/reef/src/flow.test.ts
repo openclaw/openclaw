@@ -2,123 +2,29 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
-  base64url,
   canonicalBytes,
-  composeOutbound,
   generateIdentity,
   MemoryAuditStore,
   MemoryReplayStore,
   open,
   sha256Hex,
   verifyReceipt,
-  type GuardAdapter,
-  type SignedReceipt,
   type Verdict,
 } from "../protocol/index.js";
-import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
-import type { ReefPeerTrust } from "./friend-types.js";
+import {
+  allow,
+  config,
+  envelope,
+  guard,
+  peerTrust,
+  reefKeys,
+  transport,
+  trust,
+} from "./flow.test-helpers.js";
 import { ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
-import type { ReefTrustStore } from "./trust-store.js";
-import type { InboxEntry, ReefKeys } from "./types.js";
-
-const model = "mock-2026-07-12";
-const allow: Verdict = {
-  decision: "allow",
-  category: "safe",
-  reason: "Safe.",
-  model,
-  policyVersion: "v1",
-};
-
-function guard(...verdicts: Verdict[]): GuardAdapter & { classify: ReturnType<typeof vi.fn> } {
-  const classify = vi.fn(async () => verdicts[classify.mock.calls.length - 1] ?? verdicts.at(-1)!);
-  return { providerId: "mock", pinnedModel: model, classify };
-}
-
-function reefKeys(identity = generateIdentity()): ReefKeys {
-  return {
-    ...identity,
-    auditKey: base64url(new Uint8Array(32).fill(1)),
-    replayKey: base64url(new Uint8Array(32).fill(2)),
-    keyEpoch: 1,
-  };
-}
-
-function config() {
-  return ReefChannelConfigSchema.parse({
-    handle: "bob",
-    email: "bob@example.com",
-    guard: {
-      provider: "openai",
-      pinnedModel: model,
-      apiKeyEnv: "REEF_TEST_KEY",
-      policyVersion: "v1",
-      timeoutMs: 1_000,
-    },
-  });
-}
-
-function peerTrust(
-  identity: ReturnType<typeof generateIdentity>,
-  overrides: Partial<ReefPeerTrust> = {},
-): ReefPeerTrust {
-  return {
-    autonomy: "bounded",
-    ed25519PublicKey: identity.signing.publicKey,
-    x25519PublicKey: identity.encryption.publicKey,
-    keyEpoch: 1,
-    safetyNumberChanged: false,
-    approvedAt: 1,
-    ...overrides,
-  };
-}
-
-function trust(initial: Record<string, ReefPeerTrust>) {
-  const values = new Map(Object.entries(initial));
-  return {
-    values,
-    store: {
-      get: (peer: string) => values.get(peer),
-    } as unknown as ReefTrustStore,
-  };
-}
-
-function transport() {
-  return {
-    acknowledge: vi.fn(async (_peer: string, _id: string, _receipt: SignedReceipt) => ({
-      result: "deleted",
-    })),
-    sendEnvelope: vi.fn(
-      async (_peer: string, value: Parameters<ReefTransportClient["sendEnvelope"]>[1]) => ({
-        id: value.id,
-        status: "queued",
-      }),
-    ),
-  };
-}
-
-async function envelope(
-  sender: ReturnType<typeof generateIdentity>,
-  recipient: ReefKeys,
-  id: string,
-  text: string,
-) {
-  return (
-    await composeOutbound({
-      id,
-      from: "alice#1",
-      to: "bob#1",
-      body: { text },
-      senderSigningSecretKey: sender.signing.secretKey,
-      recipientEncryptionPublicKey: recipient.encryption.publicKey,
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(3)),
-      policyVersion: "v1",
-    })
-  ).envelope;
-}
+import type { InboxEntry } from "./types.js";
 
 describe("ReefMessageFlow inbound", () => {
   it("delivers and persists before ack, then acks duplicate redelivery without delivering twice", async () => {
@@ -431,7 +337,10 @@ describe("ReefMessageFlow outbound", () => {
       onOwnerNotice: async () => {},
     });
 
-    await expect(flow.send("bob", "ordinary text")).rejects.toMatchObject({ stage: "guard" });
+    await expect(flow.send("bob", "ordinary text")).rejects.toMatchObject({
+      stage: "guard",
+      message: expect.stringContaining("Do not retry or rephrase it automatically"),
+    });
     expect(relay.sendEnvelope).not.toHaveBeenCalled();
   });
 });

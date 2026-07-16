@@ -413,7 +413,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      // Concurrent Knip scans need cores and memory headroom.
+      runner: "blacksmith-16vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find(

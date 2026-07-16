@@ -475,6 +475,7 @@ extension OpenClawChatViewModel {
                 + "localRunId=\(runId) pending=\(self.pendingRunCount)")
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
+        self.clearPlan()
 
         // Production attachment sends enter the durable outbox above. Fixture,
         // preview, and embedded transports may intentionally have no outbox;
