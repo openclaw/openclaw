@@ -192,14 +192,16 @@ function classifyRuntimeWebTargetPathState(params: {
       if (!configuredProvider) {
         return "active";
       }
-      return commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+      const configuredPluginId = commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
         contract: "webFetchProviders",
         value: configuredProvider,
         origin: "bundled",
         config: params.config,
-      }) === pluginId
-        ? "active"
-        : "inactive";
+      });
+      if (!configuredPluginId) {
+        return "unknown";
+      }
+      return configuredPluginId === pluginId ? "active" : "inactive";
     }
     const search = params.config.tools?.web?.search;
     if (search?.enabled === false) {
@@ -209,14 +211,16 @@ function classifyRuntimeWebTargetPathState(params: {
     if (!configuredProvider) {
       return "active";
     }
-    return commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+    const configuredPluginId = commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
       contract: "webSearchProviders",
       value: configuredProvider,
       origin: "bundled",
       config: params.config,
-    }) === pluginId
-      ? "active"
-      : "inactive";
+    });
+    if (!configuredPluginId) {
+      return "unknown";
+    }
+    return configuredPluginId === pluginId ? "active" : "inactive";
   }
 
   const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
