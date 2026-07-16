@@ -19,6 +19,7 @@ import {
   updateSqliteSessionLastRoute,
   patchSqliteSessionEntry,
   resolveSqliteSessionParentForkDecision,
+  writeSqliteCompactionSuccessorTranscript,
 } from "./session-accessor.sqlite.js";
 import type {
   SessionAccessScope,
@@ -56,6 +57,31 @@ export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,
 ): Promise<ForkSessionFromParentTranscriptResult> {
   return await forkSqliteSessionTranscriptFromParent(params);
+}
+
+export type RotateCompactionTranscriptResult =
+  | { status: "created"; sessionId: string; sessionFile: string; entriesWritten: number }
+  | { status: "failed" };
+
+export type RotateCompactionTranscriptParams = {
+  agentId: string;
+  storePath: string;
+  sessionId: string;
+  header: unknown;
+  entries: readonly unknown[];
+  /** When provided, atomically repoints this session key's registry entry to the new session. */
+  sessionKey?: string;
+};
+
+/**
+ * Creates a compacted successor transcript as a new SQLite session, atomically.
+ * The source session is left untouched as an archive; callers adopt the
+ * returned session id/marker as the new active identity.
+ */
+export async function rotateCompactionTranscript(
+  params: RotateCompactionTranscriptParams,
+): Promise<RotateCompactionTranscriptResult> {
+  return await writeSqliteCompactionSuccessorTranscript(params);
 }
 
 /**

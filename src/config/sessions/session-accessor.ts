@@ -117,6 +117,8 @@ export type {
 } from "./session-transcript-turn-lifecycle.types.js";
 export type {
   RecordInboundSessionMetaParams,
+  RotateCompactionTranscriptParams,
+  RotateCompactionTranscriptResult,
   UpdateSessionLastRouteParams,
 } from "./session-accessor.entry-mutation.js";
 export {
@@ -147,6 +149,7 @@ export {
   recordInboundSessionMeta,
   resolveSessionAbortTarget,
   resolveSessionParentForkDecision,
+  rotateCompactionTranscript,
   updateSessionEntry,
   updateSessionLastRoute,
 } from "./session-accessor.entry-mutation.js";

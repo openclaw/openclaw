@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  upsertSessionEntry,
+  loadTranscriptEvents,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -399,19 +404,88 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(result.reason).toBe("no compaction entry");
   });
 
-  it("skips rotation for a sqlite-backed session file marker", async () => {
+  it("rotates a compacted sqlite-backed session into a new sqlite successor session", async () => {
     const dir = await createTmpDir();
-    const { manager } = createCompactedSession(dir);
+    const storePath = path.join(dir, "sessions.sqlite");
+    const agentId = "test-agent";
+    const sessionId = "sqlite-source-session";
+    const sessionKey = "agent:test-agent:main:sqlite-rotate";
+    const marker = formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
 
-    // `sqlite:<agentId>:<sessionId>:<storePath>` is not a filesystem path;
-    // rotating it would resolve a bogus successor path via path.dirname.
-    const result = await rotateTranscriptAfterCompaction({
-      sessionManager: manager,
-      sessionFile: `sqlite:test-agent:test-session:${path.join(dir, "openclaw-agent.sqlite")}`,
+    // Real after-turn rotation requires a resolvable session entry: register
+    // the source session before opening it, matching production bootstrap.
+    await upsertSessionEntry(
+      { agentId, sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+
+    const manager = SessionManager.open(marker, dir, dir);
+    manager.appendModelChange("openai", "gpt-5.2");
+    manager.appendThinkingLevelChange("medium");
+    manager.appendCustomEntry("test-extension", { cursor: "before-compaction" });
+    const oldUserId = manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
+    manager.appendLabelChange(oldUserId, "old bookmark");
+    manager.appendMessage(makeAssistant("old assistant", 2));
+    const firstKeptId = manager.appendMessage({
+      role: "user",
+      content: "kept user",
+      timestamp: 3,
+    });
+    manager.appendLabelChange(firstKeptId, "kept bookmark");
+    manager.appendMessage(makeAssistant("kept assistant", 4));
+    manager.appendCompaction("Summary of old user and old assistant.", firstKeptId, 5000);
+    manager.appendMessage({ role: "user", content: "post user", timestamp: 5 });
+    manager.appendMessage(makeAssistant("post assistant", 6));
+
+    const beforeSourceEntries = await loadTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
     });
 
-    expect(result.rotated).toBe(false);
-    expect(result.reason).toBe("sqlite-backed session");
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: marker,
+      sessionKey,
+      now: () => new Date("2026-04-27T12:00:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    expect(result.reason).toBeUndefined();
+    const successorSessionId = requireString(result.sessionId, "successor session id");
+    const successorFile = requireString(result.sessionFile, "successor session file");
+    expect(successorFile).toMatch(/^sqlite:/);
+    expect(successorSessionId).not.toBe(sessionId);
+
+    // Source session is left completely untouched as an archive.
+    const afterSourceEntries = await loadTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(afterSourceEntries).toEqual(beforeSourceEntries);
+
+    // The registry entry for this key now resolves the rotated successor, so
+    // the next turn's `SessionManager.open` picks up the smaller transcript
+    // instead of immediately retriggering the byte-size guard on the archive.
+    const successor = SessionManager.open(successorFile, dir, dir);
+    const header = requireValue(successor.getHeader(), "successor header");
+    expect(header.id).toBe(successorSessionId);
+    expect(header.parentSession).toBe(marker);
+    expect(header.cwd).toBe(dir);
+    expect(successor.getEntries().length).toBeLessThan(manager.getEntries().length);
+    requireEntryByIdAndType(successor.getBranch(), firstKeptId, "message", "kept user entry");
+    expect(successor.getBranch().some((entry) => entry.id === oldUserId)).toBe(false);
+    expect(successor.getLabel(firstKeptId)).toBe("kept bookmark");
+    expect(successor.getLabel(oldUserId)).toBeUndefined();
+
+    const context = successor.buildSessionContext();
+    const contextText = JSON.stringify(context.messages);
+    expect(contextText).toContain("Summary of old user and old assistant.");
+    expect(contextText).toContain("kept user");
+    expect(contextText).toContain("post assistant");
   });
 
   it("file-only rotation skips a sqlite-backed marker without reading it as a file", async () => {

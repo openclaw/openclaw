@@ -18,6 +18,7 @@ import {
   getSessionKysely,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
+  resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
@@ -138,6 +139,81 @@ export async function restoreSqliteCompactionCheckpointSession(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     return result ?? { status: "failed" };
+  });
+}
+
+/** Result from writing a compacted successor transcript directly into SQLite. */
+type SqliteCompactionSuccessorTranscriptResult =
+  | { status: "created"; sessionId: string; sessionFile: string; entriesWritten: number }
+  | { status: "failed" };
+
+/** Parameters for creating a new SQLite session that holds a compacted successor transcript. */
+type SqliteCompactionSuccessorTranscriptParams = {
+  agentId: string;
+  storePath: string;
+  sessionId: string;
+  header: TranscriptEvent;
+  entries: readonly TranscriptEvent[];
+  /** When provided, atomically repoints this session key's registry entry to the new session. */
+  sessionKey?: string;
+};
+
+/**
+ * Writes a compacted successor transcript as a brand-new SQLite session, atomically.
+ * Mirrors file-backed compaction rotation: the source session/transcript is left
+ * completely untouched (kept as archive under its original id). When `sessionKey`
+ * is provided, the session registry entry for that key is repointed to the new
+ * session id/file in the same transaction, so the next turn's `SessionManager.open`
+ * (and any other key-based lookup) resolves the rotated session instead of the
+ * archived one. Without this, callers adopting `rotated: true` would keep the
+ * old key pointed at the oversized transcript, immediately re-triggering the
+ * byte-size guard on the very next preflight.
+ */
+export async function writeSqliteCompactionSuccessorTranscript(
+  params: SqliteCompactionSuccessorTranscriptParams,
+): Promise<SqliteCompactionSuccessorTranscriptResult> {
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const targetScope = { ...resolved, sessionId: params.sessionId };
+    const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
+    let entriesWritten = 0;
+    let previousIdentity = new Map<string, SessionEntry>();
+    let currentIdentity = new Map<string, SessionEntry>();
+    runOpenClawAgentWriteTransaction((database) => {
+      const normalizedSessionKey = params.sessionKey
+        ? normalizeSqliteSessionKey(params.sessionKey)
+        : undefined;
+      const identityKeys = normalizedSessionKey
+        ? collectSessionEntryLookupKeys(database, normalizedSessionKey)
+        : [];
+      previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      entriesWritten = appendTranscriptEventsInTransaction(database, targetScope, [
+        params.header,
+        ...params.entries,
+      ]);
+      if (entriesWritten > 0 && normalizedSessionKey) {
+        const currentEntry = readSessionEntryRow(database, normalizedSessionKey)?.entry;
+        if (currentEntry) {
+          const nextEntry = cloneSqliteCheckpointSessionEntry({
+            currentEntry,
+            nextSessionId: params.sessionId,
+            nextSessionFile: sessionFile,
+          });
+          writeSessionEntry(database, normalizedSessionKey, nextEntry);
+        }
+      }
+      currentIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+    }, toDatabaseOptions(resolved));
+    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    if (entriesWritten === 0) {
+      return { status: "failed" };
+    }
+    return {
+      status: "created",
+      sessionId: params.sessionId,
+      sessionFile,
+      entriesWritten,
+    };
   });
 }
 

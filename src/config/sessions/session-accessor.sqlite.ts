@@ -38,6 +38,7 @@ export {
 export {
   branchSqliteCompactionCheckpointSession,
   restoreSqliteCompactionCheckpointSession,
+  writeSqliteCompactionSuccessorTranscript,
 } from "./session-accessor.sqlite-checkpoint.js";
 export {
   forkSqliteSessionAtMessage,
