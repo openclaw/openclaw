@@ -822,6 +822,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openChannelIngressQueue: vi.fn(() => {
         throw new Error("openChannelIngressQueue mock is not configured");
       }) as unknown as PluginRuntime["state"]["openChannelIngressQueue"],
+      openChannelIngressDrain: vi.fn(() => {
+        throw new Error("openChannelIngressDrain mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openChannelIngressDrain"],
     },
     tasks: {
       runs: {

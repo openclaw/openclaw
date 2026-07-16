@@ -1,4 +1,5 @@
 // Core runtime types define system, config, and task helper contracts for plugins.
+import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
@@ -437,6 +438,20 @@ export type PluginRuntimeCore = {
       TMetadata,
       TCompletedMetadata
     >;
+    openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      options: Omit<
+        CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
+        "queue"
+      > & {
+        queue?: import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+          TPayload,
+          TMetadata,
+          TCompletedMetadata
+        >;
+        accountId?: string;
+        stateDir?: string;
+      },
+    ) => import("../../channels/message/ingress-drain.js").ChannelIngressDrain;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;

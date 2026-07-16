@@ -347,6 +347,11 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
           "openChannelIngressQueue is only available through the plugin runtime proxy.",
         );
       },
+      openChannelIngressDrain: () => {
+        throw new Error(
+          "openChannelIngressDrain is only available through the plugin runtime proxy.",
+        );
+      },
     },
     tasks,
     taskFlow,
