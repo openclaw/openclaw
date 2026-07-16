@@ -350,7 +350,7 @@ async function runBoundaryLauncherCommand(params: {
       } catch {
         // The launcher may have exited between the stream failure and cleanup.
       }
-      reject(error);
+      reject(error instanceof Error ? error : new Error(String(error)));
     };
     child.stdout.on("data", (chunk) => {
       appendQaChildOutput(stdout, chunk);
