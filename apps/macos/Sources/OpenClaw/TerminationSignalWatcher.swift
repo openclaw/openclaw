@@ -16,17 +16,17 @@ final class TerminationSignalWatcher {
     private var terminationRequested = false
 
     func start() {
-        guard self.sources.isEmpty else { return }
-        self.install(SIGTERM)
-        self.install(SIGINT)
+        guard sources.isEmpty else { return }
+        install(SIGTERM)
+        install(SIGINT)
     }
 
     func stop() {
-        for s in self.sources {
+        for s in sources {
             s.cancel()
         }
-        self.sources.removeAll(keepingCapacity: false)
-        self.terminationRequested = false
+        sources.removeAll(keepingCapacity: false)
+        terminationRequested = false
     }
 
     private func install(_ sig: Int32) {
@@ -37,21 +37,27 @@ final class TerminationSignalWatcher {
             self?.handle(sig)
         }
         source.resume()
-        self.sources.append(source)
+        sources.append(source)
     }
 
     private func handle(_ sig: Int32) {
-        guard !self.terminationRequested else { return }
-        self.terminationRequested = true
+        guard !terminationRequested else { return }
+        terminationRequested = true
 
-        self.logger.info("received signal \(sig, privacy: .public); terminating")
+        logger.info("received signal \(sig, privacy: .public); terminating")
         // Ensure any pairing prompt can't accidentally approve during shutdown.
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
+        Self.scheduleExitFailsafe()
         NSApp.terminate(nil)
+    }
 
-        // Safety net: don't hang forever if something blocks termination.
-        DispatchQueue.main.asyncAfter(deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds) {
+    static func scheduleExitFailsafe() {
+        // AppKit waits in a nested event loop while async termination cleanup runs.
+        // A main-queue failsafe cannot fire from that loop, so enforce the deadline off-main.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds
+        ) {
             exit(0)
         }
     }
