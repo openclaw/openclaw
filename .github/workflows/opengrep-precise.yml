@@ -64,7 +64,12 @@ jobs:
           OPENGREP_VERSION: v1.22.0
           OPENGREP_INSTALL_SHA: f458d7f0d52cc58eae1ca3cf3d5caf101e637519
         run: |
-          curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
+          # Keep script download bounded if the raw.githubusercontent.com
+          # endpoint stalls during workflow startup.
+          curl -fsSL \
+            --connect-timeout 10 \
+            --max-time 60 \
+            "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
             | bash -s -- -v "$OPENGREP_VERSION"
           echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
 

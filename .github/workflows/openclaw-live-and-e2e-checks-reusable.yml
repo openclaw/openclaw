@@ -851,7 +851,12 @@ jobs:
         run: |
           set -euo pipefail
           export OPENSHELL_VERSION=v0.0.68
-          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/d64542f69d06694cbd203b64929d286dd0533bbb/install.sh | sh
+          # Keep script download bounded if the raw.githubusercontent.com
+          # endpoint stalls during workflow startup.
+          curl -LsSf \
+            --connect-timeout 10 \
+            --max-time 60 \
+            https://raw.githubusercontent.com/NVIDIA/OpenShell/d64542f69d06694cbd203b64929d286dd0533bbb/install.sh | sh
           openshell --version
 
       - name: Bootstrap OpenShell gateway
