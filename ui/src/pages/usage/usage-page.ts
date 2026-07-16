@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, type PropertyValues } from "lit";
+import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -7,20 +7,16 @@ import type {
   SessionsUsageResult,
   SessionUsageTimeSeries,
 } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
   createPanelRefreshStatus,
-  failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -36,12 +32,14 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
+import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import {
   currentLocalDate,
   selectUsageSessionKeys,
   toggleUsageRangeSelection,
   toUsageErrorMessage,
 } from "./helpers.ts";
+import { renderUsagePageShell } from "./page-shell.ts";
 import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogEntry,
@@ -375,8 +373,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (!client || !this.connected) {
       return;
     }
-    // Retained detail data belongs to one session. Never render another session's
-    // timeline as stale while its replacement request is in flight or failing.
+    // Never render another session's retained timeline as stale.
     if (this.usageTimeSeriesSessionKey !== sessionKey) {
       this.usageTimeSeries = null;
       this.usageTimeSeriesSessionKey = null;
@@ -394,18 +391,11 @@ class UsagePage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
-        if (isMissingOperatorReadScopeError(error)) {
+        const failure = failUsageDetailRefresh(this.usageTimeSeriesStatus, error);
+        this.usageTimeSeriesStatus = failure.status;
+        if (failure.clearData) {
           this.usageTimeSeries = null;
           this.usageTimeSeriesSessionKey = null;
-          this.usageTimeSeriesStatus = failPanelRefresh(
-            createPanelRefreshStatus(),
-            formatMissingOperatorReadScopeMessage("usage details"),
-          );
-        } else {
-          this.usageTimeSeriesStatus = failPanelRefresh(
-            this.usageTimeSeriesStatus,
-            toUsageErrorMessage(error),
-          );
         }
       }
     } finally {
@@ -420,8 +410,7 @@ class UsagePage extends OpenClawLightDomElement {
     if (!client || !this.connected) {
       return;
     }
-    // Conversation retention follows the same session ownership rule as the
-    // timeline so a failed session switch cannot expose unrelated messages.
+    // Never render another session's retained conversation as stale.
     if (this.usageSessionLogsSessionKey !== sessionKey) {
       this.usageSessionLogs = null;
       this.usageSessionLogsSessionKey = null;
@@ -442,18 +431,11 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageSessionLogsStatus = completePanelRefresh();
     } catch (error) {
       if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
-        if (isMissingOperatorReadScopeError(error)) {
+        const failure = failUsageDetailRefresh(this.usageSessionLogsStatus, error);
+        this.usageSessionLogsStatus = failure.status;
+        if (failure.clearData) {
           this.usageSessionLogs = null;
           this.usageSessionLogsSessionKey = null;
-          this.usageSessionLogsStatus = failPanelRefresh(
-            createPanelRefreshStatus(),
-            formatMissingOperatorReadScopeMessage("usage details"),
-          );
-        } else {
-          this.usageSessionLogsStatus = failPanelRefresh(
-            this.usageSessionLogsStatus,
-            toUsageErrorMessage(error),
-          );
         }
       }
     } finally {
@@ -750,22 +732,7 @@ class UsagePage extends OpenClawLightDomElement {
       },
     };
 
-    return html`
-      <section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("usage")}</div>
-        </div>
-        ${renderAgentScopeControl({
-          agents: this.context.agents.state.agentsList?.agents ?? [],
-          additionalAgentIds:
-            this.usageResult?.sessions
-              .map((entry) => entry.agentId)
-              .filter((agentId): agentId is string => Boolean(agentId?.trim())) ?? [],
-          selection: this.context.agentSelection,
-        })}
-      </section>
-      ${renderSettingsWorkspace(renderUsage(props))}
-    `;
+    return renderUsagePageShell(this.context, this.usageResult, renderUsage(props));
   }
 }
 
