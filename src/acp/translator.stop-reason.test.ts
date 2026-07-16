@@ -3,6 +3,8 @@ import type { PromptRequest } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import { createInMemoryAcpEventLedger } from "./event-ledger.js";
+import { sessionUpdatePayloads } from "./translator.bridge-test-helpers.js";
 import { AcpGatewayAgent } from "./translator.js";
 import {
   createChatEvent,
@@ -169,13 +171,57 @@ describe("acp translator stop reason mapping", () => {
   it("rejects in-flight prompts when the gateway does not reconnect before the grace window", async () => {
     vi.useFakeTimers();
     try {
-      const { agent, promptPromise } = await createPendingPromptHarness();
+      const eventLedger = createInMemoryAcpEventLedger();
+      await eventLedger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: "/tmp",
+        complete: true,
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return {};
+        }
+        if (method === "agent.wait") {
+          throw new Error("gateway closed (1006): connection lost");
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const { agent, sessionId, sessionUpdate } = createSessionAgentHarness(request, {
+        eventLedger,
+      });
+      const promptPromise = promptAgent(agent, sessionId);
       void promptPromise.catch(() => {});
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("chat.send", expect.any(Object), { timeoutMs: null });
+      });
+      await Promise.resolve();
 
       agent.handleGatewayDisconnect("1006: connection lost");
       await vi.advanceTimersByTimeAsync(5_000);
 
-      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+      await expect(promptPromise).rejects.toThrow(
+        "This turn was accepted and may still complete after reconnect",
+      );
+      const interruptionUpdates = sessionUpdatePayloads(sessionUpdate, "agent_message_chunk");
+      expect(interruptionUpdates).toHaveLength(1);
+      expect(interruptionUpdates[0]?.update.content).toEqual({
+        type: "text",
+        text: expect.stringContaining(
+          "[OpenClaw interruption] Gateway disconnected: 1006: connection lost. This turn was accepted",
+        ),
+      });
+      expect(JSON.stringify(interruptionUpdates)).not.toContain("resend");
+
+      const replay = await eventLedger.readReplay({
+        sessionId,
+        sessionKey: "agent:main:main",
+      });
+      const recordedInterruptions = replay.events.filter(
+        (event) => event.update.sessionUpdate === "agent_message_chunk",
+      );
+      expect(recordedInterruptions).toHaveLength(1);
+      expect(recordedInterruptions[0]?.runId).toBeTypeOf("string");
     } finally {
       vi.useRealTimers();
     }
@@ -190,7 +236,7 @@ describe("acp translator stop reason mapping", () => {
         }
         return {};
       }) as GatewayClient["request"];
-      const { agent, sessionId } = createSessionAgentHarness(request);
+      const { agent, sessionId, sessionUpdate } = createSessionAgentHarness(request);
       const promptPromise = promptAgent(agent, sessionId);
       const settleSpy = observeSettlement(promptPromise);
 
@@ -203,6 +249,13 @@ describe("acp translator stop reason mapping", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+      const interruptionUpdates = sessionUpdatePayloads(sessionUpdate, "agent_message_chunk");
+      expect(interruptionUpdates).toHaveLength(1);
+      expect(interruptionUpdates[0]?.update.content).toEqual({
+        type: "text",
+        text: expect.stringContaining("did not confirm whether this turn was accepted"),
+      });
+      expect(JSON.stringify(interruptionUpdates)).not.toContain("resend");
     } finally {
       vi.useRealTimers();
     }

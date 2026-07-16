@@ -155,6 +155,16 @@ type PendingPrompt = {
   toolCalls?: Map<string, PendingToolCall>;
 };
 
+function buildGatewayDisconnectError(
+  pending: PendingPrompt,
+  disconnectContext: DisconnectContext,
+): Error {
+  const guidance = pending.sendAccepted
+    ? "This turn was accepted and may still complete after reconnect; check the session before retrying."
+    : "The Gateway did not confirm whether this turn was accepted; check the session before retrying.";
+  return new Error(`Gateway disconnected: ${disconnectContext.reason}. ${guidance}`);
+}
+
 type PendingApprovalRelay = {
   approvalId: string;
   runId: string;
@@ -702,11 +712,13 @@ export class AcpGatewayAgent implements Agent {
       }
 
       const sendWithProvenanceFallback = async () => {
-        const markSendAccepted = () => {
+        const markSendAccepted = (): boolean => {
           const pending = this.getPendingPrompt(params.sessionId, runId);
-          if (pending) {
-            pending.sendAccepted = true;
+          if (!pending) {
+            return false;
           }
+          pending.sendAccepted = true;
+          return true;
         };
         const applyTerminalAck = async (ack: ChatSendAck | undefined): Promise<boolean> => {
           const status = normalizedChatSendAckStatus(ack?.status);
@@ -721,7 +733,7 @@ export class AcpGatewayAgent implements Agent {
           if (status === "error") {
             const current = pending();
             if (current) {
-              this.rejectPendingPrompt(
+              await this.rejectPendingPrompt(
                 current,
                 new Error("Chat failed before the run started; try again."),
               );
@@ -729,7 +741,9 @@ export class AcpGatewayAgent implements Agent {
             return true;
           }
           if (status === "ok") {
-            markSendAccepted();
+            if (!markSendAccepted()) {
+              return true;
+            }
             await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
             const current = pending();
             if (current) {
@@ -756,7 +770,9 @@ export class AcpGatewayAgent implements Agent {
           if (terminal) {
             return;
           }
-          markSendAccepted();
+          if (!markSendAccepted()) {
+            return;
+          }
           await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
         } catch (err) {
           if (
@@ -767,7 +783,9 @@ export class AcpGatewayAgent implements Agent {
             if (terminal) {
               return;
             }
-            markSendAccepted();
+            if (!markSendAccepted()) {
+              return;
+            }
             await this.sessionUpdates.recordUserPrompt(session, runId, params.prompt);
             return;
           }
@@ -1299,20 +1317,43 @@ export class AcpGatewayAgent implements Agent {
     this.disconnectTimer.unref?.();
   }
 
-  private rejectPendingPrompt(pending: PendingPrompt, error: Error): void {
+  private async rejectPendingPrompt(pending: PendingPrompt, error: Error): Promise<void> {
     const currentPending = this.getPendingPrompt(pending.sessionId, pending.idempotencyKey);
     if (currentPending !== pending) {
       return;
     }
-    this.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
-      denyActive: true,
-    });
-    this.pendingPrompts.delete(pending.sessionId);
-    this.sessionStore.clearActiveRun(pending.sessionId);
-    if (this.pendingPrompts.size === 0) {
-      this.clearDisconnectTimer();
+    const promptKey = this.pendingPromptKey(pending.sessionId, pending.idempotencyKey);
+    this.settlingPromptKeys.add(promptKey);
+    try {
+      this.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
+        denyActive: true,
+      });
+      // Retire the prompt before yielding so reconnect, deadline, and send-failure
+      // paths cannot emit duplicate terminal notices for the same turn.
+      this.pendingPrompts.delete(pending.sessionId);
+      this.sessionStore.clearActiveRun(pending.sessionId);
+      if (this.pendingPrompts.size === 0) {
+        this.clearDisconnectTimer();
+      }
+      try {
+        await this.sessionUpdates.emit({
+          sessionId: pending.sessionId,
+          sessionKey: pending.sessionKey,
+          ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+          runId: pending.idempotencyKey,
+          record: true,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: `[OpenClaw interruption] ${error.message}` },
+          },
+        });
+      } catch (err) {
+        this.log(`prompt interruption update failed for ${pending.sessionId}: ${String(err)}`);
+      }
+      pending.reject(error);
+    } finally {
+      this.settlingPromptKeys.delete(promptKey);
     }
-    pending.reject(error);
   }
 
   private clearPendingDisconnectState(
@@ -1394,9 +1435,9 @@ export class AcpGatewayAgent implements Agent {
       this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
       if (deadlineExpired) {
         if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
-          this.rejectPendingPrompt(
+          await this.rejectPendingPrompt(
             pending,
-            new Error(`Gateway disconnected: ${disconnectContext.reason}`),
+            buildGatewayDisconnectError(pending, disconnectContext),
           );
           return false;
         }
@@ -1424,9 +1465,9 @@ export class AcpGatewayAgent implements Agent {
         if (!currentDisconnectContext) {
           return false;
         }
-        this.rejectPendingPrompt(
+        await this.rejectPendingPrompt(
           currentPending,
-          new Error(`Gateway disconnected: ${currentDisconnectContext.reason}`),
+          buildGatewayDisconnectError(currentPending, currentDisconnectContext),
         );
         return false;
       }

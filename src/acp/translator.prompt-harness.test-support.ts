@@ -4,6 +4,7 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
+import type { AcpEventLedger } from "./event-ledger.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -21,7 +22,13 @@ const DEFAULT_PROMPT_TEXT = "hello";
 /** Creates an ACP translator instance with one preloaded session. */
 export function createSessionAgentHarness(
   request: GatewayClient["request"],
-  options: { sessionId?: string; sessionKey?: string; cwd?: string } = {},
+  options: {
+    sessionId?: string;
+    sessionKey?: string;
+    cwd?: string;
+    connection?: ReturnType<typeof createAcpConnection>;
+    eventLedger?: AcpEventLedger;
+  } = {},
 ) {
   const sessionId = options.sessionId ?? DEFAULT_SESSION_ID;
   const sessionKey = options.sessionKey ?? DEFAULT_SESSION_KEY;
@@ -31,12 +38,15 @@ export function createSessionAgentHarness(
     sessionKey,
     cwd: options.cwd ?? "/tmp",
   });
-  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+  const connection = options.connection ?? createAcpConnection();
+  const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    ...(options.eventLedger ? { eventLedger: options.eventLedger } : {}),
     sessionStore,
   });
 
   return {
     agent,
+    sessionUpdate: connection["__sessionUpdateMock"],
     sessionId,
     sessionKey,
     sessionStore,
