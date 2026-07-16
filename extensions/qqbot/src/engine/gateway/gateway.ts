@@ -376,7 +376,14 @@ export async function sendReplySessionConflictTerminalNotice(
   if (!isReplySessionInitConflictError(error)) {
     return;
   }
-  const { event, account, log, senderSendText, buildDeliveryTargetFn, accountToCredsFn } = deps;
+  const {
+    event,
+    account,
+    log,
+    senderSendText: senderSendTextFn,
+    buildDeliveryTargetFn,
+    accountToCredsFn,
+  } = deps;
   const errorId = generateSessionConflictErrorId();
   const terminalText = `当前消息因会话冲突未能处理，请重新发送。\n错误编号：${errorId}`;
 
@@ -389,7 +396,7 @@ export async function sendReplySessionConflictTerminalNotice(
   );
 
   try {
-    await senderSendText(buildDeliveryTargetFn(event), terminalText, accountToCredsFn(account), {
+    await senderSendTextFn(buildDeliveryTargetFn(event), terminalText, accountToCredsFn(account), {
       msgId: event.messageId,
     });
   } catch (sendErr) {
