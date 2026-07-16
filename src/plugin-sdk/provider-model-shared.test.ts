@@ -95,9 +95,9 @@ describe("modelCostsEqual", () => {
 
 describe("selectPreferredLocalModelId", () => {
   const familyOrder = [
+    "google/gemma-4-27b",
     "qwen3.5:4b",
     "qwen3:8b",
-    "google/gemma-4-27b",
     "gpt-oss:20b",
     "google/gemma-3-12b",
     "meta-llama/Llama-4-17B",
