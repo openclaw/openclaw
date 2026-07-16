@@ -274,7 +274,10 @@ export async function sendPayloadWithChunkedTextAndMedia<
   return lastResult;
 }
 
-/** Sends a media sequence with caption text on the first item and returns the last send result. */
+/**
+ * Sends non-empty media URLs with caption text on the first actual send.
+ * Returns the last send result, or undefined when every URL is empty.
+ */
 export async function sendPayloadMediaSequence<TResult>(params: {
   /** Caption text attached to the first non-empty media URL only. */
   text: string;
@@ -287,24 +290,27 @@ export async function sendPayloadMediaSequence<TResult>(params: {
     mediaUrl: string;
     /** Original index in `mediaUrls`. */
     index: number;
-    /** Whether this is the first media entry in the original sequence. */
+    /** Whether this is the first non-empty media entry sent. */
     isFirst: boolean;
   }) => Promise<TResult>;
   /** Called after each successful media send and before the next send starts. */
   onResult?: (result: TResult) => Promise<void> | void;
 }): Promise<TResult | undefined> {
   let lastResult: TResult | undefined;
+  let hasSent = false;
   for (let i = 0; i < params.mediaUrls.length; i += 1) {
     const mediaUrl = params.mediaUrls[i];
     if (!mediaUrl) {
       continue;
     }
+    const isFirst = !hasSent;
     lastResult = await params.send({
-      text: i === 0 ? params.text : "",
+      text: isFirst ? params.text : "",
       mediaUrl,
       index: i,
-      isFirst: i === 0,
+      isFirst,
     });
+    hasSent = true;
     await params.onResult?.(lastResult);
   }
   return lastResult;
@@ -345,13 +351,14 @@ export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
   onResult?: (result: TResult) => Promise<void> | void;
   /** Result returned when no media result is available. */
   fallbackResult: TResult;
-  /** Optional callback used instead of `fallbackResult` when there are no media URLs. */
+  /** Optional callback used instead of `fallbackResult` when no media item is sent. */
   sendNoMedia?: () => Promise<TResult>;
 }): Promise<TResult> {
-  if (params.mediaUrls.length === 0) {
-    return params.sendNoMedia ? await params.sendNoMedia() : params.fallbackResult;
+  const result = await sendPayloadMediaSequence(params);
+  if (result !== undefined) {
+    return result;
   }
-  return (await sendPayloadMediaSequence(params)) ?? params.fallbackResult;
+  return params.sendNoMedia ? await params.sendNoMedia() : params.fallbackResult;
 }
 
 /** Sends media when present, then always runs finalization and returns its result. */
@@ -417,7 +424,12 @@ export async function sendTextMediaPayload(params: {
         return result;
       },
     });
-    return lastResult ?? { channel: params.channel, messageId: "" };
+    if (lastResult !== undefined) {
+      return lastResult;
+    }
+  }
+  if (!text) {
+    return { channel: params.channel, messageId: "" };
   }
   const limit = params.adapter.textChunkLimit;
   const chunks =

@@ -18,6 +18,8 @@ import {
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
+  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceOrFallback,
   sendTextMediaPayload,
   sendMediaWithLeadingCaption,
   sendPayloadTextChunkSequence,
@@ -150,7 +152,79 @@ describe("sendPayloadTextChunkSequence", () => {
   });
 });
 
+describe("sendPayloadMediaSequence", () => {
+  it("treats the first non-empty URL as the first media send", async () => {
+    const calls: Array<{ text: string; mediaUrl: string; index: number; isFirst: boolean }> = [];
+
+    const result = await sendPayloadMediaSequence({
+      text: "caption",
+      mediaUrls: ["", "https://example.com/image.png"],
+      send: async (input) => {
+        calls.push(input);
+        return input.mediaUrl;
+      },
+    });
+
+    expect(calls).toEqual([
+      {
+        text: "caption",
+        mediaUrl: "https://example.com/image.png",
+        index: 1,
+        isFirst: true,
+      },
+    ]);
+    expect(result).toBe("https://example.com/image.png");
+  });
+
+  it("returns undefined when every media URL is empty", async () => {
+    const send = vi.fn();
+
+    await expect(
+      sendPayloadMediaSequence({ text: "caption", mediaUrls: [""], send }),
+    ).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("uses the no-media fallback when every media URL is empty", async () => {
+    const send = vi.fn();
+    const sendNoMedia = vi.fn(async () => "text-result");
+
+    await expect(
+      sendPayloadMediaSequenceOrFallback({
+        text: "caption",
+        mediaUrls: ["", ""],
+        send,
+        sendNoMedia,
+        fallbackResult: "fallback-result",
+      }),
+    ).resolves.toBe("text-result");
+    expect(send).not.toHaveBeenCalled();
+    expect(sendNoMedia).toHaveBeenCalledOnce();
+  });
+});
+
 describe("sendTextMediaPayload", () => {
+  it("falls back to text when every media URL is empty", async () => {
+    const sendMedia = vi.fn();
+    const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
+
+    const result = await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: {},
+        to: "target",
+        text: "caption",
+        payload: { text: "caption", mediaUrls: ["", ""] },
+      },
+      adapter: { sendMedia, sendText },
+    });
+
+    expect(sendMedia).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "caption" }));
+    expect(result).toEqual({ channel: "test", messageId: "caption" });
+  });
+
   it("reports each completed text chunk before a later chunk fails", async () => {
     const sendText = vi
       .fn()

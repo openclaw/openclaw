@@ -175,15 +175,16 @@ export const matrixOutbound: ChannelOutboundAdapter = {
             onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
           }),
       });
-      return {
-        channel: "matrix",
-        messageId: lastResult!.messageId,
-        roomId: lastResult!.roomId,
-      };
+      if (lastResult !== undefined) {
+        return {
+          channel: "matrix",
+          messageId: lastResult.messageId,
+          roomId: lastResult.roomId,
+        };
+      }
     }
     const result = await send(to, payloadText, {
       cfg,
-      mediaUrl: payload.mediaUrl,
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
