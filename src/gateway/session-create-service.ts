@@ -61,6 +61,11 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
+import {
+  rejectPluginOwnerMismatch,
+  createPluginOwnerAssertCurrent,
+  runWithOwnerMismatchCatch,
+} from "./session-plugin-ownership.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
@@ -261,6 +266,7 @@ export async function createGatewaySession(params: {
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
+  pluginRuntimeOwnerId?: string;
   spawnedCwd?: string;
   /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
   worktree?: { id: string; branch: string; repoRoot: string };
@@ -464,6 +470,17 @@ export async function createGatewaySession(params: {
     }
     canonicalParentSessionKey = parent.canonicalKey;
     parentSessionEntry = parent.entry;
+    {
+      const err = rejectPluginOwnerMismatch(
+        params.pluginRuntimeOwnerId,
+        parentSessionEntry,
+        parentSessionKey,
+        "use",
+      );
+      if (err) {
+        return err;
+      }
+    }
     parentSessionTarget = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: parentSessionKey,
@@ -508,20 +525,27 @@ export async function createGatewaySession(params: {
       const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
       const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
       const execCwd = normalizeOptionalString(params.execCwd);
-      const resetResult = await performGatewaySessionReset({
-        key: canonicalParentSessionKey,
-        ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
-          ? { agentId: parentSelectedAgentId }
-          : {}),
-        reason: "new",
-        commandSource: params.commandSource,
-        ...(spawnedCwd ? { spawnedCwd } : {}),
-        ...(params.worktree ? { worktree: params.worktree } : {}),
-        ...(params.execNode ? { execNode: params.execNode } : {}),
-        ...(execCwd ? { execCwd } : {}),
-        ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
-        ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
-      });
+      const resetResult = await runWithOwnerMismatchCatch(() =>
+        performGatewaySessionReset({
+          key: canonicalParentSessionKey,
+          ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
+            ? { agentId: parentSelectedAgentId }
+            : {}),
+          reason: "new",
+          commandSource: params.commandSource,
+          ...(spawnedCwd ? { spawnedCwd } : {}),
+          ...(params.worktree ? { worktree: params.worktree } : {}),
+          ...(params.execNode ? { execNode: params.execNode } : {}),
+          ...(execCwd ? { execCwd } : {}),
+          ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
+          ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
+          assertCurrent: createPluginOwnerAssertCurrent(
+            params.pluginRuntimeOwnerId,
+            parentSessionKey!,
+            parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
+          ),
+        }),
+      );
       if (!resetResult.ok) {
         return resetResult;
       }
@@ -539,11 +563,7 @@ export async function createGatewaySession(params: {
   let createdContext: CreatedGatewaySession | undefined;
   const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
     let currentParentSessionEntry = parentSessionEntry;
-    if (
-      canonicalParentSessionKey &&
-      parentSessionTarget &&
-      (params.emitCommandHooks === true || params.fork === true)
-    ) {
+    if (canonicalParentSessionKey && parentSessionTarget) {
       const currentParent = loadSessionEntry(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
@@ -557,7 +577,7 @@ export async function createGatewaySession(params: {
           ok: false,
           error: errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `Parent session ${parentSessionKey} changed before ${params.fork === true ? "fork" : "/new"}; retry.`,
+            `Parent session ${parentSessionKey} changed before ${params.fork === true ? "fork" : "link"}; retry.`,
           ),
         };
       }
@@ -568,20 +588,33 @@ export async function createGatewaySession(params: {
           error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
         };
       }
-      const parentHasActiveWork =
-        isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
-        isSessionWorkAdmissionActive(parentSessionTarget.storePath, [
-          canonicalParentSessionKey,
-          currentParentEntry.sessionId,
-        ]);
-      if (parentHasActiveWork) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Parent session ${parentSessionKey} is still active; try again in a moment.`,
-          ),
-        };
+      {
+        const err = rejectPluginOwnerMismatch(
+          params.pluginRuntimeOwnerId,
+          currentParentEntry,
+          parentSessionKey!,
+          "use",
+        );
+        if (err) {
+          return err;
+        }
+      }
+      if (params.emitCommandHooks === true || params.fork === true) {
+        const parentHasActiveWork =
+          isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
+          isSessionWorkAdmissionActive(parentSessionTarget.storePath, [
+            canonicalParentSessionKey,
+            currentParentEntry.sessionId,
+          ]);
+        if (parentHasActiveWork) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Parent session ${parentSessionKey} is still active; try again in a moment.`,
+            ),
+          };
+        }
       }
     }
 
@@ -746,6 +779,17 @@ export async function createGatewaySession(params: {
         const catalogResolvedModel = params.catalogTarget
           ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
           : undefined;
+        {
+          const err = rejectPluginOwnerMismatch(
+            params.pluginRuntimeOwnerId,
+            existingEntry,
+            target.canonicalKey,
+            "takeover",
+          );
+          if (err) {
+            return err;
+          }
+        }
         const initializedEntry: SessionEntry = {
           ...patched.entry,
           ...(catalogResolvedModel && catalogAgentRuntime
@@ -787,6 +831,7 @@ export async function createGatewaySession(params: {
           ...(params.initialEntry?.pluginExtensions !== undefined
             ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
             : {}),
+          ...(params.pluginRuntimeOwnerId ? { pluginOwnerId: params.pluginRuntimeOwnerId } : {}),
         };
         sessionEntries[target.canonicalKey] = initializedEntry;
         const initialized = { ...patched, entry: initializedEntry };
@@ -805,6 +850,7 @@ export async function createGatewaySession(params: {
           ...initializedEntry,
           ...inheritedSelection,
           parentSessionKey: storedParentSessionKey,
+          ...(params.pluginRuntimeOwnerId ? { pluginOwnerId: params.pluginRuntimeOwnerId } : {}),
         };
         if (params.fork !== true) {
           return { ...initialized, entry };

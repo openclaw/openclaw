@@ -24,6 +24,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { handleSessionStateSessionDeleted } from "../../sessions/session-state-events.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { rejectPluginOwnerMismatch } from "../session-plugin-ownership.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { chatHandlers } from "./chat.js";
@@ -31,7 +32,6 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   loadSessionsRuntimeModule,
-  rejectPluginRuntimeDeleteMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementMutationError,
@@ -171,15 +171,18 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       respondSessionWorkerPlacementMutationError(initialPlacementError, respond);
       return;
     }
-    if (
-      rejectPluginRuntimeDeleteMismatch({
-        client,
-        key: target.canonicalKey ?? key,
-        entry: initialDeleteEntry,
-        respond,
-      })
-    ) {
-      return;
+    {
+      const pluginRuntimeOwnerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
+      const ownerError = rejectPluginOwnerMismatch(
+        pluginRuntimeOwnerId,
+        initialDeleteEntry,
+        target.canonicalKey ?? key,
+        "delete",
+      );
+      if (ownerError) {
+        respond(false, undefined, ownerError.error);
+        return;
+      }
     }
     let abortResult:
       | {
@@ -290,15 +293,20 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
-        if (
-          rejectPluginRuntimeDeleteMismatch({
-            client,
-            key: canonicalKey ?? key,
+        {
+          const pluginRuntimeOwnerId = normalizeOptionalString(
+            client?.internal?.pluginRuntimeOwnerId,
+          );
+          const ownerError = rejectPluginOwnerMismatch(
+            pluginRuntimeOwnerId,
             entry,
-            respond,
-          })
-        ) {
-          return undefined;
+            canonicalKey ?? key,
+            "delete",
+          );
+          if (ownerError) {
+            respond(false, undefined, ownerError.error);
+            return undefined;
+          }
         }
         const mutationCleanupError = await cleanupSessionBeforeMutation({
           cfg,

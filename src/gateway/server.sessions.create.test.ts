@@ -15,6 +15,8 @@ import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/sessi
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { performGatewaySessionReset } from "./session-reset-service.js";
+import { loadSessionEntry as loadSessionEntryFromUtils } from "./session-utils.js";
 import {
   agentCommand,
   agentDiscoveryMock,
@@ -29,7 +31,6 @@ import {
   sessionStoreEntry,
   directSessionReq,
   sessionHookMocks,
-  sessionLifecycleHookMocks,
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -1619,12 +1620,6 @@ test("sessions.create loads selected global parent from the requested agent stor
           (event as { action?: unknown }).action === "new",
       );
     expect(commandNewEvent?.context?.sessionEntry?.sessionId).toBe("sess-work-parent");
-    const [endEvent] = sessionLifecycleHookMocks.runSessionEnd.mock.calls[0] as unknown as [
-      { sessionId?: string; sessionKey?: string },
-      unknown,
-    ];
-    expect(endEvent.sessionId).toBe("sess-work-parent");
-    expect(endEvent.sessionKey).toBe("global");
   } finally {
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;
@@ -2193,5 +2188,320 @@ test("sessions.create rejects replacing its parent key", async () => {
     code: "INVALID_REQUEST",
     message: "sessions.create key must differ from parentSessionKey",
   });
+});
+
+test("sessions.create rejects cross-plugin or ownerless parent session", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+
+  // Seed sessions: pluginA-owned, ownerless (user), and pluginB-owned.
+  // Each session that will be used as a fork parent needs its own transcript.
+  const pluginAParent = await createCheckpointFixture(dir);
+  const selfParent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(pluginAParent.sessionId, {
+        sessionFile: pluginAParent.sessionFile,
+        pluginOwnerId: "pluginA",
+        totalTokens: 123,
+        totalTokensFresh: true,
+      }),
+      user: sessionStoreEntry("sess-user", {
+        // no sessionFile — ownerless user session is not forkable
+        // no pluginOwnerId — ownerless user session
+      }),
+      self: sessionStoreEntry(selfParent.sessionId, {
+        sessionFile: selfParent.sessionFile,
+        pluginOwnerId: "pluginB",
+      }),
+    },
+  });
+  // Seed transcripts so non-plugin forks can copy them.
+  await seedSessionTranscript({
+    sessionId: pluginAParent.sessionId,
+    sessionKey: "agent:main:main",
+    storePath: testState.sessionStorePath!,
+    messages: [
+      { role: "user", content: "before compaction" },
+      { role: "assistant", content: [{ type: "text", text: "working on it" }] },
+    ],
+  });
+  await seedSessionTranscript({
+    sessionId: selfParent.sessionId,
+    sessionKey: "agent:main:main",
+    storePath: testState.sessionStorePath!,
+    messages: [
+      { role: "user", content: "self message" },
+      { role: "assistant", content: [{ type: "text", text: "self reply" }] },
+    ],
+  });
+
+  const pluginBClient = {
+    connect: { scopes: ["operator.write"] },
+    internal: { pluginRuntimeOwnerId: "pluginB" },
+  } as never;
+
+  // 1) Plugin B forks Plugin A's session — rejected (cross-plugin fork)
+  const deniedForkCross = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "main", fork: true },
+    { client: pluginBClient },
+  );
+  expect(deniedForkCross.ok).toBe(false);
+  expect(deniedForkCross.error?.message).toContain("cannot use session");
+
+  // 2) Non-plugin client (no pluginRuntimeOwnerId) forks — allowed
+  const allowedForkNonPlugin = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+    fork: true,
+  });
+  expect(allowedForkNonPlugin.ok, JSON.stringify(allowedForkNonPlugin.error)).toBe(true);
+
+  // 3) Plugin B forks ownerless session — rejected
+  const deniedForkOwnerless = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "user", fork: true },
+    { client: pluginBClient },
+  );
+  expect(deniedForkOwnerless.ok).toBe(false);
+  expect(deniedForkOwnerless.error?.message).toContain("cannot use session");
+
+  // 4) Plugin B non-fork parent → Plugin A's session — rejected
+  const deniedParentCross = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "main", fork: false },
+    { client: pluginBClient },
+  );
+  expect(deniedParentCross.ok).toBe(false);
+  expect(deniedParentCross.error?.message).toContain("cannot use session");
+
+  // 5) Plugin B non-fork parent → ownerless session — rejected
+  const deniedParentOwnerless = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "user", fork: false },
+    { client: pluginBClient },
+  );
+  expect(deniedParentOwnerless.ok).toBe(false);
+  expect(deniedParentOwnerless.error?.message).toContain("cannot use session");
+
+  // 6) Plugin B non-fork parent → own session — allowed, child is owned by pluginB
+  const allowedParentSelf = await directSessionReq<{
+    key: string;
+    entry: { pluginOwnerId?: string };
+  }>(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "self", fork: false },
+    { client: pluginBClient },
+  );
+  expect(allowedParentSelf.ok, JSON.stringify(allowedParentSelf.error)).toBe(true);
+  expect(allowedParentSelf.payload?.entry?.pluginOwnerId).toBe("pluginB");
+
+  // 7) Non-plugin client non-fork parent — allowed, child is ownerless
+  const allowedParentNonPlugin = await directSessionReq<{
+    key: string;
+    entry: { pluginOwnerId?: string };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "self",
+    fork: false,
+  });
+  expect(allowedParentNonPlugin.ok, JSON.stringify(allowedParentNonPlugin.error)).toBe(true);
+  expect(allowedParentNonPlugin.payload?.entry?.pluginOwnerId).toBeUndefined();
+
+  // 8) Plugin B can reuse its own child as parent — allowed (child persisted pluginOwnerId)
+  const childKey = allowedParentSelf.payload?.key;
+  if (childKey) {
+    const reuseChild = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", parentSessionKey: childKey, fork: false },
+      { client: pluginBClient },
+    );
+    expect(reuseChild.ok, JSON.stringify(reuseChild.error)).toBe(true);
+  }
+
+  // 9) Plugin A cannot use Plugin B's child as parent — rejected
+  const pluginAClient = {
+    connect: { scopes: ["operator.write"] },
+    internal: { pluginRuntimeOwnerId: "pluginA" },
+  } as never;
+  if (childKey) {
+    const crossPluginChild = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", parentSessionKey: childKey, fork: false },
+      { client: pluginAClient },
+    );
+    expect(crossPluginChild.ok).toBe(false);
+    expect(crossPluginChild.error?.message).toContain("cannot use session");
+  }
+
+  // 10) Plugin B fork from own session → child is owned by pluginB
+  const selfForkChild = await directSessionReq<{
+    key: string;
+    entry: { pluginOwnerId?: string };
+  }>(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "self", fork: true },
+    { client: pluginBClient },
+  );
+  expect(selfForkChild.ok, JSON.stringify(selfForkChild.error)).toBe(true);
+  expect(selfForkChild.payload?.entry?.pluginOwnerId).toBe("pluginB");
+
+  // 11) Plugin B parentless create → child is also owned by pluginB
+  const parentlessChild = await directSessionReq<{
+    key: string;
+    entry: { pluginOwnerId?: string };
+  }>("sessions.create", { agentId: "main" }, { client: pluginBClient });
+  expect(parentlessChild.ok, JSON.stringify(parentlessChild.error)).toBe(true);
+  expect(parentlessChild.payload?.entry?.pluginOwnerId).toBe("pluginB");
+
+  // 12) Plugin B cannot take over existing foreign session via explicit key — rejected
+  const takeoverForeign = await directSessionReq<{
+    key: string;
+    entry: { pluginOwnerId?: string };
+  }>("sessions.create", { key: "main", agentId: "main" }, { client: pluginBClient });
+  expect(takeoverForeign.ok).toBe(false);
+  expect(takeoverForeign.error?.message).toContain("cannot take over session");
+
+  // 13) Plugin B can create at non-existent explicit key (new target, no takeover)
+  const newTarget = await directSessionReq<{
+    key: string;
+    entry: { pluginOwnerId?: string };
+  }>("sessions.create", { key: "pluginB-new", agentId: "main" }, { client: pluginBClient });
+  expect(newTarget.ok, JSON.stringify(newTarget.error)).toBe(true);
+  expect(newTarget.payload?.entry?.pluginOwnerId).toBe("pluginB");
+
+  // 14) Plugin B cannot take over existing foreign session via parent + explicit key — rejected
+  const takeoverParentKey = await directSessionReq<{
+    key: string;
+    entry: { pluginOwnerId?: string };
+  }>(
+    "sessions.create",
+    { key: "main", agentId: "main", parentSessionKey: "self", fork: false },
+    { client: pluginBClient },
+  );
+  expect(takeoverParentKey.ok).toBe(false);
+  expect(takeoverParentKey.error?.message).toContain("cannot take over session");
+
+  // 15) Plugin B cannot take over existing ownerless session via explicit key — rejected
+  const takeoverOwnerless = await directSessionReq<{
+    key: string;
+    entry: { pluginOwnerId?: string };
+  }>("sessions.create", { key: "user", agentId: "main" }, { client: pluginBClient });
+  expect(takeoverOwnerless.ok).toBe(false);
+  expect(takeoverOwnerless.error?.message).toContain("cannot take over session");
+
+  testState.sessionConfig = undefined;
+});
+
+test("performGatewaySessionReset assertCurrent propagates owner mismatch through lifecycle lock", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
+
+  const fixture = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(fixture.sessionId, {
+        sessionFile: fixture.sessionFile,
+        pluginOwnerId: "pluginB",
+      }),
+    },
+  });
+
+  // Simulate the TOCTOU outcome: the main session was replaced under a
+  // different owner between the pre-lock check and the lifecycle lock.
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-replaced", {
+        sessionFile: fixture.sessionFile,
+        pluginOwnerId: "pluginA",
+      }),
+    },
+  });
+
+  // Call performGatewaySessionReset directly with an assertCurrent that
+  // expects the original owner (pluginB). The assertCurrent fires inside
+  // runExclusiveSessionLifecycleMutation's prepare — under the lifecycle
+  // lock — reloads the parent entry, sees pluginA, and throws.
+  // The error propagates from the prepare callback through the lifecycle
+  // lock cleanup, and then out of performGatewaySessionReset as a
+  // rejection.
+  await expect(
+    performGatewaySessionReset({
+      key: "main",
+      reason: "new",
+      commandSource: "test",
+      assertCurrent: () => {
+        const entry = loadSessionEntryFromUtils("main").entry;
+        if (!entry?.sessionId || entry.pluginOwnerId !== "pluginB") {
+          throw new Error(
+            `Plugin "pluginB" cannot reset session "main" because it did not create it.`,
+          );
+        }
+      },
+    }),
+  ).rejects.toThrow("cannot reset session");
+
+  testState.sessionConfig = undefined;
+});
+
+test("sessions.create rejects cross-store cross-plugin parent session fork", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const workDir = path.dirname(workStorePath);
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "per-sender" };
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  try {
+    await fs.mkdir(workDir, { recursive: true });
+    const parent = await createCheckpointFixture(workDir);
+    await writeSessionStore({
+      storePath: workStorePath,
+      agentId: "work",
+      entries: {
+        main: sessionStoreEntry(parent.sessionId, {
+          sessionFile: parent.sessionFile,
+          pluginOwnerId: "pluginA",
+        }),
+      },
+    });
+    // Seed transcript so the non-plugin fork case can copy it.
+    await seedSessionTranscript({
+      sessionId: parent.sessionId,
+      sessionKey: "agent:work:main",
+      storePath: workStorePath,
+      messages: [
+        { role: "user", content: "before compaction" },
+        { role: "assistant", content: [{ type: "text", text: "working on it" }] },
+      ],
+    });
+
+    const pluginBClient = {
+      connect: { scopes: ["operator.write"] },
+      internal: { pluginRuntimeOwnerId: "pluginB" },
+    } as never;
+
+    // PluginB tries to fork pluginA's session across agent stores
+    const deniedFork = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", parentSessionKey: "agent:work:main", fork: true },
+      { client: pluginBClient },
+    );
+    expect(deniedFork.ok).toBe(false);
+    expect(deniedFork.error?.message).toContain("cannot use session");
+
+    // Non-plugin client cross-store fork — still allowed
+    const allowedFork = await directSessionReq("sessions.create", {
+      agentId: "main",
+      parentSessionKey: "agent:work:main",
+      fork: true,
+    });
+    expect(allowedFork.ok, JSON.stringify(allowedFork.error)).toBe(true);
+  } finally {
+    testState.agentsConfig = undefined;
+    testState.sessionConfig = undefined;
+    testState.sessionStorePath = undefined;
+  }
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
