@@ -554,6 +554,88 @@ class ChatControllerReconnectRestoreTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun recoveredPendingRunStopsWatchdogWhenRefreshFails() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+      )
+      val controller = newController(gateway)
+      controller.load("main")
+      runCurrent()
+      assertEquals(1, controller.pendingRunCount.value)
+
+      gateway.respond("chat.history") { error("history unavailable") }
+      advanceTimeBy(120_000)
+      runCurrent()
+
+      assertEquals(2, gateway.callCount("chat.history"))
+      assertEquals(0, controller.pendingRunCount.value)
+      assertNull(controller.streamingAssistantText.value)
+
+      advanceTimeBy(120_000)
+      runCurrent()
+      assertEquals(2, gateway.callCount("chat.history"))
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun newerRecoverySnapshotCanSupersedePendingRunWatchdogRefresh() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+      )
+      val controller = newController(gateway)
+      controller.load("main")
+      runCurrent()
+
+      val watchdogRefreshStarted = CompletableDeferred<Unit>()
+      val releaseWatchdogRefresh = CompletableDeferred<String>()
+      val newerRefreshStarted = CompletableDeferred<Unit>()
+      val releaseNewerRefresh = CompletableDeferred<String>()
+      var refreshCalls = 0
+      gateway.respond("chat.history") {
+        refreshCalls += 1
+        if (refreshCalls == 1) {
+          watchdogRefreshStarted.complete(Unit)
+          releaseWatchdogRefresh.await()
+        } else {
+          newerRefreshStarted.complete(Unit)
+          releaseNewerRefresh.await()
+        }
+      }
+
+      advanceTimeBy(120_000)
+      runCurrent()
+      watchdogRefreshStarted.await()
+      controller.refresh()
+      runCurrent()
+      newerRefreshStarted.await()
+      releaseWatchdogRefresh.complete(
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "stale working"),
+      )
+      runCurrent()
+
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("working", controller.streamingAssistantText.value)
+      assertNull(controller.errorText.value)
+
+      releaseNewerRefresh.complete(
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "still working"),
+      )
+      runCurrent()
+
+      assertEquals(3, gateway.callCount("chat.history"))
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("still working", controller.streamingAssistantText.value)
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun explicitRefreshClearsPriorHistoryError() =
     runTest {
       val gateway = ScriptedGateway(json)

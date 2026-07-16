@@ -164,6 +164,12 @@ class ChatController internal constructor(
     val generation: Long,
   )
 
+  private enum class HistoryRefreshResult {
+    Applied,
+    Superseded,
+    Failed,
+  }
+
   @Volatile
   private var liveHistoryMarker: LiveHistoryMarker? = null
 
@@ -1675,14 +1681,14 @@ class ChatController internal constructor(
     // live chat.history response always replaces cached rows wholesale.
     primeFromCache(sessionKey, generation)
     try {
-      val historyApplied =
+      val historyResult =
         fetchAndApplyHistory(
           sessionKey,
           generation,
           updateSessionInfo = true,
           runIdsToReconcile = runIdsToReconcile,
         )
-      if (!historyApplied) return
+      if (historyResult != HistoryRefreshResult.Applied) return
 
       if (!ownsReconnectRecovery) {
         pollHealthIfNeeded(force = forceHealth)
@@ -1707,14 +1713,14 @@ class ChatController internal constructor(
 
   /**
    * Requests live history and applies it to controller state, replacing any cached transcript.
-   * Returns false when a newer load superseded this request (stale responses are dropped).
+   * Reports when a newer load superseded this request (stale responses are dropped).
    */
   private suspend fun fetchAndApplyHistory(
     sessionKey: String,
     generation: Long,
     updateSessionInfo: Boolean,
     runIdsToReconcile: Set<String> = emptySet(),
-  ): Boolean {
+  ): HistoryRefreshResult {
     val requestSequence = historyRequestSequence.incrementAndGet()
     val requestModelSelectionGeneration = modelSelectionGeneration.get()
     val requestCacheScope = currentCacheScope()
@@ -1723,7 +1729,7 @@ class ChatController internal constructor(
       !isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get()) ||
       requestCacheScope != currentCacheScope()
     ) {
-      return false
+      return HistoryRefreshResult.Superseded
     }
     val history =
       try {
@@ -1743,7 +1749,7 @@ class ChatController internal constructor(
               requestCacheScope != currentCacheScope() ||
               requestSequence < latestAppliedHistoryRequest
           }
-        if (superseded) return false
+        if (superseded) return HistoryRefreshResult.Superseded
         throw err
       }
     val applied =
@@ -1814,11 +1820,11 @@ class ChatController internal constructor(
           ?.let { _thinkingLevel.value = it }
         true
       }
-    if (!applied) return false
+    if (!applied) return HistoryRefreshResult.Superseded
     completeReconnectRecoveryIfOwned(sessionKey, generation)
     persistTranscript(requestCacheScope, sessionKey, history.messages)
     confirmDurableSendsFromHistory(requestCacheScope, history)
-    return true
+    return HistoryRefreshResult.Applied
   }
 
   private suspend fun awaitMainSessionReadiness(
@@ -2972,14 +2978,28 @@ class ChatController internal constructor(
     pendingRunTimeoutJobs[runId] =
       scope.launch {
         delay(pendingRunTimeoutMs)
-        refreshHistorySnapshotBestEffort(
-          sessionKey = _sessionKey.value,
-          generation = historyLoadGeneration.get(),
-          runIdsToReconcile = emptySet(),
-        )
-        val runStillInFlight = synchronized(gatewayScopeApplyLock) { latestAppliedInFlightRunId == runId }
-        val replyStillUnresolved = unresolvedRepliesByRunId.containsKey(runId)
-        if (runStillInFlight) {
+        val watchdogSessionKey = _sessionKey.value
+        val latestAppliedBeforeRefresh =
+          synchronized(gatewayScopeApplyLock) {
+            latestAppliedHistoryRequest
+          }
+        val historyResult =
+          refreshHistorySnapshotBestEffort(
+            sessionKey = watchdogSessionKey,
+            generation = historyLoadGeneration.get(),
+            runIdsToReconcile = emptySet(),
+          )
+        val refreshState =
+          synchronized(gatewayScopeApplyLock) {
+            // A concurrent recovery load can supersede this request. Its newer
+            // current-session snapshot is equally authoritative confirmation.
+            val currentSession = watchdogSessionKey == _sessionKey.value
+            val freshSnapshotApplied =
+              historyResult == HistoryRefreshResult.Applied || latestAppliedHistoryRequest > latestAppliedBeforeRefresh
+            Triple(currentSession, freshSnapshotApplied, latestAppliedInFlightRunId == runId)
+          }
+        val (currentSession, freshSnapshotApplied, latestRunMatches) = refreshState
+        if (currentSession && freshSnapshotApplied && latestRunMatches) {
           // The refreshed snapshot confirms the run is still executing; long agent
           // turns can outlast one timeout window, so keep waiting instead of
           // surfacing a false timeout and dropping the optimistic bubble. Terminal
@@ -2987,16 +3007,16 @@ class ChatController internal constructor(
           armPendingRunTimeout(runId)
           return@launch
         }
+        if (currentSession && !freshSnapshotApplied && historyResult == HistoryRefreshResult.Superseded) {
+          // The newer current-session load owns reconciliation but has not applied
+          // yet. Defer expiry; its snapshot or the next watchdog decides the run.
+          armPendingRunTimeout(runId)
+          return@launch
+        }
+        val replyStillUnresolved = unresolvedRepliesByRunId.containsKey(runId)
         clearPendingRun(runId)
         clearTransientRunUiIfIdle()
         if (!replyStillUnresolved) return@launch
-        val stillPending =
-          synchronized(pendingRuns) {
-            pendingRuns.contains(runId)
-          }
-        if (!stillPending && !replyStillUnresolved) return@launch
-        clearPendingRun(runId)
-        clearTransientRunUiIfIdle()
         removeOptimisticMessage(runId)
         unresolvedRepliesByRunId.remove(runId)
         terminalWithoutReplyRunIds.remove(runId)
@@ -3205,7 +3225,7 @@ class ChatController internal constructor(
     sessionKey: String,
     generation: Long,
     runIdsToReconcile: Set<String>,
-  ) {
+  ): HistoryRefreshResult =
     try {
       fetchAndApplyHistory(
         sessionKey,
@@ -3217,8 +3237,8 @@ class ChatController internal constructor(
       throw err
     } catch (_: Throwable) {
       // The bounded expiry below remains the final reconciliation path.
+      HistoryRefreshResult.Failed
     }
-  }
 
   private fun refreshCurrentHistoryBestEffort(
     runIdsToReconcile: Set<String> = emptySet(),
