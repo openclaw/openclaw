@@ -20,28 +20,13 @@ type ProfilePageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-const EMPTY_COST_SUMMARY = {
-  totals: { totalTokens: 0, totalCost: 0 },
-  daily: [],
-} as unknown as CostUsageSummary;
-
-const EMPTY_SESSIONS_USAGE = {
-  sessions: [],
-  aggregates: {
-    messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-    tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-    byModel: [],
-    byProvider: [],
-    byAgent: [],
-    byChannel: [],
-    daily: [],
-  },
-} as unknown as SessionsUsageResult;
-
-function createContext(): ApplicationContext<RouteId> {
+function createContext(
+  client: GatewayBrowserClient | null = null,
+  connected = false,
+): ApplicationContext<RouteId> {
   const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    connected: false,
+    client,
+    connected,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",
@@ -52,9 +37,51 @@ function createContext(): ApplicationContext<RouteId> {
   const subscribe = () => () => undefined;
   return {
     gateway: { snapshot, subscribe },
-    agents: { subscribe },
-    agentIdentity: { subscribe },
+    agents: { subscribe, ensureList: vi.fn(async () => null) },
+    agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
   } as unknown as ApplicationContext<RouteId>;
+}
+
+function createCostSummary(cacheStatus?: CostUsageSummary["cacheStatus"]): CostUsageSummary {
+  return {
+    updatedAt: 0,
+    days: 0,
+    daily: [],
+    totals: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      totalCost: 1,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    },
+    ...(cacheStatus ? { cacheStatus } : {}),
+  };
+}
+
+function createSessionsResult(): SessionsUsageResult {
+  const totals = createCostSummary().totals;
+  return {
+    updatedAt: 0,
+    startDate: "2026-07-08",
+    endDate: "2026-07-08",
+    sessions: [],
+    totals,
+    aggregates: {
+      messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+      tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+      byModel: [],
+      byProvider: [],
+      byAgent: [],
+      byChannel: [],
+      daily: [],
+    },
+  };
 }
 
 function createConnectedContext(request: GatewayBrowserClient["request"]) {
@@ -134,9 +161,9 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   const request = vi.fn(async (method: string) => {
     if (method === "usage.cost") {
-      return EMPTY_COST_SUMMARY;
+      return createCostSummary();
     }
-    return EMPTY_SESSIONS_USAGE;
+    return createSessionsResult();
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
   const provider = createApplicationContextProvider(harness.context);
@@ -164,10 +191,12 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
     reconnectPollDelayMs = Number(timeout);
     return 1;
   }) as unknown as typeof window.setTimeout);
-  page.costSummary = {
-    ...EMPTY_COST_SUMMARY,
-    cacheStatus: { status: "refreshing" },
-  } as CostUsageSummary;
+  page.costSummary = createCostSummary({
+    status: "refreshing",
+    cachedFiles: 0,
+    pendingFiles: 1,
+    staleFiles: 0,
+  });
   harness.emitConnected(false);
   harness.emitConnected(true);
   expect(request).toHaveBeenCalledTimes(2);
@@ -201,10 +230,12 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
     settleDelayMs = Number(timeout);
     return 1;
   }) as unknown as typeof window.setTimeout);
-  page.costSummary = {
-    ...EMPTY_COST_SUMMARY,
-    cacheStatus: { status: "refreshing" },
-  } as CostUsageSummary;
+  page.costSummary = createCostSummary({
+    status: "refreshing",
+    cachedFiles: 0,
+    pendingFiles: 1,
+    staleFiles: 0,
+  });
   page.lastProfileLoadedAtMs = Date.now();
   page.scheduleCacheSettleRefresh();
   expect(settleDelayMs).toBe(USAGE_PAYLOAD_TTL_MS);
