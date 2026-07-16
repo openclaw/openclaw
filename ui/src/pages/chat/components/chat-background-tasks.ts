@@ -20,36 +20,11 @@ import {
 } from "../../../lib/tasks/data.ts";
 import { renderTaskRow } from "./chat-background-task-row.ts";
 import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
 export { STATUS_TONES } from "./chat-background-tasks-shared.ts";
-
-export type BackgroundTasksProps = {
-  agentId: string;
-  statusRowId: string;
-  collapsed: boolean;
-  /** Pane too narrow for a side rail: presentation moves to a bottom strip
-   * (mirrors the workspace rail's narrow mode). */
-  narrowLayout: boolean;
-  connected: boolean;
-  canCancel: boolean;
-  loading: boolean;
-  error: string | null;
-  /** null until the first load for this agent finished. */
-  tasks: TaskSummary[] | null;
-  selectedTaskId: string | null;
-  taskDetails: ReadonlyMap<string, TaskSummary>;
-  taskDetailErrors: ReadonlyMap<string, string>;
-  taskDetailLoadingIds: ReadonlySet<string>;
-  cancellingTaskIds: ReadonlySet<string>;
-  finishedCollapsed: boolean;
-  onToggleCollapsed: () => void;
-  onToggleFinished: () => void;
-  onRefresh: () => void;
-  onCancel: (taskId: string) => void;
-  onToggleTask: (task: TaskSummary) => void;
-  onOpenSession: (sessionKey: string) => void;
-};
+export type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 
 type BackgroundTasksState = {
   agentId: string;

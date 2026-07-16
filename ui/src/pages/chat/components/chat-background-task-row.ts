@@ -17,7 +17,7 @@ import {
   newestTaskSnapshot,
   STATUS_TONES,
 } from "./chat-background-tasks-shared.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 
 export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
   const active = isActiveTask(task);
