@@ -232,6 +232,31 @@ describe("SMS account config", () => {
     });
   });
 
+  it("does not discover blank env values as the implicit default account", () => {
+    process.env.TWILIO_ACCOUNT_SID = " ";
+    process.env.TWILIO_AUTH_TOKEN = "\t";
+    process.env.TWILIO_PHONE_NUMBER = " ";
+    process.env.TWILIO_SMS_FROM = "\n";
+    process.env.TWILIO_MESSAGING_SERVICE_SID = " ";
+
+    expect(listSmsAccountIds({})).toEqual([]);
+    expect(
+      listSmsAccountIds({
+        channels: {
+          sms: {
+            accounts: {
+              support: {
+                accountSid: "AC-support",
+                authToken: "support-token",
+                fromNumber: "+15551112222",
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual(["support"]);
+  });
+
   it("uses TWILIO_SMS_FROM when the legacy from-number env var is blank", () => {
     process.env.TWILIO_ACCOUNT_SID = "AC-env";
     process.env.TWILIO_AUTH_TOKEN = "env-token";
