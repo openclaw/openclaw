@@ -400,7 +400,9 @@ async function waitForGatewayReady(params: {
       return;
     }
     try {
-      await sleepWithAbort(DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS, params.abortSignal);
+      await sleepWithAbort(DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS, params.abortSignal, {
+        ref: false,
+      });
     } catch {
       // Abort is normal lifecycle shutdown; do not enter another reconnect attempt.
       return;
