@@ -150,6 +150,15 @@ describe("OpenClaw provider index", () => {
       (model) => model.id === "kimi-k2.6",
     );
     expect(kimi?.status).toBe("preview");
+    const kimiK3 = index.providers.moonshot?.previewCatalog?.models.find(
+      (model) => model.id === "kimi-k3",
+    );
+    expect(kimiK3).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1048576,
+      status: "preview",
+    });
     const kimiCode = index.providers.moonshot?.previewCatalog?.models.find(
       (model) => model.id === "kimi-k2.7-code",
     );
