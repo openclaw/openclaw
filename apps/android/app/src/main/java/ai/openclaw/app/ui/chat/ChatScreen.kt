@@ -98,6 +98,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -158,6 +159,7 @@ fun ChatScreen(
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
@@ -198,6 +200,13 @@ fun ChatScreen(
   val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
   val sessionAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: gatewayDefaultAgentId ?: "main"
+  val composerOwner =
+    ChatComposerOwner(
+      gatewayStableId = activeGatewayStableId,
+      agentId = sessionAgentId,
+      sessionKey = sessionKey.trim().ifEmpty { mainSessionKey.trim().ifEmpty { "main" } },
+    )
+  val currentComposerOwner by rememberUpdatedState(composerOwner)
   val activeAgentId = selectedChatAgentId(mainSessionKey, gatewayDefaultAgentId)
   val workspaceGit = gatewayAgents.firstOrNull { it.id == sessionAgentId }?.workspaceGit == true
   val context = LocalContext.current
@@ -206,6 +215,10 @@ fun ChatScreen(
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
   val attachments = remember { mutableStateListOf<PendingAttachment>() }
+  var input by rememberSaveable { mutableStateOf("") }
+  var shareImportNoticeVisible by rememberSaveable { mutableStateOf(false) }
+  var imagePickerOwner by remember { mutableStateOf<ChatComposerOwner?>(null) }
+  var voiceNoteOwner by remember { mutableStateOf<ChatComposerOwner?>(null) }
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
 
   DisposableEffect(viewModel) {
@@ -228,7 +241,17 @@ fun ChatScreen(
   val voiceNoteRecorder =
     rememberVoiceNoteRecorderController(
       viewModel = viewModel,
-      onFinished = attachments::add,
+      canCommit = {
+        val ownerSnapshot = voiceNoteOwner
+        ownerSnapshot != null && canCommitComposerResult(ownerSnapshot, currentComposerOwner)
+      },
+      onFinished = { attachment ->
+        val ownerSnapshot = voiceNoteOwner
+        voiceNoteOwner = null
+        if (ownerSnapshot != null && canCommitComposerResult(ownerSnapshot, currentComposerOwner)) {
+          attachments.add(attachment)
+        }
+      },
     )
   val voiceNoteState by voiceNoteRecorder.state.collectAsState()
   val voiceNoteElapsedMs by voiceNoteRecorder.elapsedMs.collectAsState()
@@ -236,6 +259,8 @@ fun ChatScreen(
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
+      val ownerSnapshot = imagePickerOwner ?: return@rememberLauncherForActivityResult
+      imagePickerOwner = null
       scope.launch(Dispatchers.IO) {
         val next =
           uris.take(8).mapNotNull { uri ->
@@ -246,10 +271,20 @@ fun ChatScreen(
             }
           }
         withContext(Dispatchers.Main) {
-          attachments.addAll(next)
+          if (canCommitComposerResult(ownerSnapshot, currentComposerOwner)) {
+            attachments.addAll(next)
+          }
         }
       }
     }
+
+  LaunchedEffect(composerOwner) {
+    imagePickerOwner = null
+    voiceNoteOwner = null
+    voiceNoteRecorder.cancel()
+    attachments.clear()
+    shareImportNoticeVisible = false
+  }
 
   LaunchedEffect(Unit) {
     val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
@@ -274,8 +309,6 @@ fun ChatScreen(
     )
   }
 
-  var input by rememberSaveable { mutableStateOf("") }
-  var shareImportNoticeVisible by rememberSaveable { mutableStateOf(false) }
   val shareImportNotice =
     if (shareImportNoticeVisible) {
       nativeText("Some shared images were omitted or could not be added.")
@@ -291,6 +324,7 @@ fun ChatScreen(
   LaunchedEffect(chatShareDraft?.id, lifecycleState) {
     if (!lifecycleState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
     val share = chatShareDraft ?: return@LaunchedEffect
+    val ownerSnapshot = composerOwner
     viewModel.withChatShareDraftLease(share.id) {
       val attachmentSnapshot = attachments.toList()
       val staged =
@@ -299,13 +333,14 @@ fun ChatScreen(
             loadSizedImageAttachment(resolver, uri)
           }
         }
-      val merged =
-        mergeStagedChatShare(
-          staged = staged,
-          currentInput = input,
-          currentAttachments = attachments,
+      if (
+        !canCommitStagedChatShare(
+          stagedId = share.id,
+          currentHead = viewModel.chatShareDraft.value,
+          ownerSnapshot = ownerSnapshot,
+          currentOwner = currentComposerOwner,
         )
-      if (!canCommitStagedChatShare(stagedId = share.id, currentHead = viewModel.chatShareDraft.value)) {
+      ) {
         return@withChatShareDraftLease
       }
       // A non-resumed Activity must not acknowledge into its hidden composer; the next visible
@@ -313,6 +348,12 @@ fun ChatScreen(
       if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
         return@withChatShareDraftLease
       }
+      val merged =
+        mergeStagedChatShare(
+          staged = staged,
+          currentInput = input,
+          currentAttachments = attachments,
+        )
       // Keep the head pending through both mutations: Send stays gated until text and images
       // have been merged together, and disposal before this point leaves the head for retry.
       input = merged.input
@@ -436,14 +477,31 @@ fun ChatScreen(
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onOpenModelPicker = { showModelPicker = true },
-      onPickImages = { pickImages.launch("image/*") },
+      onPickImages = {
+        imagePickerOwner = currentComposerOwner
+        pickImages.launch("image/*")
+      },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
       voiceNoteLevel = voiceNoteLevel,
       recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive,
-      onStartVoiceNote = { scope.launch { voiceNoteRecorder.start() } },
-      onCancelVoiceNote = voiceNoteRecorder::cancel,
+      onStartVoiceNote = {
+        scope.launch {
+          val ownerSnapshot = currentComposerOwner
+          if (voiceNoteRecorder.start()) {
+            if (canCommitComposerResult(ownerSnapshot, currentComposerOwner)) {
+              voiceNoteOwner = ownerSnapshot
+            } else {
+              voiceNoteRecorder.cancel()
+            }
+          }
+        }
+      },
+      onCancelVoiceNote = {
+        voiceNoteOwner = null
+        voiceNoteRecorder.cancel()
+      },
       onFinishVoiceNote = voiceNoteRecorder::finish,
       onVoice = onVoice,
       onFixConnection = onOpenGatewaySettings,
@@ -464,11 +522,12 @@ fun ChatScreen(
         shareImportNoticeVisible = false
         val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
         val pendingAttachments = attachments.toList()
+        val ownerSnapshot = currentComposerOwner
         input = ""
         attachments.clear()
         scope.launch {
           val accepted = viewModel.sendChatAwaitAcceptance(message = message, thinking = thinkingLevel, attachments = outgoing)
-          if (!accepted) {
+          if (!accepted && canCommitComposerResult(ownerSnapshot, currentComposerOwner)) {
             // Refused sends (offline queue full, enqueue failure) must not eat the draft;
             // restore it unless the user already started typing something new.
             if (input.isEmpty()) input = message

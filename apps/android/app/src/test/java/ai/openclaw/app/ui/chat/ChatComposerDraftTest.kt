@@ -190,10 +190,36 @@ class ChatComposerDraftTest {
   fun stagedShareCommitsOnlyForMatchingQueueHead() {
     val current = ChatShareDraft(id = 7, text = "current", imageUris = emptyList(), droppedImageCount = 0)
     val replacement = ChatShareDraft(id = 8, text = "replacement", imageUris = emptyList(), droppedImageCount = 0)
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
 
-    assertTrue(canCommitStagedChatShare(stagedId = current.id, currentHead = current))
-    assertFalse(canCommitStagedChatShare(stagedId = current.id, currentHead = replacement))
-    assertFalse(canCommitStagedChatShare(stagedId = current.id, currentHead = null))
+    assertTrue(canCommitStagedChatShare(current.id, current, owner, owner))
+    assertFalse(canCommitStagedChatShare(current.id, replacement, owner, owner))
+    assertFalse(canCommitStagedChatShare(current.id, null, owner, owner))
+  }
+
+  @Test
+  fun asyncComposerResultsCommitOnlyToTheirOriginalOwner() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
+
+    assertTrue(canCommitComposerResult(owner, owner))
+    assertFalse(canCommitComposerResult(owner, owner.copy(gatewayStableId = "gateway-b")))
+    assertFalse(canCommitComposerResult(owner, owner.copy(agentId = "agent-b")))
+    assertFalse(canCommitComposerResult(owner, owner.copy(sessionKey = "session-b")))
+  }
+
+  @Test
+  fun stagedShareRejectsAReplacementComposerOwner() {
+    val share = ChatShareDraft(id = 7, text = "share", imageUris = emptyList(), droppedImageCount = 0)
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
+
+    assertFalse(
+      canCommitStagedChatShare(
+        stagedId = share.id,
+        currentHead = share,
+        ownerSnapshot = owner,
+        currentOwner = owner.copy(sessionKey = "session-b"),
+      ),
+    )
   }
 
   @Test

@@ -8,6 +8,17 @@ import ai.openclaw.app.chat.VoiceNoteRecorderState
 import android.net.Uri
 import kotlinx.coroutines.CancellationException
 
+internal data class ChatComposerOwner(
+  val gatewayStableId: String?,
+  val agentId: String,
+  val sessionKey: String,
+)
+
+internal fun canCommitComposerResult(
+  ownerSnapshot: ChatComposerOwner,
+  currentOwner: ChatComposerOwner,
+): Boolean = ownerSnapshot == currentOwner
+
 internal fun mergeChatDraft(
   draft: ChatDraft?,
   currentInput: String,
@@ -137,7 +148,11 @@ internal fun mergeStagedChatShare(
 internal fun canCommitStagedChatShare(
   stagedId: Long,
   currentHead: ChatShareDraft?,
-): Boolean = currentHead?.id == stagedId
+  ownerSnapshot: ChatComposerOwner,
+  currentOwner: ChatComposerOwner,
+): Boolean =
+  currentHead?.id == stagedId &&
+    canCommitComposerResult(ownerSnapshot = ownerSnapshot, currentOwner = currentOwner)
 
 internal fun chatComposerSendEnabled(
   voiceNoteState: VoiceNoteRecorderState,

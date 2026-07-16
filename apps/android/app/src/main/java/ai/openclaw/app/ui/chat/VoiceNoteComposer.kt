@@ -49,11 +49,13 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun rememberVoiceNoteRecorderController(
   viewModel: MainViewModel,
+  canCommit: () -> Boolean,
   onFinished: (PendingAttachment) -> Unit,
 ): VoiceNoteRecorderController {
   val context = LocalContext.current.applicationContext
   val lifecycleOwner = LocalLifecycleOwner.current
   val scope = rememberCoroutineScope()
+  val currentCanCommit by rememberUpdatedState(canCommit)
   val currentOnFinished by rememberUpdatedState(onFinished)
   lateinit var controller: VoiceNoteRecorderController
   controller =
@@ -69,6 +71,10 @@ internal fun rememberVoiceNoteRecorderController(
           scope.launch(Dispatchers.IO) {
             val attachment = runCatching { stageVoiceNoteAttachment(recording) }
             withContext(Dispatchers.Main) {
+              if (!currentCanCommit()) {
+                controller.completePreparation()
+                return@withContext
+              }
               attachment.fold(
                 onSuccess = {
                   currentOnFinished(it)
