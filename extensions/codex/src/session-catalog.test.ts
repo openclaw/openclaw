@@ -449,7 +449,6 @@ describe("Codex supervision catalog", () => {
         modelProviders: [],
         sortKey: "recency_at",
         sortDirection: "desc",
-        sourceKinds: ["cli", "vscode"],
         cwd: "/workspace/one",
       },
       {
@@ -643,11 +642,13 @@ describe("Codex supervision catalog", () => {
     },
   );
 
-  it("omits noninteractive sources when App Server ignores the requested source kinds", async () => {
+  it("keeps every Codex interactive source while omitting other custom sources", async () => {
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [
         idleThread({ id: "cli", source: "cli" }),
         idleThread({ id: "vscode", source: "vscode" }),
+        idleThread({ id: "atlas", source: { custom: "atlas" } }),
+        idleThread({ id: "chatgpt", source: { custom: "chatgpt" } }),
         idleThread({ id: "exec", source: "exec" }),
         idleThread({ id: "app-server", source: "appServer" }),
         idleThread({ id: "subagent", source: { subAgent: "review" } }),
@@ -663,8 +664,18 @@ describe("Codex supervision catalog", () => {
 
     const page = await control.listPage({});
 
-    expect(page.sessions.map((session) => session.threadId)).toEqual(["cli", "vscode"]);
-    expect(page.sessions.map((session) => session.source)).toEqual(["cli", "vscode"]);
+    expect(page.sessions.map((session) => session.threadId)).toEqual([
+      "cli",
+      "vscode",
+      "atlas",
+      "chatgpt",
+    ]);
+    expect(page.sessions.map((session) => session.source)).toEqual([
+      "cli",
+      "vscode",
+      "atlas",
+      "chatgpt",
+    ]);
   });
 
   it("keeps takeover forking out of the passive catalog control", async () => {
@@ -1057,7 +1068,7 @@ describe("Codex supervision catalog", () => {
             {
               threadId,
               status: "idle",
-              source: "cli",
+              source: "atlas",
               cwd: "/node/catalog/cwd",
               archived: false,
             },
@@ -2415,9 +2426,9 @@ describe("Codex supervision actions", () => {
         control,
         threadId: "thread-1",
       }),
-    ).rejects.toThrow("not a non-archived interactive CLI or VS Code session");
+    ).rejects.toThrow("not a non-archived interactive Codex session");
     await expect(archiveTestSession({ control })).rejects.toThrow(
-      "not a non-archived interactive CLI or VS Code session",
+      "not a non-archived interactive Codex session",
     );
     expect(control.readThread).not.toHaveBeenCalled();
     expect(createSessionEntry).not.toHaveBeenCalled();
@@ -2448,9 +2459,9 @@ describe("Codex supervision actions", () => {
         control,
         threadId: "thread-1",
       }),
-    ).rejects.toThrow("not a non-archived interactive CLI or VS Code session");
+    ).rejects.toThrow("not a non-archived interactive Codex session");
     await expect(archiveTestSession({ control })).rejects.toThrow(
-      "not a non-archived interactive CLI or VS Code session",
+      "not a non-archived interactive Codex session",
     );
     expect(control.readThread).not.toHaveBeenCalled();
   });
@@ -2841,6 +2852,7 @@ describe("Codex supervision actions", () => {
     const sourceByNode = new Map([
       ["ready-cli", { status: "idle", source: "cli" }],
       ["ready-vscode", { status: "notLoaded", source: "vscode" }],
+      ["ready-atlas", { status: "notLoaded", source: "atlas" }],
       ["missing-run", { status: "idle", source: "cli" }],
       ["active", { status: "active", source: "cli" }],
       ["noninteractive", { status: "idle", source: "exec" }],
@@ -2895,6 +2907,10 @@ describe("Codex supervision actions", () => {
       canArchive: false,
     });
     expect(sessionByHost.get("node:ready-vscode")).toMatchObject({
+      canContinue: true,
+      canArchive: false,
+    });
+    expect(sessionByHost.get("node:ready-atlas")).toMatchObject({
       canContinue: true,
       canArchive: false,
     });

@@ -7454,6 +7454,21 @@
       "translated": "OpenClaw가 응답을 준비하고 있습니다."
     },
     {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "계획 체크리스트 접기"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "계획 체크리스트 펼치기"
+    },
+    {
       "id": "native.android.f3806d79e43f568f",
       "source": "Dismiss shared-image warning",
       "translated": "공유 이미지 경고 닫기"
@@ -13687,6 +13702,21 @@
       "id": "native.apple.cc304ba214b8a9df",
       "source": "Review this exec request before continuing. Your decision will be sent back to the gateway.",
       "translated": "계속하기 전에 이 exec 요청을 검토하세요. 결정은 gateway로 다시 전송됩니다."
+    },
+    {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "플러그인"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "도구"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "심각도"
     },
     {
       "id": "native.apple.1f2576ef69108e39",
@@ -22342,6 +22372,16 @@
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "도구 실행 중…"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "계획 접기"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "계획 펼치기"
     },
     {
       "id": "native.apple.63320b6d5138c0db",

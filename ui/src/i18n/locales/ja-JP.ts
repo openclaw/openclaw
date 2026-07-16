@@ -1632,6 +1632,7 @@ export const ja_JP: TranslationMap = {
     connectionTimedOut: "30秒以内にセッションに接続できませんでした。",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "エージェント",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "デタッチ済み",

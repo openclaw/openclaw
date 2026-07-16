@@ -53,6 +53,16 @@
         "dock"
       ]
     },
+    "terminal": {
+      "emoji": "⌨️",
+      "title": "Terminal",
+      "detailKeys": [
+        "action",
+        "sessionId",
+        "command",
+        "cwd"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",

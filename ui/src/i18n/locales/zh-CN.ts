@@ -1595,6 +1595,7 @@ export const zh_CN: TranslationMap = {
     connectionTimedOut: "未能在 30 秒内连接到会话。",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "agent",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "已分离",
