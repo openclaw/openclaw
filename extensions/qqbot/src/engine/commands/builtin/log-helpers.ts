@@ -230,11 +230,14 @@ function tailFileLines(
       const readSize = Math.min(CHUNK_SIZE, position);
       position -= readSize;
       const buf = Buffer.alloc(readSize);
-      fs.readSync(fd, buf, 0, readSize, position);
-      chunks.unshift(buf);
-      bytesRead += readSize;
+      const actualRead = fs.readSync(fd, buf, 0, readSize, position);
+      // Short reads return fewer bytes than requested; keep only the
+      // bytes actually read so the tail doesn't contain NUL padding.
+      const chunk = actualRead < readSize ? buf.subarray(0, actualRead) : buf;
+      chunks.unshift(chunk);
+      bytesRead += actualRead;
 
-      for (let i = 0; i < readSize; i++) {
+      for (let i = 0; i < actualRead; i++) {
         if (buf[i] === 0x0a) {
           newlineCount++;
         }
@@ -259,6 +262,8 @@ function tailFileLines(
     fs.closeSync(fd);
   }
 }
+
+export const testing = { tailFileLines };
 
 /**
  * Build the /bot-logs result: collect recent log files, write them to a temp file.
