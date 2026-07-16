@@ -69,7 +69,7 @@ type HistoryEntry = {
   tokensAfter?: unknown;
 };
 
-type CliSessionTranscriptParams = {
+export type CliSessionTranscriptParams = {
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
@@ -452,7 +452,7 @@ function resolveSafeCliSessionFile(params: CliSessionTranscriptParams): {
   };
 }
 
-function resolveSafeCliSqliteTranscript(params: CliSessionTranscriptParams):
+export function resolveCliSessionSqliteTranscriptScope(params: CliSessionTranscriptParams):
   | {
       agentId: string;
       sessionId: string;
@@ -515,7 +515,7 @@ function finalizeCliSessionEntries(params: {
 async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promise<unknown[]> {
   try {
     if (params.sessionFile.trim().startsWith("sqlite:")) {
-      const transcriptScope = resolveSafeCliSqliteTranscript(params);
+      const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
       if (!transcriptScope) {
         return [];
       }
@@ -576,7 +576,7 @@ export async function hasCliSessionTranscript(
 ): Promise<boolean> {
   try {
     if (params.sessionFile.trim().startsWith("sqlite:")) {
-      const transcriptScope = resolveSafeCliSqliteTranscript(params);
+      const transcriptScope = resolveCliSessionSqliteTranscriptScope(params);
       return transcriptScope ? hasTranscriptEventsSync(transcriptScope) : false;
     }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);

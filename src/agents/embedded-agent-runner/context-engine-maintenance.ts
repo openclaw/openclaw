@@ -323,13 +323,16 @@ function buildContextEngineMaintenanceRuntimeContext(params: {
           ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
           : rewriteSessionManagerEntries();
       }
+      const agentId = params.agentId ?? params.sessionTarget?.agentId;
+      const storePath = params.sessionTarget?.storePath;
       const rewriteRuntimeTranscriptEntries = async () =>
         await rewriteTranscriptEntriesInRuntimeTranscript({
           scope: {
             sessionId: params.sessionId,
             sessionKey: params.sessionKey ?? params.sessionId,
             sessionFile: params.sessionFile,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(agentId ? { agentId } : {}),
+            ...(storePath ? { storePath } : {}),
           },
           request,
           config: params.config,
