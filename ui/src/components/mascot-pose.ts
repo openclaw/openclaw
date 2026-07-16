@@ -11,7 +11,7 @@ export type MascotMood =
   | "sleepy"
   | "attentive";
 
-export type MascotEffect = "none" | "sparkles" | "zzz" | "sparks" | "sweat";
+type MascotEffect = "none" | "sparkles" | "zzz" | "sparks" | "sweat";
 
 export type MascotPose = {
   floatOffset: number;
