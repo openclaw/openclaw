@@ -107,7 +107,7 @@ describe("legacy workspace reset cleanup", () => {
     await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("foreign marker\n");
   });
 
-  it("removes a malformed reserved sibling claim without deleting a foreign marker", async () => {
+  it("preserves a malformed sibling claim and foreign marker", async () => {
     const context = setup();
     const siblingPath = context.paths.siblingAttestationPaths[0]!;
     const claimPath = `${siblingPath}.doctor-importing`;
@@ -118,9 +118,12 @@ describe("legacy workspace reset cleanup", () => {
     const result = await removeLegacyWorkspaceStateForReset(prepare(context));
 
     expect(result.warnings).toEqual([]);
-    expect(result.removedPaths).toEqual([claimPath]);
+    expect(result.removedPaths).toEqual([]);
     await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("foreign marker\n");
-    await expect(fs.lstat(claimPath)).rejects.toHaveProperty("code", "ENOENT");
+    await expect(fs.readFile(claimPath, "utf8")).resolves.toBe("truncated claim\n");
+    expect(() =>
+      assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+    ).not.toThrow();
   });
 
   it("checks lexical legacy markers separately for aliases of one workspace", async () => {

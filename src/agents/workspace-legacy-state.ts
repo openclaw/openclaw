@@ -179,7 +179,7 @@ export function assertNoUnmigratedWorkspaceState(params: { workspaceDir: string 
     sources.stateDirAttestationPaths.some(pathOrClaimExists) ||
     sources.siblingAttestationPaths.some(
       (sourcePath) =>
-        pathExistsOrUnknown(`${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`) ||
+        siblingPathIsOwnedMarker(`${sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`) ||
         siblingPathIsOwnedMarker(sourcePath),
     );
   if (hasLegacy) {
@@ -237,9 +237,9 @@ export function prepareLegacyWorkspaceStateReset(
     {
       ...candidate,
       sourcePath: `${candidate.sourcePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`,
-      // Claim filenames are OpenClaw-reserved. Interrupted/truncated claims
-      // must not survive an explicit reset and block runtime forever.
-      requireAttestationHeader: false,
+      // Sibling claims remain outside OpenClaw-owned roots. Renaming a claimed
+      // marker preserves its header, so require that ownership proof there too.
+      requireAttestationHeader: candidate.requireAttestationHeader,
     },
   ]);
   return { candidates };
