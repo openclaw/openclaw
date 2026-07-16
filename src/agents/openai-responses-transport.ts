@@ -1244,6 +1244,7 @@ async function processResponsesStream(
   let pendingMessageText: string | null = null;
   const streamStartedAt = Date.now();
   let eventCount = 0;
+  let sawTerminalResponseEvent = false;
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
@@ -1698,9 +1699,10 @@ async function processResponsesStream(
           currentItem = null;
         }
       }
-    } else if (type === "response.completed") {
+    } else if (type === "response.completed" || type === "response.incomplete") {
+      sawTerminalResponseEvent = true;
       if (streamingToolCalls.hasActive()) {
-        throw new Error("Responses stream completed with unresolved tool calls");
+        throw new Error("Responses stream terminated with unresolved tool calls");
       }
       const response = event.response as Record<string, unknown> | undefined;
       if (typeof response?.id === "string") {
@@ -1770,6 +1772,12 @@ async function processResponsesStream(
   }
   if (streamingToolCalls.hasActive()) {
     throw new Error("Responses stream ended with unresolved tool calls");
+  }
+  throwIfModelStreamAborted(options?.signal);
+  if (!sawTerminalResponseEvent) {
+    throw new Error(
+      `Responses stream ended before a terminal response event (events=${eventCount})`,
+    );
   }
   const eventTypeSummary = [...eventTypes.entries()]
     .slice(0, 12)
