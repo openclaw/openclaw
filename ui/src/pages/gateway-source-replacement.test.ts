@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import type { SessionsRouteData } from "./sessions/sessions-page.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
+import { USAGE_PAYLOAD_TTL_MS, type UsageRefreshReason } from "./usage/refresh-policy.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
@@ -23,10 +24,12 @@ type TestPage = HTMLElement & {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 function gatewayWithClient(
@@ -88,6 +91,32 @@ function contextWithClient(
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
+}
+
+function contextWithMutableGateway(client: GatewayBrowserClient) {
+  const context = contextWithClient(client, { connected: true });
+  let currentSnapshot = context.gateway.snapshot;
+  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  const gateway = {
+    ...context.gateway,
+    get snapshot() {
+      return currentSnapshot;
+    },
+    subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  } as ApplicationContext["gateway"];
+  Object.defineProperty(context, "gateway", { value: gateway });
+  return {
+    context,
+    emitConnected(connected: boolean) {
+      currentSnapshot = { ...currentSnapshot, connected };
+      for (const listener of listeners) {
+        listener(currentSnapshot);
+      }
+    },
+  };
 }
 
 function createPage(tagName: string, context: ApplicationContext): TestPage {
@@ -156,6 +185,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result,
       costSummary: null,
       providerUsageSummary: null,
+      loadedAtMs: Date.now(),
       error: null,
     } satisfies UsageRouteData;
     const page = createPage("openclaw-usage-page", context) as TestPage & {
@@ -199,6 +229,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result: staleResult,
       costSummary: null,
       providerUsageSummary: null,
+      loadedAtMs: Date.now(),
       error: null,
     };
 
@@ -211,6 +242,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
   });
 
   it("keeps loaded usage data across a same-client reconnect", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true });
@@ -232,6 +265,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result,
       costSummary: null,
       providerUsageSummary: null,
+      loadedAtMs: Date.now(),
       error: null,
     };
 
@@ -245,6 +279,8 @@ describe("gateway source replacement across reconnect with a reused client", () 
   });
 
   it("retries a usage load interrupted by a same-client disconnect", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const request = vi.fn(async (method: string) =>
       method === "sessions.usage" ? { sessions: [] } : {},
     );
@@ -268,6 +304,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result: { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"],
       costSummary: null,
       providerUsageSummary: null,
+      loadedAtMs: Date.now(),
       error: null,
     };
 
@@ -282,6 +319,82 @@ describe("gateway source replacement across reconnect with a reused client", () 
     );
   });
 
+  it("gates same-client usage reconnects by payload age and page visibility", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.usage") {
+        return { sessions: [] };
+      }
+      if (method === "usage.status") {
+        return { providers: [] };
+      }
+      return { daily: [] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const harness = contextWithMutableGateway(client);
+    const result = { sessions: [] } as unknown as UsageRouteData["result"];
+    const page = createPage("openclaw-usage-page", harness.context) as TestPage & {
+      routeData: UsageRouteData;
+      lastUsageLoadedAtMs: number | null;
+      usageLoading: boolean;
+      requestUsageRefresh: (reason: UsageRefreshReason) => void;
+    };
+    page.routeData = {
+      gateway: harness.context.gateway,
+      gatewaySnapshot: harness.context.gateway.snapshot,
+      query: {
+        startDate: "2026-07-08",
+        endDate: "2026-07-08",
+        scope: "family",
+        timeZone: "local",
+        agentId: null,
+      },
+      result,
+      costSummary: null,
+      providerUsageSummary: null,
+      loadedAtMs: Date.now(),
+      error: null,
+    };
+
+    document.body.append(page);
+    await page.updateComplete;
+
+    harness.emitConnected(false);
+    harness.emitConnected(true);
+    expect(request).not.toHaveBeenCalled();
+
+    page.lastUsageLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
+    visibility.mockReturnValue("hidden");
+    harness.emitConnected(false);
+    harness.emitConnected(true);
+    expect(request).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(page.usageLoading).toBe(false));
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "sessions.usage",
+      "usage.cost",
+      "usage.status",
+    ]);
+
+    page.usageLoading = true;
+    page.requestUsageRefresh("manual");
+    await vi.waitFor(() => expect(page.usageLoading).toBe(false));
+    expect(request).toHaveBeenCalledTimes(6);
+
+    const failedRefresh = deferred<never>();
+    request.mockImplementationOnce(() => failedRefresh.promise);
+    page.lastUsageLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
+    page.requestUsageRefresh("manual");
+    expect(request).toHaveBeenCalledTimes(9);
+    page.requestUsageRefresh("focus");
+    failedRefresh.reject(new Error("connection interrupted"));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(12));
+    await vi.waitFor(() => expect(page.usageLoading).toBe(false));
+  });
   it("preserves matching skills route data on the first bind", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;

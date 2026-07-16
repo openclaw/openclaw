@@ -40,6 +40,7 @@ import {
   toUsageErrorMessage,
 } from "./helpers.ts";
 import { renderUsagePageShell } from "./page-shell.ts";
+import { decideUsageRefresh, type UsageRefreshReason } from "./refresh-policy.ts";
 import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogEntry,
@@ -62,6 +63,7 @@ export type UsageRouteData = {
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
   providerUsageSummary: ProviderUsageSummary | null;
+  loadedAtMs: number | null;
   error: string | null;
 };
 
@@ -123,6 +125,10 @@ class UsagePage extends OpenClawLightDomElement {
   private queryDebounceTimer: number | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
+  private lastUsageLoadedAtMs: number | null = null;
+  private pendingAutomaticUsageRefresh = false;
+  // Set only when a disconnect invalidates active work. The shared refresh
+  // policy decides when the retry is allowed to run.
   private usageReloadPending = false;
   private hasBoundGatewaySource = false;
   private observedAgentScopeId: string | null | undefined;
@@ -167,7 +173,19 @@ class UsagePage extends OpenClawLightDomElement {
     }
   }
 
+  private readonly handlePageActivation = () => {
+    this.requestUsageRefresh("focus");
+  };
+
+  override connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener("visibilitychange", this.handlePageActivation);
+    globalThis.addEventListener("focus", this.handlePageActivation);
+  }
+
   override disconnectedCallback() {
+    document.removeEventListener("visibilitychange", this.handlePageActivation);
+    globalThis.removeEventListener("focus", this.handlePageActivation);
     this.subscriptions.clear();
     this.clearDateDebounce();
     this.clearQueryDebounce();
@@ -193,11 +211,8 @@ class UsagePage extends OpenClawLightDomElement {
     }
 
     void this.context.agents.ensureList();
-    if (
-      this.routeDataInitialized &&
-      (clientChanged || (becameConnected && (this.usageReloadPending || this.usageResult === null)))
-    ) {
-      void this.loadUsage();
+    if (this.routeDataInitialized && (clientChanged || becameConnected)) {
+      this.requestUsageRefresh("reconnect");
     }
   }
 
@@ -237,6 +252,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
     this.providerUsageSummary = data.providerUsageSummary;
+    this.lastUsageLoadedAtMs = data.loadedAtMs;
     this.usageError = data.error;
     this.usageLoading = false;
   }
@@ -263,6 +279,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = null;
     this.usageCostSummary = null;
     this.providerUsageSummary = null;
+    this.lastUsageLoadedAtMs = null;
     this.usageError = null;
     this.usageReloadPending = false;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
@@ -350,6 +367,7 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageResult = sessionsResult;
       this.usageCostSummary = costSummary;
       this.providerUsageSummary = providerUsageSummary;
+      this.lastUsageLoadedAtMs = Date.now();
     } catch (error) {
       if (!this.isCurrentRequest(requestId, client)) {
         return;
@@ -364,6 +382,7 @@ class UsagePage extends OpenClawLightDomElement {
     } finally {
       if (this.isCurrentRequest(requestId, client)) {
         this.usageLoading = false;
+        this.flushPendingAutomaticUsageRefresh();
       }
     }
   }
@@ -485,9 +504,36 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private reloadUsage() {
+    this.pendingAutomaticUsageRefresh = false;
     this.clearDateDebounce();
     this.invalidateUsageRequest();
     void this.loadUsage();
+  }
+
+  private requestUsageRefresh(reason: UsageRefreshReason) {
+    if (this.usageLoading && reason !== "manual") {
+      this.pendingAutomaticUsageRefresh = true;
+      return;
+    }
+    this.pendingAutomaticUsageRefresh = false;
+    const decision = decideUsageRefresh({
+      reason,
+      visible: document.visibilityState === "visible" && document.hasFocus(),
+      interrupted: this.usageReloadPending,
+      nowMs: Date.now(),
+      lastLoadedAtMs: this.lastUsageLoadedAtMs,
+    });
+    if (decision === "fetch") {
+      this.reloadUsage();
+    }
+  }
+
+  private flushPendingAutomaticUsageRefresh() {
+    if (!this.pendingAutomaticUsageRefresh) {
+      return;
+    }
+    this.pendingAutomaticUsageRefresh = false;
+    this.requestUsageRefresh("focus");
   }
 
   private clearQueryDebounce() {
@@ -602,7 +648,7 @@ class UsagePage extends OpenClawLightDomElement {
           onAgentChange: (agentId) => {
             this.context.agentSelection.setScope(agentId);
           },
-          onRefresh: () => this.reloadUsage(),
+          onRefresh: () => this.requestUsageRefresh("manual"),
           onTimeZoneChange: (timeZone) => {
             this.usageTimeZone = timeZone;
             this.clearSelectionsAndDetails();
