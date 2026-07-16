@@ -281,6 +281,26 @@ describe("xai tts", () => {
       await result.release();
     });
 
+    it("rejects stalled CONNECTING via connectTimer and closes the socket", async () => {
+      const timeoutMs = 80;
+      const started = Date.now();
+      const resultPromise = xaiTTSStream({
+        text: "hello",
+        apiKey: "dummy",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        timeoutMs,
+      });
+      const ws = FakeWebSocket.instances.at(0);
+      expect(ws?.readyState).toBe(FakeWebSocket.CONNECTING);
+      // Never emit open: exercises production connectTimer + release()/close().
+      await expect(resultPromise).rejects.toThrow("xAI TTS stream connection timeout");
+      const elapsedMs = Date.now() - started;
+      expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 20);
+      expect(elapsedMs).toBeLessThan(timeoutMs + 200);
+      expect(ws?.readyState).toBe(FakeWebSocket.CLOSED);
+    });
+
     it("splits text above xAI's 15,000-character limit into ordered delta frames", async () => {
       const text = `${"a".repeat(15_000)}${"b".repeat(15_000)}c`;
       const resultPromise = xaiTTSStream({
