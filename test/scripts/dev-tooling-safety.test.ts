@@ -1202,16 +1202,9 @@ describe("script-specific dev tooling hardening", () => {
     ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
   });
 
-  it("proxies upstream Anthropic requests through a timeout-bounded fetch", async () => {
-    const { testing: promptProbeTesting } = await import("../../scripts/anthropic-prompt-probe.ts");
-    const { startAnthropicProxy } = promptProbeTesting;
-    expect(typeof startAnthropicProxy).toBe("function");
-
-    // Start a stub upstream that the proxy will forward to
-    const upstream = http.createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ type: "message", content: "ok" }));
-    });
+  it("aborts a stalled Anthropic proxy upstream at the configured deadline", async () => {
+    const nativeFetch = globalThis.fetch;
+    const upstream = http.createServer(() => {});
     await new Promise<void>((resolve, reject) => {
       upstream.once("error", reject);
       upstream.listen(0, "127.0.0.1", () => {
@@ -1219,21 +1212,41 @@ describe("script-specific dev tooling hardening", () => {
         resolve();
       });
     });
-    const upstreamAddr = upstream.address();
-    if (!upstreamAddr || typeof upstreamAddr === "string") {
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
       throw new Error("upstream did not bind to a TCP port");
     }
+    const upstreamUrl = `http://127.0.0.1:${upstreamAddress.port}/v1/messages`;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((_input, init) => nativeFetch(upstreamUrl, init));
+    let proxy: Awaited<ReturnType<typeof promptProbeTesting.startAnthropicProxy>> | undefined;
 
     try {
-      const proxy = await startAnthropicProxy({
+      proxy = await promptProbeTesting.startAnthropicProxy({
         port: 0,
-        upstreamBaseUrl: `http://127.0.0.1:${upstreamAddr.port}`,
+        upstreamBaseUrl: "https://api.anthropic.com",
+        timeoutMs: 100,
       });
-      expect(typeof proxy.getLastCapture).toBe("function");
-      expect(typeof proxy.stop).toBe("function");
-      await proxy.stop();
+      const startedAt = Date.now();
+      const response = await nativeFetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+        method: "POST",
+        body: "{}",
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.text()).resolves.toMatch(/TimeoutError/u);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.anthropic.com/v1/messages",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
     } finally {
-      upstream.close();
+      fetchSpy.mockRestore();
+      await proxy?.stop();
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 });
