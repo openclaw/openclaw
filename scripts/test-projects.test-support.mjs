@@ -822,11 +822,13 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/ci-workflow-guards.test.ts",
     ],
   ],
-  ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
+  [
+    "scripts/ci-changed-scope.mjs",
+    ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
+  ],
   ["scripts/periphery-intersection.mjs", ["test/scripts/periphery-intersection.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
-  ["scripts/control-ui-i18n-resolve-conflicts.ts", ["test/scripts/control-ui-i18n.test.ts"]],
   ["scripts/apple-app-i18n.ts", ["test/scripts/apple-app-i18n.test.ts"]],
   [
     "scripts/native-app-i18n.ts",

@@ -120,6 +120,7 @@ jobs:
       run_format_check: ${{ steps.manifest.outputs.run_format_check }}
       compatibility_target: ${{ steps.manifest.outputs.compatibility_target }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
+      strict_control_ui_i18n: ${{ steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
@@ -321,6 +322,8 @@ jobs:
         id: changed_scope
         if: github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true'
         shell: bash
+        env:
+          OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           set -euo pipefail
 
@@ -1219,9 +1222,9 @@ jobs:
     name: control-ui-i18n
     needs: [preflight]
     if: needs.preflight.outputs.run_control_ui_i18n == 'true'
-    # Locale refresh runs separately on main and nightly. Keep drift visible on
-    # automatic runs without blocking unrelated work; release CI stays strict.
-    continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
+    # Source PR drift stays advisory because the post-merge bot owns repair.
+    # Generated locale PRs and release CI must pass the strict catalog gate.
+    continue-on-error: ${{ github.event_name != 'workflow_dispatch' && needs.preflight.outputs.strict_control_ui_i18n != 'true' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:

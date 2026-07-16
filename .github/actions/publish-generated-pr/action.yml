@@ -43,6 +43,10 @@ inputs:
     description: Whether stale inputs or owned-path overlap defer to a successor run or fail.
     required: false
     default: defer
+  auto-merge:
+    description: Enable squash auto-merge for the exact generated PR head after publication.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -70,6 +74,7 @@ runs:
         GENERATED_PATHS: ${{ inputs.generated-paths }}
         INVALIDATION_PATHS: ${{ inputs.invalidation-paths }}
         OVERLAP_POLICY: ${{ inputs.overlap-policy }}
+        AUTO_MERGE: ${{ inputs.auto-merge }}
       run: |
         set -euo pipefail
         export GH_PROMPT_DISABLED=1
@@ -90,6 +95,13 @@ runs:
           defer | fail) ;;
           *)
             echo "Generated PR publication overlap policy must be 'defer' or 'fail'." >&2
+            exit 1
+            ;;
+        esac
+        case "${AUTO_MERGE}" in
+          true | false) ;;
+          *)
+            echo "Generated PR publication auto-merge must be 'true' or 'false'." >&2
             exit 1
             ;;
         esac
@@ -321,6 +333,7 @@ runs:
             if [[ -n "${final_pr_url}" ]]; then
               final_pr_head="${final_pr_record#*$'\t'}"
               if [[ "${final_pr_head}" = "${published_commit}" ]]; then
+                published_pr_url="${final_pr_url}"
                 echo "Generated pull request: ${final_pr_url}" >> "${GITHUB_STEP_SUMMARY}"
                 return 0
               fi
@@ -342,6 +355,72 @@ runs:
           fi
           echo "::error::Generated branch has no open same-repository pull request."
           return 1
+        }
+        enable_auto_merge() {
+          if [[ "${AUTO_MERGE}" != "true" || -z "${published_pr_url:-}" ]]; then
+            return 0
+          fi
+          GH_TOKEN="${CONTENTS_TOKEN}" \
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh pr merge "${published_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+                --auto --squash --match-head-commit "${published_commit}"
+          echo "Enabled squash auto-merge for exact generated head: ${published_pr_url}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+        }
+        disable_existing_auto_merge() {
+          local auto_merge_enabled current_pr_head current_pr_record current_pr_url
+          local existing_pr_head existing_pr_record existing_pr_url fetched_head
+          local expected_head="$1"
+          if [[ "${AUTO_MERGE}" != "true" ]]; then
+            return 0
+          fi
+          existing_pr_record="$(find_open_pr)"
+          existing_pr_url="${existing_pr_record%%$'\t'*}"
+          if [[ -z "${existing_pr_url}" ]]; then
+            return 0
+          fi
+          existing_pr_head="${existing_pr_record#*$'\t'}"
+          if [[ "${existing_pr_head}" != "${expected_head}" ]]; then
+            return 0
+          fi
+          auto_merge_enabled="$(
+            # Read with the PR token; the contents-only token may not grant PR reads.
+            GH_TOKEN="${GH_TOKEN}" \
+              timeout --signal=TERM --kill-after=10s 60s \
+                gh pr view "${existing_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+                  --json autoMergeRequest --jq '.autoMergeRequest != null'
+          )"
+          if [[ "${auto_merge_enabled}" != "true" ]]; then
+            return 0
+          fi
+          git fetch --no-tags origin \
+            "refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          fetched_head="$(git rev-parse "refs/remotes/origin/${HEAD_BRANCH}")"
+          if [[ "${fetched_head}" != "${expected_head}" ]]; then
+            return 0
+          fi
+          GH_TOKEN="${CONTENTS_TOKEN}" \
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh pr merge "${existing_pr_url}" --repo "${GITHUB_REPOSITORY}" --disable-auto
+          echo "Disabled inherited auto-merge before replacing generated head: ${existing_pr_url}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+          # A newer publisher can move the PR between the head read and the mutation.
+          # Restore its exact head, then stop this stale publisher before it can push.
+          current_pr_record="$(find_open_pr)"
+          current_pr_url="${current_pr_record%%$'\t'*}"
+          current_pr_head="${current_pr_record#*$'\t'}"
+          if [[ "${current_pr_url}" = "${existing_pr_url}" &&
+            "${current_pr_head}" != "${expected_head}" ]]; then
+            GH_TOKEN="${CONTENTS_TOKEN}" \
+              timeout --signal=TERM --kill-after=10s 60s \
+                gh pr merge "${current_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+                  --auto --squash --match-head-commit "${current_pr_head}"
+            echo "Restored auto-merge for concurrently published generated head: ${current_pr_url}" \
+              >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error::Generated branch moved while inherited auto-merge was being disabled."
+            return 1
+          fi
         }
 
         source_commit="$(git rev-parse HEAD)"
@@ -388,6 +467,7 @@ runs:
 
         # Lease the exact observed automation head so a cancelled run cannot overwrite newer output.
         remote_head="$(read_remote_head)"
+        disable_existing_auto_merge "${remote_head}"
         push_log="${RUNNER_TEMP}/generated-pr-push.log"
         if ! push_generated_branch "${remote_head}"; then
           current_remote_head="$(read_remote_head)"
@@ -455,3 +535,4 @@ runs:
           fi
           exit 1
         fi
+        enable_auto_merge
