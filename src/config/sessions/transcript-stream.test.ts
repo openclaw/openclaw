@@ -3,15 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const { warn: warnMock } = vi.hoisted(() => ({
-  warn: vi.fn(),
-}));
-
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: warnMock }),
-}));
-
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
@@ -29,10 +20,10 @@ let transcriptPath = "";
 beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-stream-"));
   transcriptPath = path.join(tempDir, "session.jsonl");
-  warnMock.mockReset();
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -68,32 +59,13 @@ describe("streamSessionTranscriptLines", () => {
     expect(lines).toEqual([]);
   });
 
-  it("logs a warning when stat fails with EACCES", async () => {
-    const statSpy = vi
-      .spyOn(fs.promises, "stat")
-      .mockRejectedValueOnce(
-        Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
-      );
+  it("propagates stat failures other than ENOENT", async () => {
+    const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    vi.spyOn(fs.promises, "stat").mockRejectedValueOnce(error);
 
-    const lines = await collect(streamSessionTranscriptLines("/some/protected/transcript.jsonl"));
-
-    expect(lines).toEqual([]);
-    expect(warnMock).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to stat transcript /some/protected/transcript.jsonl"),
-    );
-    statSpy.mockRestore();
-  });
-
-  it("does not log a warning when stat fails with ENOENT (missing file)", async () => {
-    const statSpy = vi
-      .spyOn(fs.promises, "stat")
-      .mockRejectedValueOnce(Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" }));
-
-    const lines = await collect(streamSessionTranscriptLines("/tmp/missing-transcript.jsonl"));
-
-    expect(lines).toEqual([]);
-    expect(warnMock).not.toHaveBeenCalled();
-    statSpy.mockRestore();
+    await expect(
+      collect(streamSessionTranscriptLines("/some/protected/transcript.jsonl")),
+    ).rejects.toBe(error);
   });
 
   it("forwards malformed JSON lines as raw text so callers can choose to skip them", async () => {
@@ -144,7 +116,7 @@ describe("streamSessionTranscriptLinesReverse", () => {
     expect(lines).toEqual(["third", "second", "first"]);
   });
 
-  it("returns an empty iterator when the file cannot be opened", async () => {
+  it("returns an empty iterator when the file does not exist", async () => {
     const lines = await collect(
       streamSessionTranscriptLinesReverse(path.join(tempDir, "missing.jsonl")),
     );
@@ -152,38 +124,13 @@ describe("streamSessionTranscriptLinesReverse", () => {
     expect(lines).toEqual([]);
   });
 
-  it("logs a warning when open fails with EACCES (permission denied)", async () => {
-    const openSpy = vi
-      .spyOn(fs.promises, "open")
-      .mockRejectedValueOnce(
-        Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
-      );
+  it("propagates open failures other than ENOENT", async () => {
+    const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    vi.spyOn(fs.promises, "open").mockRejectedValueOnce(error);
 
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse("/some/protected/transcript.jsonl"),
-    );
-
-    expect(lines).toEqual([]);
-    expect(warnMock).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Failed to open transcript /some/protected/transcript.jsonl for reverse streaming",
-      ),
-    );
-    openSpy.mockRestore();
-  });
-
-  it("does not log a warning when open fails with ENOENT (missing file)", async () => {
-    const openSpy = vi
-      .spyOn(fs.promises, "open")
-      .mockRejectedValueOnce(Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" }));
-
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse("/tmp/missing-transcript.jsonl"),
-    );
-
-    expect(lines).toEqual([]);
-    expect(warnMock).not.toHaveBeenCalled();
-    openSpy.mockRestore();
+    await expect(
+      collect(streamSessionTranscriptLinesReverse("/some/protected/transcript.jsonl")),
+    ).rejects.toBe(error);
   });
 
   it("preserves complete lines across chunk boundaries", async () => {
