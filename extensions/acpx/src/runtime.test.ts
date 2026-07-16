@@ -22,7 +22,7 @@ type TestSessionStore = {
 
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
-const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.1.4";
+const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.1.2";
 const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node "${path.resolve(
@@ -939,7 +939,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         reasoningEffort: "medium",
       }),
     ).toBe(
-      `npx @agentclientprotocol/codex-acp@1.1.4 ${OPENCLAW_CODEX_CONFIG_ARG} '{"model":"gpt-5.4","model_reasoning_effort":"medium"}'`,
+      `npx @agentclientprotocol/codex-acp@1.1.2 ${OPENCLAW_CODEX_CONFIG_ARG} '{"model":"gpt-5.4","model_reasoning_effort":"medium"}'`,
     );
     expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
   });

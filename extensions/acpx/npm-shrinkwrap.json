@@ -9,7 +9,7 @@
       "version": "2026.7.2",
       "dependencies": {
         "@agentclientprotocol/claude-agent-acp": "0.55.0",
-        "@agentclientprotocol/codex-acp": "1.1.4",
+        "@agentclientprotocol/codex-acp": "1.1.2",
         "acpx": "0.11.2",
         "smol-toml": "1.7.0",
         "zod": "4.4.3"
@@ -33,13 +33,13 @@
       }
     },
     "node_modules/@agentclientprotocol/codex-acp": {
-      "version": "1.1.4",
-      "resolved": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-1.1.4.tgz",
-      "integrity": "sha512-DzusIpGwlQwMWuHgJhU8FWMsyQvzjenB93IEzQATkdbNulo5Rd9GKOz8+B+/C9iWWxmyXgtgmjzaL+iRFyDryQ==",
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-1.1.2.tgz",
+      "integrity": "sha512-qE/R1WdqJJ9OFHsHGvbmVmS2j9iCMZzpWT3g2XIViXrGHu1fLOALLINBIlW+WzKDllCh131aB6cqcIWSt0otbw==",
       "license": "Apache-2.0",
       "dependencies": {
         "@agentclientprotocol/sdk": "^1.2.1",
-        "@openai/codex": "^0.144.4",
+        "@openai/codex": "^0.144.0",
         "diff": "^9.0.0",
         "open": "^11.0.0",
         "vscode-jsonrpc": "^9.0.1",

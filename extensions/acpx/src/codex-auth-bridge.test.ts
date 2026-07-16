@@ -221,7 +221,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/codex-acp@1.1.4"');
+    expect(wrapper).toContain('"@agentclientprotocol/codex-acp@1.1.2"');
     expect(wrapper).toContain('"--", "codex-acp"');
     expect(wrapper).not.toContain("@zed-industries/codex-acp");
   });
@@ -760,7 +760,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
         agents: {
           codex: {
             command:
-              "npx @agentclientprotocol/codex-acp@1.1.4 cli -c 'model=\"gpt-5.6-sol\"' --config 'model_reasoning_effort=\"low\"'",
+              "npx @agentclientprotocol/codex-acp@1.1.2 cli -c 'model=\"gpt-5.6-sol\"' --config 'model_reasoning_effort=\"low\"'",
           },
         },
       },
