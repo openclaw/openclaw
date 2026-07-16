@@ -762,7 +762,8 @@ describe("runDaemonRestart health checks", () => {
       timeoutMs: 10_000,
     });
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
+    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+    expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
     expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
       port: 18_789,
       attempts: 960,
@@ -800,6 +801,11 @@ describe("runDaemonRestart health checks", () => {
       timeoutMs: 10_000,
     });
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 4200,
+      reason: "gateway.restart",
+      intent: { waitMs: 30_000 },
+    });
     expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
     expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
       port: 18_789,

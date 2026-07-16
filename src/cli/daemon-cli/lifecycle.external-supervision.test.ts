@@ -246,7 +246,8 @@ describe("external gateway supervision lifecycle", () => {
       timeoutMs: 10_000,
     });
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
+    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
+    expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
     expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
       port: 18_789,
       attempts: 420,

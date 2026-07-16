@@ -340,12 +340,15 @@ async function signalGatewayRestart(
       `gateway lock identity does not match the verified listener on port ${port}; refusing an ambiguous restart`,
     );
   }
-  const intentWritten = writeGatewayRestartIntentSync({
-    targetPid: pid,
-    reason: "gateway.restart",
-    ...(params.restartIntent ? { intent: params.restartIntent } : {}),
-  });
-  if (requiresTargetedDelivery && !intentWritten) {
+  const usesTargetedWindowsRpc = isWindows && Boolean(previousLockIdentity?.ownerId);
+  const intentWritten = usesTargetedWindowsRpc
+    ? false
+    : writeGatewayRestartIntentSync({
+        targetPid: pid,
+        reason: "gateway.restart",
+        ...(params.restartIntent ? { intent: params.restartIntent } : {}),
+      });
+  if (requiresTargetedDelivery && !usesTargetedWindowsRpc && !intentWritten) {
     throw new Error("failed to persist the gateway restart intent");
   }
   try {
@@ -400,9 +403,6 @@ async function signalGatewayRestart(
       clearGatewayRestartIntentSync();
     }
     throw err;
-  }
-  if (isWindows && previousLockIdentity?.ownerId && intentWritten) {
-    clearGatewayRestartIntentSync();
   }
   return {
     result: "restarted" as const,
