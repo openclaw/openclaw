@@ -1762,6 +1762,13 @@ export const uk: TranslationMap = {
     loading: "Перевіряємо доступні способи доступу до ШІ на цьому Gateway…",
     retry: "Повторити",
     checkAgain: "Перевірити ще раз",
+    verify: {
+      title: "Поточне підключення",
+      button: "Перевірити підключення",
+      checking: "Перевірка — очікуємо на швидку відповідь від {modelRef}…",
+      answered: "Відповідь отримано",
+      answeredIn: "Відповідь отримано за {latencyMs} мс",
+    },
     access: {
       adminRequired: "Для налаштування моделі потрібен доступ operator.admin.",
       gatewayTooOld: "Gateway працює на застарілій версії OpenClaw",

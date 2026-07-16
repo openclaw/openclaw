@@ -1763,6 +1763,13 @@ export const pl: TranslationMap = {
     loading: "Sprawdzanie dostępnego dostępu do AI w tym Gateway…",
     retry: "Ponów",
     checkAgain: "Sprawdź ponownie",
+    verify: {
+      title: "Bieżące połączenie",
+      button: "Sprawdź połączenie",
+      checking: "Sprawdzanie — prosimy {modelRef} o szybką odpowiedź…",
+      answered: "Odpowiedziano",
+      answeredIn: "Odpowiedziano w ciągu {latencyMs} ms",
+    },
     access: {
       adminRequired: "Konfiguracja modelu wymaga uprawnienia operator.admin.",
       gatewayTooOld: "Gateway korzysta ze starszej wersji OpenClaw",

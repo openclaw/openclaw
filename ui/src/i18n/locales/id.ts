@@ -1755,6 +1755,13 @@ export const id: TranslationMap = {
     loading: "Memeriksa akses AI yang tersedia di Gateway ini…",
     retry: "Coba lagi",
     checkAgain: "Periksa lagi",
+    verify: {
+      title: "Koneksi saat ini",
+      button: "Verifikasi koneksi",
+      checking: "Memeriksa — meminta balasan singkat dari {modelRef}…",
+      answered: "Dijawab",
+      answeredIn: "Dijawab dalam {latencyMs} ms",
+    },
     access: {
       adminRequired: "Penyiapan model memerlukan akses operator.admin.",
       gatewayTooOld: "Gateway menjalankan OpenClaw versi lama",

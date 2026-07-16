@@ -1722,6 +1722,13 @@ export const zh_CN: TranslationMap = {
     loading: "正在检查此 Gateway 上可用的 AI 访问方式…",
     retry: "重试",
     checkAgain: "重新检查",
+    verify: {
+      title: "当前连接",
+      button: "验证连接",
+      checking: "正在检查 — 正在请求 {modelRef} 快速回复…",
+      answered: "已回复",
+      answeredIn: "已在 {latencyMs} 毫秒内回复",
+    },
     access: {
       adminRequired: "模型设置需要 operator.admin 访问权限。",
       gatewayTooOld: "此 Gateway 正在运行较旧版本的 OpenClaw",
