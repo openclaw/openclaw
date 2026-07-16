@@ -44,6 +44,9 @@ const auditTestState = vi.hoisted(() => ({
   recorded: 0,
   stopped: 0,
 }));
+const agentEventHandlerMocks = vi.hoisted(() => ({
+  create: vi.fn(),
+}));
 
 vi.mock("../audit/audit-config.js", () => ({
   isAuditLedgerEnabled: () => auditTestState.enabled,
@@ -66,9 +69,9 @@ vi.mock("../audit/audit-recorder.js", () => ({
   },
 }));
 
-vi.mock("./server-chat.js", () => {
-  throw new Error("server-chat lazy load failure");
-});
+vi.mock("./server-chat.js", () => ({
+  createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
+}));
 
 vi.mock("./server-session-key.js", () => ({
   resolveSessionKeyForRun: () => "agent:main:main",
@@ -112,6 +115,9 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.created = 0;
     auditTestState.recorded = 0;
     auditTestState.stopped = 0;
+    agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
+      throw new Error("server-chat lazy load failure");
+    });
     installInMemoryTaskRegistryRuntime();
   });
 
@@ -154,7 +160,7 @@ describe("startGatewayEventSubscriptions", () => {
     expect(auditTestState.stopped).toBe(1);
   });
 
-  it("logs lazy agent event module failures", async () => {
+  it("logs lazy agent event handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "start" } });
@@ -164,6 +170,19 @@ describe("startGatewayEventSubscriptions", () => {
       "Agent event dispatch failed",
       expect.objectContaining({ runId: "run-1", stream: "lifecycle" }),
     );
+  });
+
+  it("disposes a loaded agent event handler on unsubscribe", async () => {
+    const dispose = vi.fn();
+    const handler = Object.assign(vi.fn(), { dispose });
+    agentEventHandlerMocks.create.mockReturnValue(handler);
+    unsubs = startGatewayEventSubscriptions(createParams());
+
+    emitAgentEvent({ runId: "run-dispose", stream: "lifecycle", data: { phase: "error" } });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+
+    await unsubs.agentUnsub();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("logs transcript handler failures", async () => {

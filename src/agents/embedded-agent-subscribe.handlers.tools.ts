@@ -15,6 +15,7 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { type AgentPlanStep, normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
@@ -113,6 +114,18 @@ const TRACE_REQUIRED_PARAM_GROUPS = {
   write: REQUIRED_PARAM_GROUPS.write,
   edit: REQUIRED_PARAM_GROUPS.edit,
 } satisfies Record<string, readonly RequiredParamGroup[]>;
+
+function readUpdatePlanResult(
+  result: unknown,
+): { explanation?: string; steps: AgentPlanStep[] } | undefined {
+  const details = readToolResultDetails(result);
+  if (details?.status !== "updated" || !Array.isArray(details.plan)) {
+    return undefined;
+  }
+  const steps = normalizeAgentPlanSteps(details.plan) ?? [];
+  const explanation = readStringValue(details.explanation);
+  return { ...(explanation ? { explanation } : {}), steps };
+}
 
 function isMiddlewareToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
@@ -237,6 +250,16 @@ export function countActiveToolExecutions(runId: string): number {
     }
   }
   return count;
+}
+
+/** Cleans up tool start data for a run that has been unsubscribed or aborted. */
+export function cleanupRunToolStartData(runId: string): void {
+  const prefix = `${runId}:`;
+  for (const key of toolStartData.keys()) {
+    if (key.startsWith(prefix)) {
+      toolStartData.delete(key);
+    }
+  }
 }
 
 function isCronAddAction(args: unknown): boolean {
@@ -1454,6 +1477,22 @@ export async function handleToolExecutionEnd(
         });
       }
     }
+  }
+
+  const planUpdate =
+    !isToolError && toolName === "update_plan" ? readUpdatePlanResult(sanitizedResult) : undefined;
+  if (planUpdate) {
+    const planEvent = {
+      stream: "plan" as const,
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        ...planUpdate,
+      },
+    };
+    emitAgentEvent({ runId: ctx.params.runId, ...planEvent });
+    emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
   emitAgentEvent({

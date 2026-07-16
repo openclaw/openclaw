@@ -213,6 +213,36 @@ describe("qa suite", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds a hung lab readiness request by the remaining startup deadline", async () => {
+    vi.useFakeTimers();
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ timeoutMs }: { timeoutMs: number }) =>
+        await new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("request timed out")), timeoutMs);
+        }),
+    );
+
+    const readiness = qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+      lab: {
+        listenUrl: "http://127.0.0.1:43123",
+        stop,
+      },
+      ownsLab: true,
+      timeoutMs: 1_000,
+    });
+    const rejection = expect(readiness).rejects.toThrow(
+      "timed out after 1000ms waiting for qa-lab ready",
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 1_000 }),
+    );
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves caller-owned labs running when readiness never becomes healthy", async () => {
     const stop = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({

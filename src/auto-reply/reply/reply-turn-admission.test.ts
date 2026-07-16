@@ -23,9 +23,9 @@ import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
-  testing,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

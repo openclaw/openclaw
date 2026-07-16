@@ -44,7 +44,11 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
-import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  resolveConnectChallengeTimeoutMs,
+  resolveSafeTimeoutDelayMs,
+} from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
 
 export type DeviceIdentity = {
@@ -407,7 +411,7 @@ export class GatewayClient {
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
         ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
-        : 30_000;
+        : DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
     this.protocol = new GatewayProtocolClient<AssembledConnect>({
       createSocket: (handlers) => this.createSocket(handlers),
       createRequestId: randomUUID,

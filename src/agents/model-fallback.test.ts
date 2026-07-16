@@ -30,17 +30,25 @@ import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   isFallbackSummaryError,
-  testing,
+  resolveModelCandidateChain,
   runWithImageModelFallback,
   runWithModelFallback as runWithModelFallbackBase,
 } from "./model-fallback.js";
+import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
+import { resolveSessionSuspensionReason } from "./session-suspension.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
+
+const testing = {
+  resolveFallbackCandidates: resolveModelCandidateChain,
+  resolveSessionSuspensionReason,
+  shouldDiscardDeferredSessionSuspension,
+};
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 

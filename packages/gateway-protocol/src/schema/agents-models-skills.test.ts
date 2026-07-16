@@ -89,10 +89,16 @@ describe("ModelsListResultSchema", () => {
       id: "gpt-image",
       name: "GPT Image",
       provider: "openai",
+      agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
       input: ["text", "image", "audio", "video", "document"],
     };
 
     expect(Value.Check(ModelsListResultSchema, { models: [model] })).toBe(true);
+    expect(
+      Value.Check(ModelsListResultSchema, {
+        models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
+      }),
+    ).toBe(false);
     expect(
       Value.Check(ModelsListResultSchema, {
         models: [{ ...model, input: ["text", "binary"] }],

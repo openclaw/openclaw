@@ -234,7 +234,6 @@ describe("production lint suppressions", () => {
         "src/system-agent/setup-inference.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/version.ts|eslint/no-underscore-dangle|1",

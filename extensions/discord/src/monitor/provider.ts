@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -55,6 +56,7 @@ export type MonitorDiscordOpts = {
   historyLimit?: number;
   replyToMode?: ReplyToMode;
   setStatus?: DiscordMonitorStatusSink;
+  commandDeployHashStore?: DiscordCommandDeployHashStore;
 };
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
@@ -336,6 +338,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceEnabled,
       discordConfig: discordCfg,
       runtime,
+      commandDeployHashStore: opts.commandDeployHashStore,
       createClient: discordProviderRuntime.createClient,
       createGatewayPlugin: createDiscordGatewayPlugin,
       createGatewaySupervisor: createDiscordGatewaySupervisor,

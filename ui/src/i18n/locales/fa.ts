@@ -654,6 +654,8 @@ export const fa: TranslationMap = {
     archiveSession: "بایگانی کردن نشست",
     archiveSessionCount: "بایگانی {count}",
     restoreSession: "بازیابی نشست",
+    stopCloudWorker: "توقف ورکر ابری…",
+    stopCloudWorkerConfirm: "ورکر ابری برای «{session}» متوقف شود؟",
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "حذف {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

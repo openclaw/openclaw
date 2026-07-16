@@ -183,7 +183,7 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   );
 }
 
-export async function buildOpenAILiveProviderConfig(
+async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<ModelProviderConfig> {
   const baseUrl =
@@ -446,7 +446,7 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
   };
 }
 
-export async function buildOpenAICodexLiveProviderConfig(params: {
+async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
@@ -1007,9 +1007,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ provider, modelId, agentRuntime, compat }) =>
+    resolveThinkingProfile: ({ provider, modelId, agentRuntime, api, compat }) =>
       normalizeProviderId(provider) === PROVIDER_ID
-        ? resolveUnifiedOpenAIThinkingProfile(modelId, agentRuntime, compat)
+        ? resolveUnifiedOpenAIThinkingProfile(modelId, agentRuntime, compat, api)
         : null,
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),

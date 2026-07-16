@@ -48,6 +48,7 @@ import {
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliPlanUpdate,
   type CliStreamingDelta,
   type CliThinkingDelta,
   type CliThinkingProgress,
@@ -1513,6 +1514,22 @@ export async function executePreparedCliRun(
             data: { progressTokens },
           });
         };
+        const emitCliPlanUpdate = ({ steps }: CliPlanUpdate) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "plan",
+            data: {
+              phase: "update",
+              title: "Plan updated",
+              source: "codex-exec",
+              steps,
+            },
+          });
+        };
         if (useManagedClaudeLiveSession) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -1578,6 +1595,7 @@ export async function executePreparedCliRun(
                 onAssistantDelta: emitCliAssistantDelta,
                 onThinkingDelta: emitCliThinkingDelta,
                 onThinkingProgress: emitCliThinkingProgress,
+                onPlanUpdate: emitCliPlanUpdate,
                 onToolUseStart: emitParsedToolUseStart,
                 onToolResult: emitParsedToolResult,
                 onCommentaryText:
