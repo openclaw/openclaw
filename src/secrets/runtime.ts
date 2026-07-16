@@ -59,6 +59,10 @@ const loadRuntimePrepareHelpers = createLazyRuntimeModule(
   () => import("./runtime-prepare.runtime.js"),
 );
 
+const loadRuntimeOptionalAssignmentHelpers = createLazyRuntimeModule(
+  () => import("./runtime-optional-assignments.js"),
+);
+
 async function resolveLoadablePluginOrigins(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -182,9 +186,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     collectAuthStoreAssignments,
     collectConfigAssignments,
     createResolverContext,
-    resolveAndApplySecretAssignments,
     resolveRuntimeWebTools,
   } = await loadRuntimePrepareHelpers();
+  const { resolveAndApplySecretAssignments } = await loadRuntimeOptionalAssignmentHelpers();
   const manifestRegistry =
     params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
   const loadablePluginOrigins =

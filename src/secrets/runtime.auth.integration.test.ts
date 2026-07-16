@@ -57,12 +57,15 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
       }
     }
   },
-  resolveAndApplySecretAssignments: async () => {},
   resolveRuntimeWebTools: async () => ({
     search: { providerSource: "none", diagnostics: [] },
     fetch: { providerSource: "none", diagnostics: [] },
     diagnostics: [],
   }),
+}));
+
+vi.mock("./runtime-optional-assignments.js", () => ({
+  resolveAndApplySecretAssignments: async () => {},
 }));
 
 function loadAuthStoreFromTestFile(agentDir?: string): AuthProfileStore {
