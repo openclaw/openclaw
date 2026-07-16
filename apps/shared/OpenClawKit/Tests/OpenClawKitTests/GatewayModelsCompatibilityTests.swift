@@ -72,5 +72,19 @@ struct GatewayModelsCompatibilityTests {
         #expect(legacyJSON["model"] as? String == "openai/gpt-5.6")
         #expect(omittedJSON["model"] == nil)
         #expect(clearedJSON["model"] is NSNull)
+
+        let decodedOmitted = try JSONDecoder().decode(
+            AgentsUpdateParams.self,
+            from: Data(#"{"agentId":"work"}"#.utf8))
+        let decodedCleared = try JSONDecoder().decode(
+            AgentsUpdateParams.self,
+            from: Data(#"{"agentId":"work","model":null}"#.utf8))
+        let reencodedCleared = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedCleared))
+                as? [String: Any])
+
+        #expect(decodedOmitted.modelvalue == nil)
+        #expect(decodedCleared.modelvalue?.value is NSNull)
+        #expect(reencodedCleared["model"] is NSNull)
     }
 }

@@ -447,10 +447,51 @@ function emitStruct(name: string, schema: JsonSchema): string {
       "\n\n" +
       "    private enum CodingKeys: String, CodingKey {\n" +
       codingKeys.join("\n") +
-      "\n    }\n}",
+      "\n    }" +
+      emitStructCustomCodable(name, props, required) +
+      "\n}",
   );
   lines.push("");
   return lines.join("\n");
+}
+
+function emitStructCustomCodable(
+  name: string,
+  props: Record<string, JsonSchema>,
+  required: Set<string>,
+): string {
+  if (name !== "AgentsUpdateParams" || !props.model) {
+    return "";
+  }
+  const decodedProperties = Object.entries(props).map(([key, propSchema]) => {
+    const propName = swiftStoredPropertyName(name, key);
+    if (key === "model") {
+      // decodeIfPresent collapses an explicit JSON null into nil. Presence-aware decoding
+      // preserves the Gateway patch distinction between clearing and omitting the model.
+      return `        self.${propName} = container.contains(.${propName})\n            ? try container.decode(AnyCodable.self, forKey: .${propName})\n            : nil`;
+    }
+    if (required.has(key)) {
+      return `        self.${propName} = try container.decode(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
+    }
+    return `        self.${propName} = try container.decodeIfPresent(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
+  });
+  const encodedProperties = Object.keys(props).map((key) => {
+    const propName = swiftStoredPropertyName(name, key);
+    if (required.has(key)) {
+      return `        try container.encode(${propName}, forKey: .${propName})`;
+    }
+    return `        try container.encodeIfPresent(${propName}, forKey: .${propName})`;
+  });
+  return (
+    "\n\n    public init(from decoder: Decoder) throws {\n" +
+    "        let container = try decoder.container(keyedBy: CodingKeys.self)\n" +
+    decodedProperties.join("\n") +
+    "\n    }\n\n" +
+    "    public func encode(to encoder: Encoder) throws {\n" +
+    "        var container = encoder.container(keyedBy: CodingKeys.self)\n" +
+    encodedProperties.join("\n") +
+    "\n    }"
+  );
 }
 
 function emitStructCompatibilityInitializer(

@@ -8126,6 +8126,28 @@ public struct AgentsUpdateParams: Codable, Sendable {
         case emoji
         case avatar
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.agentid = try container.decode(String.self, forKey: .agentid)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
+        self.modelvalue = container.contains(.modelvalue)
+            ? try container.decode(AnyCodable.self, forKey: .modelvalue)
+            : nil
+        self.emoji = try container.decodeIfPresent(String.self, forKey: .emoji)
+        self.avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(agentid, forKey: .agentid)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(workspace, forKey: .workspace)
+        try container.encodeIfPresent(modelvalue, forKey: .modelvalue)
+        try container.encodeIfPresent(emoji, forKey: .emoji)
+        try container.encodeIfPresent(avatar, forKey: .avatar)
+    }
 }
 
 public struct AgentsUpdateResult: Codable, Sendable {
