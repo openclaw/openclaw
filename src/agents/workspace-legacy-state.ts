@@ -120,15 +120,6 @@ function pathOrClaimExists(filePath: string): boolean {
   return false;
 }
 
-function pathExistsOrUnknown(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 function siblingPathIsOwnedMarker(filePath: string): boolean {
   let stat: fs.Stats;
   try {
