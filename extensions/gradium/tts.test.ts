@@ -144,6 +144,41 @@ describe("gradium tts diagnostics", () => {
     expect(result).toEqual(audioData);
   });
 
+  it("times out when a TTS audio response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array([1, 2, 3]));
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+
+      const pending = gradiumTTS({
+        text: "hello",
+        apiKey: "gsk_test123",
+        baseUrl: "https://api.gradium.ai",
+        voiceId: "YTpq7expH9539ERJ",
+        outputFormat: "wav",
+        timeoutMs: 50,
+      });
+      const settled = expect(pending).rejects.toThrow(
+        "Gradium TTS audio response stalled: no data received for 50ms",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects HTTP base URLs before sending the API key", async () => {
     const fetchMock = vi
       .fn()

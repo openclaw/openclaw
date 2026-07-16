@@ -54,9 +54,14 @@ export async function gradiumTTS(params: {
   try {
     await assertOkOrThrowProviderError(response, "Gradium API error");
 
+    // fetchWithSsrFGuard resolves after headers; keep the request deadline on the
+    // audio body so a stalled Gradium stream cannot hang speech synthesis.
     return await readResponseWithLimit(response, maxBytes, {
+      chunkTimeoutMs: timeoutMs,
       onOverflow: ({ maxBytes: maxBytesLocal }) =>
         new Error(`Gradium TTS audio response exceeds ${maxBytesLocal} bytes`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Gradium TTS audio response stalled: no data received for ${chunkTimeoutMs}ms`),
     });
   } finally {
     await release();
