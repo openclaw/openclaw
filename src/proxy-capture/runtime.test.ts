@@ -1,5 +1,4 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
-import { Buffer } from "node:buffer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -9,7 +8,6 @@ import {
   captureWsEvent,
   finalizeDebugProxyCapture,
   initializeDebugProxyCapture,
-  readCapturedResponseBodyBounded,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime.js";
 
@@ -530,6 +528,62 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
+  it("captures a spec-compliant null response body as empty", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.example.test/no-content",
+        method: "HEAD",
+        response: new Response(null, { status: 204 }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(response?.status).toBe(204);
+    expect(response?.dataText).toBe("");
+    expect(response?.metaJson).toBeUndefined();
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
+  it.each([undefined, "invalid", "1"])(
+    "fails closed on a streamless Response-like body with content-length %s",
+    async (contentLength) => {
+      initializeDebugProxyCapture("test", settings, deps);
+      const headers = new Headers(
+        contentLength === undefined ? undefined : { "content-length": contentLength },
+      );
+      const arrayBuffer = vi.fn(async () => new Uint8Array(32 * ONE_MIB).buffer);
+      captureHttpExchange(
+        {
+          url: "https://api.example.test/streamless",
+          method: "GET",
+          response: {
+            status: 200,
+            headers,
+            arrayBuffer,
+            clone: () => ({ body: null, headers, arrayBuffer }),
+          } as unknown as Response,
+        },
+        settings,
+        deps,
+      );
+      await waitForResponseSettled();
+      finalizeDebugProxyCapture(settings, deps);
+
+      const response = events.find((event) => event.kind === "response");
+      expect(JSON.parse(String(response?.metaJson))).toMatchObject({
+        bodyCapture: "unavailable",
+      });
+      expect(response).not.toHaveProperty("dataText");
+      expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(events.some((event) => event.kind === "error")).toBe(false);
+    },
+  );
+
   it("records metadata-only for non-cloneable Response-like objects", async () => {
     initializeDebugProxyCapture("test", settings, deps);
     // Some seams hand capture a Response-like object that cannot be cloned. It
@@ -577,138 +631,5 @@ describe("debug proxy runtime", () => {
     expect(response?.status).toBe(204);
     expect(response?.contentType).toBeUndefined();
     expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "unavailable" });
-  });
-});
-
-describe("readCapturedResponseBodyBounded", () => {
-  it("skips body read when content-length exceeds cap (body-less fallback)", async () => {
-    // Force the !body fallback with a mock clone so the content-length
-    // precheck, not the streaming path, rejects the oversized body.
-    // A real Response clone exposes body.getReader in Node 24 and would
-    // enter the streaming branch, never testing this guard.
-    const largeSize = 5 * 1024 * 1024;
-    const arrayBufferSpy = vi.fn();
-    const mockClone = {
-      headers: new Headers({ "content-length": String(largeSize) }),
-      body: null,
-      arrayBuffer: arrayBufferSpy,
-    };
-    const response = {
-      clone: () => mockClone,
-    } as unknown as Response;
-    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 1024);
-    expect(truncated).toBe(true);
-    expect(buffer.length).toBe(0);
-    expect(arrayBufferSpy).not.toHaveBeenCalled();
-  });
-
-  it("skips body read when content-length is a huge non-safe integer (body-less fallback)", async () => {
-    // Very long digit-only Content-Length values overflow Number parsing and
-    // would bypass a naive Number.isFinite guard, still calling arrayBuffer().
-    const arrayBufferSpy = vi.fn();
-    const mockClone = {
-      headers: new Headers({ "content-length": "9".repeat(100) }),
-      body: null,
-      arrayBuffer: arrayBufferSpy,
-    };
-    const response = {
-      clone: () => mockClone,
-    } as unknown as Response;
-    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 1024);
-    expect(truncated).toBe(true);
-    expect(buffer.length).toBe(0);
-    expect(arrayBufferSpy).not.toHaveBeenCalled();
-  });
-
-  it("reads body via fallback when content-length is zero-padded under the cap", async () => {
-    // Padding can make the raw header wider than MAX_SAFE_INTEGER's digit
-    // count while still declaring a small under-cap length. Normalize zeroes
-    // before the width guard so capture still reads the body.
-    const body = Buffer.from("padded");
-    const arrayBufferSpy = vi
-      .fn()
-      .mockResolvedValue(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
-    const paddedLength = `${"0".repeat(20)}${body.length}`;
-    expect(paddedLength.length).toBeGreaterThan(String(Number.MAX_SAFE_INTEGER).length);
-    const mockClone = {
-      headers: new Headers({ "content-length": paddedLength }),
-      body: null,
-      arrayBuffer: arrayBufferSpy,
-    };
-    const response = {
-      clone: () => mockClone,
-    } as unknown as Response;
-    const result = await readCapturedResponseBodyBounded(response, 1024);
-    expect(result.truncated).toBe(false);
-    expect(result.buffer.equals(body)).toBe(true);
-    expect(arrayBufferSpy).toHaveBeenCalledOnce();
-  });
-
-  it("reads body via fallback when content-length is within cap", async () => {
-    // Body-less path with a declared length under the cap: must call
-    // arrayBuffer() and return the body.
-    const body = Buffer.from("small");
-    const arrayBufferSpy = vi
-      .fn()
-      .mockResolvedValue(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
-    const mockClone = {
-      headers: new Headers({ "content-length": String(body.length) }),
-      body: null,
-      arrayBuffer: arrayBufferSpy,
-    };
-    const response = {
-      clone: () => mockClone,
-    } as unknown as Response;
-    const result = await readCapturedResponseBodyBounded(response, 1024);
-    expect(result.truncated).toBe(false);
-    expect(result.buffer.equals(body)).toBe(true);
-    expect(arrayBufferSpy).toHaveBeenCalledOnce();
-  });
-
-  it("reads body via fallback when content-length is missing (within cap)", async () => {
-    // Body-less path without a content-length header: must fall through
-    // to arrayBuffer() and check the actual byte length.
-    const body = Buffer.from("no length header");
-    const arrayBufferSpy = vi
-      .fn()
-      .mockResolvedValue(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
-    const mockClone = {
-      headers: new Headers(),
-      body: null,
-      arrayBuffer: arrayBufferSpy,
-    };
-    const response = {
-      clone: () => mockClone,
-    } as unknown as Response;
-    const result = await readCapturedResponseBodyBounded(response, 4096);
-    expect(result.truncated).toBe(false);
-    expect(result.buffer.equals(body)).toBe(true);
-    expect(arrayBufferSpy).toHaveBeenCalledOnce();
-  });
-
-  it("reads body when content-length is within cap", async () => {
-    const body = Buffer.from("small");
-    const response = new Response(body, {
-      headers: { "content-length": String(body.length) },
-    });
-    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 1024);
-    expect(truncated).toBe(false);
-    expect(buffer.equals(body)).toBe(true);
-  });
-
-  it("reads body when content-length is missing (within cap)", async () => {
-    const body = Buffer.from("no length header");
-    const response = new Response(body);
-    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 4096);
-    expect(truncated).toBe(false);
-    expect(buffer.equals(body)).toBe(true);
-  });
-
-  it("handles stream body (regression guard)", async () => {
-    const data = new Uint8Array(100).fill(97);
-    const response = new Response(new Blob([data]).stream());
-    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 200);
-    expect(truncated).toBe(false);
-    expect(buffer.length).toBe(100);
   });
 });

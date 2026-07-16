@@ -30,36 +30,13 @@ const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]",
 // response would otherwise be buffered fully into memory just to record it.
 const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 
-function declaredContentLengthExceedsCap(headers: Headers, maxBytes: number): boolean {
-  const raw = headers.get("content-length");
-  if (!raw) {
-    return false;
-  }
-  const trimmed = raw.trim();
-  // Only accept plain digit strings; reject scientific notation, decimals,
-  // signs, or non-numeric values. Those are treated as unknown length and
-  // verified after the actual arrayBuffer() read.
-  if (!/^\d+$/u.test(trimmed)) {
-    return false;
-  }
-  // Strip leading zeroes before the digit-count guard so values like
-  // "000…001" are not treated as oversized solely due to padding width.
-  const normalized = trimmed.replace(/^0+/u, "") || "0";
-  // Any digit-only value with more digits than MAX_SAFE_INTEGER is definitely
-  // above the cap and cannot be safely represented as a Number.
-  if (normalized.length > String(Number.MAX_SAFE_INTEGER).length) {
-    return true;
-  }
-  const parsed = Number.parseInt(normalized, 10);
-  if (!Number.isSafeInteger(parsed)) {
-    return true;
-  }
-  return parsed > maxBytes;
-}
+type CapturedResponseBodyResult =
+  | { status: "captured"; buffer: Buffer }
+  | { status: "too-large" | "unavailable" };
 
-// Reads a cloned capture response body under a byte cap. Returns truncated=true
-// (and discards the partial buffer) once the cap is exceeded so oversized or
-// hostile/endless bodies are recorded as metadata-only instead of buffered.
+// Reads a cloned capture response body under a byte cap. Oversized or
+// non-streaming Response-like bodies return a metadata-only status instead of
+// allocating the full body.
 //
 // Unlike media-core's readResponseWithLimit this never awaits reader.cancel():
 // the body here is one branch of a Response.clone() tee whose sibling (the
@@ -67,24 +44,18 @@ function declaredContentLengthExceedsCap(headers: Headers, maxBytes: number): bo
 // settles (it only resolves once BOTH branches cancel). Awaiting it would hang
 // the capture pipeline and retain the buffered prefix forever, so we cancel
 // fire-and-forget, mirroring src/agents/tools/web-shared.ts#readResponseText.
-export async function readCapturedResponseBodyBounded(
+async function readCapturedResponseBodyBounded(
   response: Response,
   maxBytes: number,
-): Promise<{ buffer: Buffer; truncated: boolean }> {
+): Promise<CapturedResponseBodyResult> {
   const clone = response.clone();
   const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
   if (!body || typeof body.getReader !== "function") {
-    // Non-streaming clone (e.g. test doubles): guard against an oversized
-    // body before allocating through arrayBuffer(). The stream path above
-    // cancels on overflow; this path must pre-check content-length then
-    // still verify the full read stayed within the cap.
-    if (declaredContentLengthExceedsCap(clone.headers, maxBytes)) {
-      return { buffer: Buffer.alloc(0), truncated: true };
-    }
-    const bytes = Buffer.from(await clone.arrayBuffer());
-    return bytes.length > maxBytes
-      ? { buffer: Buffer.alloc(0), truncated: true }
-      : { buffer: bytes, truncated: false };
+    // A real null-body Response consumes as empty. Response-like objects without
+    // a stream cannot be read under a byte cap, so never call arrayBuffer().
+    return clone instanceof Response && clone.body === null
+      ? { status: "captured", buffer: Buffer.alloc(0) }
+      : { status: "unavailable" };
   }
   const reader = body.getReader();
   const chunks: Buffer[] = [];
@@ -117,8 +88,8 @@ export async function readCapturedResponseBodyBounded(
     }
   }
   return truncated
-    ? { buffer: Buffer.alloc(0), truncated: true }
-    : { buffer: Buffer.concat(chunks, total), truncated: false };
+    ? { status: "too-large" }
+    : { status: "captured", buffer: Buffer.concat(chunks, total) };
 }
 const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
   "authorization",
@@ -618,16 +589,15 @@ export function captureHttpExchange(
     return;
   }
   void readCapturedResponseBodyBounded(params.response, MAX_CAPTURED_RESPONSE_BODY_BYTES)
-    .then(({ buffer, truncated }) => {
-      if (truncated) {
-        // Body exceeded the cap mid-stream (chunked / understated length). The
-        // bounded reader already cancelled the clone and discarded the partial
-        // buffer; record metadata only instead of persisting an oversized blob.
-        recordResponseMetadataOnly("too-large");
+    .then((result) => {
+      if (result.status !== "captured") {
+        // The body either exceeded the cap or offered no bounded streaming path.
+        // Preserve the exchange as metadata instead of allocating the whole body.
+        recordResponseMetadataOnly(result.status);
         return;
       }
       const responsePayload = runtime.persistEventPayload(store, {
-        data: redactCapturePayload(buffer),
+        data: redactCapturePayload(result.buffer),
         contentType: responseContentType,
       });
       store.recordEvent({
