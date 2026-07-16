@@ -3819,5 +3819,39 @@ describe("config cli", () => {
       expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
     });
   });
+
+  describe("config patch --file size guard", () => {
+    it("rejects oversized --file input before reading", async () => {
+      const largeContent = "x".repeat(2 * 1024 * 1024);
+      const pathname = writeTempJson5File("openclaw-config-patch-oversize", {
+        channels: { slack: { botToken: largeContent } },
+      });
+      try {
+        await expect(
+          runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]),
+        ).rejects.toThrow(/exceeds maximum size/);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+    });
+
+    it("accepts normal-sized --file input", async () => {
+      const resolved = {
+        channels: { slack: { enabled: true } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-small", {
+        channels: { slack: { enabled: true } },
+      });
+      try {
+        await expect(
+          runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]),
+        ).resolves.not.toThrow();
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

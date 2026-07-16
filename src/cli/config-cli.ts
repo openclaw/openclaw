@@ -1494,6 +1494,16 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
   }
   const sourceLabel = stdin ? "--stdin" : "--file";
+  if (!stdin) {
+    const configPath = file as string;
+    const stat = fs.statSync(configPath);
+    if (!stat.isFile()) {
+      throw new Error(`--file path is not a regular file: ${configPath}`);
+    }
+    if (stat.size > 1024 * 1024) {
+      throw new Error(`--file exceeds maximum size of 1 MB: ${configPath} (${stat.size} bytes)`);
+    }
+  }
   const raw = stdin ? await readStdinText() : fs.readFileSync(file as string, "utf8");
   try {
     return JSON5.parse(raw);
