@@ -1623,6 +1623,7 @@ export const fa: TranslationMap = {
     connectionTimedOut: "اتصال به نشست ظرف ۳۰ ثانیه برقرار نشد.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "عامل",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "جداشده",

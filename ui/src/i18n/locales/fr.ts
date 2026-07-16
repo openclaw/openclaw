@@ -1643,6 +1643,7 @@ export const fr: TranslationMap = {
     connectionTimedOut: "La connexion à la session n’a pas été établie dans les 30 secondes.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "agent",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "détaché",
