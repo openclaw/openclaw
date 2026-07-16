@@ -95,8 +95,7 @@ export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
 export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
-export const listWebSearchProvidersMock = createMock();
-export const resolveWebSearchProviderIdMock = createMock();
+export const hasUsableWebSearchProviderMock = createMock();
 export const classifyEmbeddedAgentRunResultForModelFallbackMock = createMock();
 export const mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock = createMock();
 
@@ -187,8 +186,7 @@ vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
 }));
 
 vi.mock("../../web-search/runtime.js", () => ({
-  listWebSearchProviders: listWebSearchProvidersMock,
-  resolveWebSearchProviderId: resolveWebSearchProviderIdMock,
+  hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
 }));
 
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
@@ -814,10 +812,11 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   setSessionRuntimeModelMock.mockReturnValue(undefined);
   logWarnMock.mockReset();
   ensureRuntimePluginsLoadedMock.mockReset();
-  listWebSearchProvidersMock.mockReset();
-  listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
-  resolveWebSearchProviderIdMock.mockReset();
-  resolveWebSearchProviderIdMock.mockReturnValue("duckduckgo");
+  hasUsableWebSearchProviderMock.mockReset();
+  hasUsableWebSearchProviderMock.mockImplementation(
+    (params?: { runtimeWebSearch?: { selectedProvider?: string } }) =>
+      Boolean(params?.runtimeWebSearch?.selectedProvider),
+  );
 }
 
 export function clearFastTestEnv(): string | undefined {
