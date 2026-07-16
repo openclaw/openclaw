@@ -297,15 +297,16 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
+  let latest: GatewayServiceCommandPort = { kind: "missing" };
   for (const [index, arg] of programArguments.entries()) {
     if (arg === "--port") {
-      return parseGatewayPortArg(programArguments[index + 1]);
+      latest = parseGatewayPortArg(programArguments[index + 1]);
     }
     if (arg.startsWith("--port=")) {
-      return parseGatewayPortArg(arg.slice("--port=".length));
+      latest = parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return { kind: "missing" };
+  return latest;
 }
 
 function auditGatewayServicePort(params: {

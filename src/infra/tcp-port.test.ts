@@ -27,5 +27,15 @@ describe("parseTcpPortFromArgs", () => {
       19001,
     );
     expect(parseTcpPortFromArgs(["gateway", "--port=18789", "--port=19002"])).toBe(19002);
+    expect(parseTcpPortFromArgs(["gateway", "--port", "18789", "--port=19003"])).toBe(19003);
+  });
+
+  it("keeps best-effort parsing when repeated flags contain invalid values", () => {
+    expect(parseTcpPortFromArgs(["gateway", "--port=invalid", "--port", "19004"])).toBe(
+      19004,
+    );
+    expect(parseTcpPortFromArgs(["gateway", "--port", "19005", "--port=invalid"])).toBe(
+      19005,
+    );
   });
 });
