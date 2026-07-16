@@ -324,13 +324,7 @@ function followupOwnsNativeCompaction(params: FollowupCliRuntimeParams): boolean
   return false;
 }
 
-function resolveFollowupContextConfigProvider(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): string {
+function resolveFollowupContextConfigProvider(params: FollowupCliRuntimeParams): string {
   const provider = params.followupRun.run.provider;
   return resolveContextConfigProviderForRuntime({
     provider,
@@ -339,13 +333,8 @@ function resolveFollowupContextConfigProvider(params: {
   });
 }
 
-function resolveFollowupAgentRuntimeId(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): string {
+function resolveFollowupAgentRuntimeId(params: FollowupCliRuntimeParams): string {
+  // Only sessionId + runtime pin fields are needed; callers may pass a Pick.
   const matchingSessionEntry =
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
@@ -364,13 +353,7 @@ function resolveFollowupAgentRuntimeId(params: {
   });
 }
 
-function followupUsesCodexRuntime(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): boolean {
+function followupUsesCodexRuntime(params: FollowupCliRuntimeParams): boolean {
   return normalizeLowercaseStringOrEmpty(resolveFollowupAgentRuntimeId(params)) === "codex";
 }
 
