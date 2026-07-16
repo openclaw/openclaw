@@ -4,7 +4,8 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { cliBackendLog } from "./log.js";
@@ -21,6 +22,7 @@ const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createSessionTranscript(params: {
   rootDir: string;
@@ -458,7 +460,7 @@ describe("loadCliSessionHistoryMessages", () => {
   });
 
   it("uses the opened file size when the transcript shrinks after stat", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const stateDir = tempDirs.make("openclaw-cli-state-");
     const sessionFile = createOversizedSessionTranscript(stateDir, "session-oversized-shrink");
     const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
     // Report a stale size whose bounded-read offset is beyond the real EOF,
@@ -496,7 +498,6 @@ describe("loadCliSessionHistoryMessages", () => {
     } finally {
       statSpy.mockRestore();
       warnSpy.mockRestore();
-      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
