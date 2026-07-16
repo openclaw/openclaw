@@ -5,7 +5,7 @@ import type { Root } from "@openclaw/fs-safe";
 
 const JSON_WHITESPACE = new Set([" ", "\t", "\r", "\n"]);
 
-export type LegacyJsonStreamSnapshot = {
+type LegacyJsonStreamSnapshot = {
   dev: number;
   ino: number;
   mtimeMs: number;

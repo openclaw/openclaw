@@ -70,12 +70,12 @@ type RegisterRelayApnsParams = {
 
 type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
 
-export type ApnsRegistrationDatabase = Pick<
+type ApnsRegistrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "apns_registrations" | "apns_registration_tombstones"
 >;
-export type ApnsRegistrationRow = Selectable<ApnsRegistrationDatabase["apns_registrations"]>;
-export type ApnsRegistrationInsert = Insertable<ApnsRegistrationDatabase["apns_registrations"]>;
+type ApnsRegistrationRow = Selectable<ApnsRegistrationDatabase["apns_registrations"]>;
+type ApnsRegistrationInsert = Insertable<ApnsRegistrationDatabase["apns_registrations"]>;
 
 const MAX_NODE_ID_LENGTH = 256;
 const MAX_TOPIC_LENGTH = 255;
@@ -380,7 +380,7 @@ export function apnsRegistrationToRow(registration: ApnsRegistration): ApnsRegis
   };
 }
 
-export function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration): boolean {
+function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration): boolean {
   if (
     left.nodeId !== right.nodeId ||
     left.transport !== right.transport ||
