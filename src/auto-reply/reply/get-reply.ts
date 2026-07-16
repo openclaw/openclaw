@@ -22,10 +22,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -142,19 +138,6 @@ function loadLinkUnderstandingApplyRuntime() {
 
 function loadCommandsCoreRuntime() {
   return commandsCoreRuntimeLoader.load();
-}
-
-const hookRunnerGlobalLoader = createLazyImportLoader(
-  () => import("../../plugins/hook-runner-global.js"),
-);
-const originRoutingLoader = createLazyImportLoader(() => import("./origin-routing.js"));
-
-function loadHookRunnerGlobal() {
-  return hookRunnerGlobalLoader.load();
-}
-
-function loadOriginRouting() {
-  return originRoutingLoader.load();
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {

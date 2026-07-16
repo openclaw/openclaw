@@ -12,7 +12,10 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runBeforeAgentReplyForTurn } from "../plugins/before-agent-reply.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+} from "../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -214,21 +217,6 @@ async function assertSuccessfulCliRuntimeBindingCurrent(
   if (currentOwner !== context.runtimeOwnerFingerprint) {
     throw new Error("CLI runtime owner changed during successful inference");
   }
-}
-
-function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
 }
 
 function buildCliHookUserMessage(prompt: string): unknown {
@@ -529,7 +517,7 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
       `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(finalText)}`,
     );
     return {
-      payloads: buildHandledReplyPayloads(hookResult.reply),
+      payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
       meta: {
         durationMs: Date.now() - hookStartedAt,
         agentMeta: {

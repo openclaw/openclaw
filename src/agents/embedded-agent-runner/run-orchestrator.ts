@@ -10,7 +10,10 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+} from "../../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -40,7 +43,6 @@ import {
   shouldWarnEmbeddedRunStageSummary,
 } from "./run/attempt-stage-timing.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
-import { buildHandledReplyPayloads } from "./run/handled-reply.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -266,7 +268,7 @@ async function runEmbeddedAgentInternal(
       });
       if (hookResult?.handled) {
         return {
-          payloads: buildHandledReplyPayloads(hookResult.reply),
+          payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
           meta: {
             durationMs: Date.now() - started,
             agentMeta: {

@@ -52,6 +52,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -1191,7 +1192,6 @@ export async function runReplyAgent(params: {
   resetTriggered?: boolean;
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
-  beforeAgentReply?: (admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -1224,7 +1224,6 @@ export async function runReplyAgent(params: {
     resetTriggered,
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
-    beforeAgentReply,
   } = params;
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
@@ -1255,16 +1254,6 @@ export async function runReplyAgent(params: {
     mode: typingMode,
     isHeartbeat,
   });
-  let beforeAgentReplyInvoked = false;
-  const invokeBeforeAgentReply = async (admitted?: {
-    sessionId?: string;
-  }): Promise<ReplyPayload | undefined> => {
-    if (!beforeAgentReply || beforeAgentReplyInvoked) {
-      return undefined;
-    }
-    beforeAgentReplyInvoked = true;
-    return await beforeAgentReply(admitted);
-  };
   const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
   const restartRecoveryEntry =
     sessionKey && storePath
@@ -1338,13 +1327,6 @@ export async function runReplyAgent(params: {
 
   let shouldQueueAfterSteerRejection = false;
   if (effectiveShouldSteer && isActive) {
-    // Steering never reaches reply-lane admission. Preserve the hook's
-    // historical before-queue boundary instead of silently skipping it.
-    const hookReply = await invokeBeforeAgentReply();
-    if (hookReply) {
-      typing.cleanup();
-      return hookReply;
-    }
     // Steer against the operation that owns THIS session's run slot. A native
     // command continuation whose slot adoption was skipped (#104844) still
     // carries a source-keyed reservation; steering by its stale sessionId
@@ -1428,13 +1410,6 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    // Follow-up queues are process-local and may collect multiple sources.
-    // Run each source hook before enqueue so handled turns never enter a batch.
-    const hookReply = await invokeBeforeAgentReply();
-    if (hookReply) {
-      typing.cleanup();
-      return hookReply;
-    }
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
@@ -1618,6 +1593,7 @@ export async function runReplyAgent(params: {
     : undefined;
   const {
     admitUserTurn,
+    beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
@@ -1628,8 +1604,7 @@ export async function runReplyAgent(params: {
     getEntry: () =>
       sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
     getSessionId: () => replyOperation.sessionId,
-    beforeAgentReplyState:
-      beforeAgentReply === undefined ? undefined : beforeAgentReplyInvoked ? "continue" : "pending",
+    beforeAgentReplyState: "admitted",
     isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",
@@ -1816,87 +1791,92 @@ export async function runReplyAgent(params: {
     // Suppressed delivery persists only the user transcript; crashed suppressed runs die
     // silently. Deliverable turns atomically persist transcript plus recovery ownership.
     await opts?.onTurnAdopted?.();
-    const shouldCheckpointBeforeAgentReply =
-      beforeAgentReply !== undefined && !beforeAgentReplyInvoked;
-    const hookReply = await invokeBeforeAgentReply({ sessionId: replyOperation.sessionId });
-    if (hookReply) {
-      const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
-      const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
-      let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
-        state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
-      };
-      if (sessionKey && storePath && normalizedHookReplies.length > 0) {
-        const sourceReplyPolicy = resolveSourceReplyPolicy({
-          cfg,
-          sessionCtx,
-          sessionEntry: activeSessionEntry,
-          sessionKey,
-          runtimePolicySessionKey,
-          opts,
-        });
-        if (!sourceReplyPolicy.suppressDelivery) {
-          const pendingFinalDeliveryIntentId = crypto.randomUUID();
-          setReplyPayloadMetadata(hookReply, {
-            pendingFinalDeliveryIntentId,
-            pendingFinalDeliveryRetryText: hookFinalDeliveryText,
-          });
-          hookCheckpoint = {
-            state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
-            pendingFinalDelivery: {
-              text: hookFinalDeliveryText ?? "",
-              intentId: pendingFinalDeliveryIntentId,
-              context: resolveReplyRunDeliveryContext({
-                cfg,
-                sessionCtx,
-                sessionEntry: activeSessionEntry,
-                sessionKey,
-                runtimePolicySessionKey,
-                opts,
-              }),
-            },
+    const runOutcome = await withBeforeAgentReplyObserver(
+      {
+        beforeDispatch: beginBeforeAgentReply,
+        afterDispatch: async (hookResult) => {
+          if (!hookResult?.handled) {
+            await checkpointBeforeAgentReply({ state: "continue" });
+            return hookResult;
+          }
+          const hookReply = hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+          const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
+          const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
+          let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
+            state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
           };
-        } else {
-          // dispatch-from-config owns source visibility for every returned payload.
-          // This checkpoint records that recovery owes no delivery; the outer gate drops the reply.
-          hookCheckpoint = { state: "handled-silent" };
-        }
-      }
-      await checkpointBeforeAgentReply(hookCheckpoint);
-      return returnWithQueuedFollowupDrain(hookReply);
-    }
-    if (shouldCheckpointBeforeAgentReply) {
-      await checkpointBeforeAgentReply({ state: "continue" });
-    }
-    const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
-      runAgentTurnWithFallback({
-        commandBody,
-        transcriptCommandBody,
-        followupRun,
-        sessionCtx,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        replyOperation,
-        opts,
-        typingSignals,
-        blockReplyPipeline,
-        blockStreamingEnabled,
-        blockReplyChunking,
-        resolvedBlockStreamingBreak,
-        applyReplyToMode,
-        shouldEmitToolResult,
-        shouldEmitToolOutput,
-        pendingToolTasks,
-        resetSessionAfterRoleOrderingConflict,
-        isHeartbeat,
-        sessionKey,
-        runtimePolicySessionKey,
-        getActiveSessionEntry: () => activeSessionEntry,
-        activeSessionStore,
-        storePath,
-        resolvedVerboseLevel,
-        toolProgressDetail,
-        replyMediaContext,
-        isRestartRecoveryArmed,
-      }),
+          if (sessionKey && storePath && normalizedHookReplies.length > 0) {
+            const sourceReplyPolicy = resolveSourceReplyPolicy({
+              cfg,
+              sessionCtx,
+              sessionEntry: activeSessionEntry,
+              sessionKey,
+              runtimePolicySessionKey,
+              opts,
+            });
+            if (!sourceReplyPolicy.suppressDelivery) {
+              const pendingFinalDeliveryIntentId = crypto.randomUUID();
+              setReplyPayloadMetadata(hookReply, {
+                pendingFinalDeliveryIntentId,
+                pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+              });
+              hookCheckpoint = {
+                state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
+                pendingFinalDelivery: {
+                  text: hookFinalDeliveryText ?? "",
+                  intentId: pendingFinalDeliveryIntentId,
+                  context: resolveReplyRunDeliveryContext({
+                    cfg,
+                    sessionCtx,
+                    sessionEntry: activeSessionEntry,
+                    sessionKey,
+                    runtimePolicySessionKey,
+                    opts,
+                  }),
+                },
+              };
+            } else {
+              // dispatch-from-config owns source visibility for every returned payload.
+              // This checkpoint records that recovery owes no delivery; the outer gate drops the reply.
+              hookCheckpoint = { state: "handled-silent" };
+            }
+          }
+          await checkpointBeforeAgentReply(hookCheckpoint);
+          return { ...hookResult, reply: hookReply };
+        },
+      },
+      () =>
+        traceAgentPhase("reply.run_agent_turn", () =>
+          runAgentTurnWithFallback({
+            commandBody,
+            transcriptCommandBody,
+            followupRun,
+            sessionCtx,
+            replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+            replyOperation,
+            opts,
+            typingSignals,
+            blockReplyPipeline,
+            blockStreamingEnabled,
+            blockReplyChunking,
+            resolvedBlockStreamingBreak,
+            applyReplyToMode,
+            shouldEmitToolResult,
+            shouldEmitToolOutput,
+            pendingToolTasks,
+            resetSessionAfterRoleOrderingConflict,
+            isHeartbeat,
+            sessionKey,
+            runtimePolicySessionKey,
+            getActiveSessionEntry: () => activeSessionEntry,
+            activeSessionStore,
+            storePath,
+            resolvedVerboseLevel,
+            toolProgressDetail,
+            replyMediaContext,
+            isRestartRecoveryArmed,
+          }),
+        ),
     );
 
     if (runOutcome.kind === "final") {

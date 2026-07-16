@@ -146,7 +146,12 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     );
     mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
       handled: true,
-      reply: { text: "user turn claimed" },
+      reply: {
+        text: "user turn claimed",
+        channelData: { testPayload: true },
+        sensitiveMedia: true,
+        videoAsNote: true,
+      },
     });
 
     const result = await runEmbeddedAgent({
@@ -158,7 +163,12 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     const [, hookContext] = firstBeforeAgentReplyCall();
     expect(hookContext?.trigger).toBe("user");
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-    expect(result.payloads?.[0]?.text).toBe("user turn claimed");
+    expect(result.payloads?.[0]).toMatchObject({
+      text: "user turn claimed",
+      channelData: { testPayload: true },
+      sensitiveMedia: true,
+      videoAsNote: true,
+    });
   });
 
   it("lets before_agent_reply claim heartbeat runs before the embedded attempt starts", async () => {
