@@ -202,6 +202,7 @@ function isSessionsSendToolName(value: unknown): boolean {
 
 function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
   const sendCallIds = new Set<string>();
+  const resolvedCallIds = new Set<string>();
   const resultTextByCallId = new Map<string, string>();
 
   for (const message of messages) {
@@ -233,6 +234,7 @@ function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
     if (!callId || !sendCallIds.has(callId)) {
       continue;
     }
+    resolvedCallIds.add(callId);
     const resultText = extractMessageText(message) || formatNonTextPlaceholder(message.content);
     if (resultText) {
       resultTextByCallId.set(callId, resultText);
@@ -257,11 +259,15 @@ function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
         replaced = true;
         const callId = typeof record.id === "string" ? record.id.trim() : "";
         const resultText = callId ? resultTextByCallId.get(callId) : undefined;
+        const resolved = Boolean(callId && resolvedCallIds.has(callId));
         return {
           type: "text",
-          text: resultText
-            ? `sessions_send completed; delivery call omitted from replay.\nResult: ${resultText}`
-            : "sessions_send completed; delivery call omitted from replay.",
+          text:
+            resolved && resultText
+              ? `sessions_send completed; delivery call omitted from replay.\nResult: ${resultText}`
+              : resolved
+                ? "sessions_send completed; delivery call omitted from replay."
+                : "sessions_send delivery status unknown; delivery call omitted from replay.",
         };
       });
       return replaced ? [{ ...message, content } as AgentMessage] : [message];

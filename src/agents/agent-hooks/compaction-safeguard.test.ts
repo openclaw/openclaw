@@ -2692,7 +2692,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(messages.map((message) => requireRecord(message).role)).toEqual(scenario.expectedRoles);
   });
 
-  it("keeps source-session sends as inert completed history", async () => {
+  it("keeps source-session sends as inert status history", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("completed send summary");
 
@@ -2724,6 +2724,12 @@ describe("compaction-safeguard double-compaction guard", () => {
                 id: "call-1",
                 name: "functions.sessions_send",
                 arguments: { sessionKey: "agent:bee", message: "say bee" },
+              },
+              {
+                type: "toolCall",
+                id: "call-2",
+                name: "tools/sessions_send",
+                arguments: { sessionKey: "agent:wasp", message: "say wasp" },
               },
             ],
             timestamp: now + 1,
@@ -2773,8 +2779,10 @@ describe("compaction-safeguard double-compaction guard", () => {
     const messages = requireArray(summarizeCall.messages);
     expect(messages.map((message) => requireRecord(message).role)).toEqual(["user", "assistant"]);
     expect(JSON.stringify(messages)).toContain("sessions_send completed");
+    expect(JSON.stringify(messages)).toContain("sessions_send delivery status unknown");
     expect(JSON.stringify(messages)).toContain("bee replied");
     expect(JSON.stringify(messages)).not.toContain("functions.sessions_send");
+    expect(JSON.stringify(messages)).not.toContain("tools/sessions_send");
   });
 
   it("preserves completed historical inter-session turns outside the active tail", async () => {
