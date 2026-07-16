@@ -174,6 +174,13 @@ Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
+Package-manager updates normally keep using the Node binary recorded in the
+managed service. If that Node cannot run the target release, but the current
+CLI Node can and the service is proven to belong to the package being updated,
+a restart-enabled update uses the current Node for finalization and rewrites
+the service metadata to that runtime. `--no-restart` cannot repair service
+metadata, so the same runtime mismatch stops before package mutation.
+
 On macOS, the post-update check also verifies the LaunchAgent is
 loaded/running for the active profile and the configured loopback port is
 healthy. If the plist is installed but launchd is not supervising it, OpenClaw
