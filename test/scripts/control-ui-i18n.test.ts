@@ -72,6 +72,8 @@ describe("control-ui-i18n process runner", () => {
     expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/de.ts")).toBe(true);
     expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/glossary.de.json")).toBe(false);
     expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en.ts")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en-agents.ts")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/unknown.ts")).toBe(false);
   });
 
   it("uses the replayed entry when both sides change the same cache key", () => {

@@ -3,16 +3,20 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "nod
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 
-const GENERATED_CONFLICT_RE =
-  /^(?:ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks|raw-copy-baseline)\.json|ui\/src\/i18n\/\.i18n\/[^/]+\.(?:meta\.json|tm\.jsonl)|ui\/src\/i18n\/locales\/(?!en\.ts$)[^/]+\.ts)$/u;
+const GENERATED_ASSET_CONFLICT_RE =
+  /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks|raw-copy-baseline)\.json$|^ui\/src\/i18n\/\.i18n\/[^/]+\.(?:meta\.json|tm\.jsonl)$/u;
+const GENERATED_LOCALE_PATHS = new Set(
+  CONTROL_UI_LOCALE_ENTRIES.map((entry) => `ui/src/i18n/locales/${entry.fileName}`),
+);
 const TRANSLATION_MEMORY_RE = /^ui\/src\/i18n\/\.i18n\/[^/]+\.tm\.jsonl$/u;
 const GIT_OUTPUT_MAX_BYTES = 64 * 1024 * 1024;
 
 type TranslationMemoryEntry = Record<string, unknown> & { cache_key: string };
 
 export function isControlUiGeneratedI18nPath(filePath: string): boolean {
-  return GENERATED_CONFLICT_RE.test(filePath);
+  return GENERATED_ASSET_CONFLICT_RE.test(filePath) || GENERATED_LOCALE_PATHS.has(filePath);
 }
 
 function parseTranslationMemory(raw: string, label: string): TranslationMemoryEntry[] {
