@@ -55,7 +55,7 @@ const CronSessionTargetSchema = Type.Union([
   Type.Literal("main"),
   Type.Literal("isolated"),
   Type.Literal("current"),
-  Type.String({ pattern: "^session:.+" }),
+  Type.String({ pattern: "^session:.+$" }),
 ]);
 /** Whether a cron job waits for heartbeat processing or wakes immediately. */
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
@@ -112,9 +112,21 @@ const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("unknown"),
   Type.Literal("not-requested"),
 ]);
-const NonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
-const CronDeclarationKeySchema = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
-const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
+// Fully-anchored llama.cpp-compatible nonblank pattern: the whole string must
+// contain at least one non-whitespace character (same acceptance set as the
+// prior unanchored `\S`), including leading/trailing whitespace and newlines.
+const NONBLANK_STRING_PATTERN = "^[\\s\\S]*\\S[\\s\\S]*$";
+const NonBlankString = Type.String({ minLength: 1, pattern: NONBLANK_STRING_PATTERN });
+const CronDeclarationKeySchema = Type.String({
+  minLength: 1,
+  maxLength: 200,
+  pattern: NONBLANK_STRING_PATTERN,
+});
+const CronDisplayNameSchema = Type.String({
+  minLength: 1,
+  maxLength: 200,
+  pattern: NONBLANK_STRING_PATTERN,
+});
 const CronOwnerSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),

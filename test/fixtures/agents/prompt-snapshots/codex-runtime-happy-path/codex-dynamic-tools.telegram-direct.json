@@ -470,7 +470,7 @@
                   "description": "Idempotent declaration key.",
                   "maxLength": 200,
                   "minLength": 1,
-                  "pattern": "\\S",
+                  "pattern": "^[\\\\s\\\\S]*\\\\S[\\\\s\\\\S]*$",
                   "type": "string"
                 },
                 "deleteAfterRun": {

@@ -279,7 +279,8 @@ function createCronJobObjectSchema(): TSchema {
             description: "Idempotent declaration key.",
             minLength: 1,
             maxLength: 200,
-            pattern: "\\S",
+            // Fully-anchored llama.cpp-compatible nonblank pattern.
+            pattern: "^[\\s\\S]*\\S[\\s\\S]*$",
           }),
         ),
         displayName: Type.Optional(

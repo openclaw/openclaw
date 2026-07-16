@@ -306,4 +306,67 @@ describe("createCronToolSchema", () => {
     // The "not" composition keyword is not supported by OpenAPI 3.0.
     expect(json).not.toMatch(/"not"\s*:\s*\{/);
   });
+
+  it("anchors every regex pattern for llama.cpp schema conversion", () => {
+    // llama.cpp JSON-schema-to-grammar requires patterns to start with '^'
+    // and end with '$'; unanchored cron patterns cause a hard 400 before
+    // inference when the cron tool is advertised.
+    const patterns = collectPatterns(schemaRecord);
+    expect(patterns.length).toBeGreaterThan(0);
+    for (const pattern of patterns) {
+      expect(pattern.startsWith("^") && pattern.endsWith("$"), pattern).toBe(true);
+    }
+  });
+
+  it("accepts nonblank declarationKey and rejects whitespace-only keys", () => {
+    const schema = createCronTool().parametersJsonSchema;
+    if (!schema || typeof schema !== "object") {
+      throw new Error("expected cron tool parametersJsonSchema");
+    }
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: { declarationKey: "daily-report" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: { declarationKey: " daily-report " },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: { declarationKey: "line one\nline two" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: { declarationKey: "   " },
+      }),
+    ).toBe(false);
+  });
 });
+
+/** Recursively collect JSON Schema `pattern` strings from a TypeBox schema tree. */
+function collectPatterns(value: unknown, out: string[] = []): string[] {
+  if (!value || typeof value !== "object") {
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectPatterns(item, out);
+    }
+    return out;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.pattern === "string") {
+    out.push(record.pattern);
+  }
+  for (const child of Object.values(record)) {
+    collectPatterns(child, out);
+  }
+  return out;
+}
