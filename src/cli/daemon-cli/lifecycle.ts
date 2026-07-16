@@ -427,6 +427,14 @@ async function restartGatewayWithoutServiceManager(
   });
 }
 
+type GatewaySignalRestartResult = NonNullable<Awaited<ReturnType<typeof signalGatewayRestart>>>;
+
+function isGatewaySignalRestartResult(
+  result: Awaited<ReturnType<typeof restartGatewayWithoutServiceManager>>,
+): result is GatewaySignalRestartResult {
+  return result !== null && "pid" in result && typeof result.pid === "number";
+}
+
 async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
   const json = Boolean(opts.json);
   const { emit, fail } = createDaemonActionContext({ action: "restart", json });
@@ -620,7 +628,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const handled = await restartGatewayWithoutServiceManager(unmanagedPort, restartIntent);
       if (handled) {
         restartedWithoutServiceManager = true;
-        if ("pid" in handled && handled.previousLockIdentity) {
+        if (isGatewaySignalRestartResult(handled) && handled.previousLockIdentity) {
           unmanagedPreviousLockIdentity = handled.previousLockIdentity;
           const healthWait = await resolveRestartListenerHealthWait(restartIntent);
           unmanagedRestartHealthAttempts = healthWait.attempts;
