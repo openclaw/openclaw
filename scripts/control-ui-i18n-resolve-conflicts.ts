@@ -10,6 +10,8 @@ const GENERATED_ASSET_CONFLICT_RE =
 const GENERATED_LOCALE_PATHS = new Set(
   CONTROL_UI_LOCALE_ENTRIES.map((entry) => `ui/src/i18n/locales/${entry.fileName}`),
 );
+const GENERATED_LOCALE_PATH_RE = /^ui\/src\/i18n\/locales\/[^/]+\.ts$/u;
+const GENERATED_LOCALE_HEADER = "// Generated locale bundle for Control UI translations.\n";
 const TRANSLATION_MEMORY_RE = /^ui\/src\/i18n\/\.i18n\/[^/]+\.tm\.jsonl$/u;
 const GIT_OUTPUT_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -17,6 +19,17 @@ type TranslationMemoryEntry = Record<string, unknown> & { cache_key: string };
 
 export function isControlUiGeneratedI18nPath(filePath: string): boolean {
   return GENERATED_ASSET_CONFLICT_RE.test(filePath) || GENERATED_LOCALE_PATHS.has(filePath);
+}
+
+export function isControlUiGeneratedI18nConflictPath(
+  filePath: string,
+  stages: readonly (string | null)[],
+): boolean {
+  return (
+    isControlUiGeneratedI18nPath(filePath) ||
+    (GENERATED_LOCALE_PATH_RE.test(filePath) &&
+      stages.some((contents) => contents?.startsWith(GENERATED_LOCALE_HEADER)))
+  );
 }
 
 function parseTranslationMemory(raw: string, label: string): TranslationMemoryEntry[] {
@@ -203,7 +216,18 @@ function main(): void {
   if (conflicts.length === 0) {
     throw new Error("no unmerged files found");
   }
-  const unsupported = conflicts.filter((filePath) => !isControlUiGeneratedI18nPath(filePath));
+  const formerGeneratedLocales = new Set(
+    conflicts.filter((filePath) => {
+      if (GENERATED_LOCALE_PATHS.has(filePath) || !GENERATED_LOCALE_PATH_RE.test(filePath)) {
+        return false;
+      }
+      const stages = ([1, 2, 3] as const).map((stage) => readIndexStage(root, stage, filePath));
+      return isControlUiGeneratedI18nConflictPath(filePath, stages);
+    }),
+  );
+  const unsupported = conflicts.filter(
+    (filePath) => !isControlUiGeneratedI18nPath(filePath) && !formerGeneratedLocales.has(filePath),
+  );
   if (unsupported.length > 0) {
     throw new Error(
       `resolve and stage non-generated conflicts first:\n${unsupported.map((filePath) => `- ${filePath}`).join("\n")}`,
@@ -211,7 +235,13 @@ function main(): void {
   }
 
   for (const filePath of conflicts) {
-    resolveGeneratedConflict(root, filePath);
+    if (formerGeneratedLocales.has(filePath)) {
+      // A removed or renamed locale is absent from the active config. Its old
+      // generated bundle must stay deleted even when the replayed branch edited it.
+      rmSync(path.join(root, filePath), { force: true });
+    } else {
+      resolveGeneratedConflict(root, filePath);
+    }
   }
 
   // Sync first so removed English keys are pruned from generated locales before
@@ -235,6 +265,7 @@ function main(): void {
     ":(glob)ui/src/i18n/.i18n/*.meta.json",
     ":(glob)ui/src/i18n/.i18n/*.tm.jsonl",
     ...GENERATED_LOCALE_PATHS,
+    ...formerGeneratedLocales,
   ]);
 
   const remaining = listUnmerged(root);

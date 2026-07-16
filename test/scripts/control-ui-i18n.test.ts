@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
+  isControlUiGeneratedI18nConflictPath,
   isControlUiGeneratedI18nPath,
   mergeControlUiTranslationMemory,
   resolveControlUiGeneratedConflict,
@@ -74,6 +75,17 @@ describe("control-ui-i18n process runner", () => {
     expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en.ts")).toBe(false);
     expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en-agents.ts")).toBe(false);
     expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/unknown.ts")).toBe(false);
+    expect(
+      isControlUiGeneratedI18nConflictPath("ui/src/i18n/locales/removed.ts", [
+        "// Generated locale bundle for Control UI translations.\nexport const removed = {};\n",
+        null,
+      ]),
+    ).toBe(true);
+    expect(
+      isControlUiGeneratedI18nConflictPath("ui/src/i18n/locales/en-agents.ts", [
+        "// Agent-specific English strings stay split from the oversized source locale.\n",
+      ]),
+    ).toBe(false);
   });
 
   it("uses the replayed entry when both sides change the same cache key", () => {
