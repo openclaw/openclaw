@@ -321,17 +321,17 @@ export function getShellPathFromLoginShell(opts: {
 
 type UserShellExecutableResolution = {
   executable: string;
-  /** Present only when resolution required the login-shell PATH fallback. */
+  /** Present only when the login-shell PATH selected the executable. */
   pathEnv?: string;
 };
 
-export function resolveExecutableFromUserShellPathWithPathEnv(
+export function resolveExecutableFromUserShellPath(
   executable: string,
   opts: {
     env: NodeJS.ProcessEnv;
     pathEnv?: string;
     includeExtensionless?: boolean;
-    preferLoginShell?: boolean;
+    strategy: "fallback" | "prefer";
     timeoutMs?: number;
     exec?: typeof execFileSync;
     platform?: NodeJS.Platform;
@@ -343,9 +343,7 @@ export function resolveExecutableFromUserShellPathWithPathEnv(
     opts.env,
     { includeExtensionless: opts.includeExtensionless },
   );
-  // Interactive catalog terminals should mirror the operator's shell command.
-  // A service PATH can contain package shims that are absent or unusable there.
-  if (direct && !opts.preferLoginShell) {
+  if (direct && opts.strategy === "fallback") {
     return { executable: direct };
   }
   const shellPath = getShellPathFromLoginShell({

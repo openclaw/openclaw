@@ -350,6 +350,34 @@ describe("workspace CLI", () => {
     });
   });
 
+  it.each([
+    ["0x1,0,4,2", "hex"],
+    ["1e0,0,4,2", "exponent"],
+    ["0o1,0,4,2", "octal literal"],
+    ["0b1,0,4,2", "binary literal"],
+    [",0,4,2", "empty segment"],
+  ])("rejects %s (%s) --grid input", async (grid, _label) => {
+    const program = createProgram();
+
+    await expect(
+      program.parseAsync(
+        [
+          "workspaces",
+          "widgets",
+          "add",
+          "--tab",
+          "ops",
+          "--kind",
+          "builtin:markdown",
+          "--grid",
+          grid,
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("grid must be x,y,w,h");
+    expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
   it("scaffolds operator widgets as pending and approves them through the approvals method", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new WorkspaceStore({ stateDir });

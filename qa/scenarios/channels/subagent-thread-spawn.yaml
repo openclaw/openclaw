@@ -33,13 +33,13 @@ scenario:
     - docs/tools/subagents.md
   codeRefs:
     - src/agents/tools/sessions-spawn-tool.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
     summary: Spawn a bound Matrix child session and require native thread relation evidence on completion.
+    driver: live
     config:
-      requiredChannelDriver: live
       conversationId: main
       childMarker: QA-MATRIX-SUBAGENT-THREAD-OK
       prompt: 'Use sessions_spawn for this QA check. task="Finish with exactly QA-MATRIX-SUBAGENT-THREAD-OK." label=qa-thread-subagent thread=true mode=session. After spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread. Do not write QA-MATRIX-SUBAGENT-THREAD-OK in the parent response.'

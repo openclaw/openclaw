@@ -256,7 +256,6 @@
   "persistent-dedupe",
   "keyed-async-queue",
   "qa-runner-runtime",
-  "qa-live-transport-scenarios",
   "memory-core",
   "memory-core-engine-runtime",
   "memory-core-host-embedding-registry",

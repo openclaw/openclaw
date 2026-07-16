@@ -10,7 +10,7 @@ import type { FollowupRun } from "./queue.js";
 const DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
 
 /** Computes a reserve-token floor scaled to the selected context window. */
-export function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
+function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
   if (typeof contextWindow !== "number" || contextWindow <= 0) {
     return DEFAULT_RESERVE_TOKENS_FLOOR;
   }
