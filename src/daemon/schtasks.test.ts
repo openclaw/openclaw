@@ -231,7 +231,7 @@ describe("readScheduledTaskCommand", () => {
         const scriptPath = resolveTaskScriptPath(env);
         const script = options.scriptLines.join("\r\n");
         await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-        let scriptBytes = Buffer.from(script, "utf8");
+        let scriptBytes: Buffer = Buffer.from(script, "utf8");
         if (options.scriptEncoding === "gbk") {
           // Production bytes for a code-page install: marker line + GBK body.
           resolveWindowsSystemEncodingMock.mockReturnValueOnce("gbk");
