@@ -120,7 +120,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     expect(supports).not.toHaveBeenCalled();
   });
 
-  it("prefers explicit session overrides and treats legacy harness ids as observational", () => {
+  it("prefers explicit session overrides", () => {
     const cfg = openAIConfig("openclaw");
     expect(
       resolveEffectiveAgentRuntime({
@@ -130,6 +130,10 @@ describe("resolveEffectiveAgentRuntime", () => {
         sessionEntry: { agentRuntimeOverride: "codex", agentHarnessId: "openclaw" },
       }),
     ).toBe("codex");
+  });
+
+  it("ignores legacy harness ids when choosing a runtime", () => {
+    const cfg = openAIConfig("openclaw");
     expect(
       resolveEffectiveAgentRuntime({
         cfg,
@@ -138,6 +142,10 @@ describe("resolveEffectiveAgentRuntime", () => {
         sessionEntry: { agentHarnessId: "codex" },
       }),
     ).toBe("openclaw");
+  });
+
+  it("uses configured runtime policy without session hints", () => {
+    const cfg = openAIConfig("openclaw");
     expect(
       resolveEffectiveAgentRuntime({
         cfg,

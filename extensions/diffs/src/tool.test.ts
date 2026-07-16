@@ -525,6 +525,34 @@ describe("diffs tool", () => {
       agentAccountId: "work",
     });
   });
+
+  it("stores partial tool context for viewer and rendered-file artifacts", async () => {
+    const screenshotter = createPngScreenshotter();
+    const tool = createToolWithScreenshotter(store, screenshotter, DEFAULT_DIFFS_TOOL_DEFAULTS, {
+      agentId: "reviewer",
+      sessionId: "session-partial",
+    });
+
+    const result = await tool.execute?.("tool-context-partial", {
+      before: "one\n",
+      after: "two\n",
+      mode: "both",
+    });
+
+    expect((result.details as Record<string, unknown>).context).toEqual({
+      agentId: "reviewer",
+      sessionId: "session-partial",
+    });
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+
+    const viewerPath = String((result.details as Record<string, unknown>).viewerPath);
+    const id = extractViewerArtifactId(viewerPath);
+    const viewer = await store.readAuthorizedViewer(id, extractViewerArtifactToken(viewerPath));
+    expect(viewer?.artifact.context).toEqual({
+      agentId: "reviewer",
+      sessionId: "session-partial",
+    });
+  });
 });
 
 function createApi(pluginConfig?: Record<string, unknown>): OpenClawPluginApi {

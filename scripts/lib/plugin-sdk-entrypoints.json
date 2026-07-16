@@ -95,6 +95,7 @@
   "agent-runtime",
   "simple-completion-runtime",
   "speech-core",
+  "speech-settings",
   "tts-runtime",
   "plugin-runtime",
   "skills-runtime",

@@ -573,6 +573,10 @@
       "types": "./dist/plugin-sdk/speech-core.d.ts",
       "default": "./dist/plugin-sdk/speech-core.js"
     },
+    "./plugin-sdk/speech-settings": {
+      "types": "./dist/plugin-sdk/speech-settings.d.ts",
+      "default": "./dist/plugin-sdk/speech-settings.js"
+    },
     "./plugin-sdk/tts-runtime": {
       "types": "./dist/plugin-sdk/tts-runtime.d.ts",
       "default": "./dist/plugin-sdk/tts-runtime.js"

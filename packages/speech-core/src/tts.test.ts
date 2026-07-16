@@ -122,7 +122,7 @@ const {
   setTtsMaxLength,
   synthesizeSpeech,
   textToSpeechTelephony,
-} = await import("./tts.js");
+} = await import("../runtime-api.js");
 
 const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
 
