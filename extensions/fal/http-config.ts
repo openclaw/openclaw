@@ -3,6 +3,7 @@ import type { AuthProfileStore, OpenClawConfig } from "openclaw/plugin-sdk/provi
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestCapability,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -44,6 +45,9 @@ export async function resolveFalHttpRequestConfig(params: {
     },
     provider: "fal",
     capability: params.capability,
+    request: sanitizeConfiguredModelProviderRequest(
+      params.req.cfg?.models?.providers?.fal?.request,
+    ),
     transport: "http",
   });
 }
