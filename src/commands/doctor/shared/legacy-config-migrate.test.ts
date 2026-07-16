@@ -1807,13 +1807,21 @@ describe("legacy migrate audio transcription", () => {
   });
 
   it("drops invalid audio.transcription payloads", () => {
-    const res = migrateLegacyConfigForTest({
+    const raw = {
       audio: {
         transcription: {
           command: [{}],
         },
       },
-    });
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      {
+        path: "audio.transcription",
+        message: "Use tools.media.audio.models instead.",
+      },
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toStrictEqual(["Removed audio.transcription (invalid or empty command)."]);
     expect(res.config).not.toHaveProperty("audio");
@@ -1821,14 +1829,17 @@ describe("legacy migrate audio transcription", () => {
   });
 
   it("rewrites legacy audio {input} placeholders to media templates", () => {
-    const res = migrateLegacyConfigForTest({
+    const raw = {
       audio: {
         transcription: {
           command: ["whisper-cli", "--model", "small", "{input}", "--input={input}"],
           timeoutSeconds: 30,
         },
       },
-    });
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["audio.transcription"]);
+    const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.audio.models."]);
     expect(res.config).not.toHaveProperty("audio");
