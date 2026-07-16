@@ -110,33 +110,6 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts thread.requireExplicitMention", () => {
-    const result = MattermostConfigSchema.safeParse({
-      baseUrl: "https://chat.example.com",
-      thread: { requireExplicitMention: true },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts thread.requireExplicitMention on account", () => {
-    const result = MattermostConfigSchema.safeParse({
-      accounts: {
-        main: {
-          baseUrl: "https://chat.example.com",
-          thread: { requireExplicitMention: true },
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects unknown properties inside thread", () => {
-    const result = MattermostConfigSchema.safeParse({
-      thread: { requireExplicitMention: true, unknownProp: "bad" },
-    });
-    expect(result.success).toBe(false);
-  });
-
   it("rejects unknown properties inside groups entry", () => {
     const result = MattermostConfigSchema.safeParse({
       groups: {

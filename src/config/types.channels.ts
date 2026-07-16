@@ -22,6 +22,15 @@ export type {
 } from "./types.channel-health.js";
 export type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 
+export type ChannelImplicitMentionsConfig = {
+  /** Treat replies to the bot's own message as implicit mentions. */
+  replyToBot?: boolean;
+  /** Treat quoted bot messages as implicit mentions. */
+  quotedBot?: boolean;
+  /** Treat follow-ups in threads the bot participated in as implicit mentions. */
+  threadParticipation?: boolean;
+};
+
 export type ChannelDefaultsConfig = {
   /** Default group-chat admission policy inherited by channels that support groups. */
   groupPolicy?: GroupPolicy;
@@ -31,6 +40,8 @@ export type ChannelDefaultsConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Default pair loop guard settings for channels that support bot loop protection. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
+  /** Default implicit-mention policy inherited by supporting channels. */
+  implicitMentions?: ChannelImplicitMentionsConfig;
 };
 
 /** Provider/channel/target model override map used by channel dispatch. Keys are channel-specific group IDs, thread IDs, channel names, or DM peer identifiers (see docs/gateway/config-channels.md). */
@@ -56,6 +67,8 @@ export type ExtensionAccountConfig = ExtensionNestedPolicyConfig & {
   mediaMaxMb?: number;
   /** Whether channel setup/doctor flows may write this account config. */
   configWrites?: boolean;
+  /** Account-specific implicit-mention policy override. */
+  implicitMentions?: ChannelImplicitMentionsConfig;
 };
 
 /** JSON-compatible open-world channel section for plugin ids unknown to core. */
@@ -114,6 +127,8 @@ export type ExtensionChannelConfig = {
   };
   /** Channel-specific bot loop guard settings. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
+  /** Channel-specific implicit-mention policy override. */
+  implicitMentions?: ChannelImplicitMentionsConfig;
   /** @deprecated Use threadBindings.spawnSessions instead. */
   spawnSubagentSessions?: boolean;
   /** Explicit opt-in for channels that need private network callbacks or media fetches. */

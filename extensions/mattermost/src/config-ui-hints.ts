@@ -36,8 +36,4 @@ export const mattermostChannelConfigUiHints = {
     label: "Mattermost Block Streaming Coalesce",
     help: "Merge streamed Mattermost block replies before final delivery.",
   },
-  "thread.requireExplicitMention": {
-    label: "Mattermost Thread Require Explicit Mention",
-    help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
-  },
 } satisfies Record<string, ChannelConfigUiHint>;

@@ -41,16 +41,6 @@ export type MattermostAccountConfig = {
   oncharPrefixes?: string[];
   /** Require @mention to respond in channels. Default: true. */
   requireMention?: boolean;
-  /** Thread participation controls. */
-  thread?: {
-    /**
-     * Require an explicit @mention to respond to thread follow-ups, even in
-     * threads the bot has already replied in. Default: false — the bot
-     * auto-follows threads it has participated in (parity with Slack's
-     * `channels.slack.thread.requireExplicitMention`).
-     */
-    requireExplicitMention?: boolean;
-  };
   /** Direct message policy (pairing/allowlist/open/disabled). */
   dmPolicy?: DmPolicy;
   /** Allowlist for direct messages (user ids or @usernames). */

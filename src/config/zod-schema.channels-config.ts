@@ -17,6 +17,14 @@ export const ChannelBotLoopProtectionSchema = z
   })
   .strict();
 
+export const ChannelImplicitMentionsSchema = z
+  .object({
+    replyToBot: z.boolean().optional(),
+    quotedBot: z.boolean().optional(),
+    threadParticipation: z.boolean().optional(),
+  })
+  .strict();
+
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
   ctx: z.RefinementCtx,
@@ -57,6 +65,7 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
         contextVisibility: ContextVisibilityModeSchema.optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
         botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+        implicitMentions: ChannelImplicitMentionsSchema.optional(),
       })
       .strict()
       .optional(),

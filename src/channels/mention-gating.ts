@@ -1,3 +1,5 @@
+import type { ChannelImplicitMentionsConfig } from "../config/types.channels.js";
+
 /** @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`. */
 export type MentionGateParams = {
   requireMention: boolean;
@@ -76,6 +78,18 @@ export function implicitMentionKindWhen(
   enabled: boolean,
 ): InboundImplicitMentionKind[] {
   return enabled ? [kind] : [];
+}
+
+/** Translates positive implicit-mention policy into the evaluator's kind allowlist. */
+export function allowedImplicitMentionKindsFromConfig(
+  config: ChannelImplicitMentionsConfig,
+): InboundImplicitMentionKind[] {
+  return [
+    ...implicitMentionKindWhen("reply_to_bot", config.replyToBot !== false),
+    ...implicitMentionKindWhen("quoted_bot", config.quotedBot !== false),
+    ...implicitMentionKindWhen("bot_thread_participant", config.threadParticipation !== false),
+    "native",
+  ];
 }
 
 function resolveMatchedImplicitMentionKinds(params: {

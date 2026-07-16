@@ -1,6 +1,7 @@
 // Mention gating tests cover channel mention requirements before inbound messages trigger agents.
 import { describe, expect, it } from "vitest";
 import {
+  allowedImplicitMentionKindsFromConfig,
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
   resolveMentionGating,
@@ -265,5 +266,26 @@ describe("implicitMentionKindWhen", () => {
 
   it("returns an empty list when disabled", () => {
     expect(implicitMentionKindWhen("reply_to_bot", false)).toStrictEqual([]);
+  });
+});
+
+describe("allowedImplicitMentionKindsFromConfig", () => {
+  it("maps positive config flags to evaluator kinds while preserving native mentions", () => {
+    expect(
+      allowedImplicitMentionKindsFromConfig({
+        replyToBot: true,
+        quotedBot: false,
+        threadParticipation: false,
+      }),
+    ).toEqual(["reply_to_bot", "native"]);
+  });
+
+  it("keeps unset kinds allowed for shipped-behavior compatibility", () => {
+    expect(allowedImplicitMentionKindsFromConfig({})).toEqual([
+      "reply_to_bot",
+      "quoted_bot",
+      "bot_thread_participant",
+      "native",
+    ]);
   });
 });

@@ -1073,6 +1073,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",
   "channels.defaults.contextVisibility": "Default Context Visibility",
+  "channels.defaults.implicitMentions": "Default Implicit Mentions",
+  "channels.defaults.implicitMentions.replyToBot": "Default Reply-to-Bot Implicit Mentions",
+  "channels.defaults.implicitMentions.quotedBot": "Default Quoted-Bot Implicit Mentions",
+  "channels.defaults.implicitMentions.threadParticipation":
+    "Default Thread-Participation Implicit Mentions",
   "channels.defaults.heartbeat": "Default Heartbeat Visibility",
   "channels.defaults.heartbeat.showOk": "Heartbeat Show OK",
   "channels.defaults.heartbeat.showAlerts": "Heartbeat Show Alerts",

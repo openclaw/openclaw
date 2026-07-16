@@ -46,11 +46,6 @@ type MattermostMentionGateInput = {
   // Bot has already replied in this thread; treat follow-ups as addressed so the
   // user need not re-mention on every turn (parity with Slack thread participation).
   threadAlreadyEngaged?: boolean;
-  // When true, thread participation alone does not count as a mention: the bot
-  // requires an explicit @mention to respond to thread follow-ups, opting out of
-  // the auto-follow above. Parity with Slack's
-  // `channels.slack.thread.requireExplicitMention`.
-  threadRequireExplicitMention?: boolean;
   isControlCommand: boolean;
   commandAuthorized: boolean;
   oncharEnabled: boolean;
@@ -82,21 +77,17 @@ export function evaluateMattermostMentionGate(
     shouldRequireMention &&
     !params.wasMentioned &&
     params.commandAuthorized;
-  // Thread participation counts as an implicit mention unless the operator has
-  // opted this account/channel into requiring an explicit @mention in threads.
-  const threadEngaged =
-    params.threadAlreadyEngaged === true && params.threadRequireExplicitMention !== true;
   const effectiveWasMentioned =
     params.wasMentioned ||
     shouldBypassMention ||
     params.oncharTriggered ||
-    threadEngaged;
+    params.threadAlreadyEngaged === true;
   if (
     params.oncharEnabled &&
     !params.oncharTriggered &&
     !params.wasMentioned &&
     !params.isControlCommand &&
-    !threadEngaged
+    params.threadAlreadyEngaged !== true
   ) {
     return {
       shouldRequireMention,
