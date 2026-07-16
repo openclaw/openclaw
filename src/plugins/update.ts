@@ -1,12 +1,5 @@
 /** Updates installed plugins across npm, ClawHub, marketplace, Git, and bundled bridge sources. */
-export type {
-  PluginUpdateChannelFallback,
-  PluginUpdateIntegrityDriftParams,
-  PluginUpdateLogger,
-  PluginUpdateOutcome,
-  PluginUpdateSummary,
-} from "./update-source.js";
-export type { PluginChannelSyncResult, PluginChannelSyncSummary } from "./update-channel.js";
+export type { PluginUpdateIntegrityDriftParams, PluginUpdateOutcome } from "./update-source.js";
 
 export {
   isPluginInstallRecordUpdateSource,

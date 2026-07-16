@@ -146,7 +146,7 @@ type InstallIntegrityDrift = {
   };
 };
 
-export function createPluginUpdateIntegrityDriftHandler(params: {
+function createPluginUpdateIntegrityDriftHandler(params: {
   pluginId: string;
   dryRun: boolean;
   logger: PluginUpdateLogger;
@@ -172,7 +172,7 @@ export function createPluginUpdateIntegrityDriftHandler(params: {
   };
 }
 
-export type PluginUpdateSpecPlan = {
+type PluginUpdateSpecPlan = {
   installSpec?: string;
   recordSpec?: string;
   fallbackSpec?: string;
@@ -201,7 +201,7 @@ export type MarketplacePluginUpdateSuccess = Extract<
   Awaited<ReturnType<typeof installPluginFromMarketplace>>,
   { ok: true }
 >;
-export type PluginUpdateSuccess = Extract<PluginUpdateInstallResult, { ok: true }>;
+type PluginUpdateSuccess = Extract<PluginUpdateInstallResult, { ok: true }>;
 
 type PluginUpdateAttemptState = {
   activeClawHubInstallSpec?: string;
@@ -214,7 +214,7 @@ type PluginUpdateAttemptState = {
   usedOfficialNpmFallback: boolean;
 };
 
-export type PluginUpdateAttemptResult =
+type PluginUpdateAttemptResult =
   | { kind: "exception"; message: string }
   | ({ kind: "result"; result: PluginUpdateInstallResult } & PluginUpdateAttemptState);
 
