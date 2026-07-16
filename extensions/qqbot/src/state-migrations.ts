@@ -85,7 +85,7 @@ async function credentialBackupCandidates(stateDir: string): Promise<CredentialB
   accountFiles.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 
   const singlePath = path.join(dataDir, "credential-backup.json");
-  return (await fileExists(singlePath))
+  return fileExists(singlePath)
     ? [...accountFiles, { sourcePath: singlePath }]
     : accountFiles;
 }
@@ -116,7 +116,7 @@ async function archiveLegacySource(params: {
   warnings: string[];
 }): Promise<void> {
   const archivedPath = `${params.sourcePath}.migrated`;
-  if (await fileExists(archivedPath)) {
+  if (fileExists(archivedPath)) {
     params.warnings.push(
       `Left QQBot credential backup in place because ${archivedPath} already exists`,
     );

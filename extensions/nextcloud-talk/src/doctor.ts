@@ -65,7 +65,7 @@ async function repairNextcloudTalkReplayDedupeState(params: {
 
   for (const accountId of listNextcloudTalkAccountIds(params.cfg)) {
     const legacyPath = path.join(replayDir, `${sanitizeLegacyReplaySegment(accountId)}.json`);
-    if (!(await fileExists(legacyPath))) {
+    if (!fileExists(legacyPath)) {
       continue;
     }
     try {
