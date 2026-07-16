@@ -25,8 +25,12 @@ type DiscordActivityDocToken = {
   accountId: string;
 };
 
+type AtomicPluginStateKeyedStore<T> = PluginStateKeyedStore<T> & {
+  update: NonNullable<PluginStateKeyedStore<T>["update"]>;
+};
+
 type DiscordActivityStores = {
-  widgets: PluginStateKeyedStore<DiscordActivityWidget>;
+  widgets: AtomicPluginStateKeyedStore<DiscordActivityWidget>;
   sessions: PluginStateKeyedStore<DiscordActivitySession>;
   docTokens: PluginStateKeyedStore<DiscordActivityDocToken>;
 };
@@ -38,14 +42,23 @@ type OpenKeyedStore = <T>(options: {
   defaultTtlMs: number;
 }) => PluginStateKeyedStore<T>;
 
+function requireAtomicUpdate<T>(store: PluginStateKeyedStore<T>): AtomicPluginStateKeyedStore<T> {
+  if (!store.update) {
+    throw new Error("Discord Activities require atomic plugin state updates");
+  }
+  return store as AtomicPluginStateKeyedStore<T>;
+}
+
 export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): DiscordActivityStores {
   return {
-    widgets: openKeyedStore<DiscordActivityWidget>({
-      namespace: "activities-widgets",
-      maxEntries: 64,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: WIDGET_TTL_MS,
-    }),
+    widgets: requireAtomicUpdate(
+      openKeyedStore<DiscordActivityWidget>({
+        namespace: "activities-widgets",
+        maxEntries: 64,
+        overflowPolicy: "evict-oldest",
+        defaultTtlMs: WIDGET_TTL_MS,
+      }),
+    ),
     sessions: openKeyedStore<DiscordActivitySession>({
       namespace: "activities-sessions",
       maxEntries: 256,
@@ -78,9 +91,12 @@ export class DiscordActivityStore {
   async markWidgetDelivered(id: string, deliveredAt: number): Promise<void> {
     const orderedDeliveredAt = Math.max(deliveredAt, this.lastWidgetDeliveredAt + 1);
     this.lastWidgetDeliveredAt = orderedDeliveredAt;
-    await this.stores.widgets.update(id, (widget) =>
+    const updated = await this.stores.widgets.update(id, (widget) =>
       widget ? { ...widget, deliveredAt: orderedDeliveredAt } : undefined,
     );
+    if (!updated) {
+      throw new Error("Discord Activity widget disappeared before delivery was recorded");
+    }
   }
 
   async deleteWidget(id: string): Promise<void> {
