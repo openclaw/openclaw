@@ -139,7 +139,7 @@ describe("readResponseBodySnippet", () => {
       maxChars: 10,
     });
 
-    expect(result).toBe("a" + "\u{1F99E}".repeat(4));
+    expect(result).toBe("a" + "🦞".repeat(4));
   });
 });
 
@@ -148,45 +148,43 @@ describe("readResponseBodySnippet error visibility", () => {
     mockWarn.mockClear();
   });
 
-  it("logs a warning and returns empty string when response.text() rejects", async () => {
-    const error = new Error("body already consumed");
-    const badResponse = {
-      body: null,
-      text: async () => {
-        throw error;
-      },
-    } as unknown as Response;
+  it.each([
+    {
+      name: "response.text() rejection",
+      response: () =>
+        ({
+          body: null,
+          text: async () => {
+            throw new Error("body already consumed");
+          },
+        }) as unknown as Response,
+      expectedError: "body already consumed",
+    },
+    {
+      name: "body stream failure",
+      response: () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("partial"));
+              controller.error(new Error("stream aborted"));
+            },
+          }),
+        ),
+      expectedError: "stream aborted",
+    },
+  ])(
+    "logs the read error and preserves the empty fallback for $name",
+    async ({ response, expectedError }) => {
+      const result = await readResponseBodySnippet(response(), {
+        maxBytes: 1024,
+        maxChars: 50,
+      });
 
-    const result = await readResponseBodySnippet(badResponse, {
-      maxBytes: 1024,
-      maxChars: 50,
-    });
-
-    expect(result).toBe("");
-    expect(mockWarn).toHaveBeenCalledTimes(1);
-    expect(mockWarn).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to read response body snippet"),
-    );
-  });
-
-  it("logs a warning and returns empty string when body stream throws", async () => {
-    const badStream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("partial"));
-        controller.error(new Error("stream aborted"));
-      },
-    });
-    const badResponse = new Response(badStream);
-
-    const result = await readResponseBodySnippet(badResponse, {
-      maxBytes: 1024,
-      maxChars: 50,
-    });
-
-    expect(result).toBe("");
-    expect(mockWarn).toHaveBeenCalledTimes(1);
-    expect(mockWarn).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to read response body snippet"),
-    );
-  });
+      expect(result).toBe("");
+      expect(mockWarn).toHaveBeenCalledExactlyOnceWith(
+        `Failed to read response body snippet: ${expectedError}`,
+      );
+    },
+  );
 });
