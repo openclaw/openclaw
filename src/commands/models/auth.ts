@@ -25,12 +25,12 @@ import {
   externalCliDiscoveryForProviderAuth,
   removeProviderAuthProfilesWithLock,
 } from "../../agents/auth-profiles.js";
+import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
 import {
   listProfilesForProvider,
   promoteAuthProfileInOrder,
   upsertAuthProfileWithLock,
 } from "../../agents/auth-profiles/profiles.js";
-import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
 import {
   loadAuthProfileStoreForRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,
