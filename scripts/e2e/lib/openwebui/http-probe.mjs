@@ -20,7 +20,9 @@ async function awaitCancellationBeforeDeadline(cancel, signal) {
   if (!cancel) {
     return;
   }
-  const cancellation = Promise.resolve().then(cancel).catch(() => undefined);
+  const cancellation = Promise.resolve()
+    .then(cancel)
+    .catch(() => undefined);
   if (signal.aborted) {
     return;
   }
