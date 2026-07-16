@@ -1,9 +1,11 @@
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ContextEngineFactory } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
+import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -47,6 +49,7 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { MemoryCorpusSupplement } from "./memory-state.js";
 import type {
   MigrationProviderPlugin,
   PluginConfigMigration,
@@ -303,10 +306,7 @@ export type OpenClawPluginApi = {
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   /** Register a context engine implementation (exclusive slot - only one active at a time). */
-  registerContextEngine: (
-    id: string,
-    factory: import("../context-engine/registry.js").ContextEngineFactory,
-  ) => void;
+  registerContextEngine: (id: string, factory: ContextEngineFactory) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,
@@ -433,9 +433,7 @@ export type OpenClawPluginApi = {
     params: PluginSessionTurnUnscheduleByTagParams,
   ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
-  registerDetachedTaskRuntime: (
-    runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,
-  ) => void;
+  registerDetachedTaskRuntime: (runtime: DetachedTaskLifecycleRuntime) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (
     capability: import("./memory-state.js").MemoryPluginCapability,
@@ -452,9 +450,7 @@ export type OpenClawPluginApi = {
     builder: import("./memory-state.js").MemoryPromptSectionBuilder,
   ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
-  registerMemoryCorpusSupplement: (
-    supplement: import("./memory-state.js").MemoryCorpusSupplement,
-  ) => void;
+  registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
   /**
    * Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot).
    * @deprecated Use registerMemoryCapability({ flushPlanResolver }) instead.

@@ -42,7 +42,7 @@ type ContextEngineFactoryContext = {
  * backward compatible because TypeScript permits assigning functions with
  * fewer parameters to wider signatures.
  */
-type ContextEngineFactory = (
+export type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
 type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };

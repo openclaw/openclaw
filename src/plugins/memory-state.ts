@@ -47,7 +47,7 @@ type MemoryCorpusGetResult = {
   updatedAt?: string;
 };
 
-type MemoryCorpusSupplement = {
+export type MemoryCorpusSupplement = {
   search(params: {
     query: string;
     maxResults?: number;
