@@ -14,7 +14,7 @@ const ANTHROPIC_VERTEX_REGION_RE = /^[a-z0-9-]+$/;
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 const ANTHROPIC_VERTEX_ADC_FILE_MAX_BYTES = 1024 * 1024;
 
-export type AnthropicVertexAdcCredentials = NonNullable<GoogleAuthOptions["credentials"]> & {
+type AnthropicVertexAdcCredentials = NonNullable<GoogleAuthOptions["credentials"]> & {
   project_id?: unknown;
   quota_project_id?: unknown;
 };
