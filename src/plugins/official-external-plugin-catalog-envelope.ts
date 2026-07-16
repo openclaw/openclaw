@@ -21,10 +21,31 @@ type LegacyOfficialExternalPluginCatalogEnvelopeSignature = {
   algorithm?: string;
   signature?: string;
 };
-type OfficialExternalPluginCatalogTrustedSigningKey = {
+export type TrustedFeedSigningKey = {
   keyId: string;
   publicKey: string;
 };
+
+export type SignedFeedEnvelopePayloadVerificationResult =
+  | {
+      ok: true;
+      payloadType: string;
+      payloadBytes: Buffer;
+      signedBy: string;
+      signedByKeyIds: readonly string[];
+      signatureCount: number;
+      threshold: number;
+    }
+  | {
+      ok: false;
+      error:
+        | "invalid-envelope"
+        | "unsupported-payload"
+        | "invalid-payload"
+        | "missing-trust-key"
+        | "invalid-signature";
+      message: string;
+    };
 
 type OfficialExternalPluginCatalogEnvelopeVerificationResult =
   | {
@@ -56,23 +77,65 @@ function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
 export function verifyOfficialExternalPluginCatalogSignedEnvelope(
   raw: unknown,
   params: {
-    trustedKeys: readonly OfficialExternalPluginCatalogTrustedSigningKey[];
+    trustedKeys: readonly TrustedFeedSigningKey[];
     threshold?: number;
   },
 ): OfficialExternalPluginCatalogEnvelopeVerificationResult {
+  const verified = verifySignedFeedEnvelopePayload(raw, {
+    expectedPayloadType: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+    trustedKeys: params.trustedKeys,
+    threshold: params.threshold,
+    context: "hosted catalog",
+  });
+  if (verified.ok) {
+    const decoded = decodeOfficialExternalPluginCatalogEnvelopePayload(verified.payloadBytes);
+    if (!decoded?.feed) {
+      return {
+        ok: false,
+        error: "invalid-payload",
+        message: "hosted catalog signed envelope payload is invalid",
+        ...(decoded ? { authenticatedPayload: decoded.raw } : {}),
+      };
+    }
+    return {
+      ok: true,
+      feed: decoded.feed,
+      signedBy: verified.signedBy,
+      ...(verified.threshold > 1
+        ? {
+            signedByKeyIds: verified.signedByKeyIds,
+            signatureCount: verified.signatureCount,
+            threshold: verified.threshold,
+          }
+        : {}),
+    };
+  }
+  return verified;
+}
+
+export function verifySignedFeedEnvelopePayload(
+  raw: unknown,
+  params: {
+    expectedPayloadType: string;
+    trustedKeys: readonly TrustedFeedSigningKey[];
+    threshold?: number;
+    context?: string;
+  },
+): SignedFeedEnvelopePayloadVerificationResult {
+  const context = params.context?.trim() || "signed feed";
   const envelope = parseOfficialExternalPluginCatalogSignedEnvelope(raw);
   if (!envelope) {
     return {
       ok: false,
       error: "invalid-envelope",
-      message: "hosted catalog signed envelope is malformed",
+      message: `${context} signed envelope is malformed`,
     };
   }
-  if (envelope.payloadType !== OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE) {
+  if (envelope.payloadType !== params.expectedPayloadType) {
     return {
       ok: false,
       error: "unsupported-payload",
-      message: "hosted catalog signed envelope payload type is unsupported",
+      message: `${context} signed envelope payload type is unsupported`,
     };
   }
   const payloadBytes = decodeOfficialExternalPluginCatalogEnvelopePayloadBytes(envelope.payload);
@@ -80,7 +143,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
     return {
       ok: false,
       error: "invalid-payload",
-      message: "hosted catalog signed envelope payload is invalid",
+      message: `${context} signed envelope payload is invalid`,
     };
   }
   const signingInput = createOfficialExternalPluginCatalogEnvelopeSigningInput({
@@ -115,26 +178,14 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
     }
   }
   if (trustedSignaturePublicKeys.size >= threshold) {
-    const decoded = decodeOfficialExternalPluginCatalogEnvelopePayload(payloadBytes);
-    if (!decoded?.feed) {
-      return {
-        ok: false,
-        error: "invalid-payload",
-        message: "hosted catalog signed envelope payload is invalid",
-        ...(decoded ? { authenticatedPayload: decoded.raw } : {}),
-      };
-    }
     return {
       ok: true,
-      feed: decoded.feed,
+      payloadType: envelope.payloadType,
+      payloadBytes,
       signedBy: trustedSignatureKeyIds[0] ?? "",
-      ...(threshold > 1
-        ? {
-            signedByKeyIds: trustedSignatureKeyIds,
-            signatureCount: trustedSignaturePublicKeys.size,
-            threshold,
-          }
-        : {}),
+      signedByKeyIds: trustedSignatureKeyIds,
+      signatureCount: trustedSignaturePublicKeys.size,
+      threshold,
     };
   }
   const hasKnownKey = envelope.signatures.some((signature) =>
@@ -146,13 +197,13 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
         error: "invalid-signature",
         message:
           trustedSignatureKeyIds.length > 0
-            ? "hosted catalog signed envelope did not meet the configured signature threshold"
-            : "hosted catalog signed envelope signature is invalid",
+            ? `${context} signed envelope did not meet the configured signature threshold`
+            : `${context} signed envelope signature is invalid`,
       }
     : {
         ok: false,
         error: "missing-trust-key",
-        message: "hosted catalog signed envelope was not signed by a trusted key",
+        message: `${context} signed envelope was not signed by a trusted key`,
       };
 }
 
