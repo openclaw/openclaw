@@ -793,6 +793,7 @@ describe("mattermostPlugin", () => {
             cfg,
             accountId: "default",
             input: "disabled12abcd1234abcd1234",
+            normalized: "disabled12abcd1234abcd1234",
           }),
         ),
       ).rejects.toThrow('Mattermost account "default" is disabled');
