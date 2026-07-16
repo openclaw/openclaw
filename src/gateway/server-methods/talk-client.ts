@@ -14,8 +14,12 @@ import {
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveRealtimeContextPackInstructions } from "../../agents/realtime-context-pack.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -147,8 +151,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         requested: typedParams,
         defaults: realtimeConfig,
       });
-      const agentId = resolveAgentIdFromSessionKey(typedParams.sessionKey);
-      const sessionKey = typedParams.sessionKey?.trim() || "main";
+      const requestedSessionKey = normalizeOptionalString(typedParams.sessionKey);
+      // Shipped clients can prefetch without a session key. Resolve the configured
+      // default agent here or their provider session receives the wrong workspace context.
+      const agentId = requestedSessionKey
+        ? resolveAgentIdFromSessionKey(requestedSessionKey)
+        : resolveDefaultAgentId(runtimeConfig);
+      const sessionKey = requestedSessionKey ?? buildAgentMainSessionKey({ agentId });
       const contextPack = await resolveRealtimeContextPackInstructions({
         agentId,
         config: runtimeConfig,

@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   stopTalkTranscriptionRelaySession: vi.fn(),
   chatSend: vi.fn(),
   controlRealtimeVoiceAgentRun: vi.fn(),
+  resolveRealtimeContextPackInstructions: vi.fn(async () => undefined),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
   resolveSessionKeyFromResolveParams: vi.fn(),
 }));
@@ -79,6 +80,10 @@ vi.mock("../../talk/provider-resolver.js", () => ({
 
 vi.mock("../../talk/agent-run-control.js", () => ({
   controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+}));
+
+vi.mock("../../agents/realtime-context-pack.js", () => ({
+  resolveRealtimeContextPackInstructions: mocks.resolveRealtimeContextPackInstructions,
 }));
 
 vi.mock("./chat.js", () => ({
@@ -2841,6 +2846,58 @@ describe("talk.client.create handler", () => {
     expect(createInput).not.toHaveProperty("provider");
     expect(createInput).not.toHaveProperty("providers");
     expect(createInput).not.toHaveProperty("transport");
+    expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
+  });
+
+  it("uses the configured default agent context for shipped clients that omit sessionKey", async () => {
+    const createBrowserSession = vi.fn(async (_input: unknown) => ({
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "secret",
+    }));
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: {
+        id: "openai",
+        label: "OpenAI Realtime",
+        isConfigured: () => true,
+        createBrowserSession,
+        createBridge: vi.fn(),
+      },
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveRealtimeContextPackInstructions.mockResolvedValueOnce("Ron cached context");
+
+    const config = {
+      agents: {
+        defaults: { workspace: "/tmp/default-workspace" },
+        list: [{ id: "default", default: true }],
+      },
+      talk: {
+        realtime: {
+          provider: "openai",
+          providers: { openai: { apiKey: "openai-key" } },
+        },
+      },
+    } as OpenClawConfig;
+    const respond = vi.fn();
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
+      req: { type: "req", id: "1", method: "talk.client.create" },
+      params: { mode: "realtime", transport: "webrtc", brain: "agent-consult" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => config } as never,
+    });
+
+    expect(mocks.resolveRealtimeContextPackInstructions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "default", config }),
+    );
+    expectRecordFields(mockCallArg(createBrowserSession), {
+      instructions: expect.stringContaining("Ron cached context"),
+    });
     expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
   });
 
