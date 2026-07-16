@@ -394,7 +394,12 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot-proxy`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/codex`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/codex`]: strictBundledPluginWorkspace([
+      // Codex provider runtime and harness surfaces are reached through plugin
+      // registration contracts rather than static imports from the entrypoint.
+      "harness.ts!",
+      "media-understanding-provider.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: strictBundledPluginWorkspace([
@@ -407,7 +412,14 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/fireworks`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/google`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/huggingface`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/github-copilot`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/github-copilot`]: strictBundledPluginWorkspace([
+      // Auth, replay, token, and stream helpers are runtime-owned provider
+      // surfaces that are consumed through plugin hooks and dynamic imports.
+      "connection-bound-ids.ts!",
+      "login.ts!",
+      "stream.ts!",
+      "token.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: strictBundledPluginWorkspace(),
@@ -420,16 +432,47 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/mistral`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/moonshot`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/nvidia`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: strictBundledPluginWorkspace([
+      // OpenAI exposes provider, OAuth, overlay, media, usage, and realtime
+      // contracts to runtime/plugin integration paths that Knip cannot trace.
+      "embedding-batch.ts!",
+      "media-understanding-provider.ts!",
+      "model-route-contract.ts!",
+      "native-web-search.ts!",
+      "openai-chatgpt-oauth-abort.runtime.ts!",
+      "openai-chatgpt-oauth-flow.runtime.ts!",
+      "openai-chatgpt-oauth-types.runtime.ts!",
+      "openai-chatgpt-oauth.runtime.ts!",
+      "openai-chatgpt-pkce.runtime.ts!",
+      "openai-chatgpt-provider.runtime.ts!",
+      "openai-provider.ts!",
+      "prompt-overlay.ts!",
+      "realtime-provider-shared.ts!",
+      "tts.ts!",
+      "usage.ts!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: strictBundledPluginWorkspace([
+      // Session catalog and provider helpers are plugin-owned runtime surfaces.
+      "media-understanding-provider.ts!",
+      "provider-catalog.ts!",
+      "session-catalog-plugin.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: strictBundledPluginWorkspace([
+      // OAuth, model, and media provider helpers are runtime/plugin surfaces.
+      "image-generation-provider.ts!",
+      "media-understanding-provider.ts!",
+      "models.ts!",
+      "oauth.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/pixverse`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: strictBundledPluginWorkspace([
       // The plugin-SDK QA Lab facade resolves this CLI surface by basename.
       "cli.ts!",
+      // The debugger UI is a separate browser entrypoint outside src/.
+      "web/src/app.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: strictBundledPluginWorkspace(),
