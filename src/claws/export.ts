@@ -211,7 +211,10 @@ function portableMcpServer(server: Record<string, unknown>): ClawMcpServer {
 export async function exportClawAgent(
   agentId: string,
   outputDirectory: string,
-  options: OpenClawStateDatabaseOptions & { config: OpenClawConfig },
+  options: OpenClawStateDatabaseOptions & {
+    config: OpenClawConfig;
+    sourceMcpServers: Record<string, Record<string, unknown>>;
+  },
 ): Promise<ClawExportResult> {
   const status = await readClawStatus(agentId, options);
   const record = status.records.find((candidate) => candidate.install.agentId === agentId);
@@ -288,7 +291,7 @@ export async function exportClawAgent(
       files.push({ source, path: file.path });
     }
   }
-  const configuredMcpServers = normalizeConfiguredMcpServers(options.config.mcp?.servers);
+  const configuredMcpServers = normalizeConfiguredMcpServers(options.sourceMcpServers);
   const manifest: ClawManifest = {
     schemaVersion: CLAW_SCHEMA_VERSION,
     agent: portableAgent(agent, avatar.source),

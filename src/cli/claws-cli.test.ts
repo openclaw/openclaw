@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     errors,
     runtime,
     loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})),
+    listConfiguredMcpServers: vi.fn(),
     applyClawAddPlan: vi.fn(),
     readClawStatus: vi.fn(),
     buildClawRemovePlan: vi.fn(),
@@ -45,6 +46,11 @@ vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+}));
+
+vi.mock("../config/mcp-config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/mcp-config.js")>("../config/mcp-config.js")),
+  listConfiguredMcpServers: mocks.listConfiguredMcpServers,
 }));
 
 vi.mock("../claws/add.js", async () => ({
@@ -137,6 +143,13 @@ describe("claws cli", () => {
     mocks.runtime.exit.mockClear();
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({});
+    mocks.listConfiguredMcpServers.mockReset();
+    mocks.listConfiguredMcpServers.mockResolvedValue({
+      ok: true,
+      path: "config",
+      config: {},
+      mcpServers: {},
+    });
     mocks.applyClawAddPlan.mockReset();
     mocks.applyClawAddPlan.mockImplementation(async (plan) => ({
       schemaVersion: "openclaw.clawAddResult.v1",
@@ -185,6 +198,8 @@ describe("claws cli", () => {
       agentRemoved: true,
       workspaceFiles: [],
       packages: [],
+      mcpServers: [],
+      cronJobs: [],
       packageRefsReleased: 1,
     });
     mocks.exportClawAgent.mockReset();
@@ -481,6 +496,7 @@ describe("claws cli", () => {
 
     expect(mocks.exportClawAgent).toHaveBeenCalledWith("demo-agent", "/tmp/exported", {
       config: {},
+      sourceMcpServers: {},
     });
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       schemaVersion: "openclaw.clawExportResult.v1",

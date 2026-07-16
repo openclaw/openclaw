@@ -33,6 +33,7 @@ import {
 import { agentsDeleteCommand } from "../commands/agents.commands.delete.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
@@ -231,6 +232,12 @@ export async function runClawsAddCommand(
   }
 
   const config = getRuntimeConfig();
+  const listedMcpServers = await listConfiguredMcpServers();
+  if (!listedMcpServers.ok) {
+    runtime.error(listedMcpServers.error);
+    runtime.exit(1);
+    return;
+  }
   const existingAgentIds = listAgentIds(config);
   const existingWorkspacePaths = existingAgentIds.map((agentId) =>
     resolveAgentWorkspaceDir(config, agentId),
@@ -243,7 +250,7 @@ export async function runClawsAddCommand(
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
     existingAgentIds,
     existingWorkspacePaths,
-    existingMcpServerNames: Object.keys(config.mcp?.servers ?? {}),
+    existingMcpServers: listedMcpServers.mcpServers,
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
     packagePreflight: preflightClawPackage,
   };
@@ -251,11 +258,7 @@ export async function runClawsAddCommand(
     manifest: result.manifest,
     source: result.source,
     diagnostics: result.diagnostics,
-    context: {
-      ...basePlanContext,
-      existingMcpServerNames: [],
-      existingMcpServers: config.mcp?.servers,
-    },
+    context: basePlanContext,
   });
   const resumeRecord = matchingResumeRecord(plan, opts);
   if (resumeRecord && plan.blockers.length > 0) {
@@ -269,8 +272,6 @@ export async function runClawsAddCommand(
         existingWorkspacePaths: existingWorkspacePaths.filter(
           (workspacePath) => resolve(workspacePath) !== resolve(resumeRecord.workspace),
         ),
-        existingMcpServerNames: [],
-        existingMcpServers: config.mcp?.servers,
       },
     });
   }
@@ -478,7 +479,14 @@ export async function runClawsExportCommand(
 ): Promise<void> {
   assertExperimentalClawsEnabled();
   try {
-    const result = await exportClawAgent(agentId, opts.out, { config: getRuntimeConfig() });
+    const listedMcpServers = await listConfiguredMcpServers();
+    if (!listedMcpServers.ok) {
+      throw new ClawExportError("mcp_config_unavailable", listedMcpServers.error);
+    }
+    const result = await exportClawAgent(agentId, opts.out, {
+      config: getRuntimeConfig(),
+      sourceMcpServers: listedMcpServers.mcpServers,
+    });
     if (opts.json) {
       writeRuntimeJson(runtime, result);
       return;
