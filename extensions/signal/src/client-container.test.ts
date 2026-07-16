@@ -386,17 +386,7 @@ describe("containerCheck", () => {
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 1000 }]);
-  });
-
-  it("derives handshakeTimeout from caller timeoutMs, not a fixed cap", async () => {
-    wsMockState.behavior = "open";
-    mockFetch.mockResolvedValue({ ok: true, status: 200 });
-
-    // A caller requesting 60s must not be truncated to the 30s library default.
-    await containerCheck("http://localhost:8080", 60_000, "+14259798283");
-
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 60_000 }]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
   });
 
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
@@ -1470,6 +1460,28 @@ describe("streamContainerEvents", () => {
     expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
+  });
+
+  it("derives stream handshakeTimeout from caller timeoutMs, not a fixed 30s cap", async () => {
+    await streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      timeoutMs: 60_000,
+      onEvent: vi.fn(),
+    });
+
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 60_000 }]);
+  });
+
+  it("honors a shorter caller stream handshake budget", async () => {
+    await streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      timeoutMs: 1_000,
+      onEvent: vi.fn(),
+    });
+
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 1_000 }]);
   });
 
   it("removes the abort listener when the stream closes", async () => {
