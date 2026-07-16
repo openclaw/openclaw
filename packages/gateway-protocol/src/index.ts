@@ -341,6 +341,8 @@ import {
   SessionsDescribeParamsSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
+  SessionsReclaimParamsSchema,
+  SessionsReclaimResultSchema,
   SessionGroupSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsListParamsSchema,
@@ -641,6 +643,8 @@ export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSche
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
 export const validateSessionsDispatchResult = lazyCompile(SessionsDispatchResultSchema);
+export const validateSessionsReclaimParams = lazyCompile(SessionsReclaimParamsSchema);
+export const validateSessionsReclaimResult = lazyCompile(SessionsReclaimResultSchema);
 export const validateSessionsMessagesSubscribeParams = lazyCompile(
   SessionsMessagesSubscribeParamsSchema,
 );
@@ -993,6 +997,8 @@ export {
   SessionsCreateResultSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
+  SessionsReclaimParamsSchema,
+  SessionsReclaimResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
@@ -1548,6 +1554,8 @@ export type {
   SessionWorktreeInfo,
   SessionsDispatchParams,
   SessionsDispatchResult,
+  SessionsReclaimParams,
+  SessionsReclaimResult,
   SessionsCreateResult,
   SessionsPatchParams,
   SessionsResetParams,

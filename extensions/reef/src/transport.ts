@@ -1,8 +1,15 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
 import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
 
 type FetchLike = typeof fetch;
+
+// Relay JSON is untrusted network input. Cap success bodies at the shared
+// provider default and keep error bodies smaller so a hostile relay cannot
+// force unbounded allocation through response.json().
+const REEF_RELAY_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const REEF_RELAY_ERROR_JSON_MAX_BYTES = 64 * 1024;
 
 export class ReefRelayError extends Error {
   constructor(
@@ -65,8 +72,14 @@ export class ReefTransportClient {
   requestFriend(to: string, code?: string): Promise<{ status: string }> {
     return this.signed("POST", "/v1/friends/request", code ? { to, code } : { to });
   }
-  respondFriend(peer: string, accept: boolean): Promise<{ peer: string; status: string }> {
-    return this.signed("POST", "/v1/friends/respond", { peer, accept });
+  respondFriend(friend: RelayFriend, accept: boolean): Promise<{ peer: string; status: string }> {
+    return this.signed("POST", "/v1/friends/respond", {
+      peer: friend.peer,
+      accept,
+      expected_key_epoch: friend.key_epoch,
+      expected_ed25519_pub: friend.ed25519_pub,
+      expected_x25519_pub: friend.x25519_pub,
+    });
   }
   listFriends(): Promise<{ friendships: RelayFriend[] }> {
     return this.signed("GET", "/v1/friends");
@@ -144,17 +157,26 @@ export class ReefTransportClient {
     if (!response.ok) {
       let message = `relay HTTP ${response.status}`;
       try {
-        const parsed = (await response.json()) as { error?: string };
-        if (parsed.error) {
+        const parsed = await readProviderJsonResponse<{ error?: string }>(
+          response,
+          "reef.relay.error",
+          { maxBytes: REEF_RELAY_ERROR_JSON_MAX_BYTES },
+        );
+        if (typeof parsed.error === "string" && parsed.error) {
           message = parsed.error;
         }
-      } catch {}
+      } catch {
+        // Keep the status fallback when the error body is missing, malformed,
+        // or oversized; callers still get a typed ReefRelayError.
+      }
       throw new ReefRelayError(response.status, message);
     }
     if (response.status === 204) {
       return undefined as T;
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "reef.relay", {
+      maxBytes: REEF_RELAY_JSON_MAX_BYTES,
+    });
   }
 }
 

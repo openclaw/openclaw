@@ -287,12 +287,12 @@ Slash commands and directives are honored only for authorized senders, derived f
 
 ## Control plane tools
 
-Two built-in tools can make persistent changes:
+Two built-in tools remain control-plane sensitive:
 
-- `gateway` inspects config with `config.schema.lookup` / `config.get`, and mutates with `config.apply`, `config.patch`, and `update.run`.
+- `gateway` reads config with `config.schema.lookup` / `config.get`. It cannot write config, update OpenClaw, or restart the Gateway.
 - `cron` creates scheduled jobs that keep running after the original chat/task ends.
 
-`gateway config.apply`/`config.patch` are fail-closed by default: only a narrow allowlist of low-risk agent runtime tuning (`agents.defaults.model`, `agents.defaults.thinkingDefault`, per-agent model/thinking/reasoning/fast-mode fields), mention-gating (`channels.*.requireMention` at several nesting depths), and visible-reply settings (`messages.visibleReplies`, `messages.groupChat.visibleReplies`, `messages.groupChat.unmentionedInbound`) are agent-tunable. Any other changed config path is rejected. Prompt overlays stay operator-controlled, and new sensitive config trees are protected unless deliberately added to that allowlist. The tool still refuses to rewrite `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the equivalent `tools.exec.*` path before the write is checked.
+The `gateway` tool stays owner-only because config reads can expose secrets and host topology. Agents request persistent config or lifecycle changes through the `openclaw` delegation tool; OpenClaw maps them to typed operations and requires human approval before applying them. See [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
 
 For any agent/surface handling untrusted content, deny these by default:
 
@@ -304,7 +304,7 @@ For any agent/surface handling untrusted content, deny these by default:
 }
 ```
 
-`commands.restart=false` only blocks restart actions - it does not disable `gateway` config/update actions.
+`commands.restart=false` disables `/restart` and external `SIGUSR1` restart requests. The `gateway` agent tool has no restart action.
 
 ## Node execution (`system.run`)
 

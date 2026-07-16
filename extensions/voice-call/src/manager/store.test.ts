@@ -12,7 +12,7 @@ import {
   makePersistedCall,
   writeLegacyCallsJsonl,
 } from "../manager.test-harness.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
+import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
 import {
   findCallMatchesInStore,
@@ -45,7 +45,6 @@ describe("voice-call call record store", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 

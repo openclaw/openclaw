@@ -375,11 +375,15 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    conversationReadOrigin,
   }) => {
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
       const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
       const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
+      if (!account.enabled) {
+        throw new Error(`Mattermost account "${resolvedAccountId}" is disabled`);
+      }
       const reactionsEnabled =
         account.config.actions?.reactions ?? mattermostConfig?.actions?.reactions ?? true;
       if (!reactionsEnabled) {
@@ -387,6 +391,9 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       }
 
       const { postId, emojiName, remove } = parseMattermostReactActionParams(params);
+      // The runner preserves the caller's spelling in `target` and puts the
+      // directory-resolved provider destination in `to` before dispatch.
+      const authorizedTarget = normalizeOptionalString(params.to);
       if (remove) {
         const result = await (
           await loadMattermostChannelRuntime()
@@ -395,6 +402,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
           postId,
           emojiName,
           accountId: resolvedAccountId,
+          authorizedTarget,
+          conversationReadOrigin,
         });
         if (!result.ok) {
           throw new Error(result.error);
@@ -414,6 +423,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
         postId,
         emojiName,
         accountId: resolvedAccountId,
+        authorizedTarget,
+        conversationReadOrigin,
       });
       if (!result.ok) {
         throw new Error(result.error);
@@ -811,6 +822,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     }),
     messaging: {
       targetPrefixes: ["mattermost"],
+      directTargetStyle: "user-prefixed",
+      targetIdComparison: "case-sensitive",
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {

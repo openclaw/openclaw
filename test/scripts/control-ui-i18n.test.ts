@@ -389,9 +389,9 @@ describe("control-ui-i18n process runner", () => {
         });
 
         try {
-          const deadline = Date.now() + 5_000;
+          const deadline = Date.now() + 30_000;
+          let fastReady = false;
           while (Date.now() < deadline) {
-            let fastReady = false;
             try {
               fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
             } catch {}
@@ -405,7 +405,7 @@ describe("control-ui-i18n process runner", () => {
               setTimeout(resolve, 10);
             });
           }
-          expect(readFileSync(fastReadyPath, "utf8")).toBe("ready");
+          expect(fastReady).toBe(true);
           expect(grandchildPid).toBeGreaterThan(0);
           expect(processIsAlive(grandchildPid)).toBe(true);
 

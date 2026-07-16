@@ -192,12 +192,6 @@ function commandLookupKey(
   return `${client.apiBaseUrl}:${accountId}:${registered.teamId}:${registered.id}`;
 }
 
-export function resetMattermostSlashCommandValidationCacheForTests(): void {
-  commandLookupInflight.clear();
-  commandValidationFailureCache.clear();
-  commandValidationLookupRateLimit.clear();
-}
-
 export function clearMattermostSlashCommandValidationCacheForAccount(accountId: string): void {
   for (const [key, entry] of commandValidationFailureCache) {
     if (entry.accountId === accountId) {

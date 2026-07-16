@@ -13,6 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
@@ -161,7 +162,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement {
     }
   };
 
-  static override styles = browserPanelStyles;
+  static override styles = [panelTabStripStyles, browserPanelStyles];
 
   override connectedCallback(): void {
     super.connectedCallback();

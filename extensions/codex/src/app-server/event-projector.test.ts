@@ -23,7 +23,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { createCodexTestModel } from "./test-support.js";
+import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
 const TURN_ID = "turn-1";
@@ -78,6 +78,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(),
     thinkLevel: "medium",
+    observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -140,6 +141,13 @@ function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
   };
 }
 
+function expectUsageLimitPromptError(value: unknown): Error & { status: 429 } {
+  expect(value).toBeInstanceOf(Error);
+  const error = value as Error & { status?: unknown };
+  expect(error.status).toBe(429);
+  return error as Error & { status: 429 };
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Expected ${label}`);
@@ -200,7 +208,7 @@ function findAgentEvent(
   throw new Error(`Expected agent event ${params.stream}`);
 }
 
-function findPlanEventWithSteps(mock: unknown, steps: string[]) {
+function findPlanEventWithSteps(mock: unknown, steps: Array<{ step: string; status: string }>) {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
   if (!Array.isArray(calls)) {
     throw new Error("Expected onAgentEvent mock calls");
@@ -215,7 +223,7 @@ function findPlanEventWithSteps(mock: unknown, steps: string[]) {
       return data;
     }
   }
-  throw new Error(`Expected plan event ${steps.join(", ")}`);
+  throw new Error(`Expected plan event ${JSON.stringify(steps)}`);
 }
 
 function forCurrentTurn(
@@ -1900,9 +1908,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Wait until the reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
+    expect(promptError.message).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1929,8 +1938,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1969,8 +1979,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1995,9 +2006,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
-    expect(result.promptError).not.toContain("Codex did not return a reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
+    expect(promptError.message).not.toContain("Codex did not return a reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -2550,7 +2562,7 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(
       forCurrentTurn("turn/plan/updated", {
         explanation: "next",
-        plan: [{ step: "patch", status: "in_progress" }],
+        plan: [{ step: "patch", status: "inProgress" }],
       }),
     );
     await projector.handleNotification(
@@ -2584,9 +2596,12 @@ describe("CodexAppServerEventProjector", () => {
       isReasoningSnapshot: true,
     });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-    expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
-      "patch (in_progress)",
-    ]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "inspect", status: "pending" }]).steps,
+    ).toEqual([{ step: "inspect", status: "pending" }]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "patch", status: "in_progress" }]).steps,
+    ).toEqual([{ step: "patch", status: "in_progress" }]);
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
     );
@@ -4328,7 +4343,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("orders declined native tool diagnostics after their start event", async () => {
-    const projector = await createProjector();
+    const observeToolTerminal = vi.fn(createCodexTestToolTerminalObserver());
+    const projector = await createProjector({
+      ...(await createParams()),
+      observeToolTerminal,
+    });
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 
@@ -4408,13 +4427,15 @@ describe("CodexAppServerEventProjector", () => {
       toolName: "bash",
       meta: "run tests (workspace)",
       error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
+      mutatingAction: false,
     });
+    expect(observeToolTerminal).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        executionStarted: false,
+        nativeMutation: { mutatingAction: false, replaySafe: true },
+        outcome: "failure",
+      }),
+    );
   });
 
   it.each(["failed", "cancelled", "timed_out"] as const)(
@@ -4631,12 +4652,7 @@ describe("CodexAppServerEventProjector", () => {
       toolName: "bash",
       meta: "run tests (workspace)",
       error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
+      mutatingAction: false,
     });
 
     await projector.handleNotification(
@@ -4660,7 +4676,67 @@ describe("CodexAppServerEventProjector", () => {
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 
-  it("does not clear a declined native tool error with a different action", async () => {
+  it("preserves distinct native mutation failures when only one action recovers", async () => {
+    const observeToolTerminal = vi.fn(createCodexTestToolTerminalObserver());
+    const projector = await createProjector({
+      ...(await createParams()),
+      observeToolTerminal,
+    });
+    const commandItem = (
+      id: string,
+      command: string,
+      status: "completed" | "failed",
+      output: string,
+      exitCode: number,
+    ) => ({
+      type: "commandExecution",
+      id,
+      command,
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status,
+      commandActions: [],
+      aggregatedOutput: output,
+      exitCode,
+      durationMs: 1,
+    });
+    const firstCommand = "node scripts/first.js --publish";
+    const secondCommand = "node scripts/second.js --publish";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-first-failed", firstCommand, "failed", "first failed", 1),
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-second-failed", secondCommand, "failed", "second failed", 1),
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-second-recovered", secondCommand, "completed", "ok", 0),
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "bash",
+      error: "first failed",
+      actionFingerprint: expect.stringContaining(firstCommand),
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-first-recovered", firstCommand, "completed", "ok", 0),
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
+    expect(observeToolTerminal).toHaveBeenCalledTimes(4);
+  });
+
+  it("clears a declined pre-execution error after a later successful action", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(
@@ -4698,17 +4774,7 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
-      toolName: "bash",
-      meta: "run tests (workspace)",
-      error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
-    });
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 
   it("emits after_tool_call observations for Codex-native tool item completions", async () => {
@@ -5159,7 +5225,8 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("does not keep side-effect evidence for pre-execution dynamic tool errors", async () => {
-    const projector = await createProjector();
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
 
     projector.recordDynamicToolCall({
       callId: "call-unknown-message",
@@ -5169,6 +5236,14 @@ describe("CodexAppServerEventProjector", () => {
     projector.recordDynamicToolResult({
       callId: "call-unknown-message",
       tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-unknown-message",
+        toolName: "message",
+        arguments: { action: "send", text: "hello" },
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "Unknown OpenClaw tool: message" },
+      }),
       success: false,
       terminalType: "error",
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: message" }],
@@ -5177,30 +5252,128 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+    expect(result.lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: false,
+    });
   });
 
-  it("clears a blocked dynamic tool outcome after the next successful tool", async () => {
-    const projector = await createProjector();
+  it("does not mark a blocked pre-execution dynamic mutation as attempted", async () => {
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
+    const messageArgs = { action: "send", to: "channel:123", message: "hello" };
 
     projector.recordDynamicToolResult({
-      callId: "call-cron-blocked",
-      tool: "cron",
+      callId: "call-message-preflight-blocked",
+      tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-preflight-blocked",
+        toolName: "message",
+        arguments: messageArgs,
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "blocked before execution" },
+      }),
       success: false,
       terminalType: "blocked",
-      contentItems: [{ type: "inputText", text: "blocked by policy" }],
+      contentItems: [{ type: "inputText", text: "blocked before execution" }],
     });
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
-      toolName: "cron",
-      error: "blocked by policy",
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: false,
+    });
+  });
+
+  it("keeps a blocked dynamic mutation until the same action succeeds", async () => {
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
+    const messageArgs = {
+      action: "send",
+      provider: "discord",
+      to: "channel:123",
+      message: "deployment ready",
+    };
+
+    projector.recordDynamicToolResult({
+      callId: "call-message-blocked",
+      tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-blocked",
+        toolName: "message",
+        arguments: messageArgs,
+        meta: "send to channel:123",
+        executionStarted: true,
+        outcome: "failure",
+        failure: { error: "cross-context messaging denied" },
+      }),
+      success: false,
+      terminalType: "blocked",
+      contentItems: [{ type: "inputText", text: "cross-context messaging denied" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      error: "cross-context messaging denied",
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining("tool=message|action=send|to=channel:123"),
     });
 
     projector.recordDynamicToolResult({
-      callId: "call-web-fetch-recovered",
-      tool: "web_fetch",
+      callId: "call-read-failed",
+      tool: "read",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-read-failed",
+        toolName: "read",
+        arguments: { path: "/tmp/missing" },
+        executionStarted: true,
+        outcome: "failure",
+        failure: { error: "file not found" },
+      }),
+      success: false,
+      terminalType: "error",
+      contentItems: [{ type: "inputText", text: "file not found" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+    });
+
+    projector.recordDynamicToolResult({
+      callId: "call-heartbeat-response",
+      tool: "heartbeat_respond",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-heartbeat-response",
+        toolName: "heartbeat_respond",
+        arguments: { notify: false, summary: "nothing else changed" },
+        executionStarted: true,
+        outcome: "success",
+      }),
       success: true,
       terminalType: "completed",
-      contentItems: [{ type: "inputText", text: "fetch ok" }],
+      contentItems: [{ type: "inputText", text: "HEARTBEAT_OK" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+    });
+
+    projector.recordDynamicToolResult({
+      callId: "call-message-retry",
+      tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-retry",
+        toolName: "message",
+        arguments: messageArgs,
+        meta: "send to channel:123",
+        executionStarted: true,
+        outcome: "success",
+      }),
+      success: true,
+      terminalType: "completed",
+      contentItems: [{ type: "inputText", text: "sent" }],
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
@@ -6041,8 +6214,8 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
-      "step one",
-      "step two",
+      { step: "step one", status: "pending" },
+      { step: "step two", status: "pending" },
     ]);
     expect(result.assistantTexts).toEqual(["final answer"]);
     expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");

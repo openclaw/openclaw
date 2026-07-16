@@ -38,14 +38,12 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "../plugins/providers.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
   type SystemAgentConfiguredRouteDeps,
 } from "./inference-route.js";
-
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-
 type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
   SystemAgentConfiguredRoute,
   "runConfig" | "authProfileId"
@@ -398,14 +396,13 @@ function projectOwnerPluginArtifacts(params: {
     };
   });
 }
-
 async function projectVerifiedExecutionFingerprint(
   config: OpenClawConfig,
   route: SystemAgentConfiguredRoute,
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
 ): Promise<SystemAgentVerifiedExecutionFingerprint> {
-  const projection = await projectDefaultInferenceRoute(config);
+  const projection = await projectInferenceRoute(config, route.agentId);
   return {
     route: projection.route
       ? (() => {
@@ -829,7 +826,10 @@ export async function resolveSystemAgentVerifiedInferenceRoute(
     return null;
   }
   const config = snapshot.runtimeConfig ?? snapshot.config;
-  const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+    config,
+    binding.execution.agentId,
+  );
   if (
     !currentRoute ||
     !isDeepStrictEqual(systemAgentRouteIdentity(currentRoute), binding.configuredRoute)
