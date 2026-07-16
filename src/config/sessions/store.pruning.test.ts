@@ -701,6 +701,27 @@ describe("capEntryCount", () => {
     }
   });
 
+  it("honors caller-supplied overrideMax even when it differs from the 500 default (regression: #109191)", () => {
+    // Issue #109191: the previous no-arg fallback to resolveMaintenanceConfigFromInput()
+    // would silently substitute DEFAULT_SESSION_MAX_ENTRIES (500) regardless of
+    // what the caller's override said, because the fallback ORed with the
+    // override — but it also meant a future caller that forgot to pass the
+    // runtime-resolved value would have been bitten by the silent default.
+    // The fix requires overrideMax directly: verify it is used as-is for any
+    // value, including the user's configured 4096.
+    const now = Date.now();
+    const store = makeStore([
+      ["a", makeEntry(now - 4)],
+      ["b", makeEntry(now - 3)],
+      ["c", makeEntry(now - 2)],
+      ["d", makeEntry(now - 1)],
+      ["e", makeEntry(now)],
+    ]);
+
+    expect(capEntryCount(store, 4096)).toBe(0); // override honored; nothing evicted
+    expect(Object.keys(store)).toHaveLength(5);
+  });
+
   it("normalizes runtime-provided preserve keys to match lowercased store keys", () => {
     const now = Date.now();
     const childKey = "agent:main:subagent:child";

@@ -528,17 +528,25 @@ function wouldCapActiveSession(params: {
  * Cap the store to the N most recently updated entries.
  * Entries without `updatedAt` are sorted last (removed first when over limit).
  * Mutates `store` in-place.
+ *
+ * `overrideMax` is required: the previous no-arg fallback that called
+ * `resolveMaintenanceConfigFromInput()` could only ever read built-in defaults
+ * (it bypassed `getRuntimeConfig()`), so a caller that forgot to pass the
+ * configured `session.maintenance.maxEntries` silently fell back to 500 even
+ * when the user's config said otherwise (see issue #109191). All production
+ * callers already supply the resolved value, so refusing to default here is
+ * the safe-and-honest behavior; tests pass an integer directly.
  */
 export function capEntryCount(
   store: Record<string, SessionEntry>,
-  overrideMax?: number,
+  overrideMax: number,
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
-  const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
+  const maxEntries = overrideMax;
   const preservedCount = Object.entries(store).filter(([key, entry]) =>
     shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
   ).length;
