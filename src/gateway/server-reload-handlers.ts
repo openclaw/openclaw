@@ -568,7 +568,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
     let pluginReloadAborted = false;
-    let pluginReloadDeferredActiveWork = false;
     const isLifecycleReloadAborted = () =>
       abortGeneration !== undefined && myGeneration <= abortGeneration;
     const isPluginReloadAborted = () =>
@@ -774,7 +773,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           pluginReloadAborted = true;
           return;
         }
-        pluginReloadDeferredActiveWork = true;
         const stopFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,
           run: async (channel) => {
@@ -873,7 +871,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     const channelTargets = channelReloadTargets();
-    if (!pluginReloadDeferredActiveWork && channelTargets.size > 0 && !shouldSkipChannelRestart) {
+    const hasLiveChannelTargets = [...channelTargets].some(
+      (channel) => !channelsStoppedBeforePluginReload.has(channel),
+    );
+    if (!pluginReloadAborted && hasLiveChannelTargets && !shouldSkipChannelRestart) {
       pluginReloadAborted = await waitForActiveWorkBeforeChannelReload(
         channelTargets,
         nextConfig,

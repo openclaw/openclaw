@@ -3407,7 +3407,7 @@ describe("gateway channel hot reload handlers", () => {
     expect(events).toEqual(["stop:discord:alpha"]);
   });
 
-  it("defers account restarts when a plugin reload did not stop a channel", async () => {
+  it("re-drains account work admitted after plugin reload leaves the channel running", async () => {
     const events: string[] = [];
     const channels = {
       stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
@@ -3417,15 +3417,16 @@ describe("gateway channel hot reload handlers", () => {
         events.push(`start:${channel}:${accountId}`);
       }),
     };
-    const reloadPlugins = vi.fn(
-      async (): Promise<GatewayPluginReloadResult> => ({
+    const reloadPlugins = vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
+      await params.beforeReplace(new Set());
+      hoisted.activeEmbeddedRunCount.value = 1;
+      return {
         restartChannels: new Set(),
         activeChannels: new Set(["discord"]),
-      }),
-    );
+      };
+    });
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { applyHotReload } = createReloadHandlersForTest(logReload, channels, reloadPlugins);
-    hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
     let reload: Promise<void> | undefined;
 
