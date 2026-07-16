@@ -202,8 +202,6 @@ export function createSubagentRegistryLifecycleController(params: {
   maybeWakeRequesterAfterAllChildrenSettled: MaybeWakeRequesterAfterAllChildrenSettled;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
-  let scheduleRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
-
   const scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
   const scheduledRequesterSettleWakeRuns = new Set<string>();
   const terminalCompletionLocks = new Map<string, Promise<void>>();
@@ -872,7 +870,7 @@ export function createSubagentRegistryLifecycleController(params: {
   // cleanup parent reserves the root synchronously, so restart or suspend
   // cannot reach quiescence between scheduling and the wake's gateway turn.
   // Failures are logged only.
-  scheduleRequesterSettleWake = (runId: string, entry: SubagentRunRecord) => {
+  function scheduleRequesterSettleWake(runId: string, entry: SubagentRunRecord): void {
     const requesterSessionKey = entry.requesterSessionKey?.trim();
     if (!requesterSessionKey || scheduledRequesterSettleWakeRuns.has(runId)) {
       return;
@@ -897,7 +895,7 @@ export function createSubagentRegistryLifecycleController(params: {
       .finally(() => {
         scheduledRequesterSettleWakeRuns.delete(runId);
       });
-  };
+  }
 
   const suspendPendingFinalDelivery = (args: {
     runId: string;
