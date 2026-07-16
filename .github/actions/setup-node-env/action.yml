@@ -39,10 +39,11 @@ inputs:
     description: Whether to persist Vitest's experimental filesystem module cache.
     required: false
     default: "false"
-  save-vitest-actions-cache:
+  save-vitest-fs-cache:
     description: >
-      Whether this job may save the actions/cache fallback for the Vitest
-      filesystem module cache. Ignored for sticky-disk jobs.
+      Whether this job may save the shared Vitest filesystem module cache.
+      Other matrix jobs restore the warm seed without committing competing
+      snapshots.
     required: false
     default: "false"
 runs:
@@ -110,10 +111,10 @@ runs:
         # entries; the lockfile key rotates dependency/plugin generations.
         key: ${{ github.repository }}-vitest-fs-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}
         path: /var/tmp/openclaw-vitest-fs-cache
-        commit: on-change
+        commit: ${{ inputs.save-vitest-fs-cache == 'true' && 'on-change' || 'false' }}
 
     - name: Restore and save Vitest transform cache
-      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk != 'true' && inputs.save-vitest-actions-cache == 'true' && runner.os != 'Windows'
+      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk != 'true' && inputs.save-vitest-fs-cache == 'true' && runner.os != 'Windows'
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
@@ -124,7 +125,7 @@ runs:
           ${{ github.repository }}-vitest-fs-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}-
 
     - name: Restore Vitest transform cache
-      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk != 'true' && inputs.save-vitest-actions-cache != 'true' && runner.os != 'Windows'
+      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk != 'true' && inputs.save-vitest-fs-cache != 'true' && runner.os != 'Windows'
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-vitest-fs-cache

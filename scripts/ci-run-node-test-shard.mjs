@@ -252,7 +252,7 @@ export async function runShardPlans(plans, options = {}) {
         );
       }
     } catch (error) {
-      console.warn(`[shard:cache] failed to prune persistent cache: ${error}`);
+      console.warn(`[shard:cache] failed to prune persistent cache: ${String(error)}`);
     }
   }
   return exitCode;

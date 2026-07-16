@@ -1718,9 +1718,9 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
-          # actions/cache is immutable, so only one fallback matrix job saves
-          # the shared warm seed. Sticky-disk jobs commit their isolated clones.
-          save-vitest-actions-cache: ${{ strategy.job-index == 0 && 'true' || 'false' }}
+          # One matrix job commits the shared warm seed. Other jobs restore it
+          # read-only, avoiding concurrent sticky-disk or archive writers.
+          save-vitest-fs-cache: ${{ strategy.job-index == 0 && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true

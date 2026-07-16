@@ -1799,15 +1799,15 @@ describe("ci workflow guards", () => {
 
     expect(setupNodeStep.with).toMatchObject({
       "vitest-fs-cache": "true",
-      "save-vitest-actions-cache": "${{ strategy.job-index == 0 && 'true' || 'false' }}",
+      "save-vitest-fs-cache": "${{ strategy.job-index == 0 && 'true' || 'false' }}",
     });
     expect(action.inputs["vitest-fs-cache"].default).toBe("false");
-    expect(action.inputs["save-vitest-actions-cache"].default).toBe("false");
+    expect(action.inputs["save-vitest-fs-cache"].default).toBe("false");
     expect(stickyStep).toMatchObject({
       uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
       with: {
         path: "/var/tmp/openclaw-vitest-fs-cache",
-        commit: "on-change",
+        commit: "${{ inputs.save-vitest-fs-cache == 'true' && 'on-change' || 'false' }}",
       },
     });
     expect(stickyStep.if).toContain("inputs.sticky-disk == 'true'");
@@ -1815,11 +1815,11 @@ describe("ci workflow guards", () => {
     expect(stickyStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
     expect(stickyStep.with.key).toContain("hashFiles('pnpm-lock.yaml')");
     expect(writerStep.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
-    expect(writerStep.if).toContain("inputs.save-vitest-actions-cache == 'true'");
+    expect(writerStep.if).toContain("inputs.save-vitest-fs-cache == 'true'");
     expect(writerStep.with.key).toContain("github.run_id");
     expect(writerStep.with["restore-keys"]).toContain("hashFiles('pnpm-lock.yaml')");
     expect(readerStep.uses).toBe(CACHE_V5);
-    expect(readerStep.if).toContain("inputs.save-vitest-actions-cache != 'true'");
+    expect(readerStep.if).toContain("inputs.save-vitest-fs-cache != 'true'");
     expect(readerStep.with["restore-keys"]).toBe(writerStep.with["restore-keys"]);
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
   });
