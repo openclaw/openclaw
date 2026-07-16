@@ -131,6 +131,34 @@ describe("ClickClack setup adapter", () => {
     });
   });
 
+  it("accepts setup-code URLs for local HTTP installations", async () => {
+    claimClickClackSetupCode.mockResolvedValue({
+      token: "test-token",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {},
+    });
+
+    await expect(
+      prepare({
+        code: "http://localhost:3000/#abcd-efgh-jkmn",
+      }),
+    ).resolves.toMatchObject({
+      baseUrl: "http://localhost:3000",
+      token: "test-token",
+      workspace: "wsp_1",
+    });
+    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:3000",
+      code: "ABCDEFGHJKMN",
+    });
+  });
+
   it("rejects conflicting credentials before claiming a setup code", async () => {
     for (const input of [
       { code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example", token: "test-token" },
@@ -148,9 +176,9 @@ describe("ClickClack setup adapter", () => {
     expect(claimClickClackSetupCode).not.toHaveBeenCalled();
   });
 
-  it("rejects insecure, mismatched, and malformed setup-code inputs before claiming", async () => {
-    await expect(prepare({ code: "http://clickclack.example/#ABCD-EFGH-JKMN" })).rejects.toThrow(
-      "ClickClack setup codes require HTTPS.",
+  it("rejects mismatched and malformed setup-code inputs before claiming", async () => {
+    await expect(prepare({ code: "ftp://clickclack.example/#ABCD-EFGH-JKMN" })).rejects.toThrow(
+      "HTTP(S)",
     );
     await expect(
       prepare({
@@ -158,9 +186,6 @@ describe("ClickClack setup adapter", () => {
         baseUrl: "https://other.example",
       }),
     ).rejects.toThrow("does not match");
-    await expect(
-      prepare({ code: "ABCD-EFGH-JKMN", baseUrl: "http://clickclack.example" }),
-    ).rejects.toThrow("require an HTTPS base URL");
     await expect(
       prepare({ code: "not-a-code", baseUrl: "https://clickclack.example" }),
     ).rejects.toThrow("12 valid base32 characters");
