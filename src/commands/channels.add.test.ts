@@ -689,13 +689,13 @@ describe("channelsAddCommand", () => {
       callOrder.push("prepare");
       return {
         ...input,
-        token: "prepared-token",
+        token: "test-token",
         workspace: "prepared-workspace",
       };
     });
     const validateInput = vi.fn(({ input }) => {
       callOrder.push("validate");
-      return input.token === "prepared-token" ? null : "input was not prepared";
+      return input.token === "test-token" ? null : "input was not prepared";
     });
     const applyAccountConfig = vi.fn(({ cfg, input }) => {
       callOrder.push("apply");
@@ -714,7 +714,7 @@ describe("channelsAddCommand", () => {
     const afterAccountConfigWritten = vi.fn(({ input }) => {
       callOrder.push("after");
       expect(input).toMatchObject({
-        token: "prepared-token",
+        token: "test-token",
         workspace: "prepared-workspace",
       });
     });
@@ -767,7 +767,7 @@ describe("channelsAddCommand", () => {
     });
     expect(writtenChannel("prepared-chat")).toEqual({
       enabled: true,
-      token: "prepared-token",
+      token: "test-token",
       workspace: "prepared-workspace",
     });
   });
