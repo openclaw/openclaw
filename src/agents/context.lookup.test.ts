@@ -2,6 +2,7 @@
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 
 type DiscoveredModel = {
   id: string;
@@ -120,7 +121,7 @@ async function importResolveContextTokensForModel() {
 
 describe("lookupContextTokens", () => {
   beforeAll(async () => {
-    contextModule = await import("./context.js");
+    contextModule = await importFreshContextModule();
   });
 
   beforeEach(() => {
@@ -364,6 +365,30 @@ describe("lookupContextTokens", () => {
     expect(
       lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
     ).toBe(1_048_576);
+  });
+
+  it("warms fresh caches instead of reusing a pre-generation load promise", async () => {
+    const legacyLoadPromise = Promise.resolve();
+    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = legacyLoadPromise;
+    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = null;
+    CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = createContextOverrideConfig(
+      "fresh-provider",
+      "fresh-model",
+      123_456,
+    );
+
+    await contextModule.ensureContextWindowCacheLoaded();
+
+    expect(
+      contextModule.lookupContextTokens("fresh-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBe(123_456);
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).not.toBe(legacyLoadPromise);
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBe(
+      CONTEXT_WINDOW_RUNTIME_STATE.generation,
+    );
   });
 
   it("status waits for pending context warmup but releases on timeout", async () => {

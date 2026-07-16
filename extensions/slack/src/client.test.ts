@@ -18,6 +18,7 @@ vi.mock("@slack/web-api", () => {
 });
 
 let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
+let createSlackLookupClient: typeof import("./client.js").createSlackLookupClient;
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
 let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
@@ -93,6 +94,7 @@ beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
   ({
     createSlackWebClient,
+    createSlackLookupClient,
     createSlackWriteClient,
     createSlackTokenCacheKey,
     getSlackWriteClient,
@@ -205,10 +207,17 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toEqual(SLACK_WRITE_RETRY_OPTIONS);
   });
 
-  it("serializes write client requests by default", () => {
-    const options = resolveSlackWriteClientOptions();
+  it("passes the bounded lookup policy into WebClient", () => {
+    const customAgent = {} as never;
 
-    expect(options.maxRequestConcurrency).toBe(1);
+    createSlackLookupClient("lookup-fixture", { agent: customAgent });
+
+    expect(WebClient).toHaveBeenCalledWith("lookup-fixture", {
+      agent: customAgent,
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+      timeout: 30_000,
+    });
   });
 
   it("respects explicit write client concurrency overrides", () => {
@@ -224,7 +233,6 @@ describe("slack web client config", () => {
 
     expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
       agent: customAgent,
-      maxRequestConcurrency: 1,
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       timeout: 4321,
     });
@@ -240,7 +248,6 @@ describe("slack web client config", () => {
       expect(WebClient).toHaveBeenCalledTimes(1);
       expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
         agent: undefined,
-        maxRequestConcurrency: 1,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       });
     } finally {

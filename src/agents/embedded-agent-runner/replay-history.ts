@@ -431,6 +431,7 @@ function normalizeAssistantUsageSnapshot(usage: unknown) {
     output,
     cacheRead,
     cacheWrite,
+    ...(normalized.contextUsage ? { contextUsage: { ...normalized.contextUsage } } : {}),
     totalTokens,
     ...(cost ? { cost } : {}),
   };
@@ -465,7 +466,10 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
   const cacheRead = cacheReadRaw ?? base.cacheRead;
   const cacheWrite = cacheWriteRaw ?? base.cacheWrite;
   const total = totalRaw ?? input + output + cacheRead + cacheWrite;
-  return { input, output, cacheRead, cacheWrite, total };
+  // Keep authoritative provider billing provenance through replay repair. Dropping it
+  // turns a real zero-dollar total back into a local estimate during later accounting.
+  const totalOrigin = cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined;
+  return { input, output, cacheRead, cacheWrite, total, ...(totalOrigin ? { totalOrigin } : {}) };
 }
 
 function toFiniteCostNumber(value: unknown): number | undefined {
@@ -489,6 +493,25 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       message.usage && typeof message.usage === "object"
         ? (message.usage as { cost?: unknown }).cost
         : undefined;
+    const rawContextUsage =
+      message.usage && typeof message.usage === "object"
+        ? (message.usage as { contextUsage?: unknown }).contextUsage
+        : undefined;
+    const normalizedContextUsage = normalizedUsage.contextUsage;
+    const contextUsageMatches =
+      normalizedContextUsage === undefined
+        ? rawContextUsage === undefined
+        : normalizedContextUsage.state === "unavailable"
+          ? rawContextUsage !== null &&
+            typeof rawContextUsage === "object" &&
+            (rawContextUsage as { state?: unknown }).state === "unavailable"
+          : rawContextUsage !== null &&
+            typeof rawContextUsage === "object" &&
+            (rawContextUsage as { state?: unknown }).state === "available" &&
+            (rawContextUsage as { promptTokens?: unknown }).promptTokens ===
+              normalizedContextUsage.promptTokens &&
+            (rawContextUsage as { totalTokens?: unknown }).totalTokens ===
+              normalizedContextUsage.totalTokens;
     const normalizedCost = normalizedUsage.cost;
     if (
       message.usage &&
@@ -498,6 +521,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
       (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
       (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
+      contextUsageMatches &&
       ((normalizedCost &&
         usageCost &&
         typeof usageCost === "object" &&
@@ -911,3 +935,4 @@ export async function validateReplayTurns(params: {
     : params.messages;
   return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

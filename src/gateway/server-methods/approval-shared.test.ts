@@ -1,8 +1,12 @@
 /**
  * Tests shared approval helpers used by gateway method handlers.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalReviewerDeviceIds,
@@ -10,6 +14,7 @@ import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
+  registerPendingApprovalRecord,
 } from "./approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -224,6 +229,30 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
+  it("does not widen explicitly reviewer-bound approvals to another device", () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-reviewer-device-isolated",
+    );
+    bindApprovalReviewerDeviceIds({ record, deviceIds: ["device-mobile"] });
+
+    expect(
+      isApprovalRecordVisibleToClient({
+        record,
+        client: createApprovalClient({
+          connId: "conn-other",
+          clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+          deviceId: "device-other",
+          scopes: ["operator.approvals"],
+        }),
+      }),
+    ).toBe(false);
+  });
+
   it("allows gateway-client approval runtimes to see requester-bound approvals", () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -299,7 +328,7 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
-  it("does not resolve turn-source routes when approval clients are already available", async () => {
+  it("reports an active approval client instead of the manual turn-source route", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
       {
@@ -334,6 +363,15 @@ describe("handlePendingApprovalRequest", () => {
 
     await Promise.resolve();
     expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        id: "approval-with-client",
+        status: "accepted",
+        deliveryRoute: "approval-client",
+      }),
+      undefined,
+    );
 
     expect(manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
@@ -657,6 +695,123 @@ describe("handlePendingApprovalRequest", () => {
       expect.objectContaining({ id: "approval-gateway-mobile", decision: null }),
       undefined,
     );
+  });
+
+  it("returns a concurrent first answer when no-route denial loses after delivery", async () => {
+    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-no-route-race",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    let finishDelivery!: (delivered: boolean) => void;
+    const delivery = new Promise<boolean>((resolve) => {
+      finishDelivery = resolve;
+    });
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => false,
+      } as unknown as GatewayRequestContext,
+      clientConnId: "conn-requester",
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverRequest: () => delivery,
+    });
+
+    await Promise.resolve();
+    expect(manager.resolve(record.id, "allow-once", "control-ui")).toBe(true);
+    finishDelivery(false);
+    await requestPromise;
+
+    expect(manager.getSnapshot(record.id)).toMatchObject({
+      decision: "allow-once",
+      resolvedBy: "control-ui",
+    });
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: "allow-once" }),
+      undefined,
+    );
+  });
+
+  it("retains a concurrent approval binding through a delayed requester handoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new ExecApprovalManager();
+      const record = manager.create(
+        {
+          command: "echo ok",
+        },
+        60_000,
+        "approval-delayed-handoff",
+      );
+      const decisionPromise = manager.register(record, 60_000);
+      const respond = vi.fn();
+      let finishDelivery!: (delivered: boolean) => void;
+      const delivery = new Promise<boolean>((resolve) => {
+        finishDelivery = resolve;
+      });
+      const requestPromise = handlePendingApprovalRequest({
+        manager,
+        record,
+        decisionPromise,
+        respond,
+        context: {
+          broadcast: vi.fn(),
+          hasExecApprovalClients: () => false,
+        } as unknown as GatewayRequestContext,
+        requestEventName: "exec.approval.requested",
+        requestEvent: {
+          id: record.id,
+          request: record.request,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        },
+        twoPhase: true,
+        deliverRequest: () => delivery,
+      });
+
+      await Promise.resolve();
+      expect(manager.resolve(record.id, "allow-once", "control-ui")).toBe(true);
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(manager.getLiveSnapshot(record.id)).toMatchObject({
+        decision: "allow-once",
+        resolvedBy: "control-ui",
+      });
+
+      finishDelivery(true);
+      await requestPromise;
+      expect(respond).toHaveBeenLastCalledWith(
+        true,
+        expect.objectContaining({ id: record.id, decision: "allow-once" }),
+        undefined,
+      );
+      expect(manager.getLiveSnapshot(record.id)).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(manager.getLiveSnapshot(record.id)).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(manager.getLiveSnapshot(record.id)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps register-only approval requests pending without a delivery route", async () => {
@@ -1346,4 +1501,150 @@ describe("handlePendingApprovalRequest", () => {
       { dropIfSlow: true },
     );
   });
+
+  it("sanitizes durable registration failures while retaining server diagnostics", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-register-failure-"));
+    const databasePath = path.join(tempDir, "state.sqlite");
+    fs.mkdirSync(databasePath);
+    const manager = new ExecApprovalManager({
+      approvalKind: "exec",
+      persistence: {
+        runtimeEpoch: "approval-shared-register-failure",
+        databaseOptions: { path: databasePath },
+      },
+    });
+    const record = manager.create({ command: "echo safe" }, 60_000, "registration-failure");
+    const respond = vi.fn();
+    const logError = vi.fn();
+
+    try {
+      expect(
+        registerPendingApprovalRecord({
+          manager,
+          record,
+          timeoutMs: 60_000,
+          respond,
+          context: { logGateway: { error: logError } } as unknown as GatewayRequestContext,
+        }),
+      ).toBeUndefined();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE", message: "approval request unavailable" }),
+      );
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(databasePath);
+      expect(logError).toHaveBeenCalledTimes(1);
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("sanitizes a no-route storage failure while failing the waiter closed", async () => {
+    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-route-failure-"));
+    const databasePath = path.join(tempDir, "state.sqlite");
+    const manager = new ExecApprovalManager({
+      approvalKind: "exec",
+      persistence: {
+        runtimeEpoch: "approval-shared-route-failure",
+        databaseOptions: { path: databasePath },
+      },
+    });
+    const record = manager.create({ command: "echo safe" }, 60_000, "route-failure");
+    const decisionPromise = manager.register(record, 60_000);
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(databasePath, { force: true });
+    fs.mkdirSync(databasePath);
+    const respond = vi.fn();
+    const logError = vi.fn();
+
+    try {
+      await handlePendingApprovalRequest({
+        manager,
+        record,
+        decisionPromise,
+        respond,
+        context: {
+          broadcast: vi.fn(),
+          hasExecApprovalClients: () => false,
+          logGateway: { error: logError },
+        } as unknown as GatewayRequestContext,
+        requestEventName: "exec.approval.requested",
+        requestEvent: {
+          id: record.id,
+          request: record.request,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        },
+        twoPhase: true,
+        deliverRequest: () => false,
+      });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE", message: "approval request unavailable" }),
+      );
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(databasePath);
+      expect(logError).toHaveBeenCalledTimes(1);
+      await expect(decisionPromise).resolves.toBe("deny");
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("sanitizes durable resolve failures while failing the waiter closed", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-resolve-failure-"));
+    const databasePath = path.join(tempDir, "state.sqlite");
+    const manager = new ExecApprovalManager({
+      approvalKind: "exec",
+      persistence: {
+        runtimeEpoch: "approval-shared-resolve-failure",
+        databaseOptions: { path: databasePath },
+      },
+    });
+    const record = manager.create({ command: "echo safe" }, 60_000, "resolve-failure");
+    const decisionPromise = manager.register(record, 60_000);
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(databasePath, { force: true });
+    fs.mkdirSync(databasePath);
+    const respond = vi.fn();
+    const logError = vi.fn();
+
+    try {
+      await handleApprovalResolve({
+        manager,
+        inputId: record.id,
+        decision: "deny",
+        respond,
+        context: {
+          broadcast: vi.fn(),
+          broadcastToConnIds: vi.fn(),
+          logGateway: { error: logError },
+        } as unknown as GatewayRequestContext,
+        client: null,
+        resolvedEventName: "exec.approval.resolved",
+        buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
+          id: approvalId,
+          decision,
+          request: snapshot.request,
+        }),
+      });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE", message: "approval resolve unavailable" }),
+      );
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(databasePath);
+      expect(logError).toHaveBeenCalledTimes(1);
+      await expect(decisionPromise).resolves.toBe("deny");
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

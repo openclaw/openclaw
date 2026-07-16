@@ -4,6 +4,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isPolicyValueAtLeastAsStrict,
   policyContainerShapeFindings,
@@ -12,13 +13,13 @@ import {
   type PolicyScopeSelectorKind,
 } from "./doctor/register.js";
 
-export const POLICY_CONFORMANCE_CHECK_IDS = {
+const POLICY_CONFORMANCE_CHECK_IDS = {
   missing: "policy/policy-conformance-missing",
   weaker: "policy/policy-conformance-weaker",
   invalid: "policy/policy-conformance-invalid",
 } as const;
 
-export type PolicyConformanceFinding = {
+type PolicyConformanceFinding = {
   readonly checkId: (typeof POLICY_CONFORMANCE_CHECK_IDS)[keyof typeof POLICY_CONFORMANCE_CHECK_IDS];
   readonly severity: "error";
   readonly message: string;
@@ -572,8 +573,12 @@ function normalizeSelectorValues(
 }
 
 function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
-  const scopedRoot = path[0] === "agents" ? overlay.agents : overlay[path[0]];
-  return getPolicyPath(scopedRoot, path.slice(1));
+  const [root, ...remainingPath] = path;
+  if (!root) {
+    return undefined;
+  }
+  const scopedRoot = root === "agents" ? overlay.agents : overlay[root];
+  return getPolicyPath(scopedRoot, remainingPath);
 }
 
 function getPolicyPath(value: unknown, path: readonly string[]): unknown {
@@ -623,8 +628,4 @@ function ocPathSegment(value: string): string {
     return value;
   }
   return JSON.stringify(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

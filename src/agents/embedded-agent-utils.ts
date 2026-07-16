@@ -143,6 +143,11 @@ export function extractAssistantVisibleText(msg: AssistantMessage): string {
   return extractAssistantTextForPhase(msg, undefined, { unphasedSignedFinalAnswer: true }).text;
 }
 
+/** Extract the commentary/narration text of a commentary-phase assistant message. */
+export function extractAssistantCommentaryText(msg: AssistantMessage): string {
+  return extractAssistantTextForPhase(msg, "commentary").text;
+}
+
 /** Extract sanitized assistant text across all text content blocks. */
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
@@ -158,7 +163,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
   return finalizeAssistantExtraction(msg, extracted);
 }
 
-/** Extract native thinking block text or a placeholder when only signed reasoning exists. */
+/** Extract native thinking block text; signature-only blocks (no summary) surface nothing. */
 export function extractAssistantThinking(msg: AssistantMessage): string {
   if (!Array.isArray(msg.content)) {
     return "";
@@ -174,8 +179,14 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
         if (thinking) {
           return thinking;
         }
+        // Signature-only thinking blocks carry a valid signature but no summary text
+        // (e.g. Anthropic display:"omitted" on Opus 4.7+/Fable 5, or OpenAI/codex reasoning
+        // items with encrypted_content and an empty summary). Surface nothing so the
+        // .filter(Boolean) below drops the bubble — a diagnostic placeholder is not reasoning
+        // content and must not be shown on any channel. The signed block stays on the message
+        // for API replay; this only governs display.
         if (typeof record.thinkingSignature === "string" && record.thinkingSignature.trim()) {
-          return "Native reasoning was produced; no summary text was returned.";
+          return "";
         }
       }
       return "";
@@ -373,8 +384,11 @@ export function extractThinkingFromTaggedStream(text: string): string {
     return "";
   }
   const closeMatches = [...text.matchAll(THINKING_TAG_CLOSE_GLOBAL_RE)];
-  const lastOpen = openMatches[openMatches.length - 1];
-  const lastClose = closeMatches[closeMatches.length - 1];
+  const lastOpen = openMatches.at(-1);
+  const lastClose = closeMatches.at(-1);
+  if (!lastOpen) {
+    return "";
+  }
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
     return closed;
   }

@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
 
@@ -552,6 +552,61 @@ describe("getHealthSnapshot", () => {
     ]);
   });
 
+  it("includes dead-lettered delivery queue entries in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+    setActivePluginRegistry(createTestRegistry([]));
+    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-dq-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    try {
+      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
+        await import("../infra/delivery-queue-sqlite.js");
+      const clean = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+      expect(clean.deliveryQueues).toBeUndefined();
+
+      upsertDeliveryQueueEntry({
+        queueName: "outbound",
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+      });
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+
+      const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+      expect(snap.deliveryQueues?.failed).toEqual([
+        { queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) },
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits configReload when no config reloader status is supplied", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+
+    expect(snap.configReload).toBeUndefined();
+  });
+
+  it("surfaces a disabled config hot-reload watcher in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 10,
+      probe: false,
+      configReloadHotReloadStatus: "disabled",
+    });
+
+    expect(snap.configReload).toEqual({ hotReloadStatus: "disabled" });
+  });
+
   it("skips telegram probe when not configured", async () => {
     testConfig = { session: { store: "/tmp/x" } };
     testStore = {
@@ -698,6 +753,35 @@ describe("getHealthSnapshot", () => {
     expect(discord.accounts?.default?.connected).toBe(true);
     expect(discord.accounts?.default?.tokenSource).toBe("config");
     expect(discord.accounts?.default?.tokenStatus).toBe("available");
+  });
+
+  it("redacts base URL credentials returned by channel summary hooks", async () => {
+    testConfig = { channels: { discord: { token: "test" } } };
+    testStore = {};
+    const plugin = createDiscordHealthPlugin();
+    plugin.status = {
+      ...plugin.status,
+      buildChannelSummary: () => ({
+        configured: true,
+        baseUrl: [
+          "https://summary-user",
+          ":",
+          "summary-pass",
+          "@chat.example.test/?to",
+          "ken=test",
+        ].join(""),
+      }),
+    };
+    healthPluginsForTest = [plugin];
+
+    const snap = await getHealthSnapshot({ probe: false, includeSensitive: false });
+    const discord = snap.channels.discord as {
+      baseUrl?: string;
+      accounts?: Record<string, { baseUrl?: string }>;
+    };
+
+    expect(discord.baseUrl).toBe("https://chat.example.test/?token=***");
+    expect(discord.accounts?.default?.baseUrl).toBe("https://chat.example.test/?token=***");
   });
 
   it("preserves plugin-derived configured state for unavailable SecretRef credentials", async () => {

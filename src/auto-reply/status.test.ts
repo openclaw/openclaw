@@ -4,21 +4,19 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   MODEL_CONTEXT_TOKEN_CACHE,
   providerContextTokenCacheKey,
 } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
-import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
-  buildCommandsMessage,
-  buildCommandsMessagePaginated,
-  buildHelpMessage,
   buildStatusMessage as buildStatusMessageRaw,
-} from "./status.js";
-import type { buildStatusMessage as BuildStatusMessage } from "./status.js";
+  type buildStatusMessage as BuildStatusMessage,
+} from "../status/status-message.js";
+import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
+import { buildCommandsMessage, buildCommandsMessagePaginated, buildHelpMessage } from "./status.js";
 
 const buildStatusMessage: typeof BuildStatusMessage = (args) =>
   buildStatusMessageRaw({
@@ -1529,6 +1527,37 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)");
   });
 
+  it("distinguishes observed local STT backends from requested backends", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: { sessionId: "media-local-stt", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: { mode: "none" },
+      mediaDecisions: [
+        {
+          capability: "audio",
+          outcome: "success",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [],
+              chosen: {
+                type: "cli",
+                provider: "whisper-cli",
+                model: "whisper-cli",
+                requestedBackend: "device:0",
+                observedBackend: "metal",
+                outcome: "success",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalizeTestText(text)).toContain("Media: audio ok (whisper-cli observed=metal)");
+  });
+
   it("includes failed media understanding decisions with the surfaced reason", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-6" },
@@ -2756,3 +2785,4 @@ describe("buildCommandsMessagePaginated", () => {
     expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

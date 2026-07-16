@@ -1863,10 +1863,12 @@ describe("handleFeishuMessage command authorization", () => {
       ChatType?: string;
       CommandAuthorized?: boolean;
       SenderId?: string;
+      GroupRequireMention?: boolean;
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ChatType).toBe("group");
     expect(context.CommandAuthorized).toBe(false);
     expect(context.SenderId).toBe("ou-attacker");
+    expect(context.GroupRequireMention).toBe(false);
   });
 
   it("normalizes group mention-prefixed slash commands before command-auth probing", async () => {
@@ -2034,6 +2036,7 @@ describe("handleFeishuMessage command authorization", () => {
       From?: string;
       OriginatingChannel?: string;
       OriginatingTo?: string;
+      NativeChannelId?: string;
       SenderId?: string;
       To?: string;
     }>(mockFinalizeInboundContext, 0, 0);
@@ -2042,6 +2045,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(finalized.To).toBe("chat:oc-group");
     expect(finalized.OriginatingChannel).toBe("feishu");
     expect(finalized.OriginatingTo).toBe("chat:oc-group");
+    expect(finalized.NativeChannelId).toBe("oc-group");
     expect(finalized.SenderId).toBe("ou-allowed");
     const groupSessionKey = resolveGroupSessionKey(finalized as never);
     if (!groupSessionKey) {
@@ -2261,6 +2265,107 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a failed image download placeholder with an unavailable notice", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired image key"));
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { dmPolicy: "open" } },
+      } as ClawdbotConfig,
+      event: {
+        sender: { sender_id: { open_id: "ou-sender" } },
+        message: {
+          message_id: "msg-image-failed",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "image",
+          content: JSON.stringify({ image_key: "expired-image" }),
+        },
+      },
+    });
+
+    const context = mockCallArg<{
+      BodyForAgent?: string;
+      CommandBody?: string;
+      MediaPath?: string;
+      RawBody?: string;
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.RawBody).toBe("<media:image>");
+    expect(context.CommandBody).toBe("<media:image>");
+    expect(context.BodyForAgent).toContain("[feishu attachment unavailable]");
+    expect(context.BodyForAgent).not.toContain("<media:image>");
+    expect(context.MediaPath).toBeUndefined();
+  });
+
+  it("preserves an audio transcript when the media download fails", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired audio key"));
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { dmPolicy: "open" } },
+      } as ClawdbotConfig,
+      event: {
+        sender: { sender_id: { open_id: "ou-sender" } },
+        message: {
+          message_id: "msg-audio-failed",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "audio",
+          content: JSON.stringify({
+            file_key: "expired-audio",
+            speech_to_text: "spoken words",
+          }),
+        },
+      },
+    });
+
+    const context = mockCallArg<{
+      BodyForAgent?: string;
+      CommandBody?: string;
+      MediaPath?: string;
+      RawBody?: string;
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.RawBody).toBe("spoken words");
+    expect(context.CommandBody).toBe("spoken words");
+    expect(context.BodyForAgent).toContain("spoken words\n\n[feishu attachment unavailable]");
+    expect(context.MediaPath).toBeUndefined();
+  });
+
+  it("preserves a filename without a phantom placeholder when a file download fails", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired file key"));
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { dmPolicy: "open" } },
+      } as ClawdbotConfig,
+      event: {
+        sender: { sender_id: { open_id: "ou-sender" } },
+        message: {
+          message_id: "msg-file-failed",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "file",
+          content: JSON.stringify({ file_key: "expired-file", file_name: "q1.pdf" }),
+        },
+      },
+    });
+
+    const context = mockCallArg<{
+      BodyForAgent?: string;
+      CommandBody?: string;
+      MediaPath?: string;
+      RawBody?: string;
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.RawBody).toBe("<media:document> (q1.pdf)");
+    expect(context.CommandBody).toBe("<media:document> (q1.pdf)");
+    expect(context.BodyForAgent).toContain("q1.pdf\n\n[feishu attachment unavailable]");
+    expect(context.BodyForAgent).not.toContain("<media:document>");
+    expect(context.MediaPath).toBeUndefined();
   });
 
   it("drops group image message when groupPolicy is open but requireMention is explicitly true", async () => {
@@ -2746,6 +2851,48 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCallArg(mockSaveMediaBuffer, 0, 1)).toBe("video/mp4");
     expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
     expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
+  });
+
+  it("removes failed rich-post media markers while preserving post text", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockRejectedValueOnce(new Error("expired image key"));
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { dmPolicy: "open" } },
+      } as ClawdbotConfig,
+      event: {
+        sender: { sender_id: { open_id: "ou-sender" } },
+        message: {
+          message_id: "msg-post-image-failed",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "post",
+          content: JSON.stringify({
+            title: "Rich text",
+            content: [
+              [
+                { tag: "text", text: "Before " },
+                { tag: "img", image_key: "expired-image" },
+                { tag: "text", text: " after" },
+              ],
+            ],
+          }),
+        },
+      },
+    });
+
+    const context = mockCallArg<{
+      BodyForAgent?: string;
+      MediaPath?: string;
+      RawBody?: string;
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.RawBody).toBe("Rich text\n\nBefore ![image] after");
+    expect(context.BodyForAgent).toContain(
+      "Rich text\n\nBefore  after\n\n[feishu attachment unavailable]",
+    );
+    expect(context.BodyForAgent).not.toContain("![image]");
+    expect(context.MediaPath).toBeUndefined();
   });
 
   it("includes message_id in BodyForAgent on its own line", async () => {
@@ -4444,3 +4591,4 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     expect(secondCall.processingClaimHeld).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

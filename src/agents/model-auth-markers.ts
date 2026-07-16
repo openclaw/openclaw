@@ -133,7 +133,8 @@ export function isNonSecretApiKeyMarker(
   const isKnownMarker =
     isOAuthApiKeyMarker(trimmed) ||
     listKnownNonSecretApiKeyMarkers().includes(trimmed) ||
-    isAwsSdkAuthMarker(trimmed);
+    isAwsSdkAuthMarker(trimmed) ||
+    isSecretRefHeaderValueMarker(trimmed);
   if (isKnownMarker) {
     return true;
   }

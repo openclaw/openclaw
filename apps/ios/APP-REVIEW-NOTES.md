@@ -78,8 +78,8 @@ Expected result: the assistant responds by voice. Tap `Stop Talk` when done.
 ## Talk + Background Audio
 
 1. Tap the `Talk` tab.
-2. Confirm `Speakerphone` is on.
-3. Confirm `Background listening` is on.
+2. Confirm the speaker button is highlighted.
+3. Confirm the background-listening button is highlighted.
 4. Tap `Start Talk`.
 5. If iOS asks for microphone access, tap `Allow`.
 6. If iOS asks for Speech Recognition access, tap `Allow`.
@@ -181,6 +181,22 @@ The push wake and node status demo completed.
    - `Calendar (Add Events)` / `Request Access`
    - `Calendar (View Events)` / `Request Full Access`
    - `Reminders` / `Request Access`
+
+### Optional HealthKit summary
+
+Health Summaries is off by default. Under `Privacy & Access`, tap
+`Enable & Share Summaries` to see the disclosure and Apple's Health permission
+sheet. OpenClaw requests read-only access to steps, sleep, resting heart rate,
+and workouts. It performs aggregation on device and shares only a user-requested
+`today` summary through the user's Gateway and configured AI provider;
+individual samples, sources, metadata, clinical records, background
+ingestion, and writes are not supported. The Gateway separately requires
+`health.summary` in `gateway.nodes.allowCommands`.
+
+The app does not infer read authorization from an empty result because HealthKit
+intentionally makes denied data indistinguishable from unavailable data. This
+feature is for personal health and fitness summaries only, not diagnosis or
+medical advice.
 
 ## Share Sheet
 

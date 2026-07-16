@@ -1,4 +1,5 @@
 // Ollama tests cover index plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -178,6 +179,79 @@ function captureWrappedOllamaPayload(
 }
 
 describe("ollama plugin", () => {
+  it.each(["ollama", "ollama-cloud"])(
+    "classifies incomplete %s streams as provider failures",
+    (providerId) => {
+      const provider = registerProvidersWithPluginConfig({}).find(
+        (candidate) => candidate.id === providerId,
+      );
+
+      expect(
+        provider?.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "Ollama API stream ended without a final response",
+        }),
+      ).toBe("server_error");
+      expect(
+        provider?.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "Ollama returned malformed tool arguments",
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("registers node-local inference commands, policy, and agent tool", () => {
+    const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
+    const registerTool = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "ollama",
+        name: "Ollama",
+        source: "test",
+        registerNodeHostCommand,
+        registerNodeInvokePolicy,
+        registerTool,
+      }),
+    );
+
+    expect(registerNodeHostCommand.mock.calls.map(([entry]) => entry.command)).toEqual([
+      "ollama.models",
+      "ollama.chat",
+    ]);
+    expect(registerNodeInvokePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: ["ollama.models", "ollama.chat"],
+        defaultPlatforms: ["macos", "linux", "windows"],
+      }),
+    );
+    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "node_inference" }));
+  });
+
+  it("keeps the agent tool but does not advertise node inference when disabled locally", () => {
+    const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
+    const registerTool = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "ollama",
+        name: "Ollama",
+        source: "test",
+        pluginConfig: { nodeInference: { enabled: false } },
+        registerNodeHostCommand,
+        registerNodeInvokePolicy,
+        registerTool,
+      }),
+    );
+
+    expect(registerNodeHostCommand).not.toHaveBeenCalled();
+    expect(registerNodeInvokePolicy).toHaveBeenCalledOnce();
+    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "node_inference" }));
+  });
+
   it("does not preselect a default model during provider auth setup", async () => {
     const provider = registerProvider();
 
@@ -1787,7 +1861,7 @@ describe("ollama plugin", () => {
     );
 
     expect(mediaProviders).toHaveLength(1);
-    const [ollamaMedia] = mediaProviders;
+    const ollamaMedia = expectDefined(mediaProviders[0], "Ollama media provider");
     expect(ollamaMedia.id).toBe("ollama");
     expect(ollamaMedia.capabilities).toEqual(["image"]);
     expect(ollamaMedia.describeImage).toBe(describeImageWithModel);
@@ -1799,3 +1873,4 @@ describe("ollama plugin", () => {
     expect(ollamaMedia.autoPriority).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

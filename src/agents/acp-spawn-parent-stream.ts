@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import {
   isAcpTagVisible,
@@ -50,9 +51,9 @@ function truncate(value: string, maxChars: number): string {
     return value;
   }
   if (maxChars <= 1) {
-    return value.slice(0, maxChars);
+    return truncateUtf16Safe(value, maxChars);
   }
-  return `${value.slice(0, maxChars - 1)}…`;
+  return `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -121,20 +122,10 @@ function mergeStreamingEntry(
   if (!override) {
     return base;
   }
-  const overrideStreaming = asObjectRecord(override.streaming);
-  const legacyOverrideMode =
-    override.streamMode !== undefined &&
-    (override.streaming === undefined || overrideStreaming) &&
-    overrideStreaming?.mode === undefined
-      ? { mode: override.streamMode }
-      : undefined;
   return {
     ...base,
     ...override,
-    streaming: mergeStreamingConfig(
-      mergeStreamingConfig(base.streaming, override.streaming),
-      legacyOverrideMode,
-    ),
+    streaming: mergeStreamingConfig(base.streaming, override.streaming),
   };
 }
 
@@ -142,8 +133,7 @@ function hasConfiguredPreviewStreamMode(entry: StreamingCompatEntry): boolean {
   return (
     asObjectRecord(entry.streaming)?.mode !== undefined ||
     typeof entry.streaming === "string" ||
-    typeof entry.streaming === "boolean" ||
-    entry.streamMode !== undefined
+    typeof entry.streaming === "boolean"
   );
 }
 
@@ -503,7 +493,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     pendingProgressKind = kind;
     pendingText += delta;
     if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
-      pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
+      pendingText = sliceUtf16Safe(pendingText, -STREAM_BUFFER_MAX_CHARS);
     }
     if (pendingText.length >= STREAM_SNIPPET_MAX_CHARS || delta.includes("\n\n")) {
       flushPending();
@@ -533,8 +523,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       pendingText = "";
     }
     itemProgressTextById.set(snapshot.itemId, snapshot.text);
-    const delta =
-      isPrefixUpdate && hasPendingSnapshot ? snapshot.text.slice(previous.length) : snapshot.text;
+    const delta = isPrefixUpdate ? snapshot.text.slice(previous.length) : snapshot.text;
     appendVisibleProgress(delta, kind);
   };
 
@@ -784,3 +773,4 @@ export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
   notifyStarted: () => void;
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,6 +7,7 @@ import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
@@ -93,6 +94,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: row.contextTokens,
     maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    thinkingLevelMap: row.thinkingLevelMap ? { ...row.thinkingLevelMap } : undefined,
     headers: row.headers,
     compat: row.compat,
     mediaInput: row.mediaInput,
@@ -206,14 +208,29 @@ export function canonicalizeManifestModelCatalogProviderAlias(params: {
   if (!provider) {
     return params.provider;
   }
+  const env = params.env ?? process.env;
+  // Gateway plugin metadata is process-stable. Reuse its lifecycle-owned snapshot
+  // so every model turn does not rediscover the same manifest alias table.
+  const currentPlugins =
+    env === process.env
+      ? getCurrentPluginMetadataSnapshot({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env,
+          ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
+        })?.plugins
+      : undefined;
+  const plugins =
+    currentPlugins ??
+    loadPluginManifestRegistry({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    }).plugins;
   return (
     resolveManifestModelCatalogProviderAlias({
       provider,
-      plugins: loadPluginManifestRegistry({
-        config: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env: params.env ?? process.env,
-      }).plugins,
+      plugins,
     }) ?? params.provider
   );
 }

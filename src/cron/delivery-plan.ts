@@ -124,7 +124,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
 }
 
 /** Normalized destination for notifying about cron execution failures. */
-export type CronFailureDeliveryPlan = {
+type CronFailureDeliveryPlan = {
   mode: "announce" | "webhook";
   channel?: CronMessageChannel;
   to?: string;
@@ -132,7 +132,7 @@ export type CronFailureDeliveryPlan = {
 };
 
 /** Job-level failure destination override fields before global defaults are merged. */
-export type CronFailureDestinationInput = {
+type CronFailureDestinationInput = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
@@ -189,14 +189,18 @@ export function resolveFailureDestination(
     if (hasJobAccountIdField) {
       accountId = jobAccountId;
     }
-    if (hasJobModeField) {
-      const globalMode = globalConfig?.mode ?? "announce";
-      const resolvedJobMode = jobMode ?? "announce";
+    // Naming a channel makes this an announce route even when mode is omitted;
+    // inheriting webhook here would reinterpret the chat target as a URL.
+    const jobImpliesAnnounce = !hasJobModeField && jobChannel !== undefined;
+    if (hasJobModeField || jobImpliesAnnounce) {
+      const effectiveJobMode = jobImpliesAnnounce ? "announce" : jobMode;
+      const globalMode = mode ?? "announce";
+      const resolvedJobMode = effectiveJobMode ?? "announce";
       if (!jobToExplicitValue && globalMode !== resolvedJobMode) {
         // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
         to = undefined;
       }
-      mode = jobMode;
+      mode = effectiveJobMode;
     }
   }
 
