@@ -1092,6 +1092,7 @@ export const id: TranslationMap = {
       manage: "Kelola →",
       browse: "Jelajahi →",
       configure: "Konfigurasi →",
+      unavailable: "Tidak tersedia",
     },
     appearance: {
       title: "Tampilan",

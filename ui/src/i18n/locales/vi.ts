@@ -1094,6 +1094,7 @@ export const vi: TranslationMap = {
       manage: "Quản lý →",
       browse: "Duyệt →",
       configure: "Cấu hình →",
+      unavailable: "Không khả dụng",
     },
     appearance: {
       title: "Giao diện",

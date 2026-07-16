@@ -1098,6 +1098,7 @@ export const uk: TranslationMap = {
       manage: "Керувати →",
       browse: "Огляд →",
       configure: "Налаштувати →",
+      unavailable: "Недоступно",
     },
     appearance: {
       title: "Вигляд",

@@ -1099,6 +1099,7 @@ export const pl: TranslationMap = {
       manage: "Zarządzaj →",
       browse: "Przeglądaj →",
       configure: "Konfiguruj →",
+      unavailable: "Niedostępne",
     },
     appearance: {
       title: "Wygląd",

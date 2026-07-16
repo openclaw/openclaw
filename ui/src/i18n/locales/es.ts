@@ -1099,6 +1099,7 @@ export const es: TranslationMap = {
       manage: "Administrar →",
       browse: "Explorar →",
       configure: "Configurar →",
+      unavailable: "No disponible",
     },
     appearance: {
       title: "Apariencia",

@@ -1100,6 +1100,7 @@ export const nl: TranslationMap = {
       manage: "Beheren →",
       browse: "Bladeren →",
       configure: "Configureren →",
+      unavailable: "Niet beschikbaar",
     },
     appearance: {
       title: "Weergave",

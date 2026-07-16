@@ -1108,6 +1108,7 @@ export const fr: TranslationMap = {
       manage: "Gérer →",
       browse: "Parcourir →",
       configure: "Configurer →",
+      unavailable: "Indisponible",
     },
     appearance: {
       title: "Apparence",

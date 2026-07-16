@@ -1075,6 +1075,7 @@ export const zh_CN: TranslationMap = {
       manage: "管理 →",
       browse: "浏览 →",
       configure: "配置 →",
+      unavailable: "不可用",
     },
     appearance: {
       title: "外观",

@@ -1088,6 +1088,7 @@ export const ko: TranslationMap = {
       manage: "관리 →",
       browse: "둘러보기 →",
       configure: "구성 →",
+      unavailable: "사용 불가",
     },
     appearance: {
       title: "외관",

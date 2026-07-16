@@ -1076,6 +1076,7 @@ export const zh_TW: TranslationMap = {
       manage: "管理 →",
       browse: "瀏覽 →",
       configure: "設定 →",
+      unavailable: "無法使用",
     },
     appearance: {
       title: "外觀",

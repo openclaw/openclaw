@@ -1095,6 +1095,7 @@ export const pt_BR: TranslationMap = {
       manage: "Gerenciar →",
       browse: "Explorar →",
       configure: "Configurar →",
+      unavailable: "Indisponível",
     },
     appearance: {
       title: "Aparência",

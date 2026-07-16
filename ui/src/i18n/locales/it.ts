@@ -1107,6 +1107,7 @@ export const it: TranslationMap = {
       manage: "Gestisci →",
       browse: "Esplora →",
       configure: "Configura →",
+      unavailable: "Non disponibile",
     },
     appearance: {
       title: "Aspetto",

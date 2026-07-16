@@ -1091,6 +1091,7 @@ export const fa: TranslationMap = {
       manage: "مدیریت →",
       browse: "مرور →",
       configure: "پیکربندی →",
+      unavailable: "در دسترس نیست",
     },
     appearance: {
       title: "ظاهر",

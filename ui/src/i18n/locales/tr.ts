@@ -1099,6 +1099,7 @@ export const tr: TranslationMap = {
       manage: "Yönet →",
       browse: "Gözat →",
       configure: "Yapılandır →",
+      unavailable: "Kullanılamıyor",
     },
     appearance: {
       title: "Görünüm",

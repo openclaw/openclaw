@@ -1101,6 +1101,7 @@ export const ru: TranslationMap = {
       manage: "Управление →",
       browse: "Обзор →",
       configure: "Настроить →",
+      unavailable: "Недоступно",
     },
     appearance: {
       title: "Внешний вид",

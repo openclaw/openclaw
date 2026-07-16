@@ -1081,6 +1081,7 @@ export const th: TranslationMap = {
       manage: "จัดการ →",
       browse: "เรียกดู →",
       configure: "กำหนดค่า →",
+      unavailable: "ไม่พร้อมใช้งาน",
     },
     appearance: {
       title: "ลักษณะที่ปรากฏ",

@@ -1103,6 +1103,7 @@ export const de: TranslationMap = {
       manage: "Verwalten →",
       browse: "Durchsuchen →",
       configure: "Konfigurieren →",
+      unavailable: "Nicht verfügbar",
     },
     appearance: {
       title: "Darstellung",

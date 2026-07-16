@@ -1086,6 +1086,7 @@ export const ar: TranslationMap = {
       manage: "إدارة →",
       browse: "استعراض →",
       configure: "إعداد →",
+      unavailable: "غير متاح",
     },
     appearance: {
       title: "المظهر",

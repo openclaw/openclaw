@@ -1100,6 +1100,7 @@ export const ja_JP: TranslationMap = {
       manage: "管理 →",
       browse: "参照 →",
       configure: "設定 →",
+      unavailable: "利用不可",
     },
     appearance: {
       title: "外観",

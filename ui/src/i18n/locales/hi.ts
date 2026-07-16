@@ -1087,6 +1087,7 @@ export const hi: TranslationMap = {
       manage: "प्रबंधित करें →",
       browse: "ब्राउज़ करें →",
       configure: "कॉन्फ़िगर करें →",
+      unavailable: "अनुपलब्ध",
     },
     appearance: {
       title: "दिखावट",
