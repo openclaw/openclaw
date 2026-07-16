@@ -1,6 +1,7 @@
 // Optional model-catalog loading gives session/tool methods metadata when fast
 // while never blocking their primary response path on catalog discovery.
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /**
@@ -9,7 +10,7 @@ import type { GatewayRequestContext } from "./types.js";
  */
 const DEFAULT_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 750;
 
-const loggedSlowCatalogKeys = new Set<string>();
+const loggedSlowCatalogKeys = createDedupeCache({ ttlMs: 0, maxSize: 256 });
 
 type OptionalServerMethodModelCatalogLoad<T> = {
   promise: Promise<T | undefined>;
@@ -86,8 +87,7 @@ async function loadOptionalServerMethodModelCatalogValue<T>(
     const result = await Promise.race([catalogLoad.promise, timeoutPromise]);
     if (result === timedOut) {
       const logOnceKey = options?.logOnceKey ?? "session-metadata";
-      if (!loggedSlowCatalogKeys.has(logOnceKey)) {
-        loggedSlowCatalogKeys.add(logOnceKey);
+      if (!loggedSlowCatalogKeys.check(logOnceKey)) {
         context.logGateway.debug(
           `${surface} continuing without model catalog after ${timeoutMs}ms`,
         );
