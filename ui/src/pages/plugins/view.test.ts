@@ -154,6 +154,7 @@ describe("renderPlugins", () => {
       { id: "flag-tools", name: "🇺🇸 Tools", expected: "🇺🇸T" },
       { id: "developer-tools", name: "👩‍💻 Tools", expected: "👩‍💻T" },
       { id: "developer-name", name: "👩‍💻Dev", expected: "👩‍💻D" },
+      { id: "combining-mark", name: "é Tools", expected: "ÉT" },
     ];
     const plugins = cases.map(({ id, name }) => createPlugin({ id, name, origin: "global" }));
     const container = mount(createProps({ result: createResult(plugins) }));
