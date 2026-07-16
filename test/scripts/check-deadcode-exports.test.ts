@@ -41,6 +41,7 @@ describe("check-deadcode-exports", () => {
   });
 
   it.each([
+    "acpx",
     "amazon-bedrock-mantle",
     "azure-speech",
     "cloudflare-ai-gateway",
@@ -49,9 +50,11 @@ describe("check-deadcode-exports", () => {
     "elevenlabs",
     "featherless",
     "fireworks",
+    "google",
     "huggingface",
     "kilocode",
     "kimi-coding",
+    "lmstudio",
     "microsoft",
     "minimax",
     "mistral",
@@ -65,6 +68,7 @@ describe("check-deadcode-exports", () => {
     "tencent",
     "vllm",
     "xiaomi",
+    "xai",
   ])("removes the bundled-plugin root catch-all from migrated %s workspace", (pluginId) => {
     const workspace = (
       knipConfig.workspaces as Record<string, { readonly entry: readonly string[] }>
