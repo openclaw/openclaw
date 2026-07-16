@@ -98,6 +98,7 @@ function createDeliveryFromTypedColumns(
       : row.completion_announced_at !== null
         ? { announcedAt: row.completion_announced_at }
         : {}),
+    ...(row.expects_completion_message === 0 ? { status: "not_required" } : {}),
   };
 }
 
