@@ -202,26 +202,6 @@ public struct OpenClawChatCanvasPreview: Codable, Hashable, Sendable {
     public let viewId: String?
     public let sandbox: String?
 
-    public init(
-        kind: String?,
-        surface: String?,
-        render: String?,
-        title: String?,
-        preferredHeight: Double?,
-        url: String?,
-        viewId: String?,
-        sandbox: String?)
-    {
-        self.kind = kind
-        self.surface = surface
-        self.render = render
-        self.title = title
-        self.preferredHeight = preferredHeight
-        self.url = url
-        self.viewId = viewId
-        self.sandbox = sandbox
-    }
-
     public var inlineWidgetPath: String? {
         guard self.kind == "canvas",
               self.surface == "assistant_message",

@@ -668,6 +668,7 @@ public actor GatewayNodeSession {
     }
 
     @discardableResult
+    // periphery:ignore - Shipped public refresh API; keep until a breaking OpenClawKit window.
     public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
         let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSurface.isEmpty else { return nil }
@@ -747,6 +748,7 @@ public actor GatewayNodeSession {
     }
 
     @discardableResult
+    // periphery:ignore - Shipped public refresh API; keep until a breaking OpenClawKit window.
     public func refreshCanvasHostUrl(timeoutSeconds: Int = 8) async -> String? {
         await self.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: timeoutSeconds)
     }

@@ -40,32 +40,6 @@ public enum OpenClawChatWidgetURLResolver {
         self.relativeWidgetTarget(rawTarget) != nil
     }
 
-    public static func resolve(
-        target: String,
-        replacing failedURL: URL?,
-        currentSurfaceURLs: @Sendable () async -> (node: String?, operatorSurface: String?),
-        refreshNodeSurfaceURL: @Sendable (String?) async -> String?) async -> URL?
-    {
-        await self.resolveResource(
-            target: target,
-            replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) },
-            currentSurfaceRoutes: {
-                let surfaces = await currentSurfaceURLs()
-                return (
-                    node: surfaces.node.map {
-                        GatewayCanvasHostRoute(url: $0, tlsFingerprintSHA256: nil)
-                    },
-                    operatorSurface: surfaces.operatorSurface.map {
-                        GatewayCanvasHostRoute(url: $0, tlsFingerprintSHA256: nil)
-                    })
-            },
-            refreshNodeSurfaceRoute: { observed in
-                await refreshNodeSurfaceURL(observed?.url).map {
-                    GatewayCanvasHostRoute(url: $0, tlsFingerprintSHA256: observed?.tlsFingerprintSHA256)
-                }
-            })?.url
-    }
-
     public static func resolveResource(
         target: String,
         replacing failedResource: OpenClawChatWidgetResource?,

@@ -56,15 +56,18 @@ struct ChatInlineWidgetTests {
         let failedURL = try #require(OpenClawChatWidgetURLResolver.resolve(
             surfaceURL: oldSurface,
             target: target))
-        let probe = ChatWidgetReconnectProbe(surfaceURL: oldSurface, replacementURL: newSurface)
+        let failedResource = OpenClawChatWidgetResource(url: failedURL)
+        let probe = ChatWidgetRouteReconnectProbe(
+            route: GatewayCanvasHostRoute(url: oldSurface, tlsFingerprintSHA256: nil),
+            replacement: GatewayCanvasHostRoute(url: newSurface, tlsFingerprintSHA256: nil))
 
-        let resolved = await OpenClawChatWidgetURLResolver.resolve(
+        let resolved = await OpenClawChatWidgetURLResolver.resolveResource(
             target: target,
-            replacing: failedURL,
-            currentSurfaceURLs: { await probe.current() },
-            refreshNodeSurfaceURL: { observed in await probe.reconnect(observed: observed) })
+            replacing: failedResource,
+            currentSurfaceRoutes: { await probe.current() },
+            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) })
 
-        #expect(resolved == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
+        #expect(resolved?.url == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
         #expect(await probe.refreshCount == 1)
     }
 
@@ -146,27 +149,6 @@ private actor ChatWidgetRouteReconnectProbe {
     func reconnect(observed _: GatewayCanvasHostRoute?) -> GatewayCanvasHostRoute? {
         self.refreshCount += 1
         self.route = self.replacement
-        return nil
-    }
-}
-
-private actor ChatWidgetReconnectProbe {
-    private var surfaceURL: String?
-    private let replacementURL: String
-    private(set) var refreshCount = 0
-
-    init(surfaceURL: String, replacementURL: String) {
-        self.surfaceURL = surfaceURL
-        self.replacementURL = replacementURL
-    }
-
-    func current() -> (node: String?, operatorSurface: String?) {
-        (node: self.surfaceURL, operatorSurface: nil)
-    }
-
-    func reconnect(observed _: String?) -> String? {
-        self.refreshCount += 1
-        self.surfaceURL = self.replacementURL
         return nil
     }
 }
