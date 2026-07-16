@@ -17,9 +17,11 @@ import { azLoginDeviceCodeWithOptions } from "./cli.js";
 
 function createChild() {
   const child = new EventEmitter() as ChildProcess;
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  return child;
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  child.stdout = stdout;
+  child.stderr = stderr;
+  return { child, stdout, stderr };
 }
 
 describe("azLoginDeviceCodeWithOptions", () => {
@@ -29,17 +31,17 @@ describe("azLoginDeviceCodeWithOptions", () => {
   });
 
   it("preserves UTF-8 characters split across output chunks", async () => {
-    const child = createChild();
+    const { child, stdout, stderr } = createChild();
     spawnMock.mockReturnValue(child);
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     const login = azLoginDeviceCodeWithOptions({});
     const emoji = Buffer.from("😀");
-    child.stdout?.write(emoji.subarray(0, 2));
-    child.stdout?.write(emoji.subarray(2));
-    child.stderr?.write(emoji.subarray(0, 1));
-    child.stderr?.write(emoji.subarray(1));
+    stdout.write(emoji.subarray(0, 2));
+    stdout.write(emoji.subarray(2));
+    stderr.write(emoji.subarray(0, 1));
+    stderr.write(emoji.subarray(1));
     child.emit("close", 0);
 
     await expect(login).resolves.toBeUndefined();
@@ -48,7 +50,7 @@ describe("azLoginDeviceCodeWithOptions", () => {
   });
 
   it.each(["stdout", "stderr"] as const)("rejects when %s becomes unreadable", async (stream) => {
-    const child = createChild();
+    const { child } = createChild();
     spawnMock.mockReturnValue(child);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
