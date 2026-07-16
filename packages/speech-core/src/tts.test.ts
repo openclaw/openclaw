@@ -115,6 +115,7 @@ const {
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
+  isTtsProviderConfigured,
   listSpeechVoices,
   maybeApplyTtsToPayload,
   resolveTtsProviderOrder,
@@ -477,6 +478,20 @@ describe("speech-core native voice-note routing", () => {
     expect(order).toEqual(["openai", "google", "elevenlabs"]);
     expect(listSpeechProvidersMock).not.toHaveBeenCalled();
     expect(getSpeechProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves provider default timeouts for prepared configuration checks", () => {
+    const isConfigured = vi.fn(() => true);
+    const provider = createMockSpeechProvider("slow", {
+      defaultTimeoutMs: 60_000,
+      isConfigured,
+    });
+    const cfg = {} as OpenClawConfig;
+    const config = resolveTtsConfig(cfg);
+    getSpeechProviderMock.mockClear();
+
+    expect(isTtsProviderConfigured(config, provider, cfg)).toBe(true);
+    expect(isConfigured).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
   });
 
   it("caps oversized provider default TTS timeouts before synthesis", async () => {

@@ -1082,11 +1082,12 @@ function resolvePrimaryTtsProviderCandidate(
 
 export function isTtsProviderConfigured(
   config: ResolvedTtsConfig,
-  provider: TtsProvider,
+  provider: TtsProvider | SpeechProviderPlugin,
   cfg?: OpenClawConfig,
 ): boolean {
   const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : config.sourceConfig;
-  const resolvedProvider = getSpeechProvider(provider, effectiveCfg);
+  const resolvedProvider =
+    typeof provider === "string" ? getSpeechProvider(provider, effectiveCfg) : provider;
   if (!resolvedProvider) {
     return false;
   }

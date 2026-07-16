@@ -16,6 +16,7 @@ import {
   getTtsPersona,
   getTtsProvider,
   isTtsEnabled,
+  isTtsProviderConfigured,
   listTtsPersonas,
   resolveExplicitTtsOverrides,
   resolveTtsAutoMode,
@@ -56,11 +57,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         if (cached !== undefined) {
           return cached;
         }
-        const configured = candidate.isConfigured({
-          cfg,
-          providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
-          timeoutMs: config.timeoutMs,
-        });
+        const configured = isTtsProviderConfigured(config, candidate, cfg);
         configuredByProvider.set(candidate.id, configured);
         return configured;
       };

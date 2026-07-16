@@ -3,6 +3,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SpeechProviderPlugin } from "../../plugins/types.js";
@@ -16,6 +17,14 @@ const mocks = vi.hoisted(() => ({
   getTtsPersona: vi.fn(() => undefined),
   getTtsProvider: vi.fn(() => "openai"),
   isTtsEnabled: vi.fn(() => true),
+  isTtsProviderConfigured: vi.fn(
+    (_config: unknown, provider: SpeechProviderPlugin, cfg: OpenClawConfig) =>
+      provider.isConfigured({
+        cfg,
+        providerConfig: { id: provider.id },
+        timeoutMs: provider.defaultTimeoutMs ?? 30_000,
+      }),
+  ),
   listSpeechProviders: vi.fn<() => SpeechProviderPlugin[]>(() => []),
   listTtsPersonas: vi.fn(() => []),
   resolveExplicitTtsOverrides: vi.fn(() => ({})),
@@ -64,6 +73,7 @@ vi.mock("../../tts/tts.js", () => ({
   getTtsPersona: mocks.getTtsPersona,
   getTtsProvider: mocks.getTtsProvider,
   isTtsEnabled: mocks.isTtsEnabled,
+  isTtsProviderConfigured: mocks.isTtsProviderConfigured,
   listTtsPersonas: mocks.listTtsPersonas,
   resolveExplicitTtsOverrides:
     mocks.resolveExplicitTtsOverrides as typeof import("../../tts/tts.js").resolveExplicitTtsOverrides,
@@ -94,6 +104,15 @@ describe("ttsHandlers", () => {
     mocks.getTtsProvider.mockReturnValue("openai");
     mocks.isTtsEnabled.mockReset();
     mocks.isTtsEnabled.mockReturnValue(true);
+    mocks.isTtsProviderConfigured.mockReset();
+    mocks.isTtsProviderConfigured.mockImplementation(
+      (_config: unknown, provider: SpeechProviderPlugin, cfg: OpenClawConfig) =>
+        provider.isConfigured({
+          cfg,
+          providerConfig: { id: provider.id },
+          timeoutMs: provider.defaultTimeoutMs ?? 30_000,
+        }),
+    );
     mocks.listSpeechProviders.mockReset();
     mocks.listSpeechProviders.mockReturnValue([]);
     mocks.listTtsPersonas.mockReset();
@@ -170,6 +189,7 @@ describe("ttsHandlers", () => {
     expect(observedTurns).toEqual(["sibling"]);
     expect(mocks.listSpeechProviders).toHaveBeenCalledOnce();
     expect(mocks.resolveTtsProviderOrder).toHaveBeenCalledWith("openai", {}, providers);
+    expect(mocks.isTtsProviderConfigured).toHaveBeenCalledTimes(2);
     expect(openaiConfigured).toHaveBeenCalledOnce();
     expect(googleConfigured).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(
