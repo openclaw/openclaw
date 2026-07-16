@@ -104,6 +104,7 @@ jobs:
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       historical_target: ${{ steps.manifest.outputs.historical_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
+      run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
@@ -554,6 +555,13 @@ jobs:
             eventName !== "pull_request" ||
             typeof changedNodeTestPlan.hasQaSmokeAffectingChange !== "function" ||
             changedNodeTestPlan.hasQaSmokeAffectingChange(changedPaths);
+          // Prompt snapshots only change when the generator's import graph or
+          // its fixtures do; unaffected PR diffs skip the regeneration lane.
+          const changedScopeHasPromptSnapshotImpact =
+            changedPaths === null ||
+            eventName !== "pull_request" ||
+            typeof changedNodeTestPlan.hasPromptSnapshotAffectingChange !== "function" ||
+            changedNodeTestPlan.hasPromptSnapshotAffectingChange(changedPaths);
           const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
           const runQaSmokeCi =
             runNodeFull &&
@@ -614,6 +622,7 @@ jobs:
             historical_target: historicalTarget,
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
+            run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createMatrix(
@@ -2021,6 +2030,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
@@ -2051,8 +2061,14 @@ jobs:
             prompt-snapshots)
               # No presence fallback: the boundary runner previously invoked
               # this unconditionally, and silent success would drop snapshot
-              # drift coverage.
-              run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
+              # drift coverage. The manifest gates the lane on the generator's
+              # import graph and fixtures; diffs outside both cannot change
+              # generated snapshots.
+              if [ "$RUN_PROMPT_SNAPSHOTS" != "true" ]; then
+                echo "[skip] changed scope cannot affect generated prompt snapshots"
+              else
+                run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
+              fi
               ;;
             session-accessor-boundary)
               if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
