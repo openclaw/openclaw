@@ -348,8 +348,6 @@ export async function executeChannelApi(
         error: `Network error: ${formatErrorMessage(err)}`,
         path: params.path,
       });
-    } finally {
-      clearTimeout(timeoutId);
     }
 
     try {
@@ -397,9 +395,17 @@ export async function executeChannelApi(
         data: parsed,
       });
     } finally {
+      clearTimeout(timeoutId);
       await release?.();
     }
   } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      debugError(`[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`);
+      return json({
+        error: `Request timed out after ${DEFAULT_TIMEOUT_MS}ms`,
+        path: params.path,
+      });
+    }
     return json({
       error: formatErrorMessage(err),
       path: params.path,

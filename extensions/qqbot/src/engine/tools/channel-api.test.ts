@@ -44,6 +44,7 @@ function cancelTrackedResponse(
 
 describe("executeChannelApi", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     fetchWithSsrFGuardMock.mockReset();
   });
@@ -83,6 +84,47 @@ describe("executeChannelApi", () => {
         allowRfc2544BenchmarkRange: true,
       },
     });
+  });
+
+  it.each([
+    { label: "successful", responseInit: { status: 200 } },
+    {
+      label: "error",
+      responseInit: { status: 503, statusText: "Service Unavailable" },
+    },
+  ])("keeps the request deadline through $label response body reads", async ({ responseInit }) => {
+    vi.useFakeTimers();
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementationOnce(async ({ init }: { init?: RequestInit }) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) {
+        throw new Error("expected channel API request signal");
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal.addEventListener("abort", () => controller.error(signal.reason), {
+            once: true,
+          });
+        },
+      });
+      return {
+        response: new Response(body, responseInit),
+        release,
+      };
+    });
+
+    const resultPromise = executeChannelApi(
+      { method: "GET", path: "/guilds/123/channels" },
+      { accessToken: "token-1" },
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const result = await resultPromise;
+    expect(result.details).toEqual({
+      error: "Request timed out after 30000ms",
+      path: "/guilds/123/channels",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("blocks guild listing when qqbot groups are scoped", async () => {
