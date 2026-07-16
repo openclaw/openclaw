@@ -220,6 +220,31 @@ describe("graph upload request timeouts", () => {
     vi.useRealTimers();
   });
 
+  it("bounds Graph token acquisition before starting an upload", async () => {
+    vi.useFakeTimers();
+    const hangingTokenProvider = {
+      getAccessToken: vi.fn(async () => await new Promise<string>(() => {})),
+    };
+    const fetchFn = vi.fn();
+
+    const upload = uploadToSharePoint({
+      buffer: Buffer.from("world"),
+      filename: "token-hang.txt",
+      siteId: "site-123",
+      tokenProvider: hangingTokenProvider,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    const assertion = expect(upload).rejects.toThrow(
+      `MS Teams Graph token acquisition timed out after ${MSTEAMS_REQUEST_TIMEOUT_MS}ms`,
+    );
+
+    await vi.advanceTimersByTimeAsync(MSTEAMS_REQUEST_TIMEOUT_MS);
+
+    await assertion;
+    expect(hangingTokenProvider.getAccessToken).toHaveBeenCalledOnce();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it("aborts SharePoint uploads that hang before response headers", async () => {
     vi.useFakeTimers();
     const fetchFn = createHangingFetch();
@@ -459,6 +484,7 @@ describe("graph upload request timeouts", () => {
       tokenProvider,
       fetchFn: fetchFn as unknown as typeof fetch,
     });
+    await vi.advanceTimersByTimeAsync(0);
     await waitForFetchCall(fetchFn, 1);
     const memberSignal = fetchSignal(fetchFn, 1);
     const assertion = expectMSTeamsTimeout(
@@ -502,7 +528,7 @@ describe("graph upload request timeouts", () => {
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the documented organization fallback for missing member permissions", async () => {
+  it("creates a per-user link when member lookup succeeds", async () => {
     const fetchFn = vi.fn(async (url: string) => {
       if (url.includes("/content")) {
         return new Response(
@@ -511,10 +537,16 @@ describe("graph upload request timeouts", () => {
         );
       }
       if (url.includes("/members")) {
-        return new Response("forbidden", { status: 403 });
+        return new Response(
+          JSON.stringify({ value: [{ userId: "user-1" }, { userId: "user-2" }] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }
       if (url.endsWith("/createLink")) {
-        return new Response(JSON.stringify({ link: { webUrl: "https://example.com/share" } }), {
+        return new Response(JSON.stringify({ link: { webUrl: "https://example.com/private" } }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
@@ -532,12 +564,47 @@ describe("graph upload request timeouts", () => {
         tokenProvider,
         fetchFn: fetchFn as unknown as typeof fetch,
       }),
-    ).resolves.toMatchObject({ shareUrl: "https://example.com/share" });
+    ).resolves.toMatchObject({ shareUrl: "https://example.com/private" });
     const [createLinkUrl, createLinkInit] = requireFetchCall(fetchFn, 2);
-    expect(createLinkUrl).toContain("/v1.0/");
+    expect(createLinkUrl).toContain("/beta/");
     expect((createLinkInit as RequestInit | undefined)?.body).toBe(
-      JSON.stringify({ type: "view", scope: "organization" }),
+      JSON.stringify({
+        type: "view",
+        scope: "users",
+        recipients: [{ objectId: "user-1" }, { objectId: "user-2" }],
+      }),
     );
+  });
+
+  it("fails closed when Graph denies member lookup", async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      if (url.includes("/content")) {
+        return new Response(
+          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/members")) {
+        return new Response("forbidden", { status: 403 });
+      }
+      throw new Error(`Unexpected SharePoint request: ${url}`);
+    });
+
+    await expect(
+      uploadAndShareSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "a.txt",
+        siteId: "site-123",
+        chatId: "chat-123",
+        usePerUserSharing: true,
+        tokenProvider,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringContaining("verify Graph chat-member permissions"),
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed when the member lookup token provider rejects with 403", async () => {
