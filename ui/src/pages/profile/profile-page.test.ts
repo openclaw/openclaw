@@ -72,6 +72,26 @@ function createCostSummary(cacheStatus?: CostUsageSummary["cacheStatus"]): CostU
   };
 }
 
+function createSessionsResult(): SessionsUsageResult {
+  const totals = createCostSummary().totals;
+  return {
+    updatedAt: 0,
+    startDate: "2026-07-08",
+    endDate: "2026-07-08",
+    sessions: [],
+    totals,
+    aggregates: {
+      messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+      tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+      byModel: [],
+      byProvider: [],
+      byAgent: [],
+      byChannel: [],
+      daily: [],
+    },
+  };
+}
+
 beforeEach(async () => {
   await i18n.setLocale("en");
 });
@@ -108,7 +128,7 @@ it("keeps settled profile usage across a same-client reconnect", async () => {
   page.client = client;
   page.connected = true;
   page.costSummary = createCostSummary();
-  page.sessionsResult = { sessions: [] } as unknown as SessionsUsageResult;
+  page.sessionsResult = createSessionsResult();
 
   page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
   page.applyGatewaySnapshot(context.gateway.snapshot);
@@ -133,7 +153,7 @@ it("resumes a settling profile cache after a same-client reconnect", async () =>
     pendingFiles: 1,
     staleFiles: 0,
   });
-  page.sessionsResult = { sessions: [] } as unknown as SessionsUsageResult;
+  page.sessionsResult = createSessionsResult();
 
   page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
   page.applyGatewaySnapshot(context.gateway.snapshot);
