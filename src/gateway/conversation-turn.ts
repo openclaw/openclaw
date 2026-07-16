@@ -11,17 +11,11 @@ import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resoluti
 import {
   ConversationDeliveryRejectedError,
   defaultConversationDeliveryDeps,
-  sendConversationMessage,
+  sendGatewayConversationMessage,
   type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
 import { registerPendingConversationTurn } from "../sessions/conversation-turns.js";
-
-export class ConversationTurnInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConversationTurnInputError";
-  }
-}
+import { ConversationInputError } from "./conversation-errors.js";
 
 type ConversationTurnDeps = ConversationDeliveryDeps & {
   registerPendingConversationTurn: typeof registerPendingConversationTurn;
@@ -103,7 +97,7 @@ function resultForCompletedOperation(params: {
         error: "Delivery was suppressed before a message was sent.",
       };
     case "rejected":
-      throw new ConversationTurnInputError(
+      throw new ConversationInputError(
         operation.rejectionError ?? "Conversation delivery was permanently rejected",
       );
     case "unknown":
@@ -135,7 +129,7 @@ function prepareConversationMessageId(params: {
     cfg: params.config,
   })?.outbound?.prepareConversationTurnMessageId;
   if (!prepare) {
-    throw new ConversationTurnInputError(
+    throw new ConversationInputError(
       `Channel ${params.conversation.channel} does not support correlated conversation turns; use conversations_send`,
     );
   }
@@ -149,10 +143,10 @@ function prepareConversationMessageId(params: {
       threadId: params.conversation.threadId,
     }).trim();
   } catch (error) {
-    throw new ConversationTurnInputError(error instanceof Error ? error.message : String(error));
+    throw new ConversationInputError(error instanceof Error ? error.message : String(error));
   }
   if (!preparedMessageId) {
-    throw new ConversationTurnInputError(
+    throw new ConversationInputError(
       `Channel ${params.conversation.channel} prepared an empty conversation-turn message id`,
     );
   }
@@ -164,6 +158,7 @@ export async function runGatewayConversationTurn(
   params: {
     config: OpenClawConfig;
     agentId: string;
+    senderIsOwner: boolean;
     sourceSessionKey?: string;
     turnId: string;
     conversationRef: string;
@@ -175,7 +170,7 @@ export async function runGatewayConversationTurn(
   const scope = resolveConversationScope(params);
   const conversation = deps.resolveConversation(scope, params.conversationRef);
   if (!conversation) {
-    throw new ConversationTurnInputError(
+    throw new ConversationInputError(
       `Conversation not found: ${params.conversationRef} (use conversations_list)`,
     );
   }
@@ -193,13 +188,15 @@ export async function runGatewayConversationTurn(
   try {
     begun = deps.beginOperation(scope, {
       operationId: params.turnId,
+      operationKind: "turn",
       conversationRef: conversation.conversationRef,
+      ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
       message: params.message,
       preparedMessageId,
     });
   } catch (error) {
     if (error instanceof ConversationDeliveryInputError) {
-      throw new ConversationTurnInputError(error.message);
+      throw new ConversationInputError(error.message);
     }
     throw error;
   }
@@ -209,6 +206,7 @@ export async function runGatewayConversationTurn(
   }
 
   const pending = deps.registerPendingConversationTurn({
+    agentId: params.agentId,
     id: params.turnId,
     conversationRef: conversation.conversationRef,
     sessionId: conversation.sessionId,
@@ -219,17 +217,18 @@ export async function runGatewayConversationTurn(
   // while the transport send promise is still resolving.
   pending.setOutboundMessageId(preparedMessageId);
   try {
-    const sent = await sendConversationMessage({
+    const sent = await sendGatewayConversationMessage({
       deps,
       context: {
         agentId: params.agentId,
         ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
         config: params.config,
-        senderIsOwner: true,
+        senderIsOwner: params.senderIsOwner,
       },
       conversation,
       message: params.message,
       operationId: pending.id,
+      operationKind: "turn",
       operation: begun.record,
       preparedMessageId,
     });
@@ -271,7 +270,7 @@ export async function runGatewayConversationTurn(
   } catch (error) {
     pending.cancel();
     if (error instanceof ConversationDeliveryRejectedError) {
-      throw new ConversationTurnInputError(error.message);
+      throw new ConversationInputError(error.message);
     }
     throw error;
   }

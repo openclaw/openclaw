@@ -115,7 +115,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated
 
 CREATE TABLE IF NOT EXISTS conversation_deliveries (
   operation_id TEXT NOT NULL PRIMARY KEY,
+  operation_kind TEXT NOT NULL CHECK (operation_kind IN ('send', 'turn')),
   conversation_id TEXT NOT NULL,
+  source_session_key TEXT,
   message_hash TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('created', 'queued', 'sent', 'suppressed', 'rejected', 'unknown', 'replied')),
   prepared_message_id TEXT,

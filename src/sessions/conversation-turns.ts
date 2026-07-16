@@ -13,6 +13,8 @@ export type ConversationTurnReply = {
 };
 
 type PendingConversationTurn = {
+  key: string;
+  agentId: string;
   id: string;
   conversationRef: string;
   sessionId: string;
@@ -52,8 +54,13 @@ function normalize(value: string | undefined): string | undefined {
   return normalized || undefined;
 }
 
+function pendingTurnKey(agentId: string, id: string): string {
+  return JSON.stringify([agentId, id]);
+}
+
 /** Registers one process-local waiter; transcript correlation remains durable after completion. */
 export function registerPendingConversationTurn(params: {
+  agentId: string;
   id?: string;
   conversationRef: string;
   sessionId: string;
@@ -61,9 +68,14 @@ export function registerPendingConversationTurn(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }): PendingConversationTurnHandle {
+  const agentId = normalize(params.agentId);
+  if (!agentId) {
+    throw new Error("conversation turn requires an agent id");
+  }
   const id = normalize(params.id) ?? crypto.randomUUID();
-  if (pendingTurns.has(id)) {
-    throw new Error(`conversation turn already pending: ${id}`);
+  const key = pendingTurnKey(agentId, id);
+  if (pendingTurns.has(key)) {
+    throw new Error(`conversation turn already pending for ${agentId}: ${id}`);
   }
   const createdAt = Date.now();
   const timeoutMs = Math.max(0, params.timeoutMs);
@@ -97,7 +109,7 @@ export function registerPendingConversationTurn(params: {
     }
     settled = true;
     markCorrelationReady();
-    pendingTurns.delete(id);
+    pendingTurns.delete(key);
     stopTimeout();
     params.signal?.removeEventListener("abort", cancel);
     resolvePromise(reply);
@@ -106,7 +118,9 @@ export function registerPendingConversationTurn(params: {
   timer = setTimeout(cancel, timeoutMs);
   timer.unref?.();
   params.signal?.addEventListener("abort", cancel, { once: true });
-  pendingTurns.set(id, {
+  pendingTurns.set(key, {
+    key,
+    agentId,
     id,
     conversationRef: params.conversationRef,
     sessionId: params.sessionId,
@@ -124,7 +138,7 @@ export function registerPendingConversationTurn(params: {
   return {
     id,
     setOutboundMessageId: (messageId) => {
-      const pending = pendingTurns.get(id);
+      const pending = pendingTurns.get(key);
       if (pending) {
         pending.outboundMessageId = normalize(messageId);
         if (!pending.outboundMessageId) {
@@ -133,7 +147,7 @@ export function registerPendingConversationTurn(params: {
       }
     },
     markReady: () => {
-      const pending = pendingTurns.get(id);
+      const pending = pendingTurns.get(key);
       if (pending?.outboundMessageId) {
         pending.markCorrelationReady();
       } else {
@@ -146,8 +160,10 @@ export function registerPendingConversationTurn(params: {
 }
 
 /** Cancels one Gateway-owned turn so a late reply follows ordinary inbound dispatch. */
-export function cancelPendingConversationTurn(id: string): boolean {
-  const pending = pendingTurns.get(normalize(id) ?? "");
+export function cancelPendingConversationTurn(params: { agentId: string; id: string }): boolean {
+  const agentId = normalize(params.agentId);
+  const id = normalize(params.id);
+  const pending = agentId && id ? pendingTurns.get(pendingTurnKey(agentId, id)) : undefined;
   if (!pending) {
     return false;
   }
@@ -157,6 +173,7 @@ export function cancelPendingConversationTurn(id: string): boolean {
 
 /** Claims a correlated inbound reply so the waiting turn can consume it without a second agent run. */
 export async function claimPendingConversationTurnReply(params: {
+  agentId: string;
   conversationRef: string;
   parentConversationRef?: string;
   sessionId: string;
@@ -172,10 +189,15 @@ export async function claimPendingConversationTurnReply(params: {
   }
   const threadId = normalize(params.threadId);
   const parentConversationRef = normalize(params.parentConversationRef);
+  const agentId = normalize(params.agentId);
+  if (!agentId) {
+    return undefined;
+  }
   const pending = [...pendingTurns.values()]
     .filter(
       (candidate) =>
         !candidate.claimed &&
+        candidate.agentId === agentId &&
         (candidate.conversationRef === params.conversationRef ||
           // Some transports promote an unthreaded message into a thread whose
           // id is that message id. Require the attested parent conversation too;
@@ -195,7 +217,7 @@ export async function claimPendingConversationTurnReply(params: {
   // Only an exact transport match can wait for outbound transcript durability.
   // Cancellation/deadline also releases this gate, so inbound dispatch stays bounded.
   await pending.correlationReady;
-  if (pendingTurns.get(pending.id) !== pending) {
+  if (pendingTurns.get(pending.key) !== pending) {
     return undefined;
   }
   // Keep the timer armed until complete(). The capture owner performs only a
@@ -225,7 +247,7 @@ export async function claimPendingConversationTurnReply(params: {
     release: () => {
       // Persistence can fail after a transport reply was claimed. Keep the
       // waiter alive so a transport retry can claim it before the deadline.
-      if (pendingTurns.get(pending.id) === pending) {
+      if (pendingTurns.get(pending.key) === pending) {
         pending.claimed = false;
       }
     },

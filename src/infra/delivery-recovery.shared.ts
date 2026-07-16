@@ -4,7 +4,7 @@ import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
 import {
   isPlatformMessageNotDispatchedError,
   isPlatformMessageRejectedError,
-  type PlatformMessageRejectedError,
+  type PlatformMessageNotDispatchedError,
 } from "./outbound/deliver-types.js";
 import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
 
@@ -93,7 +93,7 @@ export function isProvenDeliveryNotSentError(err: unknown): boolean {
 /** Finds a provider's permanent pre-dispatch rejection through delivery wrappers. */
 export function findPlatformMessageRejectedError(
   err: unknown,
-): PlatformMessageRejectedError | undefined {
+): (PlatformMessageNotDispatchedError & { readonly retryable: false }) | undefined {
   for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
     if (isPlatformMessageRejectedError(candidate)) {
       return candidate;

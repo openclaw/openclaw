@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { ConversationTurnInputError } from "../conversation-turn.js";
+import { ConversationInputError } from "../conversation-errors.js";
+import type { runGatewayConversationSend } from "../conversation-send.js";
+import type { runGatewayConversationTurn } from "../conversation-turn.js";
 import { createConversationHandlers } from "./conversations.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -27,6 +29,26 @@ const result = {
   },
 };
 
+const sendRequest = {
+  agentId: "main",
+  sourceSessionKey: "agent:main:telegram:direct:operator",
+  operationId: "conversation-send-1",
+  conversationRef: request.conversationRef,
+  message: "hello molty",
+};
+
+const sendResult = {
+  status: "sent" as const,
+  conversationRef: request.conversationRef,
+  channel: "reef",
+  messageId: "reef-outbound-1",
+  queueId: "conversation-send-1",
+};
+
+const adminClient = {
+  connect: { scopes: ["operator.admin"] },
+} as never;
+
 function context(): GatewayRequestContext {
   return {
     dedupe: new Map(),
@@ -45,16 +67,111 @@ function invoke(params: {
     respond: params.respond,
     context: params.context,
     req: { type: "req", id: "1", method: "conversations.turn" },
-    client: null,
+    client: adminClient,
     isWebchatConnect: () => false,
   });
 }
+
+function invokeSend(params: {
+  handler: NonNullable<ReturnType<typeof createConversationHandlers>["conversations.send"]>;
+  context: GatewayRequestContext;
+  respond: RespondFn;
+  request?: Record<string, unknown>;
+}) {
+  return params.handler({
+    params: params.request ?? sendRequest,
+    respond: params.respond,
+    context: params.context,
+    req: { type: "req", id: "send-1", method: "conversations.send" },
+    client: adminClient,
+    isWebchatConnect: () => false,
+  });
+}
+
+describe("conversations.send Gateway handler", () => {
+  it("owns the send and rejects operation-id reuse with different source input", async () => {
+    const runConversationSend = vi.fn(async () => sendResult);
+    const handler = createConversationHandlers({
+      cancelConversationTurn: vi.fn(),
+      runConversationSend,
+      runConversationTurn: vi.fn(),
+    })["conversations.send"]!;
+    const gatewayContext = context();
+    const respond = vi.fn<RespondFn>();
+
+    await invokeSend({ handler, context: gatewayContext, respond });
+    expect(runConversationSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        senderIsOwner: true,
+        sourceSessionKey: "agent:main:telegram:direct:operator",
+        operationId: "conversation-send-1",
+        conversationRef: request.conversationRef,
+        message: "hello molty",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, sendResult, undefined, { channel: "reef" });
+
+    const mismatchRespond = vi.fn<RespondFn>();
+    await invokeSend({
+      handler,
+      context: gatewayContext,
+      respond: mismatchRespond,
+      request: { ...sendRequest, sourceSessionKey: "agent:main:discord:channel:other" },
+    });
+    expect(runConversationSend).toHaveBeenCalledOnce();
+    expect(mismatchRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
+  it("keeps concurrent operation IDs isolated between agents", async () => {
+    let finishMain: ((value: typeof sendResult) => void) | undefined;
+    const otherResult = { ...sendResult, messageId: "reef-outbound-other" };
+    const runConversationSend = vi.fn(
+      async ({ agentId }: Parameters<typeof runGatewayConversationSend>[0]) =>
+        agentId === "main"
+          ? await new Promise<typeof sendResult>((resolve) => {
+              finishMain = resolve;
+            })
+          : otherResult,
+    );
+    const handler = createConversationHandlers({
+      cancelConversationTurn: vi.fn(),
+      runConversationSend,
+      runConversationTurn: vi.fn(),
+    })["conversations.send"]!;
+    const gatewayContext = context();
+    const mainRespond = vi.fn<RespondFn>();
+    const otherRespond = vi.fn<RespondFn>();
+
+    const main = invokeSend({ handler, context: gatewayContext, respond: mainRespond });
+    await vi.waitFor(() => expect(runConversationSend).toHaveBeenCalledOnce());
+    const other = invokeSend({
+      handler,
+      context: gatewayContext,
+      respond: otherRespond,
+      request: { ...sendRequest, agentId: "other-agent" },
+    });
+    await vi.waitFor(() => expect(runConversationSend).toHaveBeenCalledTimes(2));
+    finishMain?.(sendResult);
+    await Promise.all([main, other]);
+
+    expect(mainRespond).toHaveBeenCalledWith(true, sendResult, undefined, { channel: "reef" });
+    expect(otherRespond).toHaveBeenCalledWith(true, otherResult, undefined, {
+      channel: "reef",
+    });
+  });
+});
 
 describe("conversations.turn Gateway handler", () => {
   it("validates requests before entering the correlation service", async () => {
     const runConversationTurn = vi.fn();
     const handler = createConversationHandlers({
       cancelConversationTurn: vi.fn(),
+      runConversationSend: vi.fn(),
       runConversationTurn,
     })["conversations.turn"]!;
     const respond = vi.fn<RespondFn>();
@@ -79,6 +196,7 @@ describe("conversations.turn Gateway handler", () => {
     );
     const handler = createConversationHandlers({
       cancelConversationTurn: vi.fn(),
+      runConversationSend: vi.fn(),
       runConversationTurn,
     })["conversations.turn"]!;
     const gatewayContext = context();
@@ -86,6 +204,9 @@ describe("conversations.turn Gateway handler", () => {
     const secondRespond = vi.fn<RespondFn>();
     const first = invoke({ handler, context: gatewayContext, respond: firstRespond });
     await vi.waitFor(() => expect(runConversationTurn).toHaveBeenCalledOnce());
+    expect(runConversationTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: true }),
+    );
     const second = invoke({ handler, context: gatewayContext, respond: secondRespond });
     finish?.(result);
     await Promise.all([first, second]);
@@ -102,7 +223,11 @@ describe("conversations.turn Gateway handler", () => {
     expect(runConversationTurn).toHaveBeenCalledOnce();
     expect(cachedRespond).toHaveBeenCalledWith(true, result, undefined, { cached: true });
 
-    gatewayContext.dedupe.delete(`conversations.turn-identity:${request.turnId}`);
+    for (const key of gatewayContext.dedupe.keys()) {
+      if (key.endsWith(":identity")) {
+        gatewayContext.dedupe.delete(key);
+      }
+    }
     const mismatchedRespond = vi.fn<RespondFn>();
     await invoke({
       handler,
@@ -118,39 +243,42 @@ describe("conversations.turn Gateway handler", () => {
     );
   });
 
-  it("rejects mismatched turn-id reuse instead of joining in-flight work", async () => {
+  it("keeps concurrent turn IDs isolated between agents", async () => {
     let finish: ((value: typeof result) => void) | undefined;
+    const otherResult = { ...result, messageId: "reef-outbound-other" };
     const runConversationTurn = vi.fn(
-      async () =>
-        await new Promise<typeof result>((resolve) => {
-          finish = resolve;
-        }),
+      async ({ agentId }: Parameters<typeof runGatewayConversationTurn>[0]) =>
+        agentId === "main"
+          ? await new Promise<typeof result>((resolve) => {
+              finish = resolve;
+            })
+          : otherResult,
     );
     const handler = createConversationHandlers({
       cancelConversationTurn: vi.fn(),
+      runConversationSend: vi.fn(),
       runConversationTurn,
     })["conversations.turn"]!;
     const gatewayContext = context();
     const firstRespond = vi.fn<RespondFn>();
+    const otherRespond = vi.fn<RespondFn>();
     const first = invoke({ handler, context: gatewayContext, respond: firstRespond });
     await vi.waitFor(() => expect(runConversationTurn).toHaveBeenCalledOnce());
 
-    const mismatchedRespond = vi.fn<RespondFn>();
-    await invoke({
+    const other = invoke({
       handler,
       context: gatewayContext,
-      respond: mismatchedRespond,
+      respond: otherRespond,
       request: { ...request, agentId: "other-agent" },
     });
-    expect(mismatchedRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(runConversationTurn).toHaveBeenCalledOnce();
-
+    await vi.waitFor(() => expect(runConversationTurn).toHaveBeenCalledTimes(2));
     finish?.(result);
-    await first;
+    await Promise.all([first, other]);
+
+    expect(firstRespond).toHaveBeenCalledWith(true, result, undefined, { channel: "reef" });
+    expect(otherRespond).toHaveBeenCalledWith(true, otherResult, undefined, {
+      channel: "reef",
+    });
   });
 
   it("retries transient unavailable failures instead of caching them", async () => {
@@ -160,6 +288,7 @@ describe("conversations.turn Gateway handler", () => {
       .mockResolvedValueOnce(result);
     const handler = createConversationHandlers({
       cancelConversationTurn: vi.fn(),
+      runConversationSend: vi.fn(),
       runConversationTurn,
     })["conversations.turn"]!;
     const gatewayContext = context();
@@ -181,10 +310,11 @@ describe("conversations.turn Gateway handler", () => {
 
   it("maps unsupported conversation input to a stable invalid-request response", async () => {
     const runConversationTurn = vi.fn(async () => {
-      throw new ConversationTurnInputError("Channel matrix does not support correlated turns");
+      throw new ConversationInputError("Channel matrix does not support correlated turns");
     });
     const handler = createConversationHandlers({
       cancelConversationTurn: vi.fn(),
+      runConversationSend: vi.fn(),
       runConversationTurn,
     })["conversations.turn"]!;
     const gatewayContext = context();
@@ -220,13 +350,14 @@ describe("conversations.turn Gateway handler", () => {
     const cancelConversationTurn = vi.fn(() => true);
     const handlers = createConversationHandlers({
       cancelConversationTurn,
+      runConversationSend: vi.fn(),
       runConversationTurn: vi.fn(),
     });
     const handler = handlers["conversations.turn.cancel"]!;
     const respond = vi.fn<RespondFn>();
 
     await handler({
-      params: { turnId: request.turnId },
+      params: { agentId: request.agentId, turnId: request.turnId },
       respond,
       context: context(),
       req: { type: "req", id: "2", method: "conversations.turn.cancel" },
@@ -234,7 +365,10 @@ describe("conversations.turn Gateway handler", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(cancelConversationTurn).toHaveBeenCalledWith(request.turnId);
+    expect(cancelConversationTurn).toHaveBeenCalledWith({
+      agentId: request.agentId,
+      id: request.turnId,
+    });
     expect(respond).toHaveBeenCalledWith(true, { cancelled: true }, undefined);
   });
 });

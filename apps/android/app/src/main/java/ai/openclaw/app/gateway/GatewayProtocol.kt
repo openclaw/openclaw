@@ -308,6 +308,7 @@ enum class GatewayMethod(
   SystemPresence("system-presence"),
   SystemEvent("system-event"),
   MessageAction("message.action"),
+  ConversationsSend("conversations.send"),
   ConversationsTurn("conversations.turn"),
   ConversationsTurnCancel("conversations.turn.cancel"),
   Send("send"),

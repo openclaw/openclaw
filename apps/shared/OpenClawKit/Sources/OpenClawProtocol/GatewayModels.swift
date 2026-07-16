@@ -1156,16 +1156,80 @@ public struct AgentEvent: Codable, Sendable {
     }
 }
 
+public struct ConversationSendParams: Codable, Sendable {
+    public let agentid: String
+    public let sourcesessionkey: String?
+    public let operationid: String
+    public let conversationref: String
+    public let message: String
+
+    public init(
+        agentid: String,
+        sourcesessionkey: String? = nil,
+        operationid: String,
+        conversationref: String,
+        message: String)
+    {
+        self.agentid = agentid
+        self.sourcesessionkey = sourcesessionkey
+        self.operationid = operationid
+        self.conversationref = conversationref
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sourcesessionkey = "sourceSessionKey"
+        case operationid = "operationId"
+        case conversationref = "conversationRef"
+        case message
+    }
+}
+
+public struct ConversationSendResult: Codable, Sendable {
+    public let status: AnyCodable
+    public let conversationref: String
+    public let channel: String
+    public let messageid: String?
+    public let queueid: String?
+
+    public init(
+        status: AnyCodable,
+        conversationref: String,
+        channel: String,
+        messageid: String? = nil,
+        queueid: String? = nil)
+    {
+        self.status = status
+        self.conversationref = conversationref
+        self.channel = channel
+        self.messageid = messageid
+        self.queueid = queueid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case conversationref = "conversationRef"
+        case channel
+        case messageid = "messageId"
+        case queueid = "queueId"
+    }
+}
+
 public struct ConversationTurnCancelParams: Codable, Sendable {
+    public let agentid: String
     public let turnid: String
 
     public init(
+        agentid: String,
         turnid: String)
     {
+        self.agentid = agentid
         self.turnid = turnid
     }
 
     private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
         case turnid = "turnId"
     }
 }

@@ -1,9 +1,7 @@
-import {
-  PlatformMessageNotDispatchedError,
-  PlatformMessageRejectedError,
-} from "openclaw/plugin-sdk/error-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
+import { canonicalBytes, PipelineError, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
+import { ReefOutboundRejectedError } from "./flow.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { setActiveReef } from "./runtime.js";
 
@@ -99,7 +97,51 @@ describe("reefOutboundAdapter", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({ cause });
+    expect(error).toMatchObject({ cause, retryable: true });
+  });
+
+  it.each([
+    new PipelineError("guard", "guard denied", {
+      decision: "deny",
+      category: "confidential",
+      reason: "Denied.",
+      model: "gpt-5.6-sol",
+      policyVersion: "reef-v1",
+    }),
+    new ReefOutboundRejectedError("peer trust changed"),
+  ])("terminally rejects local Reef policy and trust denials", async (cause) => {
+    const send = vi.fn(async () => {
+      throw cause;
+    });
+    setActiveReef({ flow: { send }, friends: {}, reviews: {} } as never);
+
+    const error = await reefMessageAdapter.send
+      .text({ cfg: {}, to: "reef:Alice", text: "hello" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({ cause, retryable: false });
+  });
+
+  it("keeps guard availability failures retryable before dispatch", async () => {
+    const cause = new PipelineError("guard", "guard unavailable", {
+      decision: "deny",
+      category: "guard_failure",
+      reason: "Guard unavailable or invalid.",
+      model: "gpt-5.6-sol",
+      policyVersion: "reef-v1",
+    });
+    const send = vi.fn(async () => {
+      throw cause;
+    });
+    setActiveReef({ flow: { send }, friends: {}, reviews: {} } as never);
+
+    const error = await reefMessageAdapter.send
+      .text({ cfg: {}, to: "reef:Alice", text: "hello" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({ cause, retryable: true });
   });
 
   it("keeps relay failures ambiguous after platform dispatch starts", async () => {
@@ -175,8 +217,11 @@ describe("reefOutboundAdapter", () => {
       preparedMessageId,
     } as never).catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(PlatformMessageRejectedError);
-    expect(error).toMatchObject({ message: expect.stringContaining("atomic message limit") });
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("atomic message limit"),
+      retryable: false,
+    });
     expect(send).not.toHaveBeenCalled();
   });
 

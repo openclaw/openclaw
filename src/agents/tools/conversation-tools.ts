@@ -1,22 +1,18 @@
 /** Agent tools for addressing external conversations independently from local model sessions. */
 import crypto from "node:crypto";
 import { Type } from "typebox";
-import type { ConversationTurnResult } from "../../../packages/gateway-protocol/src/schema/agent.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import type {
+  ConversationSendResult,
+  ConversationTurnResult,
+} from "../../../packages/gateway-protocol/src/schema/agent.js";
 import {
   listConversations,
-  resolveConversation,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  defaultConversationDeliveryDeps,
-  sendConversationMessage,
-  type ConversationDeliveryDeps,
-} from "../../infra/outbound/conversation-delivery.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -63,17 +59,14 @@ type ConversationToolOptions = {
   senderIsOwner?: boolean;
 };
 
-type ConversationToolDeps = ConversationDeliveryDeps & {
+type ConversationToolDeps = {
   callGateway: typeof callGateway;
   listConversations: typeof listConversations;
-  resolveConversation: typeof resolveConversation;
 };
 
 const defaultDeps: ConversationToolDeps = {
-  ...defaultConversationDeliveryDeps,
   callGateway,
   listConversations,
-  resolveConversation,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -101,24 +94,6 @@ function readConversationRef(value: string): string {
     throw new ToolInputError(`Invalid conversationRef: ${value}`);
   }
   return conversationRef;
-}
-
-function requireConversation(params: {
-  deps: ConversationToolDeps;
-  options: ConversationToolOptions;
-  conversationRef: string;
-}): ConversationRecord {
-  const conversationRef = readConversationRef(params.conversationRef);
-  const conversation = params.deps.resolveConversation(
-    resolveConversationScope(params.options),
-    conversationRef,
-  );
-  if (!conversation) {
-    throw new ToolInputError(
-      `Conversation not found: ${params.conversationRef} (use conversations_list)`,
-    );
-  }
-  return conversation;
 }
 
 function presentConversation(conversation: ConversationRecord) {
@@ -196,40 +171,29 @@ export function createConversationsSendTool(
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
-      const conversation = requireConversation({
-        deps,
-        options,
-        conversationRef: readStringParam(params, "conversationRef", { required: true }),
-      });
+      const conversationRef = readConversationRef(
+        readStringParam(params, "conversationRef", { required: true }),
+      );
       const message = readStringParam(params, "message", { required: true });
       const operationId = buildConversationOperationId({
         options,
         toolCallId,
         toolName: "conversations_send",
-        conversationRef: conversation.conversationRef,
+        conversationRef,
       });
-      const config = options.config ?? getRuntimeConfig();
-      const context = {
-        agentId: resolveToolAgentId(options),
-        ...(options.agentSessionKey ? { sourceSessionKey: options.agentSessionKey } : {}),
-        config,
-        ...(options.senderIsOwner !== undefined ? { senderIsOwner: options.senderIsOwner } : {}),
-      };
-      const sent = await sendConversationMessage({
-        deps,
-        context,
-        conversation,
-        message,
-        operationId,
-        signal,
+      const result = await deps.callGateway<ConversationSendResult>({
+        method: "conversations.send",
+        params: {
+          agentId: resolveToolAgentId(options),
+          ...(options.agentSessionKey ? { sourceSessionKey: options.agentSessionKey } : {}),
+          operationId,
+          conversationRef,
+          message,
+        },
+        ...(options.config ? { config: options.config } : {}),
+        ...(signal ? { signal } : {}),
       });
-      return jsonResult({
-        status: sent.deliveryStatus,
-        conversationRef: conversation.conversationRef,
-        channel: conversation.channel,
-        ...(sent.messageId ? { messageId: sent.messageId } : {}),
-        ...(sent.operation.queueId ? { queueId: sent.operation.queueId } : {}),
-      });
+      return jsonResult(result);
     },
   };
 }
@@ -255,6 +219,7 @@ export function createConversationsTurnTool(
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readPositiveIntegerParam(params, "timeoutSeconds") ?? 30;
       const timeoutMs = timeoutSeconds * 1_000;
+      const agentId = resolveToolAgentId(options);
       const turnId = buildConversationOperationId({
         options,
         toolCallId,
@@ -264,7 +229,7 @@ export function createConversationsTurnTool(
       const result = await deps.callGateway<ConversationTurnResult>({
         method: "conversations.turn",
         params: {
-          agentId: resolveToolAgentId(options),
+          agentId,
           ...(options.agentSessionKey ? { sourceSessionKey: options.agentSessionKey } : {}),
           turnId,
           conversationRef,
@@ -275,7 +240,7 @@ export function createConversationsTurnTool(
         timeoutMs: timeoutMs + 20_000,
         ...(signal ? { signal } : {}),
         onSignalAbort: async (request) => {
-          await request("conversations.turn.cancel", { turnId }, { timeoutMs: 5_000 });
+          await request("conversations.turn.cancel", { agentId, turnId }, { timeoutMs: 5_000 });
         },
       });
       return jsonResult(result);

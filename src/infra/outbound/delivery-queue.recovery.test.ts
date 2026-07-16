@@ -20,7 +20,6 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
-  PlatformMessageRejectedError,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
@@ -180,6 +179,7 @@ describe("delivery-queue recovery", () => {
     );
     beginConversationDeliveryOperation(scope, {
       operationId: "operation-recovery",
+      operationKind: "send",
       conversationRef,
       message: "hello",
       preparedMessageId: "reef-prepared",
@@ -246,6 +246,7 @@ describe("delivery-queue recovery", () => {
     );
     beginConversationDeliveryOperation(scope, {
       operationId: "operation-suppressed",
+      operationKind: "send",
       conversationRef,
       message: "hello",
       preparedMessageId: "reef-prepared",
@@ -308,6 +309,7 @@ describe("delivery-queue recovery", () => {
     );
     beginConversationDeliveryOperation(scope, {
       operationId: "operation-rejected",
+      operationKind: "send",
       conversationRef,
       message: "hello",
       preparedMessageId: "reef-prepared",
@@ -1223,8 +1225,9 @@ describe("delivery-queue recovery", () => {
       tmpDir(),
     );
     const deliver = vi.fn().mockRejectedValue(
-      new PlatformMessageRejectedError("atomic message limit", {
+      new PlatformMessageNotDispatchedError("atomic message limit", {
         cause: new Error("rendered text is too large"),
+        retryable: false,
       }),
     );
     const { result } = await runRecovery({ deliver });

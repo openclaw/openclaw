@@ -5,7 +5,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   beginConversationDeliveryOperation,
-  findConversationDeliveryByReplyTarget,
+  findConversationTurnDeliveryByReplyTarget,
   getConversationDeliveryOperation,
   markConversationDeliveryQueued,
   markConversationDeliveryRejected,
@@ -59,24 +59,48 @@ describe("conversation delivery store", () => {
     await withConversationStore(({ scope, conversationRef }) => {
       const first = beginConversationDeliveryOperation(scope, {
         operationId: "operation-1",
+        operationKind: "send",
         conversationRef,
+        sourceSessionKey: "agent:main:telegram:direct:operator",
         message: "hello",
         preparedMessageId: "prepared-1",
       });
       const repeated = beginConversationDeliveryOperation(scope, {
         operationId: "operation-1",
+        operationKind: "send",
         conversationRef,
+        sourceSessionKey: "agent:main:telegram:direct:operator",
         message: "hello",
         preparedMessageId: "ignored-retry-candidate",
       });
 
       expect(first.created).toBe(true);
+      expect(first.record.sourceSessionKey).toBe("agent:main:telegram:direct:operator");
       expect(repeated).toEqual({ created: false, record: first.record });
       expect(() =>
         beginConversationDeliveryOperation(scope, {
           operationId: "operation-1",
+          operationKind: "send",
           conversationRef,
           message: "different",
+        }),
+      ).toThrow("reused with different input");
+      expect(() =>
+        beginConversationDeliveryOperation(scope, {
+          operationId: "operation-1",
+          operationKind: "turn",
+          conversationRef,
+          sourceSessionKey: "agent:main:telegram:direct:operator",
+          message: "hello",
+        }),
+      ).toThrow("reused with different input");
+      expect(() =>
+        beginConversationDeliveryOperation(scope, {
+          operationId: "operation-1",
+          operationKind: "send",
+          conversationRef,
+          sourceSessionKey: "agent:main:discord:channel:other",
+          message: "hello",
         }),
       ).toThrow("reused with different input");
     });
@@ -86,6 +110,7 @@ describe("conversation delivery store", () => {
     await withConversationStore(({ scope, conversationRef }) => {
       beginConversationDeliveryOperation(scope, {
         operationId: "operation-2",
+        operationKind: "turn",
         conversationRef,
         message: "hello",
         preparedMessageId: "prepared-2",
@@ -113,7 +138,7 @@ describe("conversation delivery store", () => {
         reply: { messageId: "reply-2", text: "ack" },
       });
       expect(
-        findConversationDeliveryByReplyTarget(scope, {
+        findConversationTurnDeliveryByReplyTarget(scope, {
           conversationRef,
           replyToId: "prepared-2",
         }),
@@ -129,6 +154,7 @@ describe("conversation delivery store", () => {
     await withConversationStore(({ scope, conversationRef }) => {
       beginConversationDeliveryOperation(scope, {
         operationId: "operation-3",
+        operationKind: "send",
         conversationRef,
         message: "hello",
       });
@@ -144,6 +170,7 @@ describe("conversation delivery store", () => {
     await withConversationStore(({ scope, conversationRef }) => {
       beginConversationDeliveryOperation(scope, {
         operationId: "operation-rejected",
+        operationKind: "send",
         conversationRef,
         message: "hello",
       });
@@ -170,6 +197,7 @@ describe("conversation delivery store", () => {
     await withConversationStore(({ scope, conversationRef }) => {
       beginConversationDeliveryOperation(scope, {
         operationId: "operation-4",
+        operationKind: "send",
         conversationRef,
         message: "hello",
       });

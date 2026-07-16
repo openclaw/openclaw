@@ -36,6 +36,7 @@ export interface ConversationDeliveries {
   created_at: number;
   message_hash: string;
   operation_id: string;
+  operation_kind: string;
   platform_message_id: string | null;
   prepared_message_id: string | null;
   queue_id: string | null;
@@ -45,6 +46,7 @@ export interface ConversationDeliveries {
   reply_thread_id: string | null;
   reply_timestamp: number | null;
   reply_to_id: string | null;
+  source_session_key: string | null;
   status: string;
   updated_at: number;
 }

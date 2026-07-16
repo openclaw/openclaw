@@ -272,9 +272,9 @@ describe("ReefMessageFlow outbound", () => {
     });
     const reservedId = "01JZ0000000000000000000201";
     const order: string[] = [];
-    relay.sendEnvelope.mockImplementationOnce(async (_peer, envelope) => {
+    relay.sendEnvelope.mockImplementationOnce(async (_peer, sentEnvelope) => {
       order.push("relay");
-      return { id: envelope.id, status: "queued" };
+      return { id: sentEnvelope.id, status: "queued" };
     });
 
     await expect(

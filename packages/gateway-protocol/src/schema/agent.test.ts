@@ -3,6 +3,8 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentParamsSchema,
+  ConversationSendParamsSchema,
+  ConversationSendResultSchema,
   ConversationTurnCancelParamsSchema,
   ConversationTurnCancelResultSchema,
   ConversationTurnParamsSchema,
@@ -147,7 +149,28 @@ describe("MessageActionParamsSchema", () => {
   });
 });
 
-describe("ConversationTurn schemas", () => {
+describe("Conversation schemas", () => {
+  it("accepts a Gateway-owned durable send and result", () => {
+    expect(
+      Value.Check(ConversationSendParamsSchema, {
+        agentId: "main",
+        sourceSessionKey: "agent:main:telegram:direct:operator",
+        operationId: "conversation-send-1",
+        conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        message: "hello",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ConversationSendResultSchema, {
+        status: "sent",
+        conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        channel: "reef",
+        messageId: "01JZ0000000000000000000200",
+        queueId: "conversation-send-1",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a Gateway-owned correlated turn and its inline reply", () => {
     expect(
       Value.Check(ConversationTurnParamsSchema, {
@@ -178,8 +201,14 @@ describe("ConversationTurn schemas", () => {
   });
 
   it("accepts explicit cancellation for an abandoned Gateway-owned turn", () => {
+    expect(
+      Value.Check(ConversationTurnCancelParamsSchema, {
+        agentId: "main",
+        turnId: "conversation-turn-1",
+      }),
+    ).toBe(true);
     expect(Value.Check(ConversationTurnCancelParamsSchema, { turnId: "conversation-turn-1" })).toBe(
-      true,
+      false,
     );
     expect(Value.Check(ConversationTurnCancelResultSchema, { cancelled: true })).toBe(true);
   });

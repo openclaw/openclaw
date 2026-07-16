@@ -123,12 +123,13 @@ function resultFromExistingOperation(
  * Sends one external message after a durable operation and queue intent exist.
  * A retry with the same operation id observes prior state instead of re-sending.
  */
-export async function sendConversationMessage(params: {
+export async function sendGatewayConversationMessage(params: {
   deps: ConversationDeliveryDeps;
   context: ConversationDeliveryContext;
   conversation: ConversationRecord;
   message: string;
   operationId: string;
+  operationKind: ConversationDeliveryRecord["operationKind"];
   operation?: ConversationDeliveryRecord;
   preparedMessageId?: string;
   signal?: AbortSignal;
@@ -138,7 +139,11 @@ export async function sendConversationMessage(params: {
     ? { created: false, record: params.operation }
     : params.deps.beginOperation(scope, {
         operationId: params.operationId,
+        operationKind: params.operationKind,
         conversationRef: params.conversation.conversationRef,
+        ...(params.context.sourceSessionKey
+          ? { sourceSessionKey: params.context.sourceSessionKey }
+          : {}),
         message: params.message,
         ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
       });

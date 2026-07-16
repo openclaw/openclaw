@@ -39,10 +39,7 @@ import {
 } from "../diagnostic-events.js";
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
-import {
-  PlatformMessageNotDispatchedError,
-  PlatformMessageRejectedError,
-} from "./deliver-types.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
@@ -2179,8 +2176,9 @@ describe("deliverOutboundPayloads", () => {
 
   it("terminally retires a permanent provider rejection before platform dispatch", async () => {
     const order: string[] = [];
-    const rejection = new PlatformMessageRejectedError("atomic message limit", {
+    const rejection = new PlatformMessageNotDispatchedError("atomic message limit", {
       cause: new Error("rendered text is too large"),
+      retryable: false,
     });
     const sendMatrix = vi.fn().mockRejectedValueOnce(rejection);
     completionMocks.rejectDurableDelivery.mockImplementationOnce(() => {
@@ -2217,8 +2215,9 @@ describe("deliverOutboundPayloads", () => {
 
   it("normalizes an empty permanent rejection reason before durable retirement", async () => {
     const sendMatrix = vi.fn().mockRejectedValueOnce(
-      new PlatformMessageRejectedError("   ", {
+      new PlatformMessageNotDispatchedError("   ", {
         cause: new Error("provider rejected the rendered payload"),
+        retryable: false,
       }),
     );
 

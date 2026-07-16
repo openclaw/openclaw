@@ -6,13 +6,10 @@ import type {
   ChannelOutboundAdapter,
   OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import {
-  PlatformMessageNotDispatchedError,
-  PlatformMessageRejectedError,
-} from "openclaw/plugin-sdk/error-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
 import { normalizeReefTarget } from "./config-schema.js";
-import { prepareReefMessageId } from "./flow.js";
+import { isPermanentReefOutboundRejection, prepareReefMessageId } from "./flow.js";
 import { getActiveReef } from "./runtime.js";
 
 const MAX_REEF_BODY_ID = "0".repeat(26);
@@ -30,7 +27,7 @@ function assertAtomicReefMessageFits(params: {
     }).length > REEF_MAX_PLAINTEXT_BYTES
   ) {
     const cause = new Error("Reef conversation turn exceeds the 32 KiB atomic message limit");
-    throw new PlatformMessageRejectedError(cause.message, { cause });
+    throw new PlatformMessageNotDispatchedError(cause.message, { cause, retryable: false });
   }
 }
 
@@ -116,8 +113,17 @@ async function send(
       },
     });
   } catch (cause) {
-    if (cause instanceof PlatformMessageRejectedError) {
+    if (cause instanceof PlatformMessageNotDispatchedError) {
       throw cause;
+    }
+    if (isPermanentReefOutboundRejection(cause)) {
+      throw new PlatformMessageNotDispatchedError(
+        cause instanceof Error ? cause.message : String(cause),
+        {
+          cause,
+          retryable: false,
+        },
+      );
     }
     if (!platformDispatchMarked) {
       throw new PlatformMessageNotDispatchedError(

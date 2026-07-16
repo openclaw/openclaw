@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
-  findConversationDeliveryByReplyTarget,
+  findConversationTurnDeliveryByReplyTarget,
   markConversationDeliveryReplied,
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
@@ -138,6 +138,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
         : undefined,
   };
   const claim = await claimPendingConversationTurnReply({
+    agentId,
     conversationRef: conversation.conversationRef,
     ...(parentConversationRef ? { parentConversationRef } : {}),
     sessionId: sessionEntry.sessionId,
@@ -150,12 +151,12 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   if (!claim) {
     if (replyToId) {
       const operation =
-        findConversationDeliveryByReplyTarget(
+        findConversationTurnDeliveryByReplyTarget(
           { agentId, storePath },
           { conversationRef: conversation.conversationRef, replyToId },
         ) ??
         (parentConversationRef && parentConversationRef !== conversation.conversationRef
-          ? findConversationDeliveryByReplyTarget(
+          ? findConversationTurnDeliveryByReplyTarget(
               { agentId, storePath },
               { conversationRef: parentConversationRef, replyToId },
             )

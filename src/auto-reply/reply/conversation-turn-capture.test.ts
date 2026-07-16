@@ -64,6 +64,7 @@ function persistSentOperation(params: {
 }) {
   beginConversationDeliveryOperation(params.scope, {
     operationId: params.operationId,
+    operationKind: "turn",
     conversationRef: params.conversationRef,
     message: "outbound",
     preparedMessageId: params.outboundMessageId,
@@ -75,6 +76,7 @@ function persistSentOperation(params: {
 describe("conversation turn capture", () => {
   it("fails closed without channel ingress admission proof", async () => {
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: "turn-untrusted",
       conversationRef: "conv_0123456789abcdef0123456789abcdef",
       sessionId: "session-main",
@@ -108,6 +110,7 @@ describe("conversation turn capture", () => {
       outboundMessageId: "reef-outbound-full",
     });
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: operationId,
       conversationRef: setup.conversationRef,
       sessionId: setup.sessionId,
@@ -211,6 +214,7 @@ describe("conversation turn capture", () => {
       outboundMessageId,
     });
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: operationId,
       conversationRef: setup.conversationRef,
       sessionId: setup.sessionId,
@@ -268,6 +272,7 @@ describe("conversation turn capture", () => {
       outboundMessageId,
     });
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: operationId,
       conversationRef: setup.conversationRef,
       sessionId: setup.sessionId,
@@ -312,6 +317,7 @@ describe("conversation turn capture", () => {
     const operationId = "turn-after-restart";
     beginConversationDeliveryOperation(setup.scope, {
       operationId,
+      operationKind: "turn",
       conversationRef: setup.conversationRef,
       message: "outbound",
       preparedMessageId: "reef-outbound-restart",
@@ -352,6 +358,43 @@ describe("conversation turn capture", () => {
     ).toEqual([]);
   });
 
+  it("leaves replies to plain sends for ordinary inbound dispatch", async () => {
+    const setup = await setupReefConversation();
+    const operationId = "send-before-reply";
+    beginConversationDeliveryOperation(setup.scope, {
+      operationId,
+      operationKind: "send",
+      conversationRef: setup.conversationRef,
+      message: "one-way outbound",
+      preparedMessageId: "reef-outbound-send",
+    });
+    markConversationDeliveryQueued(setup.scope, operationId, `queue-${operationId}`);
+
+    await expect(
+      capturePendingConversationTurnReply({
+        cfg: setup.cfg,
+        ctx: {
+          AgentId: "main",
+          SessionKey: setup.sessionKey,
+          ChatType: "direct",
+          Provider: "reef",
+          InboundAccessAuthorized: true,
+          OriginatingChannel: "reef",
+          OriginatingTo: "reef:peer-agent",
+          NativeDirectUserId: "peer-agent",
+          MessageSidFull: "reef-inbound-send-reply",
+          ReplyToIdFull: "reef-outbound-send",
+          RawBody: "ordinary reply",
+          BodyForAgent: "ordinary reply",
+        } as FinalizedMsgContext,
+      }),
+    ).resolves.toBe(false);
+    expect(getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
+      operationKind: "send",
+      status: "queued",
+    });
+  });
+
   it("consumes duplicate replies that promoted an unthreaded message into a thread", async () => {
     const setup = await setupReefConversation();
     const operationId = "turn-promoted-thread";
@@ -363,6 +406,7 @@ describe("conversation turn capture", () => {
       outboundMessageId,
     });
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: operationId,
       conversationRef: setup.conversationRef,
       sessionId: setup.sessionId,
@@ -436,6 +480,7 @@ describe("conversation turn capture", () => {
       outboundMessageId: "discord-outbound-full",
     });
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: "turn-thread",
       conversationRef,
       sessionId,
@@ -478,6 +523,7 @@ describe("conversation turn capture", () => {
   it("falls through without claiming when the inbound session cannot be resolved", async () => {
     const stateDir = tempDirs.make("openclaw-conversation-capture-");
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: "turn-missing",
       conversationRef: buildConversationRef({
         channel: "reef",

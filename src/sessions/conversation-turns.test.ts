@@ -7,6 +7,7 @@ import {
 
 function register(conversationRef = "conv_a", signal?: AbortSignal) {
   return registerPendingConversationTurn({
+    agentId: "main",
     conversationRef,
     sessionId: "session-main",
     timeoutMs: 5_000,
@@ -17,6 +18,7 @@ function register(conversationRef = "conv_a", signal?: AbortSignal) {
 describe("conversation turn correlation", () => {
   it("returns the stable operation id with an exact reply claim", async () => {
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: "turn-alias",
       conversationRef: "conv_alias",
       sessionId: "session-main",
@@ -26,6 +28,7 @@ describe("conversation turn correlation", () => {
     pending.markReady();
 
     const claim = await claimPendingConversationTurnReply({
+      agentId: "main",
       conversationRef: "conv_alias",
       sessionId: "session-main",
       messageId: "inbound-alias",
@@ -44,6 +47,7 @@ describe("conversation turn correlation", () => {
     pending.markReady();
 
     const claim = await claimPendingConversationTurnReply({
+      agentId: "main",
       conversationRef: "conv_a",
       sessionId: "session-main",
       messageId: "inbound-1",
@@ -67,6 +71,7 @@ describe("conversation turn correlation", () => {
     pending.markReady();
 
     const claim = await claimPendingConversationTurnReply({
+      agentId: "main",
       conversationRef: "conv_child",
       parentConversationRef: "conv_parent",
       sessionId: "session-main",
@@ -92,6 +97,7 @@ describe("conversation turn correlation", () => {
 
     await expect(
       claimPendingConversationTurnReply({
+        agentId: "main",
         conversationRef: "conv_peer_b_thread",
         parentConversationRef: "conv_peer_b",
         sessionId: "session-main",
@@ -112,6 +118,7 @@ describe("conversation turn correlation", () => {
     pending.markReady();
 
     const first = await claimPendingConversationTurnReply({
+      agentId: "main",
       conversationRef: "conv_a",
       sessionId: "session-main",
       messageId: "inbound-retry-1",
@@ -122,6 +129,7 @@ describe("conversation turn correlation", () => {
     first?.release();
 
     const retry = await claimPendingConversationTurnReply({
+      agentId: "main",
       conversationRef: "conv_a",
       sessionId: "session-main",
       messageId: "inbound-retry-2",
@@ -146,6 +154,7 @@ describe("conversation turn correlation", () => {
 
     await expect(
       claimPendingConversationTurnReply({
+        agentId: "main",
         conversationRef: "conv_a",
         sessionId: "session-main",
         messageId: "inbound-unknown",
@@ -154,6 +163,7 @@ describe("conversation turn correlation", () => {
     ).resolves.toBeUndefined();
 
     const exact = await claimPendingConversationTurnReply({
+      agentId: "main",
       conversationRef: "conv_a",
       sessionId: "session-main",
       messageId: "inbound-2",
@@ -172,6 +182,7 @@ describe("conversation turn correlation", () => {
     pending.markReady();
     await expect(
       claimPendingConversationTurnReply({
+        agentId: "main",
         conversationRef: "conv_a",
         sessionId: "session-main",
         messageId: "inbound-1",
@@ -192,6 +203,7 @@ describe("conversation turn correlation", () => {
 
   it("stops consuming replies after Gateway cancellation", async () => {
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       id: "cancelled-turn",
       conversationRef: "conv_cancelled",
       sessionId: "session-main",
@@ -200,10 +212,11 @@ describe("conversation turn correlation", () => {
     pending.setOutboundMessageId("outbound-cancelled");
     pending.markReady();
 
-    expect(cancelPendingConversationTurn("cancelled-turn")).toBe(true);
+    expect(cancelPendingConversationTurn({ agentId: "main", id: "cancelled-turn" })).toBe(true);
     await expect(pending.wait()).resolves.toBeUndefined();
     await expect(
       claimPendingConversationTurnReply({
+        agentId: "main",
         conversationRef: "conv_cancelled",
         sessionId: "session-main",
         messageId: "inbound-after-cancel",
@@ -211,13 +224,48 @@ describe("conversation turn correlation", () => {
         text: "dispatch me normally",
       }),
     ).resolves.toBeUndefined();
-    expect(cancelPendingConversationTurn("cancelled-turn")).toBe(false);
+    expect(cancelPendingConversationTurn({ agentId: "main", id: "cancelled-turn" })).toBe(false);
+  });
+
+  it("isolates equal turn IDs between agents", async () => {
+    const first = registerPendingConversationTurn({
+      agentId: "first-agent",
+      id: "shared-turn",
+      conversationRef: "conv_shared",
+      sessionId: "session-shared",
+      timeoutMs: 5_000,
+    });
+    const second = registerPendingConversationTurn({
+      agentId: "second-agent",
+      id: "shared-turn",
+      conversationRef: "conv_shared",
+      sessionId: "session-shared",
+      timeoutMs: 5_000,
+    });
+    first.setOutboundMessageId("outbound-first");
+    second.setOutboundMessageId("outbound-second");
+    first.markReady();
+    second.markReady();
+
+    expect(cancelPendingConversationTurn({ agentId: "first-agent", id: "shared-turn" })).toBe(true);
+    await expect(first.wait()).resolves.toBeUndefined();
+    const claim = await claimPendingConversationTurnReply({
+      agentId: "second-agent",
+      conversationRef: "conv_shared",
+      sessionId: "session-shared",
+      messageId: "inbound-second",
+      replyToId: "outbound-second",
+      text: "second reply",
+    });
+    claim?.complete();
+    await expect(second.wait()).resolves.toMatchObject({ text: "second reply" });
   });
 
   it("gates an exact reply until outbound context is durable", async () => {
     const pending = register();
     pending.setOutboundMessageId("outbound-fast");
     const claimPromise = claimPendingConversationTurnReply({
+      agentId: "main",
       conversationRef: "conv_a",
       sessionId: "session-main",
       messageId: "inbound-fast",
@@ -234,6 +282,7 @@ describe("conversation turn correlation", () => {
 
   it("does not wait on an unknown reply id while outbound delivery is unresolved", async () => {
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       conversationRef: "conv_unresolved",
       sessionId: "session-main",
       timeoutMs: 10_000,
@@ -241,6 +290,7 @@ describe("conversation turn correlation", () => {
 
     await expect(
       claimPendingConversationTurnReply({
+        agentId: "main",
         conversationRef: "conv_unresolved",
         sessionId: "session-main",
         messageId: "inbound-older-reply",
@@ -254,6 +304,7 @@ describe("conversation turn correlation", () => {
 
   it("keeps the configured timeout active until reply persistence completes", async () => {
     const pending = registerPendingConversationTurn({
+      agentId: "main",
       conversationRef: "conv_slow_persist",
       sessionId: "session-main",
       timeoutMs: 1,
@@ -261,6 +312,7 @@ describe("conversation turn correlation", () => {
     pending.setOutboundMessageId("outbound-slow");
     pending.markReady();
     const claim = await claimPendingConversationTurnReply({
+      agentId: "main",
       conversationRef: "conv_slow_persist",
       sessionId: "session-main",
       messageId: "inbound-slow",

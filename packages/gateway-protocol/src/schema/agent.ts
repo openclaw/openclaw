@@ -145,6 +145,28 @@ export const SendParamsSchema = closedObject({
   idempotencyKey: NonEmptyString,
 });
 
+/** Gateway-owned request that sends to one durable external conversation. */
+export const ConversationSendParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  sourceSessionKey: Type.Optional(NonEmptyString),
+  operationId: NonEmptyString,
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  message: NonEmptyString,
+});
+
+export const ConversationSendResultSchema = closedObject({
+  status: Type.Union([
+    Type.Literal("sent"),
+    Type.Literal("queued"),
+    Type.Literal("suppressed"),
+    Type.Literal("unknown"),
+  ]),
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  channel: NonEmptyString,
+  messageId: Type.Optional(NonEmptyString),
+  queueId: Type.Optional(NonEmptyString),
+});
+
 /** Gateway-owned request that sends and consumes one correlated external reply inline. */
 export const ConversationTurnParamsSchema = closedObject({
   agentId: NonEmptyString,
@@ -156,6 +178,7 @@ export const ConversationTurnParamsSchema = closedObject({
 });
 
 export const ConversationTurnCancelParamsSchema = closedObject({
+  agentId: NonEmptyString,
   turnId: NonEmptyString,
 });
 
@@ -333,6 +356,8 @@ export const WakeParamsSchema = Type.Object(
 export type AgentEvent = Static<typeof AgentEventSchema>;
 export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
 export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
+export type ConversationSendParams = Static<typeof ConversationSendParamsSchema>;
+export type ConversationSendResult = Static<typeof ConversationSendResultSchema>;
 export type ConversationTurnParams = Static<typeof ConversationTurnParamsSchema>;
 export type ConversationTurnCancelParams = Static<typeof ConversationTurnCancelParamsSchema>;
 export type ConversationTurnCancelResult = Static<typeof ConversationTurnCancelResultSchema>;

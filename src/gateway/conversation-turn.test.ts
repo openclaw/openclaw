@@ -3,13 +3,14 @@ import {
   ConversationDeliveryInputError,
   type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
-import { PlatformMessageRejectedError } from "../infra/outbound/deliver-types.js";
+import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import {
   claimPendingConversationTurnReply,
   registerPendingConversationTurn,
 } from "../sessions/conversation-turns.js";
-import { ConversationTurnInputError, runGatewayConversationTurn } from "./conversation-turn.js";
+import { ConversationInputError } from "./conversation-errors.js";
+import { runGatewayConversationTurn } from "./conversation-turn.js";
 
 const conversation = {
   conversationRef: "conv_0123456789abcdef0123456789abcdef",
@@ -67,6 +68,7 @@ function createDeps() {
         _scope: unknown,
         params: {
           operationId: string;
+          operationKind: "send" | "turn";
           conversationRef: string;
           message: string;
           preparedMessageId?: string;
@@ -78,6 +80,7 @@ function createDeps() {
         }
         const record: ConversationDeliveryRecord = {
           operationId: params.operationId,
+          operationKind: params.operationKind,
           conversationRef: params.conversationRef,
           messageHash: params.message,
           status: "created",
@@ -148,6 +151,7 @@ describe("runGatewayConversationTurn", () => {
       });
       persistIntent(input);
       capture = claimPendingConversationTurnReply({
+        agentId: "main",
         conversationRef: conversation.conversationRef,
         sessionId: conversation.sessionId,
         messageId: "reef-inbound-1",
@@ -162,6 +166,7 @@ describe("runGatewayConversationTurn", () => {
       {
         config: {},
         agentId: "main",
+        senderIsOwner: true,
         sourceSessionKey: "agent:main:telegram:direct:operator",
         turnId: "turn-fast-reply",
         conversationRef: conversation.conversationRef,
@@ -187,6 +192,7 @@ describe("runGatewayConversationTurn", () => {
     const deps = createDeps();
     deps.operations.set("turn-replied", {
       operationId: "turn-replied",
+      operationKind: "turn",
       conversationRef: conversation.conversationRef,
       messageHash: "hello",
       status: "replied",
@@ -202,6 +208,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-replied",
           conversationRef: conversation.conversationRef,
           message: "hello",
@@ -218,6 +225,7 @@ describe("runGatewayConversationTurn", () => {
     const deps = createDeps();
     deps.operations.set("turn-queued", {
       operationId: "turn-queued",
+      operationKind: "turn",
       conversationRef: conversation.conversationRef,
       messageHash: "hello",
       status: "queued",
@@ -232,6 +240,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-queued",
           conversationRef: conversation.conversationRef,
           message: "hello",
@@ -247,6 +256,7 @@ describe("runGatewayConversationTurn", () => {
     const deps = createDeps();
     deps.operations.set("turn-rejected", {
       operationId: "turn-rejected",
+      operationKind: "turn",
       conversationRef: conversation.conversationRef,
       messageHash: "hello",
       status: "rejected",
@@ -262,6 +272,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-rejected",
           conversationRef: conversation.conversationRef,
           message: "hello",
@@ -270,7 +281,7 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).rejects.toMatchObject({
-      name: "ConversationTurnInputError",
+      name: "ConversationInputError",
       message: "atomic message limit",
     });
     expect(deps.runMessageAction).not.toHaveBeenCalled();
@@ -290,6 +301,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-reused",
           conversationRef: conversation.conversationRef,
           message: "different",
@@ -298,7 +310,7 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).rejects.toMatchObject({
-      name: "ConversationTurnInputError",
+      name: "ConversationInputError",
       message: expect.stringContaining("reused with different input"),
     });
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
@@ -312,8 +324,9 @@ describe("runGatewayConversationTurn", () => {
         status: "rejected",
         rejectionError: "atomic message limit",
       });
-      throw new PlatformMessageRejectedError("atomic message limit", {
+      throw new PlatformMessageNotDispatchedError("atomic message limit", {
         cause: new Error("rendered text is too large"),
+        retryable: false,
       });
     }) as never;
 
@@ -322,6 +335,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-rendered-rejected",
           conversationRef: conversation.conversationRef,
           message: "raw text passed preflight",
@@ -330,7 +344,7 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).rejects.toMatchObject({
-      name: "ConversationTurnInputError",
+      name: "ConversationInputError",
       message: "atomic message limit",
     });
   });
@@ -344,6 +358,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-unsupported",
           conversationRef: conversation.conversationRef,
           message: "hello",
@@ -351,7 +366,7 @@ describe("runGatewayConversationTurn", () => {
         },
         deps,
       ),
-    ).rejects.toBeInstanceOf(ConversationTurnInputError);
+    ).rejects.toBeInstanceOf(ConversationInputError);
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
@@ -371,6 +386,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-preflight-rejected",
           conversationRef: conversation.conversationRef,
           message: "oversized",
@@ -379,7 +395,7 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).rejects.toMatchObject({
-      name: "ConversationTurnInputError",
+      name: "ConversationInputError",
       message: "atomic message limit",
     });
     expect(deps.beginOperation).not.toHaveBeenCalled();
@@ -399,6 +415,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-wrong-id",
           conversationRef: conversation.conversationRef,
           message: "hello",
@@ -439,6 +456,7 @@ describe("runGatewayConversationTurn", () => {
         {
           config: {},
           agentId: "main",
+          senderIsOwner: true,
           turnId: "turn-suppressed",
           conversationRef: conversation.conversationRef,
           message: "hello",

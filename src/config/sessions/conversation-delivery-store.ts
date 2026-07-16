@@ -21,7 +21,9 @@ export type ConversationDeliveryStatus =
 
 export type ConversationDeliveryRecord = {
   operationId: string;
+  operationKind: "send" | "turn";
   conversationRef: string;
+  sourceSessionKey?: string;
   messageHash: string;
   status: ConversationDeliveryStatus;
   preparedMessageId?: string;
@@ -49,6 +51,7 @@ type ConversationDeliveryRow = {
   conversation_id: string;
   created_at: number;
   message_hash: string;
+  operation_kind: string;
   operation_id: string;
   platform_message_id: string | null;
   prepared_message_id: string | null;
@@ -59,6 +62,7 @@ type ConversationDeliveryRow = {
   reply_thread_id: string | null;
   reply_timestamp: number | null;
   reply_to_id: string | null;
+  source_session_key: string | null;
   status: string;
   updated_at: number;
 };
@@ -100,6 +104,13 @@ function normalizeStatus(value: string): ConversationDeliveryStatus {
   }
 }
 
+function normalizeOperationKind(value: string): ConversationDeliveryRecord["operationKind"] {
+  if (value === "send" || value === "turn") {
+    return value;
+  }
+  throw new Error(`Invalid conversation delivery operation kind: ${value}`);
+}
+
 function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
   const reply =
     row.reply_message_id && row.reply_text !== null && row.reply_timestamp !== null
@@ -113,7 +124,9 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
       : undefined;
   return {
     operationId: row.operation_id,
+    operationKind: normalizeOperationKind(row.operation_kind),
     conversationRef: row.conversation_id,
+    ...(row.source_session_key ? { sourceSessionKey: row.source_session_key } : {}),
     messageHash: row.message_hash,
     status: normalizeStatus(row.status),
     ...(row.prepared_message_id ? { preparedMessageId: row.prepared_message_id } : {}),
@@ -159,12 +172,15 @@ export function beginConversationDeliveryOperation(
   scope: ConversationDeliveryStoreScope,
   params: {
     operationId: string;
+    operationKind: ConversationDeliveryRecord["operationKind"];
     conversationRef: string;
+    sourceSessionKey?: string;
     message: string;
     preparedMessageId?: string;
   },
 ): { created: boolean; record: ConversationDeliveryRecord } {
   const operationId = normalizeOperationId(params.operationId);
+  const sourceSessionKey = params.sourceSessionKey?.trim() || undefined;
   const messageHash = hashMessage(params.message);
   return runOpenClawAgentWriteTransaction(
     (database) => {
@@ -172,6 +188,8 @@ export function beginConversationDeliveryOperation(
       if (existing) {
         if (
           existing.conversationRef !== params.conversationRef ||
+          existing.operationKind !== params.operationKind ||
+          existing.sourceSessionKey !== sourceSessionKey ||
           existing.messageHash !== messageHash
         ) {
           throw new ConversationDeliveryInputError(
@@ -186,7 +204,9 @@ export function beginConversationDeliveryOperation(
         database.db,
         db.insertInto("conversation_deliveries").values({
           operation_id: operationId,
+          operation_kind: params.operationKind,
           conversation_id: params.conversationRef,
+          source_session_key: sourceSessionKey ?? null,
           message_hash: messageHash,
           status: "created",
           prepared_message_id: params.preparedMessageId ?? null,
@@ -353,8 +373,8 @@ export function markConversationDeliveryReplied(
   });
 }
 
-/** Finds the durable operation associated with an inbound transport reply. */
-export function findConversationDeliveryByReplyTarget(
+/** Finds the durable correlated turn associated with an inbound transport reply. */
+export function findConversationTurnDeliveryByReplyTarget(
   scope: ConversationDeliveryStoreScope,
   params: { conversationRef: string; replyToId: string },
 ): ConversationDeliveryRecord | undefined {
@@ -366,6 +386,7 @@ export function findConversationDeliveryByReplyTarget(
       .selectFrom("conversation_deliveries")
       .selectAll()
       .where("conversation_id", "=", params.conversationRef)
+      .where("operation_kind", "=", "turn")
       .where((eb) =>
         eb.or([
           eb("platform_message_id", "=", params.replyToId),

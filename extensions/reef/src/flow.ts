@@ -101,6 +101,33 @@ export function prepareReefMessageId(): string {
   return reefMessageIds();
 }
 
+/** Local policy or trust rejection that is safe to retire without retrying. */
+export class ReefOutboundRejectedError extends Error {
+  constructor(message: string, options: { cause?: unknown } = {}) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "ReefOutboundRejectedError";
+  }
+}
+
+export function isPermanentReefOutboundRejection(error: unknown): boolean {
+  if (error instanceof ReefOutboundRejectedError) {
+    return true;
+  }
+  if (!(error instanceof PipelineError)) {
+    return false;
+  }
+  if (error.stage === "deterministic" || error.reviewOutcome === "denied") {
+    return true;
+  }
+  // Guard transport/model failures use the explicit guard_failure category and
+  // may recover. An admitted policy denial is final until the owner intervenes.
+  return (
+    error.stage === "guard" &&
+    error.verdict?.decision === "deny" &&
+    error.verdict.category !== "guard_failure"
+  );
+}
+
 export class ReefMessageFlow {
   private legacyDeliveryIndex?: Promise<Map<string, LegacyDeliveryCandidate>>;
 
@@ -139,7 +166,7 @@ export class ReefMessageFlow {
       (context.expectedRecipient !== undefined &&
         !matchesReefPeerIdentity(friend, context.expectedRecipient))
     ) {
-      throw new Error(`Reef peer @${peer} is not approved with current keys`);
+      throw new ReefOutboundRejectedError(`Reef peer @${peer} is not approved with current keys`);
     }
     const recipient = reefPeerIdentity(friend);
     const id = context.messageId ?? prepareReefMessageId();
@@ -163,7 +190,9 @@ export class ReefMessageFlow {
     // Persist the exact peer/id/body binding before the relay can return a
     // receipt. Only a matching durable record may later authorize a resend turn.
     if (!matchesReefPeerIdentity(this.options.trust.get(peer), recipient)) {
-      throw new Error(`Reef peer @${peer} changed keys while composing the message`);
+      throw new ReefOutboundRejectedError(
+        `Reef peer @${peer} changed keys while composing the message`,
+      );
     }
     this.options.trust.recordOutboundDelivery(
       peer,
