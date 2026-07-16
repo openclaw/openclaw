@@ -1399,15 +1399,21 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         include:
-          - name: profile 1/2
+          - name: profile 1/4
             lane: profile-1
-            slug: profile-1-of-2
-          - name: profile 2/2
+            slug: profile-1-of-4
+          - name: profile 2/4
             lane: profile-2
-            slug: profile-2-of-2
+            slug: profile-2-of-4
+          - name: profile 3/4
+            lane: profile-3
+            slug: profile-3-of-4
+          - name: profile 4/4
+            lane: profile-4
+            slug: profile-4-of-4
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1454,7 +1460,17 @@ jobs:
           const partId = process.env.PROFILE_PART ?? "";
           let runs;
           if (typeof smokePlan.createQaSmokeCiPart === "function") {
-            runs = smokePlan.createQaSmokeCiPart(partId).runs;
+            try {
+              runs = smokePlan.createQaSmokeCiPart(partId).runs;
+            } catch (error) {
+              // Frozen/compat targets ship older planners that declare fewer
+              // profile parts; the declared parts still cover every scenario.
+              if (/unknown QA smoke CI profile part/.test(String(error)) && partId !== "profile-1") {
+                console.log(`[skip] ${partId} is not declared by this checkout's smoke plan`);
+                process.exit(0);
+              }
+              throw error;
+            }
           } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
             // Legacy planners select the entire profile and can mix long-lived
             // execution kinds. Reuse the current bounded smoke contract and
