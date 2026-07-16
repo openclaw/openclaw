@@ -751,7 +751,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadArtifactsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.files.list", "sessions.files.get", "sessions.files.set"],
+    methods: [
+      "sessions.files.list",
+      "sessions.files.get",
+      "sessions.files.set",
+      "sessions.files.reveal",
+    ],
     loadHandlers: loadSessionsFilesHandlers,
   }),
   ...createLazyCoreHandlers({

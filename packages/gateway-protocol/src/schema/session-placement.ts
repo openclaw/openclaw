@@ -218,5 +218,11 @@ export type SessionPlacementState = Static<typeof SessionPlacementStateSchema>;
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
+
+export function isCloudWorkerPlacementState(
+  state: SessionPlacementState | undefined,
+): state is Exclude<SessionPlacementState, "local" | "reclaimed"> {
+  return state !== undefined && state !== "local" && state !== "reclaimed";
+}
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;
 export type SessionsReclaimResult = Static<typeof SessionsReclaimResultSchema>;
