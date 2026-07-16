@@ -112,6 +112,16 @@ describe("message hook mappers", () => {
             },
           },
         },
+        {
+          pluginId: "reject-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "reject-chat", label: "Reject chat" }),
+            messaging: {
+              resolveInboundConversation: () => null,
+            },
+          },
+        },
       ]),
     );
   });
@@ -210,6 +220,23 @@ describe("message hook mappers", () => {
       replyToSender: "Ada",
       replyToIsQuote: true,
     });
+  });
+
+  it("does not fall back when a channel resolver rejects an inbound claim conversation", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "reject-chat",
+        Surface: "reject-chat",
+        OriginatingChannel: "reject-chat",
+        To: "channel:room-123",
+        OriginatingTo: "channel:room-123",
+        GroupChannel: "room",
+        GroupSubject: "guild",
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical).conversationId).toBeUndefined();
+    expect(toPluginInboundClaimEvent(canonical).conversationId).toBeUndefined();
   });
 
   it("falls back to raw body when command body is blank", () => {
