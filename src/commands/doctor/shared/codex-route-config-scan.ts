@@ -353,7 +353,7 @@ export function enableCodexPluginForRequiredRoutes(params: {
   return { cfg, changes };
 }
 
-export function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
+function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
   return cfg.plugins?.enabled === false || pluginIdListIncludes(cfg.plugins?.deny, "codex");
 }
 

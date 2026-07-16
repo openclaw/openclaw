@@ -710,7 +710,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     const modelResolver = createOpenAIRouteModelResolver({
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -727,7 +727,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       agentId: "main",
       useUtilityModel: true,
       skipAgentDiscovery: true,
-      modelResolver: modelResolver as typeof resolveModelAsync,
+      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
     });
 
     expectPreparedModelResult(result);
@@ -748,7 +748,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
   it("keeps the Codex route for OAuth auth", async () => {
     const cfg = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     const modelResolver = createOpenAIRouteModelResolver({
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -765,7 +765,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       agentId: "main",
       modelRef: "openai/gpt-5.5",
       skipAgentDiscovery: true,
-      modelResolver: modelResolver as typeof resolveModelAsync,
+      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
     });
 
     expectPreparedModelResult(result);
@@ -790,7 +790,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
         },
       },
       agents: { defaults: { model: "openai/gpt-5.5" } },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     const modelResolver = createOpenAIRouteModelResolver({
       api: "openai-responses",
       baseUrl: "https://relay.example/v1",
@@ -805,7 +805,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       cfg,
       agentId: "main",
       skipAgentDiscovery: true,
-      modelResolver: modelResolver as typeof resolveModelAsync,
+      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
     });
 
     expectPreparedModelResult(result);
@@ -819,7 +819,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
   it("honors an explicit model ref while selecting its auth-compatible route", async () => {
     const cfg = {
       agents: { defaults: { model: "anthropic/claude-opus-4-6" } },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     const modelResolver = createOpenAIRouteModelResolver({
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -835,7 +835,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       agentId: "main",
       modelRef: "openai/gpt-5.5",
       skipAgentDiscovery: true,
-      modelResolver: modelResolver as typeof resolveModelAsync,
+      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
     });
 
     expectPreparedModelResult(result);
