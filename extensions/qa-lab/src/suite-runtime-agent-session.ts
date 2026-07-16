@@ -46,7 +46,9 @@ const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
 const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 
 type QaSessionTranscriptSummary = {
+  assistantMirrors?: Array<{ identity: string; text: string }>;
   assistantToolCallCounts: Record<string, number>;
+  successfulToolCallCounts: Record<string, number>;
   finalText: string;
   hasDirectReplySelfMessage: boolean;
   lastAssistantContentTypes?: string[];
@@ -81,7 +83,10 @@ function readSessionTranscriptEventMessage(event: unknown) {
   return isRecord(event) && isRecord(event.message) ? event.message : undefined;
 }
 
-function readAssistantToolNames(message: Record<string, unknown>): string[] {
+function readAssistantToolCalls(message: Record<string, unknown>): Array<{
+  id?: string;
+  name: string;
+}> {
   if (!Array.isArray(message.content)) {
     return [];
   }
@@ -94,7 +99,7 @@ function readAssistantToolNames(message: Record<string, unknown>): string[] {
       return [];
     }
     const name = readNonEmptyString(block.name);
-    return name ? [name] : [];
+    return name ? [{ id: readNonEmptyString(block.id), name }] : [];
   });
 }
 
@@ -103,7 +108,11 @@ function summarizeSessionTranscriptEvents(
   sessionKey: string,
 ): QaSessionTranscriptSummary {
   const scanner = createDirectReplyTranscriptSentinelScanner();
+  const assistantMirrors: Array<{ identity: string; text: string }> = [];
   const assistantToolCallCounts: Record<string, number> = {};
+  const successfulToolCallCounts: Record<string, number> = {};
+  const assistantToolNamesByCallId = new Map<string, string>();
+  const successfulToolCallIds = new Set<string>();
   let finalText = "";
   let lastAssistantContentTypes: string[] = [];
   let lastAssistantErrorMessage: string | undefined;
@@ -117,12 +126,32 @@ function summarizeSessionTranscriptEvents(
       continue;
     }
     lastMessageRole = readNonEmptyString(message.role);
+    if (message.role === "toolResult") {
+      const toolCallId = readNonEmptyString(message.toolCallId);
+      const toolName = readNonEmptyString(message.toolName);
+      if (
+        toolCallId &&
+        toolName &&
+        message.isError === false &&
+        assistantToolNamesByCallId.get(toolCallId) === toolName &&
+        !successfulToolCallIds.has(toolCallId)
+      ) {
+        successfulToolCallIds.add(toolCallId);
+        successfulToolCallCounts[toolName] = (successfulToolCallCounts[toolName] ?? 0) + 1;
+      }
+      continue;
+    }
     if (message.role !== "assistant") {
       continue;
     }
     const text = extractGatewayMessageText(message);
     if (text) {
       finalText = text;
+    }
+    const openClawMeta = isRecord(message.__openclaw) ? message.__openclaw : undefined;
+    const mirrorIdentity = readNonEmptyString(openClawMeta?.mirrorIdentity);
+    if (mirrorIdentity && text) {
+      assistantMirrors.push({ identity: mirrorIdentity, text });
     }
     lastAssistantContentTypes = Array.isArray(message.content)
       ? message.content.flatMap((block) => {
@@ -132,9 +161,13 @@ function summarizeSessionTranscriptEvents(
       : [];
     lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
     lastAssistantStopReason = readNonEmptyString(message.stopReason);
-    lastAssistantToolNames = readAssistantToolNames(message);
-    for (const toolName of lastAssistantToolNames) {
-      assistantToolCallCounts[toolName] = (assistantToolCallCounts[toolName] ?? 0) + 1;
+    const assistantToolCalls = readAssistantToolCalls(message);
+    lastAssistantToolNames = assistantToolCalls.map((toolCall) => toolCall.name);
+    for (const toolCall of assistantToolCalls) {
+      assistantToolCallCounts[toolCall.name] = (assistantToolCallCounts[toolCall.name] ?? 0) + 1;
+      if (toolCall.id) {
+        assistantToolNamesByCallId.set(toolCall.id, toolCall.name);
+      }
     }
     scanner.recordMessage(message);
   }
@@ -144,7 +177,9 @@ function summarizeSessionTranscriptEvents(
   }
 
   return {
+    ...(assistantMirrors.length > 0 ? { assistantMirrors } : {}),
     assistantToolCallCounts,
+    successfulToolCallCounts,
     finalText,
     hasDirectReplySelfMessage: scanner.findings().length > 0,
     ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),
