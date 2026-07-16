@@ -80,7 +80,7 @@ describe("SQLite active transcript event projection", () => {
       "root",
       "active",
     ]);
-    expect(page.events.map((entry) => entry.seq)).toEqual([2, 4]);
+    expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
     expect(
       database.db
@@ -321,15 +321,15 @@ describe("SQLite active transcript event projection", () => {
     expect(page.totalMessages).toBe(100_000);
     expect(page.events).toHaveLength(25);
     expect(page.events.map((entry) => entry.seq)).toEqual(
-      Array.from({ length: 25 }, (_, index) => 99_977 + index),
+      Array.from({ length: 25 }, (_, index) => 99_976 + index),
     );
     expect(recent.totalMessages).toBe(100_000);
     expect(recent.events).toHaveLength(10);
-    expect(recent.events.at(-1)?.seq).toBe(100_001);
+    expect(recent.events.at(-1)?.seq).toBe(100_000);
     expect(lineCappedRecent.events).toHaveLength(3);
-    expect(lineCappedRecent.events.at(-1)?.seq).toBe(100_001);
+    expect(lineCappedRecent.events.at(-1)?.seq).toBe(100_000);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(100_000);
-    expect(byId?.seq).toBe(100_001);
+    expect(byId?.seq).toBe(100_000);
     expect(anchor).toMatchObject({
       found: true,
       hasOverreadContext: true,
@@ -337,6 +337,6 @@ describe("SQLite active transcript event projection", () => {
       totalMessages: 100_000,
     });
     expect(anchor.events).toHaveLength(6);
-    expect(anchor.events.at(-1)?.seq).toBe(100_001);
+    expect(anchor.events.at(-1)?.seq).toBe(100_000);
   });
 });

@@ -188,12 +188,16 @@ function withCurrentProjectionSnapshot<T>(
 
 function parseMessageEventRow(row: {
   event_json: string;
-  event_seq: number;
+  message_position: number | null;
 }): SessionTranscriptMessageEvent {
+  if (row.message_position === null) {
+    throw new Error("Active transcript message row is missing its message position");
+  }
   return {
     event: JSON.parse(row.event_json) as TranscriptEvent,
-    // Transcript metadata follows JSONL line numbering; SQLite seq is zero-based.
-    seq: row.event_seq + 1,
+    // Gateway cursors use the visible-message ordinal, matching the JSONL index.
+    // Raw event seq includes headers/control rows and would make pages overlap.
+    seq: row.message_position + 1,
   };
 }
 
@@ -215,7 +219,7 @@ function readMessageRange(
           .onRef("event.session_id", "=", "active.session_id")
           .onRef("event.seq", "=", "active.event_seq"),
       )
-      .select(["active.event_seq", "event.event_json"])
+      .select(["active.message_position", "event.event_json"])
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.message_position", "is not", null)
       .where("active.message_position", ">=", start)
@@ -340,7 +344,7 @@ export function readSessionTranscriptMessageEventById(
             .onRef("event.session_id", "=", "active.session_id")
             .onRef("event.seq", "=", "active.event_seq"),
         )
-        .select(["active.event_seq", "event.event_json"])
+        .select(["active.message_position", "event.event_json"])
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.event_id", "=", messageId)
         .where("active.message_position", "is not", null),
