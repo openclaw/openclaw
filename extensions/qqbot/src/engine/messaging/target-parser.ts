@@ -33,8 +33,12 @@ interface ParsedTarget {
  */
 export function parseTarget(to: string): ParsedTarget {
   const id = to.replace(/^qqbot:/i, "");
+  // Case-fold for prefix matching so that mixed-case type tags such as
+  // "Group:", "C2C:", or "CHANNEL:" are handled identically. The original
+  // case of the user/group/channel ID is preserved via `id.slice`.
+  const lower = id.toLowerCase();
 
-  if (id.startsWith("c2c:")) {
+  if (lower.startsWith("c2c:")) {
     const userId = id.slice(4);
     if (!userId) {
       throw new Error(`Invalid c2c target format: ${to} - missing user ID`);
@@ -42,7 +46,7 @@ export function parseTarget(to: string): ParsedTarget {
     return { type: "c2c", id: userId };
   }
 
-  if (id.startsWith("group:")) {
+  if (lower.startsWith("group:")) {
     const groupId = id.slice(6);
     if (!groupId) {
       throw new Error(`Invalid group target format: ${to} - missing group ID`);
@@ -50,7 +54,7 @@ export function parseTarget(to: string): ParsedTarget {
     return { type: "group", id: groupId };
   }
 
-  if (id.startsWith("channel:")) {
+  if (lower.startsWith("channel:")) {
     const channelId = id.slice(8);
     if (!channelId) {
       throw new Error(`Invalid channel target format: ${to} - missing channel ID`);
@@ -73,8 +77,11 @@ export function parseTarget(to: string): ParsedTarget {
  */
 export function normalizeTarget(target: string): string | undefined {
   const id = target.replace(/^qqbot:/i, "");
-  if (id.startsWith("c2c:") || id.startsWith("group:") || id.startsWith("channel:")) {
-    return `qqbot:${id}`;
+  // Must accept every type-prefixed shape `looksLikeQQBotTarget` accepts;
+  // canonicalize the type tag to lowercase and keep the ID's original case.
+  const typePrefix = /^(c2c|group|channel):/i.exec(id);
+  if (typePrefix?.[1]) {
+    return `qqbot:${typePrefix[1].toLowerCase()}:${id.slice(typePrefix[0].length)}`;
   }
   // 32-char hex openid
   if (/^[0-9a-fA-F]{32}$/.test(id)) {
