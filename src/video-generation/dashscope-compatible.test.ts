@@ -64,7 +64,12 @@ describe("downloadDashscopeGeneratedVideos", () => {
     });
 
     expect(videos).toHaveLength(1);
-    expect(videos[0]?.buffer.toString("utf8")).toBe("mp4-bytes");
-    expect(videos[0]?.mimeType).toBe("video/mp4");
+    const video = videos[0];
+    expect(video).toBeDefined();
+    if (!video) {
+      throw new Error("expected downloaded video asset");
+    }
+    expect(video.buffer.toString("utf8")).toBe("mp4-bytes");
+    expect(video.mimeType).toBe("video/mp4");
   });
 });
