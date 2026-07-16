@@ -795,13 +795,14 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     ) {
       return false;
     }
+    // Generic live profiles do not select a transport; dedicated channel commands own those
+    // adapters. Treating a scenario declaration as the selected channel misroutes the profile.
     const channel =
       profileReport.channelDriver === "qa-channel"
         ? "qa-channel"
-        : (scenario.execution.channel ??
-          (profileReport.channelDriver === "crabline"
-            ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL
-            : undefined));
+        : profileReport.channelDriver === "crabline"
+          ? (scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL)
+          : undefined;
     return scenarioMatchesQaProviderLane({
       scenario,
       providerMode: normalizedProviderMode,

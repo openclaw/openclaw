@@ -521,6 +521,20 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.channelDriverSelection).toBeUndefined();
   });
 
+  it("keeps channel-specific scenarios out of generic live profile runs", async () => {
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "release",
+      surface: "channel-framework",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline", "telegram-help-command"],
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.scenarioIds).toContain("channel-chat-baseline");
+    expect(suiteArgs.scenarioIds).not.toContain("telegram-help-command");
+  });
+
   it("runs the all profile through the live taxonomy profile path", async () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
