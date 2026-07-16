@@ -284,7 +284,12 @@ async function loadBackgroundTaskDetail(
       throw new Error(t("chat.backgroundTasks.detailFailed"));
     }
     const current = state.tasks?.find((candidate) => candidate.id === rowId);
-    const newest = current ? newestTaskSnapshot(current, detail) : detail;
+    // A delete event invalidates the in-flight lookup. Do not let its late
+    // response resurrect a registry entry that no longer exists.
+    if (!current) {
+      return;
+    }
+    const newest = newestTaskSnapshot(current, detail);
     state.taskDetails = new Map(state.taskDetails).set(rowId, {
       ...newest,
       ...(detail.prompt ? { prompt: detail.prompt } : {}),

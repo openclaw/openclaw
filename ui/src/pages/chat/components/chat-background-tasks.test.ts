@@ -190,6 +190,30 @@ describe("background tasks rail state", () => {
     expect(props.tasks?.map((task) => [task.id, task.status])).toEqual([["task-1", "completed"]]);
     expect(props.taskDetails.get("task-1")?.terminalSummary).toBe("Finished in lookup");
   });
+
+  it("does not resurrect a task deleted while its detail lookup is pending", async () => {
+    const running = makeTask({ id: "task-1" });
+    let resolveDetail: ((value: unknown) => void) | undefined;
+    const detail = new Promise<unknown>((resolve) => {
+      resolveDetail = resolve;
+    });
+    const { host } = createHost({
+      request: (method) =>
+        method === "tasks.get" ? detail : Promise.resolve({ tasks: [running] }),
+    });
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+
+    createBackgroundTasksProps(host, openSession).onToggleTask(running);
+    handleBackgroundTasksEvent(host, { action: "deleted", taskId: "task-1" });
+    resolveDetail?.({ task: { ...running, prompt: "Deleted task prompt" } });
+    await flushAsync();
+
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.tasks).toEqual([]);
+    expect(props.selectedTaskId).toBeNull();
+    expect(props.taskDetails.has("task-1")).toBe(false);
+  });
 });
 
 describe("background tasks rail events", () => {
