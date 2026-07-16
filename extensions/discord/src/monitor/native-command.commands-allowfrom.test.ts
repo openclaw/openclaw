@@ -3,11 +3,14 @@ import { ChannelType } from "discord-api-types/v10";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
+import { matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
-import { testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
+import { createDiscordNativeCommand } from "./native-command.js";
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", { spy: true });
+import { nativeCommandRuntime } from "./native-command.runtime.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
@@ -77,7 +80,7 @@ function createDispatchSpy() {
       tool: 0,
     },
   } as never);
-  nativeCommandTesting.setDispatchReplyWithDispatcher(dispatcherModule.dispatchReplyWithDispatcher);
+  nativeCommandRuntime.dispatchReplyWithDispatcher = dispatcherModule.dispatchReplyWithDispatcher;
   return dispatchSpy;
 }
 
@@ -102,7 +105,7 @@ async function runGuildSlashCommand(params?: {
   const command = createCommand(cfg, params?.runtimeDiscordConfig);
   const interaction = createInteraction({ userId: params?.userId });
   params?.mutateInteraction?.(interaction);
-  vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+  vi.mocked(matchPluginCommand).mockReturnValue(null);
   const dispatchSpy = createDispatchSpy();
   await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
   return { dispatchSpy, interaction };
@@ -131,9 +134,7 @@ function expectUnauthorizedReply(interaction: MockCommandInteraction) {
 describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    nativeCommandTesting.setDispatchReplyWithDispatcher(
-      dispatcherModule.dispatchReplyWithDispatcher,
-    );
+    nativeCommandRuntime.dispatchReplyWithDispatcher = dispatcherModule.dispatchReplyWithDispatcher;
   });
 
   it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
@@ -519,7 +520,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
         code: 10062,
       },
     });
-    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    vi.mocked(matchPluginCommand).mockReturnValue(null);
     const dispatchSpy = createDispatchSpy();
 
     await expect(

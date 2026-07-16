@@ -10,9 +10,7 @@ import {
 import { getLoadedChannelPlugin } from "./plugins/index.js";
 import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/thread-binding-api.js";
 
-export {
-  resolveThreadBindingLifecycle,
-} from "../shared/thread-binding-lifecycle.js";
+export { resolveThreadBindingLifecycle } from "../shared/thread-binding-lifecycle.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
@@ -33,10 +31,10 @@ type ChannelThreadBindingsContainerShape = {
 };
 
 /** Thread-bound session type controlled by spawn policy. */
-export type ThreadBindingSpawnKind = "subagent" | "acp";
+type ThreadBindingSpawnKind = "subagent" | "acp";
 
 /** Effective per-channel/account policy for creating thread-bound sessions. */
-export type ThreadBindingSpawnPolicy = {
+type ThreadBindingSpawnPolicy = {
   channel: string;
   accountId: string;
   enabled: boolean;

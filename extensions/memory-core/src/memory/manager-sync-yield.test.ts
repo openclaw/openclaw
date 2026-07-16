@@ -13,6 +13,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { buildSessionEntryMock } = vi.hoisted(() => ({
   buildSessionEntryMock: vi.fn(),
 }));
+const originalSyncYieldStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setSyncYieldStateDir(): void {
+  Reflect.set(
+    process.env,
+    "OPENCLAW_STATE_DIR",
+    path.join(os.tmpdir(), "openclaw-session-sync-yield"),
+  );
+}
+
+function restoreSyncYieldStateDir(): void {
+  if (originalSyncYieldStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalSyncYieldStateDir);
+  }
+}
 
 vi.mock("undici", async () => {
   const actual = await vi.importActual<typeof import("undici")>("undici");
@@ -27,9 +44,12 @@ vi.mock("undici", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-qmd")>();
   const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;
   return {
+    ...actual,
     buildSessionEntry: buildSessionEntryMock,
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
@@ -45,6 +65,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
       sessionId: target.sessionId,
     }),
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
+    sessionPathForSessionIdentity: (agentId: string, sessionId: string) =>
+      `sessions/${agentId}/${sessionId}`,
   };
 });
 
@@ -109,17 +131,17 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     super();
   }
 
-  async syncTargetSessionFiles(files: string[]): Promise<void> {
+  async syncTargetArchiveFiles(files: string[]): Promise<void> {
     await (
       this as unknown as {
-        syncSessionFiles: (params: {
+        syncArchiveFiles: (params: {
           needsFullReindex: boolean;
-          targetSessionFiles: string[];
+          targetArchiveFiles: string[];
         }) => Promise<void>;
       }
-    ).syncSessionFiles({
+    ).syncArchiveFiles({
       needsFullReindex: false,
-      targetSessionFiles: files,
+      targetArchiveFiles: files,
     });
   }
 
@@ -162,7 +184,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
 describe("session sync responsiveness", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(os.tmpdir(), "openclaw-session-sync-yield"));
+    setSyncYieldStateDir();
     buildSessionEntryMock.mockImplementation(async (absPath: string) => {
       const name = path.basename(absPath);
       return {
@@ -177,7 +199,7 @@ describe("session sync responsiveness", () => {
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    restoreSyncYieldStateDir();
     vi.clearAllMocks();
   });
 
@@ -200,7 +222,7 @@ describe("session sync responsiveness", () => {
       }
     });
 
-    await harness.syncTargetSessionFiles(files);
+    await harness.syncTargetArchiveFiles(files);
 
     expect(harness.indexedPaths).toHaveLength(files.length);
     expect(observedBeforeLastFile).toEqual([true]);

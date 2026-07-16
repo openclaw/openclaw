@@ -1,4 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 type EndpointCall = {
   url: string;
@@ -55,40 +57,6 @@ function cancelTrackedResponse(
   });
   return {
     response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
-
-function streamedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-  wasCanceled: () => boolean;
-} {
-  // Multi-chunk fixture: proves the bounded read stops pulling chunks before
-  // the whole (here syntactically broken / unbounded) body is buffered, and
-  // that the stream is cancelled on overflow.
-  let reads = 0;
-  let canceled = false;
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
-    getReadCount: () => reads,
     wasCanceled: () => canceled,
   };
 }
@@ -287,6 +255,7 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelObjective(undefined)).toBeUndefined();
     expect(testing.normalizeParallelObjective("")).toBeUndefined();
     expect((testing.normalizeParallelObjective("x".repeat(6000)) ?? "").length).toBe(5000);
+    expect(testing.normalizeParallelObjective(`${"x".repeat(4999)}🚀tail`)).toBe("x".repeat(4999));
   });
 
   it("normalizes search_queries: trim, drop blanks, dedupe, cap length, cap count", () => {
@@ -303,6 +272,9 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelSearchQueries(undefined)).toEqual([]);
     expect(testing.normalizeParallelSearchQueries("openclaw github")).toEqual([]);
     expect(testing.normalizeParallelSearchQueries(["x".repeat(250)])).toEqual(["x".repeat(200)]);
+    expect(testing.normalizeParallelSearchQueries([`${"x".repeat(199)}🚀tail`])).toEqual([
+      "x".repeat(199),
+    ]);
     const six = ["a", "b", "c", "d", "e", "f"];
     expect(testing.normalizeParallelSearchQueries(six)).toEqual(["a", "b", "c", "d", "e"]);
   });
@@ -322,6 +294,7 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelClientModel("  gpt-5.5  ")).toBe("gpt-5.5");
     expect(testing.normalizeParallelClientModel(undefined)).toBeUndefined();
     expect((testing.normalizeParallelClientModel("a".repeat(200)) ?? "").length).toBe(100);
+    expect(testing.normalizeParallelClientModel(`${"m".repeat(99)}🚀tail`)).toBe("m".repeat(99));
   });
 
   it("normalizes the Parallel /v1/search response shape", () => {
@@ -504,7 +477,7 @@ describe("parallel web search provider", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    const [call] = endpointMockState.calls;
+    const call = expectDefined(endpointMockState.calls[0], "Parallel search endpoint call");
     expect(call.url).toBe("https://api.parallel.ai/v1/search");
     expect(call.timeoutSeconds).toBe(5);
     expect(readMockedBody(call)).toEqual({
@@ -621,7 +594,12 @@ describe("parallel web search provider", () => {
     // 200-chunk x 1 MiB body (~200 MiB) caps at 16 MiB: the bounded reader must
     // stop pulling chunks and cancel the stream well before draining it, then
     // surface a bounded error rather than buffering the whole payload.
-    const streamed = streamedJsonResponse({ chunkCount: 200, chunkSize: 1024 * 1024 });
+    const streamed = createStreamingResponse({
+      chunkCount: 200,
+      chunkSize: 1024 * 1024,
+      text: "a",
+      headers: { "Content-Type": "application/json" },
+    });
     endpointMockState.responses.push(streamed.response);
     const provider = createParallelWebSearchProvider();
     const tool = provider.createTool({

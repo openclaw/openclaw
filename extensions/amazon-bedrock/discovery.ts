@@ -21,6 +21,8 @@ import type {
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -28,6 +30,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import {
+  createInjectedClientDiscoverySdk,
+  loadBedrockDiscoverySdk,
+  sendBedrockDiscoveryCommand,
+  type BedrockDiscoverySdk,
+} from "./discovery-sdk.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { resolveBedrockNativeThinkingLevelMap } from "./thinking-policy.js";
 
@@ -60,6 +68,9 @@ const DEFAULT_MAX_TOKENS = 4096;
 const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic Claude
   "anthropic.claude-fable-5": 1_000_000,
+  "anthropic.claude-mythos-5": 1_000_000,
+  // AWS publishes Sonnet 5 on both bedrock-runtime (Invoke/Converse) and Mantle.
+  "anthropic.claude-sonnet-5": 1_000_000,
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
   "anthropic.claude-opus-4-8": 1_000_000,
   "anthropic.claude-opus-4-7": 1_000_000,
@@ -137,7 +148,11 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
   const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
   const candidates = [modelId, stripped];
   for (const candidate of candidates) {
-    if (resolveClaudeFable5ModelIdentity({ id: candidate })) {
+    if (
+      resolveClaudeFable5ModelIdentity({ id: candidate }) ||
+      resolveClaudeMythos5ModelIdentity({ id: candidate }) ||
+      resolveClaudeSonnet5ModelIdentity({ id: candidate })
+    ) {
       return 1_000_000;
     }
     if (/(?:^|[/.:])anthropic\.claude-opus-4[.-]8(?:$|[-.:/])/i.test(candidate)) {
@@ -171,7 +186,19 @@ function resolveKnownThinkingLevelMap(
 }
 
 function resolveKnownMaxTokens(modelId: string): number | undefined {
-  return resolveClaudeFable5ModelIdentity({ id: modelId }) ? 128_000 : undefined;
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) ||
+    resolveClaudeMythos5ModelIdentity({ id: modelId }) ||
+    resolveClaudeSonnet5ModelIdentity({ id: modelId })
+    ? 128_000
+    : undefined;
+}
+
+function resolveKnownInput(modelId: string): ModelDefinitionConfig["input"] | undefined {
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) ||
+    resolveClaudeMythos5ModelIdentity({ id: modelId }) ||
+    resolveClaudeSonnet5ModelIdentity({ id: modelId })
+    ? ["text", "image"]
+    : undefined;
 }
 
 const DEFAULT_COST = {
@@ -186,38 +213,6 @@ type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelS
 type InferenceProfileSummary = NonNullable<
   ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
 >[number];
-
-type BedrockDiscoverySdk = {
-  createClient(region: string): BedrockClient;
-  createListFoundationModelsCommand(): unknown;
-  createListInferenceProfilesCommand(input: { nextToken?: string }): unknown;
-};
-
-async function loadBedrockDiscoverySdk(): Promise<BedrockDiscoverySdk> {
-  const { BedrockClient, ListFoundationModelsCommand, ListInferenceProfilesCommand } =
-    await import("@aws-sdk/client-bedrock");
-  return {
-    createClient: (region) => new BedrockClient({ region }),
-    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
-    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
-  };
-}
-
-function createInjectedClientDiscoverySdk(): BedrockDiscoverySdk {
-  class ListFoundationModelsCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-  class ListInferenceProfilesCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-  return {
-    createClient() {
-      throw new Error("clientFactory is required for injected Bedrock discovery commands");
-    },
-    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
-    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
-  };
-}
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -404,8 +399,10 @@ async function fetchInferenceProfileSummaries(
     const profiles: InferenceProfileSummary[] = [];
     let nextToken: string | undefined;
     do {
-      const response: ListInferenceProfilesCommandOutput = await client.send(
+      const response = await sendBedrockDiscoveryCommand<ListInferenceProfilesCommandOutput>(
+        client,
         createListInferenceProfilesCommand({ nextToken }) as never,
+        "Bedrock ListInferenceProfiles",
       );
       for (const summary of response.inferenceProfileSummaries ?? []) {
         profiles.push(summary);
@@ -473,6 +470,7 @@ function resolveInferenceProfiles(
     const knownThinkingLevelMap = resolveKnownThinkingLevelMap(
       baseModelId ?? profile.inferenceProfileId,
     );
+    const contractModelId = baseModelId ?? profile.inferenceProfileId;
     const canonicalClaudeId = resolveClaudeModelIdentity({ id: baseModelId });
 
     discovered.push({
@@ -481,7 +479,7 @@ function resolveInferenceProfiles(
       reasoning:
         baseModel?.reasoning ??
         supportsClaudeAdaptiveThinking({ id: baseModelId ?? profile.inferenceProfileId }),
-      input: baseModel?.input ?? ["text"],
+      input: baseModel?.input ?? resolveKnownInput(contractModelId) ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
       contextWindow:
         baseModel?.contextWindow ??
@@ -564,13 +562,16 @@ export async function discoverBedrockModels(params: {
     // Both API calls are independent, but we need the foundation model data
     // to resolve inference profile capabilities — so we fetch in parallel,
     // then build the lookup map before processing profiles.
-    const [rawFoundationResponse, profileSummaries] = await Promise.all([
-      client.send(sdk.createListFoundationModelsCommand() as never),
+    const [foundationResponse, profileSummaries] = await Promise.all([
+      sendBedrockDiscoveryCommand<ListFoundationModelsCommandOutput>(
+        client,
+        sdk.createListFoundationModelsCommand() as never,
+        "Bedrock ListFoundationModels",
+      ),
       fetchInferenceProfileSummaries(client, (input) =>
         sdk.createListInferenceProfilesCommand(input),
       ),
     ]);
-    const foundationResponse = rawFoundationResponse as ListFoundationModelsCommandOutput;
 
     const discovered: ModelDefinitionConfig[] = [];
     const seenIds = new Set<string>();

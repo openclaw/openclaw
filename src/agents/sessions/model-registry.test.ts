@@ -4,12 +4,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  PLUGIN_MODEL_CATALOG_FILE,
-  PLUGIN_MODEL_CATALOG_GENERATED_BY,
-} from "../plugin-model-catalog.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
-import { ModelRegistry } from "./model-registry.js";
+import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
+
+const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const tempDirs: string[] = [];
 
@@ -82,6 +81,27 @@ function pluginOwnerSnapshotEntries(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+    },
+  };
+}
+
+function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfigInput {
+  return {
+    oauth: {
+      name,
+      login: async () => ({
+        access: "test-token-placeholder",
+        refresh: "test-token-placeholder",
+        expires: Date.now() + 60_000,
+      }),
+      async refreshToken(credentials) {
+        return {
+          ...credentials,
+          access: "test-token-placeholder",
+          expires: Date.now() + 60_000,
+        };
+      },
+      getApiKey: (credentials) => `${apiKeyPrefix}:${credentials.access}`,
     },
   };
 }
@@ -172,6 +192,112 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+  });
+
+  it("preserves response-model temperature compatibility from generated catalogs", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: join("plugins", "openai", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            apiKey: "test-token-placeholder",
+            models: [
+              {
+                id: "gpt-5.6-luna",
+                name: "GPT-5.6 Luna",
+                compat: { supportsTemperature: false },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({ openai: { type: "api_key", key: "test-token-placeholder" } }),
+      modelsPath,
+      { pluginMetadataSnapshot: pluginOwnerSnapshot("openai", "openai") },
+    );
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("openai", "gpt-5.6-luna")?.compat).toMatchObject({
+      supportsTemperature: false,
+    });
+  });
+
+  it("loads richer generated catalog metadata without widening runtime inputs", () => {
+    // Generated catalogs can report video/audio support. Keep those rows while
+    // projecting their metadata to the runtime execution contract.
+    const modelsPath = writeModelsJsonWithPluginCatalogs({
+      root: { providers: {} },
+      pluginCatalogs: [
+        {
+          pluginRelativePath: join("plugins", "minimax", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimaxi.com/v1",
+                api: "openai-completions",
+                apiKey: "MINIMAX_API_KEY",
+                models: [{ id: "MiniMax-M3", input: ["text", "image", "video"] }],
+              },
+            },
+          },
+        },
+        {
+          pluginRelativePath: join("plugins", "nvidia", PLUGIN_MODEL_CATALOG_FILE),
+          pluginCatalog: {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              nvidia: {
+                baseUrl: "https://integrate.api.nvidia.com/v1",
+                api: "openai-completions",
+                apiKey: "NVIDIA_API_KEY",
+                models: [
+                  {
+                    id: "microsoft/phi-4-multimodal-instruct",
+                    input: ["text", "image", "audio"],
+                  },
+                  { id: "audio-only", input: ["audio"] },
+                  { id: "explicit-empty", input: [] },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({
+        minimax: { type: "api_key", key: "sk-minimax" },
+        nvidia: { type: "api_key", key: "sk-nvidia" },
+      }),
+      modelsPath,
+      {
+        pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
+          { providerId: "minimax", pluginId: "minimax" },
+          { providerId: "nvidia", pluginId: "nvidia" },
+        ]),
+      },
+    );
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("minimax", "MiniMax-M3")?.input).toEqual(["text", "image"]);
+    expect(registry.find("nvidia", "microsoft/phi-4-multimodal-instruct")?.input).toEqual([
+      "text",
+      "image",
+    ]);
+    expect(registry.find("nvidia", "audio-only")).toBeUndefined();
+    expect(registry.find("nvidia", "explicit-empty")?.input).toEqual([]);
+    const availableRefs = registry.getAvailable().map((model) => `${model.provider}/${model.id}`);
+    expect(availableRefs).not.toContain("nvidia/audio-only");
+    expect(availableRefs).toContain("nvidia/explicit-empty");
   });
 
   it("isolates invalid generated plugin catalog shards from valid models", () => {
@@ -344,5 +470,58 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
+  });
+});
+
+describe("ModelRegistry OAuth provider ownership", () => {
+  it("keeps providers isolated when another registry refreshes", async () => {
+    const sessionAAuth = AuthStorage.inMemory({
+      "corporate-ai": {
+        type: "oauth",
+        access: "test-token-placeholder",
+        refresh: "test-token-placeholder",
+        expires: 0,
+      },
+    });
+    const sessionA = ModelRegistry.inMemory(sessionAAuth);
+    sessionA.registerProvider("corporate-ai", oauthProviderConfig("Corporate AI", "corporate"));
+
+    const sessionBAuth = AuthStorage.inMemory();
+    const sessionB = ModelRegistry.inMemory(sessionBAuth);
+    sessionB.registerProvider("team-proxy", oauthProviderConfig("Team Proxy", "team"));
+
+    expect(sessionAAuth.getOAuthProviders().map((provider) => provider.id)).toContain(
+      "corporate-ai",
+    );
+    await expect(sessionA.getApiKeyForProvider("corporate-ai")).resolves.toBe(
+      "corporate:test-token-placeholder",
+    );
+
+    sessionB.unregisterProvider("team-proxy");
+
+    expect(sessionBAuth.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+      "team-proxy",
+    );
+    expect(sessionAAuth.getOAuthProviders().map((provider) => provider.id)).toContain(
+      "corporate-ai",
+    );
+    await expect(sessionA.getApiKeyForProvider("corporate-ai")).resolves.toBe(
+      "corporate:test-token-placeholder",
+    );
+  });
+
+  it("keeps a built-in override local to its registry", () => {
+    const sessionAAuth = AuthStorage.inMemory();
+    const sessionA = ModelRegistry.inMemory(sessionAAuth);
+    sessionA.registerProvider("anthropic", oauthProviderConfig("Corporate Anthropic", "corp"));
+
+    const sessionBAuth = AuthStorage.inMemory();
+
+    expect(
+      sessionAAuth.getOAuthProviders().find((provider) => provider.id === "anthropic")?.name,
+    ).toBe("Corporate Anthropic");
+    expect(
+      sessionBAuth.getOAuthProviders().find((provider) => provider.id === "anthropic")?.name,
+    ).toBe("Anthropic (Claude Pro/Max)");
   });
 });

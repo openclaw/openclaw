@@ -3,7 +3,8 @@ import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsActivityHandler, MSTeamsMessageHandlerDeps } from "./monitor-handler.js";
+import type { MSTeamsActivityHandler } from "./monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -171,7 +172,6 @@ export function createMSTeamsMessageHandlerDeps(params?: {
     list: async () => [],
     remove: async () => false,
     findPreferredDmByUserId: async () => null,
-    findByUserId: async () => null,
   };
   const pollStore: MSTeamsPollStore = {
     createPoll: async () => {},

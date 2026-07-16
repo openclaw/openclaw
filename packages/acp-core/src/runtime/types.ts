@@ -113,9 +113,22 @@ export type AcpRuntimeEvent =
       toolCallId?: string;
       status?: string;
       title?: string;
+      kind?:
+        | "read"
+        | "edit"
+        | "delete"
+        | "move"
+        | "search"
+        | "execute"
+        | "fetch"
+        | "switch_mode"
+        | "think"
+        | "other";
     }
   | {
       type: "done";
+      /** Closed result status when the manager synthesizes the terminal event. */
+      status?: "completed" | "cancelled";
       stopReason?: string;
     }
   | {

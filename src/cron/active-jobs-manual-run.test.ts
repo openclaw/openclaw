@@ -8,7 +8,7 @@
 // after TASK_RECONCILE_GRACE_MS (5 min).
 //
 // The merged commit 1fae716a04 (resolveDurableCronTaskRecovery) reconciles
-// terminal status retroactively from cron run-log + store.lastRunStatus, but
+// terminal status retroactively from cron history + store.lastRunStatus, but
 // only after the run finishes. This test asserts the producer-side mark/clear
 // pair so the transient `lost` marker plus `Background task lost` system
 // message is suppressed for long manual runs (force-mode `agentTurn` runs can
@@ -182,7 +182,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     }
   });
 
-  it("requests one setup-timeout restart when concurrent manual runs both stall before runner start", async () => {
+  it("sends one setup-timeout notification when concurrent manual runs both stall before runner start", async () => {
     vi.useFakeTimers();
     const now = Date.parse("2025-12-13T17:00:00.000Z");
     vi.setSystemTime(now);

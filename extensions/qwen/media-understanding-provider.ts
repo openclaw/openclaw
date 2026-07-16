@@ -13,6 +13,7 @@ import {
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
@@ -20,9 +21,7 @@ import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
 
-export async function describeQwenVideo(
-  params: VideoDescriptionRequest,
-): Promise<VideoDescriptionResult> {
+async function describeQwenVideo(params: VideoDescriptionRequest): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
@@ -60,7 +59,14 @@ export async function describeQwenVideo(
 
   try {
     await assertOkOrThrowHttpError(res, "Qwen video description failed");
-    const payload = (await res.json()) as OpenAiCompatibleVideoPayload;
+    // Read the success body through the shared byte-bounded JSON reader (16 MiB cap +
+    // stream cancel on overflow) so a hostile or buggy endpoint cannot force the runtime
+    // to buffer an unbounded body. Malformed JSON keeps the
+    // `Qwen video description failed: malformed JSON response` wrapping.
+    const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
+      res,
+      "Qwen video description failed",
+    );
     const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {
       throw new Error("Qwen video description response missing content");

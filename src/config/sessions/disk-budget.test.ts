@@ -54,6 +54,43 @@ function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.s
 }
 
 describe("enforceSessionDiskBudget", () => {
+  it("excludes migration archives from the session disk budget (#106875)", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const sessionId = "keep";
+      const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+      const migrationArchivePath = path.join(dir, "legacy.jsonl.migrated");
+      const numberedMigrationArchivePath = path.join(dir, "legacy.jsonl.migrated.2");
+      const store: Record<string, SessionEntry> = {
+        [sessionKey]: { sessionId, updatedAt: Date.now() },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(transcriptPath, "t".repeat(64), "utf-8");
+      await fs.writeFile(migrationArchivePath, "m".repeat(400), "utf-8");
+      await fs.writeFile(numberedMigrationArchivePath, "n".repeat(400), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: 300,
+          highWaterBytes: 200,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.overBudget).toBe(false);
+      expect(result.removedEntries).toBe(0);
+      expect(result.removedFiles).toBe(0);
+      expect(store).toHaveProperty(sessionKey);
+      await expectPathExists(transcriptPath);
+      await expectPathExists(migrationArchivePath);
+      await expectPathExists(numberedMigrationArchivePath);
+    });
+  });
+
   it("does not treat referenced transcripts with marker-like session IDs as archived artifacts", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -200,6 +237,42 @@ describe("enforceSessionDiskBudget", () => {
       expectBudgetResult(result);
       expect(result.removedEntries).toBe(1);
       expect(store).toHaveProperty(childKey);
+      expect(store).not.toHaveProperty(removableKey);
+    });
+  });
+
+  it("preserves model-locked harness sessions when removing entries for disk budget", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const lockedKey = "agent:main:harness-owned:locked";
+      const removableKey = "agent:main:old-removable";
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        [lockedKey]: {
+          sessionId: "locked-budget",
+          updatedAt: now - 10_000,
+          modelSelectionLocked: true,
+        },
+        [removableKey]: {
+          sessionId: "old-removable",
+          updatedAt: now,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: 120,
+          highWaterBytes: 80,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(store).toHaveProperty(lockedKey);
       expect(store).not.toHaveProperty(removableKey);
     });
   });

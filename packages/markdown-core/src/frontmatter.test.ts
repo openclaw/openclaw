@@ -1,7 +1,8 @@
 // Markdown Core tests cover frontmatter behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
-import { parseFrontmatterBlock } from "./frontmatter.js";
+import { parseFrontmatterBlock, stripFrontmatterBlock } from "./frontmatter.js";
 
 describe("parseFrontmatterBlock", () => {
   it("parses YAML block scalars", () => {
@@ -33,7 +34,7 @@ metadata:
     const result = parseFrontmatterBlock(content);
     expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
 
-    const parsed = JSON5.parse(result.metadata);
+    const parsed = JSON5.parse(expectDefined(result.metadata, "result.metadata test invariant"));
     expect(parsed.openclaw?.emoji).toBe("disk");
   });
 
@@ -103,11 +104,78 @@ metadata:
     expect(parseFrontmatterBlock(content)).toStrictEqual({});
   });
 
+  it("ignores non-delimiter opening prefixes", () => {
+    for (const prefix of ["---not", "----", "--- name"]) {
+      const content = `${prefix}
+name: nope
+---
+Body text`;
+      expect(parseFrontmatterBlock(content)).toStrictEqual({});
+    }
+  });
+
+  it("ignores non-delimiter closing prefixes", () => {
+    for (const closing of ["---not", "---\u2028Body text"]) {
+      const content = `---
+name: nope
+${closing}
+Body text`;
+      expect(parseFrontmatterBlock(content)).toStrictEqual({});
+      expect(stripFrontmatterBlock(content)).toBe(content);
+    }
+  });
+
+  it("accepts delimiter lines with trailing whitespace", () => {
+    const content = ["---   ", "name: sample", "---\t", "Body text"].join("\n");
+    expect(parseFrontmatterBlock(content)).toStrictEqual({ name: "sample" });
+    expect(stripFrontmatterBlock(content)).toBe("Body text");
+  });
+
+  it("preserves prototype-named keys when YAML value is null", () => {
+    const content = `---
+title: Hello
+toString: null
+constructor: null
+valueOf: null
+hasOwnProperty: null
+---
+Body text`;
+    const result = parseFrontmatterBlock(content);
+    expect(Object.hasOwn(result, "toString")).toBe(true);
+    expect(result["toString"]).toBe("null");
+    expect(Object.hasOwn(result, "constructor")).toBe(true);
+    expect(result["constructor"]).toBe("null");
+    expect(Object.hasOwn(result, "valueOf")).toBe(true);
+    expect(result["valueOf"]).toBe("null");
+    expect(Object.hasOwn(result, "hasOwnProperty")).toBe(true);
+    expect(result["hasOwnProperty"]).toBe("null");
+    // normal key unaffected
+    expect(result.title).toBe("Hello");
+  });
+
   it("parses frontmatter after a leading UTF-8 BOM", () => {
     const content = "\uFEFF---\nname: windows-skill\ndescription: Written by PowerShell\n---\n";
     const result = parseFrontmatterBlock(content);
 
     expect(result.name).toBe("windows-skill");
     expect(result.description).toBe("Written by PowerShell");
+  });
+});
+
+describe("stripFrontmatterBlock", () => {
+  it("removes a valid frontmatter block", () => {
+    const content = `---
+name: sample
+---
+Body text`;
+    expect(stripFrontmatterBlock(content)).toBe("Body text");
+  });
+
+  it("preserves Markdown that starts with a non-delimiter prefix", () => {
+    const content = `---not
+name: nope
+---not
+Body text`;
+    expect(stripFrontmatterBlock(content)).toBe(content);
   });
 });

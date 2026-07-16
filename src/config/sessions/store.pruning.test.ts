@@ -1,6 +1,7 @@
 // Session store pruning tests cover pruning decisions and retention ordering.
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
@@ -8,12 +9,16 @@ import {
   registerSessionMaintenancePreserveKeysProvider,
 } from "./store-maintenance-preserve.js";
 import {
-  isProtectedSessionMaintenanceEntry,
+  capEntryCount,
+  getActiveSessionMaintenanceWarning,
+  pruneStaleEntries,
+  pruneStaleModelRunEntries,
   resolveMaintenanceConfigFromInput,
   resolveQuotaSuspensionEntryMaintenance,
-  resolveSessionEntryMaintenanceHighWater,
+  shouldPreserveMaintenanceEntry,
+  shouldRunModelRunPrune,
+  shouldRunSessionEntryMaintenance,
 } from "./store-maintenance.js";
-import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -34,6 +39,31 @@ function makeEntry(updatedAt: number): SessionEntry {
 
 function makeStore(entries: Array<[string, SessionEntry]>): Record<string, SessionEntry> {
   return Object.fromEntries(entries);
+}
+
+function isGatewayModelRunSessionKey(sessionKey: string): boolean {
+  const store = makeStore([[sessionKey, makeEntry(Date.now() - 10 * DAY_MS)]]);
+  return pruneStaleModelRunEntries(store, DAY_MS) === 1;
+}
+
+function isProtectedSessionMaintenanceEntry(key: string, entry: SessionEntry | undefined): boolean {
+  return shouldPreserveMaintenanceEntry({ key, entry });
+}
+
+function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
+  let entryCount = 0;
+  while (!shouldRunSessionEntryMaintenance({ entryCount, maxEntries })) {
+    entryCount += 1;
+  }
+  return entryCount;
+}
+
+function createMaintenanceArtifacts() {
+  return {
+    archiveRemovedSessionTranscripts: async () => new Set<string>(),
+    removeRemovedSessionTrajectoryArtifacts: async () => {},
+    cleanupArchivedSessionTranscripts: async () => {},
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +106,21 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty("agent:main:slack:channel:C999");
     expect(store).toHaveProperty("agent:main:telegram:group:-100123");
     expect(store).toHaveProperty("agent:main:discord:channel:ops");
+  });
+
+  it("preserves model-locked harness sessions even when stale", () => {
+    const now = Date.now();
+    const lockedKey = "agent:main:harness-owned:locked";
+    const store = makeStore([
+      [lockedKey, { ...makeEntry(now - 31 * DAY_MS), modelSelectionLocked: true }],
+      ["old", makeEntry(now - 31 * DAY_MS)],
+    ]);
+
+    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store).toHaveProperty(lockedKey);
+    expect(store.old).toBeUndefined();
   });
 });
 
@@ -178,6 +223,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         mode: "enforce",
         pruneAfterMs: 7 * DAY_MS,
         maxEntries: 500,
+        modelRunPruneAfterMs: DAY_MS,
         resetArchiveRetentionMs: null,
         maxDiskBytes: null,
         highWaterBytes: null,
@@ -213,6 +259,357 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       },
     ]);
     expect(trajectoryCleanupReferencedIds).toEqual(new Set(["shared-session", "active-session"]));
+  });
+
+  it("forced cleanup prunes stale model-run probes before the cap evicts real sessions", async () => {
+    const now = Date.now();
+    const staleProbe = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174099";
+    const store: Record<string, SessionEntry> = {
+      [staleProbe]: makeEntry(now - 2 * DAY_MS),
+    };
+    for (let i = 0; i < 50; i++) {
+      store[`agent:main:explicit:real-${i}`] = makeEntry(now - 3 * DAY_MS);
+    }
+    let report: { modelRunPruned: number; pruned: number; capped: number } | undefined;
+
+    const result = await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 50,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      maintenanceOverride: { mode: "enforce" },
+      onMaintenanceApplied: (applied) => {
+        report = {
+          modelRunPruned: applied.modelRunPruned,
+          pruned: applied.pruned,
+          capped: applied.capped,
+        };
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async () => new Set(),
+        removeRemovedSessionTrajectoryArtifacts: async () => {},
+        cleanupArchivedSessionTranscripts: async () => {},
+      },
+    });
+
+    expect(result.changedStore).toBe(true);
+    expect(report?.modelRunPruned).toBe(1);
+    expect(report?.capped).toBe(0);
+    expect(store[staleProbe]).toBeUndefined();
+    expect(Object.keys(store)).toHaveLength(50);
+    for (let i = 0; i < 50; i++) {
+      expect(store).toHaveProperty(`agent:main:explicit:real-${i}`);
+    }
+  });
+
+  it("preserves every active admission instead of only the writer session", async () => {
+    const now = Date.now();
+    const storePath = "/tmp/openclaw-sessions/active-admissions.json";
+    const activeKey = "agent:main:cron:job:run:active";
+    const store = makeStore([
+      [activeKey, { sessionId: "active-session", updatedAt: now - 3 }],
+      ["removable", { sessionId: "removable-session", updatedAt: now - 2 }],
+      ["writer", { sessionId: "writer-session", updatedAt: now - 1 }],
+    ]);
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [activeKey, "active-session"],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await applyFileBackedSessionStoreMaintenance({
+        storePath,
+        store,
+        activeSessionKey: "writer",
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 30 * DAY_MS,
+          maxEntries: 1,
+          modelRunPruneAfterMs: DAY_MS,
+          resetArchiveRetentionMs: null,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+
+      expect(store).toHaveProperty(activeKey);
+      expect(store).toHaveProperty("writer");
+      expect(store.removable).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("preserves every store alias backed by an active session id", async () => {
+    const now = Date.now();
+    const storePath = "/tmp/openclaw-sessions/active-aliases.json";
+    const activeSessionId = "active-alias-session";
+    const firstAlias = "agent:main:cron:job:run:active";
+    const secondAlias = "agent:main:cron:job:run:active:thread:reply";
+    const store = makeStore([
+      [firstAlias, { sessionId: activeSessionId, updatedAt: now - 3 }],
+      [secondAlias, { sessionId: activeSessionId, updatedAt: now - 2 }],
+      ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
+    ]);
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [activeSessionId],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await applyFileBackedSessionStoreMaintenance({
+        storePath,
+        store,
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 30 * DAY_MS,
+          maxEntries: 1,
+          modelRunPruneAfterMs: DAY_MS,
+          resetArchiveRetentionMs: null,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+
+      expect(store).toHaveProperty(firstAlias);
+      expect(store).toHaveProperty(secondAlias);
+      expect(store.removable).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("preserves a raw legacy store key matched by a canonical admission identity", async () => {
+    const now = Date.now();
+    const storePath = "/tmp/openclaw-sessions/active-legacy-key.json";
+    const rawActiveKey = "Agent:Main:Subagent:CHILD";
+    const canonicalActiveKey = "agent:main:subagent:child";
+    const store = makeStore([
+      [rawActiveKey, { sessionId: "active-legacy-session", updatedAt: now - 2 }],
+      ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
+    ]);
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [canonicalActiveKey],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await applyFileBackedSessionStoreMaintenance({
+        storePath,
+        store,
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 30 * DAY_MS,
+          maxEntries: 1,
+          modelRunPruneAfterMs: DAY_MS,
+          resetArchiveRetentionMs: null,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+
+      expect(store).toHaveProperty(rawActiveKey);
+      expect(store.removable).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("scopes active preservation by store and releases rows back to maintenance", async () => {
+    const now = Date.now();
+    const activeStorePath = "/tmp/openclaw-sessions/active-store.json";
+    const maintainedStorePath = "/tmp/openclaw-sessions/maintained-store.json";
+    const activeSessionId = "shared-session-id";
+    const admission = await beginSessionWorkAdmission({
+      scope: activeStorePath,
+      identities: [activeSessionId],
+      assertAllowed: () => {},
+    });
+    const maintenanceConfig = {
+      mode: "enforce" as const,
+      pruneAfterMs: 30 * DAY_MS,
+      maxEntries: 1,
+      modelRunPruneAfterMs: DAY_MS,
+      resetArchiveRetentionMs: null,
+      maxDiskBytes: null,
+      highWaterBytes: null,
+    };
+
+    try {
+      const otherStore = makeStore([
+        ["old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
+        ["new", { sessionId: "new-session", updatedAt: now - 1 }],
+      ]);
+      await applyFileBackedSessionStoreMaintenance({
+        storePath: maintainedStorePath,
+        store: otherStore,
+        maintenanceConfig,
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+      expect(otherStore.old).toBeUndefined();
+
+      const activeStore = makeStore([
+        ["old", { sessionId: activeSessionId, updatedAt: now - 31 * DAY_MS }],
+        ["new", { sessionId: "new-session", updatedAt: now - 1 }],
+      ]);
+      await applyFileBackedSessionStoreMaintenance({
+        storePath: activeStorePath,
+        store: activeStore,
+        maintenanceConfig,
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+      expect(activeStore).toHaveProperty("old");
+
+      admission.release();
+      await applyFileBackedSessionStoreMaintenance({
+        storePath: activeStorePath,
+        store: activeStore,
+        maintenanceConfig,
+        log: { warn: () => {}, info: () => {} },
+        artifacts: createMaintenanceArtifacts(),
+      });
+      expect(activeStore.old).toBeUndefined();
+    } finally {
+      admission.release();
+    }
+  });
+});
+
+describe("pruneStaleModelRunEntries", () => {
+  it("removes only stale generated gateway model-run sessions", () => {
+    const now = Date.now();
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174001";
+    const store = makeStore([
+      [staleModelRun, makeEntry(now - 25 * 60 * 60 * 1000)],
+      [recentModelRun, makeEntry(now)],
+      ["agent:main:explicit:model-run-not-a-uuid", makeEntry(now - 10 * DAY_MS)],
+      [
+        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174002",
+        makeEntry(now - 10 * DAY_MS),
+      ],
+      ["agent:main:telegram:group:-100123:topic:77", makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:cron:job:run:123", makeEntry(now - 10 * DAY_MS)],
+    ]);
+
+    const pruned = pruneStaleModelRunEntries(store, DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store[staleModelRun]).toBeUndefined();
+    expect(store).toHaveProperty(recentModelRun);
+    expect(store).toHaveProperty("agent:main:explicit:model-run-not-a-uuid");
+    expect(store).toHaveProperty(
+      "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174002",
+    );
+    expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
+    expect(store).toHaveProperty("agent:main:cron:job:run:123");
+  });
+
+  it("honors preserve keys and disabled retention", () => {
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const store = makeStore([[staleModelRun, makeEntry(Date.now() - 10 * DAY_MS)]]);
+
+    expect(
+      pruneStaleModelRunEntries(store, DAY_MS, { preserveKeys: new Set([staleModelRun]) }),
+    ).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+    expect(pruneStaleModelRunEntries(store, null)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+  });
+
+  it("preserves model-locked harness sessions from model-run pruning", () => {
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const store = makeStore([
+      [staleModelRun, { ...makeEntry(Date.now() - 10 * DAY_MS), modelSelectionLocked: true }],
+    ]);
+
+    expect(pruneStaleModelRunEntries(store, DAY_MS)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+  });
+
+  it("matches only explicit model-run uuid session keys", () => {
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
+    expect(isGatewayModelRunSessionKey("agent:main:explicit:model-run-not-a-uuid")).toBe(false);
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-runner-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects non-canonical session keys that do not parse as agent-scoped", () => {
+    // Unscoped: missing `agent:<id>:` prefix — parseAgentSessionKey returns null.
+    expect(
+      isGatewayModelRunSessionKey("explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(false);
+    // Empty agent id segment: not a canonical `agent:<id>:` scoped key.
+    expect(
+      isGatewayModelRunSessionKey("agent::explicit:model-run-123e4567-e89b-12d3-a456-426614174000"),
+    ).toBe(false);
+    // Extra colon segment between agent id and `explicit:` — rest starts
+    // with `extra:` and fails the predicate's regex.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:extra:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+    // Whitespace-padded keys are non-canonical even though parseAgentSessionKey
+    // trims before normalizing; the predicate intentionally checks the original
+    // key shape before accepting a model-run key.
+    expect(
+      isGatewayModelRunSessionKey(
+        "  agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(false);
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000  ",
+      ),
+    ).toBe(false);
+  });
+
+  it("matches canonical keys whose agent id begins with model-run-", () => {
+    // Guards against an over-tight fix that confuses the agent id segment
+    // with the `explicit:model-run-<uuid>` rest segment.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:model-run-foo:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves case-insensitive matching for canonical keys", () => {
+    // normalizeLowercaseStringOrEmpty + parseAgentSessionKey's normalization
+    // lower-case everything outside opaque peer IDs, so a mixed-case
+    // canonical key still matches.
+    expect(
+      isGatewayModelRunSessionKey(
+        "agent:Main:Explicit:Model-Run-123E4567-E89B-12D3-A456-426614174000",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -257,6 +654,23 @@ describe("capEntryCount", () => {
     expect(store).toHaveProperty("newest");
     expect(store).toHaveProperty("recent");
     expect(store.oldest).toBeUndefined();
+    expect(store.old).toBeUndefined();
+  });
+
+  it("preserves model-locked harness sessions when capping", () => {
+    const now = Date.now();
+    const lockedKey = "agent:main:harness-owned:locked";
+    const store = makeStore([
+      [lockedKey, { ...makeEntry(now - 10 * DAY_MS), modelSelectionLocked: true }],
+      ["recent", makeEntry(now)],
+      ["old", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    expect(evicted).toBe(1);
+    expect(store).toHaveProperty(lockedKey);
+    expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
   });
 
@@ -401,6 +815,48 @@ describe("resolveMaintenanceConfigFromInput", () => {
     const maintenance = resolveMaintenanceConfigFromInput();
 
     expect(maintenance.mode).toBe("enforce");
+  });
+
+  it("defaults gateway model-run probes to fixed 24h retention", () => {
+    expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
+  });
+
+  it("keeps archived transcripts by default and bounds growth with a disk budget", () => {
+    const maintenance = resolveMaintenanceConfigFromInput();
+
+    expect(maintenance.resetArchiveRetentionMs).toBeNull();
+    expect(maintenance.maxDiskBytes).toBe(2 * 1024 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(2 * 1024 * 1024 * 1024 * 0.8));
+  });
+
+  it("honors explicit archive retention and disk budget opt-outs", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      resetArchiveRetention: "7d",
+      maxDiskBytes: false,
+    });
+
+    expect(maintenance.resetArchiveRetentionMs).toBe(7 * DAY_MS);
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("disables the disk budget when an explicit maxDiskBytes fails to parse", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "lots" });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
+    const defaultMaintenance = resolveMaintenanceConfigFromInput({ maxEntries: 50 });
+    expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
+    expect(shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 60 })).toBe(false);
+    expect(
+      shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 60, force: true }),
+    ).toBe(true);
+    expect(
+      shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 50, force: true }),
+    ).toBe(false);
   });
 
   it("batches normal entry-count maintenance for production-sized caps", () => {

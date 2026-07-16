@@ -15,6 +15,8 @@ afterAll(() => {
 });
 
 import {
+  buildLineMediaMessage,
+  hasLineSpecificMediaOptions,
   resolveLineOutboundMedia,
   validateLineMediaUrl,
 } from "./outbound-media.js";
@@ -168,5 +170,84 @@ describe("resolveLineOutboundMedia", () => {
     await expect(resolveLineOutboundMedia("http://example.com/image.jpg")).rejects.toThrow(
       /must use HTTPS/i,
     );
+  });
+});
+
+describe("hasLineSpecificMediaOptions", () => {
+  it("is false for empty or text-only channel data", () => {
+    expect(hasLineSpecificMediaOptions({})).toBe(false);
+    expect(hasLineSpecificMediaOptions({ quickReplies: ["A"] })).toBe(false);
+    expect(hasLineSpecificMediaOptions({ previewImageUrl: "  " })).toBe(false);
+  });
+
+  it("is true when any LINE media option is set", () => {
+    expect(hasLineSpecificMediaOptions({ mediaKind: "video" })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ previewImageUrl: "https://x/p.jpg" })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ durationMs: 0 })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ durationMs: 1000 })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ trackingId: "t" })).toBe(true);
+  });
+});
+
+describe("buildLineMediaMessage", () => {
+  it("builds a video message and gates trackingId on user targets", async () => {
+    const options = {
+      mediaKind: "video" as const,
+      previewImageUrl: "https://example.com/preview.jpg",
+      trackingId: "track-1",
+    };
+    await expect(
+      buildLineMediaMessage("https://example.com/clip.mp4", options, "line:user:Uabc"),
+    ).resolves.toEqual({
+      type: "video",
+      originalContentUrl: "https://example.com/clip.mp4",
+      previewImageUrl: "https://example.com/preview.jpg",
+      trackingId: "track-1",
+    });
+    await expect(
+      buildLineMediaMessage("https://example.com/clip.mp4", options, "line:group:Cabc"),
+    ).resolves.toEqual({
+      type: "video",
+      originalContentUrl: "https://example.com/clip.mp4",
+      previewImageUrl: "https://example.com/preview.jpg",
+    });
+  });
+
+  it("rejects a video missing its preview image", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/clip.mp4",
+        { mediaKind: "video" },
+        "line:user:Uabc",
+      ),
+    ).rejects.toThrow(/require previewImageUrl/i);
+  });
+
+  it("builds an audio message with a default duration", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/voice.m4a",
+        { mediaKind: "audio" },
+        "line:user:Uabc",
+      ),
+    ).resolves.toEqual({
+      type: "audio",
+      originalContentUrl: "https://example.com/voice.m4a",
+      duration: 60000,
+    });
+  });
+
+  it("defaults an image preview to the media URL", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/photo.png",
+        { mediaKind: "image" },
+        "line:user:Uabc",
+      ),
+    ).resolves.toEqual({
+      type: "image",
+      originalContentUrl: "https://example.com/photo.png",
+      previewImageUrl: "https://example.com/photo.png",
+    });
   });
 });

@@ -39,9 +39,7 @@ import {
 } from "./plugin-model-catalog.js";
 import { stableStringify } from "./stable-stringify.js";
 
-export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
-
-export type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
+type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
   fingerprint: string;
   workspaceDir?: string;
 };
@@ -141,18 +139,25 @@ async function readExistingModelsFile(pathname: string): Promise<{
 }
 
 /** Best-effort chmod for generated models.json and plugin catalog files. */
-export async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
+async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
   await fs.chmod(pathname, 0o600).catch(() => {
     // best-effort
   });
 }
 
 /** Atomic private-file-store write used by models.json generation. */
-export async function writeModelsFileAtomicForModelsJson(
+async function writeModelsFileAtomicForModelsJson(
   targetPath: string,
   contents: string,
 ): Promise<void> {
   await privateFileStore(path.dirname(targetPath)).writeText(path.basename(targetPath), contents);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelsConfigTestApi")] = {
+    ensureModelsFileModeForModelsJson,
+    writeModelsFileAtomicForModelsJson,
+  };
 }
 
 async function isGeneratedPluginCatalogFile(targetPath: string): Promise<boolean> {
@@ -340,22 +345,7 @@ export async function buildModelsJsonSourceFingerprint(
 }
 
 async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
-  const prior = MODELS_JSON_STATE.writeLocks.get(targetPath) ?? Promise.resolve();
-  let release: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const pending = prior.then(() => gate);
-  MODELS_JSON_STATE.writeLocks.set(targetPath, pending);
-  try {
-    await prior;
-    return await run();
-  } finally {
-    release();
-    if (MODELS_JSON_STATE.writeLocks.get(targetPath) === pending) {
-      MODELS_JSON_STATE.writeLocks.delete(targetPath);
-    }
-  }
+  return await MODELS_JSON_STATE.writeQueue.enqueue(targetPath, run);
 }
 
 /** Ensures models.json and plugin catalog sidecars are current for an agent. */
