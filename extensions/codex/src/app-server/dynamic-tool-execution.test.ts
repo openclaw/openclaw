@@ -273,28 +273,50 @@ describe("dynamic tool execution helpers", () => {
   );
 
   it("rejects non-finite, non-numeric, and missing duration values", () => {
-    const cases: Array<[string, Record<string, unknown> | undefined, number]> = [
-      ["NaN", { action: "wait", duration: Number.NaN }, 120_000],
-      ["Infinity", { action: "wait", duration: Infinity }, 120_000],
-      ["null", { action: "wait", duration: null }, 120_000],
-      ["bool", { action: "wait", duration: true }, 120_000],
-      ["missing key", { action: "wait" }, 120_000],
-    ];
-    for (const [, args, expectedMs] of cases) {
-      expect(
-        resolveDynamicToolCallTimeoutMs({
-          call: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId: `call-computer-wait-edge-${String(args?.duration ?? "missing")}`,
-            namespace: null,
-            tool: "computer",
-            arguments: args,
-          },
-          config: undefined,
-        }),
-      ).toBe(expectedMs);
-    }
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1", turnId: "turn-1", callId: "call-computer-wait-nan",
+          namespace: null, tool: "computer",
+          arguments: { action: "wait", duration: Number.NaN },
+        }, config: undefined,
+      }),
+    ).toBe(120_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1", turnId: "turn-1", callId: "call-computer-wait-inf",
+          namespace: null, tool: "computer",
+          arguments: { action: "wait", duration: Infinity },
+        }, config: undefined,
+      }),
+    ).toBe(120_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1", turnId: "turn-1", callId: "call-computer-wait-null",
+          namespace: null, tool: "computer",
+          arguments: { action: "wait", duration: null },
+        }, config: undefined,
+      }),
+    ).toBe(120_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1", turnId: "turn-1", callId: "call-computer-wait-bool",
+          namespace: null, tool: "computer",
+          arguments: { action: "wait", duration: true },
+        }, config: undefined,
+      }),
+    ).toBe(120_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1", turnId: "turn-1", callId: "call-computer-wait-no-dur",
+          namespace: null, tool: "computer", arguments: { action: "wait" },
+        }, config: undefined,
+      }),
+    ).toBe(120_000);
   });
 
   it("uses media image config and caps excessive dynamic tool timeouts", () => {
