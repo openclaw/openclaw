@@ -469,8 +469,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     vi.useFakeTimers();
     state.runEmbeddedAgentMock.mockRejectedValue(new Error("model is overloaded"));
     const abortController = new AbortController();
-    const { replyOperation } = createMockReplyOperation();
-    replyOperation.abortSignal = abortController.signal;
+    const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
     const onBlockReply = vi.fn();
 
     const resultPromise = runAgentTurnWithFallback(
