@@ -48,7 +48,7 @@ export type SessionTranscriptProjectionState = {
   needsRebuild: boolean;
 };
 
-export type SessionTranscriptProjectionSourceRow = {
+type SessionTranscriptProjectionSourceRow = {
   event: unknown;
   seq: number;
 };
