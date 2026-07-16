@@ -26,7 +26,7 @@ cargo build
 
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
-After a first-run CLI install, the app opens the local dashboard once with onboarding mode enabled. Reconnects and later app launches use the normal dashboard URL.
+On first run, release builds automatically install the stable CLI channel, while development builds ask for a release channel and preselect Development. After the CLI install, the app opens the local dashboard once with onboarding mode enabled. Reconnects and later app launches use the normal dashboard URL.
 
 ## Updates
 

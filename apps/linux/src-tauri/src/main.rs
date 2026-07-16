@@ -10,6 +10,7 @@ mod updater;
 use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot};
 use installer::InstallChannel;
+use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,6 +19,18 @@ use tauri::{AppHandle, Manager, State, Url, WebviewWindow};
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildInfo {
+    version: String,
+    release_build: bool,
+}
+
+fn is_release_version(version: &str) -> bool {
+    // The committed 0.1.0 version identifies branch builds; release builds are stamped by CI.
+    version != "0.1.0"
+}
 
 #[derive(Default)]
 struct NavigationState {
@@ -418,7 +431,18 @@ fn local_mode(snapshot: &GatewaySnapshot) -> &'static str {
 
 #[cfg(test)]
 mod navigation_tests {
-    use super::NavigationState;
+    use super::{is_release_version, NavigationState};
+
+    #[test]
+    fn committed_package_version_is_a_development_build() {
+        assert!(!is_release_version("0.1.0"));
+    }
+
+    #[test]
+    fn stamped_package_versions_are_release_builds() {
+        assert!(is_release_version("2026.7.2"));
+        assert!(is_release_version("2026.7.2-beta.1"));
+    }
 
     #[test]
     fn newer_remote_selection_blocks_older_local_navigation() {
@@ -503,6 +527,15 @@ fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 }
 
 #[tauri::command]
+fn build_info(app: AppHandle) -> BuildInfo {
+    let version = app.package_info().version.to_string();
+    BuildInfo {
+        release_build: is_release_version(&version),
+        version,
+    }
+}
+
+#[tauri::command]
 async fn bootstrap(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -567,6 +600,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
+        build_info,
         canvas::canvas_a2ui_action,
         updater::check_for_updates,
         discovery::connect_discovered_gateway,
@@ -580,6 +614,7 @@ fn main() {
     #[cfg(not(target_os = "linux"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
+        build_info,
         updater::check_for_updates,
         discovery::connect_discovered_gateway,
         discovery::discover_gateways,
