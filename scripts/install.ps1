@@ -125,24 +125,34 @@ function Resolve-InstallerTempDirectory {
     }
 
     foreach ($candidate in $candidates) {
+        $pathToResolve = $candidate
+        $candidateHasShortAlias = $candidate -match '(?i)~\d'
         $requiresCanonicalization = (
-            $candidate -match '(?i)~\d' -or
+            $candidateHasShortAlias -or
             $candidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)
         )
+        if ($pathToResolve.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $pathToResolve = "\\" + $pathToResolve.Substring(8)
+        } elseif ($pathToResolve.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $pathToResolve = $pathToResolve.Substring(4)
+        }
         try {
             if ($LongPathResolver) {
-                $resolvedCandidate = & $LongPathResolver $candidate
+                $resolvedCandidate = & $LongPathResolver $pathToResolve
             } else {
-                $fileSystem = New-Object -ComObject Scripting.FileSystemObject
-                $resolvedCandidate = $fileSystem.GetFolder($candidate).Path
+                # Windows PowerShell 5.1: FSO Folder.Path echoes 8.3 aliases; Get-Item.FullName expands them.
+                $resolvedCandidate = (Get-Item -LiteralPath $pathToResolve -ErrorAction Stop).FullName
             }
         } catch {
             if ($requiresCanonicalization) {
                 continue
             }
-            $resolvedCandidate = $candidate
+            $resolvedCandidate = $pathToResolve
         }
         if ([string]::IsNullOrWhiteSpace($resolvedCandidate)) {
+            continue
+        }
+        if ($candidateHasShortAlias -and $resolvedCandidate -match '(?i)~\d') {
             continue
         }
         if ($resolvedCandidate.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -762,8 +772,9 @@ function Install-PortableGit {
     $download = Resolve-PortableGitDownload
     $portableRoot = Get-PortableGitRoot
     $portableParent = Split-Path -Parent $portableRoot
-    $tmpZip = Join-Path $script:InstallerTempDirectory $download.Name
-    $tmpExtract = Join-Path $script:InstallerTempDirectory ("openclaw-portable-git-" + [guid]::NewGuid().ToString("N"))
+    $tempName = "openclaw-portable-git-" + [guid]::NewGuid().ToString("N")
+    $tmpZip = Join-Path $script:InstallerTempDirectory ($tempName + ".zip")
+    $tmpExtract = Join-Path $script:InstallerTempDirectory $tempName
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
@@ -778,6 +789,7 @@ function Install-PortableGit {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
         Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
+        New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
     } finally {
         if (Test-Path $tmpZip) {

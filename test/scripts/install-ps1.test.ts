@@ -137,22 +137,66 @@ describe("install.ps1 failure handling", () => {
           '$longTemp = Join-Path $sandbox "Long Temp"',
           "try {",
           "  New-Item -ItemType Directory -Force -Path $longTemp | Out-Null",
-          "  $env:TEMP = '\\\\?\\C:\\Temp'",
+          "  $env:TEMP = $longTemp",
           "  $env:TMP = $longTemp",
-          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate.StartsWith('\\\\?\\')) { return '\\\\?\\' + $longTemp }; return $candidate }",
-          '  if ($resolved -ne $longTemp) { throw "extended=$resolved" }',
+          "  $resolved = Resolve-InstallerTempDirectory",
+          "  $expected = (Get-Item -LiteralPath $longTemp -ErrorAction Stop).FullName",
+          '  if ($resolved -ne $expected) { throw "default=$resolved expected=$expected" }',
+          "  $env:TEMP = '\\\\?\\' + $longTemp",
+          "  $env:TMP = $env:TEMP",
+          '  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -ne $longTemp) { throw "prefix not stripped: $candidate" }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }',
+          '  if ($resolved -ne $expected) { throw "extended=$resolved expected=$expected" }',
+          "  # Windows PowerShell 5.1 proof: FSO Folder.Path echoes 8.3; Get-Item.FullName expands it.",
           "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
           "  $env:TMP = $longTemp",
-          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { throw 'stale short alias' }; return $candidate }",
+          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { return $longTemp }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
+          '  if ($resolved -ne $longTemp) { throw "short=$resolved" }',
+          "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Missing'",
+          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { throw 'unresolvable short alias' }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
           '  if ($resolved -ne $longTemp) { throw "fallback=$resolved" }',
           "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
-          "  Initialize-InstallerTempDirectory -LongPathResolver { param($candidate) return $longTemp }",
+          "  $resolved = Resolve-InstallerTempDirectory -LongPathResolver { param($candidate) return $candidate }",
+          '  if ($resolved -ne $longTemp) { throw "unchanged-short=$resolved" }',
+          "  $env:TEMP = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp'",
+          "  Initialize-InstallerTempDirectory -LongPathResolver { param($candidate) if ($candidate -match '~') { return $longTemp }; return (Get-Item -LiteralPath $candidate -ErrorAction Stop).FullName }",
           '  if ($script:InstallerTempDirectory -ne $longTemp) { throw "canonical=$script:InstallerTempDirectory" }',
           '  if ($env:TEMP -ne $longTemp) { throw "TEMP=$env:TEMP" }',
           '  if ($env:TMP -ne $longTemp) { throw "TMP=$env:TMP" }',
           "} finally {",
           "  $env:TEMP = $originalTemp",
           "  $env:TMP = $originalTmp",
+          "  if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "portable-git-layout",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-portable-git-test-" + [guid]::NewGuid().ToString("N"))',
+          '$portableRoot = Join-Path $sandbox "portable-git"',
+          "try {",
+          "  New-Item -ItemType Directory -Force -Path $sandbox | Out-Null",
+          "  $script:InstallerTempDirectory = $sandbox",
+          "  function Get-PortableGitRoot { return $portableRoot }",
+          "  function Resolve-PortableGitDownload { return @{ Tag = 'test'; Name = 'MinGit.zip'; Url = 'https://example.test/MinGit.zip' } }",
+          "  function Ensure-PortableGitOnUserPath { }",
+          "  function Use-PortableGitIfPresent { return (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe')) }",
+          "  function Invoke-WebRequest { param($Uri, $OutFile) New-Item -ItemType File -Force -Path $OutFile | Out-Null }",
+          "  function Expand-Archive {",
+          "    param($Path, $DestinationPath, [switch]$Force)",
+          "    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'cmd') | Out-Null",
+          "    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'etc') | Out-Null",
+          "    New-Item -ItemType File -Force -Path (Join-Path $DestinationPath 'cmd/git.exe') | Out-Null",
+          "    New-Item -ItemType File -Force -Path (Join-Path $DestinationPath 'etc/gitconfig') | Out-Null",
+          "  }",
+          "  Install-PortableGit",
+          "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe'))) { throw 'missing cmd/git.exe' }",
+          "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'etc/gitconfig'))) { throw 'missing etc/gitconfig' }",
+          "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter 'openclaw-portable-git-*').Count -ne 0) { throw 'temporary Git files remain' }",
+          "} finally {",
           "  if (Test-Path -LiteralPath $sandbox) { Remove-Item -LiteralPath $sandbox -Recurse -Force }",
           "}",
           "",
@@ -544,6 +588,10 @@ describe("install.ps1 failure handling", () => {
     expectBatchedPowerShellCase("canonical-temp-root");
   });
 
+  runIfPowerShell("installs portable Git from multiple archive roots without collisions", () => {
+    expectBatchedPowerShellCase("portable-git-layout");
+  });
+
   runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {
     expectBatchedPowerShellCase("winget-node-delayed-path");
     expectBatchedPowerShellCase("chocolatey-node-upgrade");
@@ -631,8 +679,10 @@ describe("install.ps1 failure handling", () => {
     const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
     const commandSafeBody = extractFunctionBody(source, "Get-WindowsCommandSafeDirectory");
 
-    expect(resolveBody).toContain("Scripting.FileSystemObject");
-    expect(resolveBody).toContain("$fileSystem.GetFolder($candidate).Path");
+    expect(resolveBody).toContain("Get-Item -LiteralPath $pathToResolve -ErrorAction Stop");
+    expect(resolveBody).toContain(".FullName");
+    expect(resolveBody).toContain("FSO Folder.Path echoes 8.3 aliases");
+    expect(resolveBody).not.toContain("Scripting.FileSystemObject");
     expect(resolveBody).toContain("$resolvedCandidate.Substring(8)");
     expect(resolveBody).toContain("$resolvedCandidate.Substring(4)");
     expect(resolveBody).toContain("Test-Path -LiteralPath $resolvedCandidate -PathType Container");
@@ -764,6 +814,16 @@ describe("install.ps1 failure handling", () => {
     expect(portableGitDownloadBody).toContain("Get-WindowsPortableArchitecture");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-arm64\\.zip$'");
     expect(portableGitDownloadBody).toContain("'^MinGit-.*-64-bit\\.zip$'");
+    expect(portableGitBody).toContain(
+      '$tempName = "openclaw-portable-git-" + [guid]::NewGuid().ToString("N")',
+    );
+    expect(portableGitBody).toContain(
+      'Join-Path $script:InstallerTempDirectory ($tempName + ".zip")',
+    );
+    expect(portableGitBody).toContain("Join-Path $script:InstallerTempDirectory $tempName");
+    expect(portableGitBody).toContain(
+      "New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null",
+    );
   });
 
   runIfPowerShell("selects native ARM64 MinGit when the release publishes it", () => {
