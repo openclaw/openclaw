@@ -4859,7 +4859,7 @@ describe("update-cli", () => {
     expect(logs).toContain(`Managed gateway service Node: ${serviceNode}`);
   });
 
-  it("checks the managed service Node runtime before updating a redirected package root", async () => {
+  it("blocks a stale managed service Node before a no-restart package update", async () => {
     const shellRoot = createCaseDir("openclaw-shell-root");
     const serviceRoot = await createTrackedTempDir("openclaw-service-root-");
     const serviceNode = path.join(path.dirname(serviceRoot), "bin", "node");
@@ -4902,7 +4902,7 @@ describe("update-cli", () => {
     });
     nodeVersionSatisfiesEngine.mockReturnValue(false);
 
-    await updateCommand({ yes: true });
+    await updateCommand({ yes: true, restart: false });
 
     expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("22.18.0", ">=22.19.0");
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -5041,7 +5041,7 @@ describe("update-cli", () => {
     );
   });
 
-  it("uses the managed service Node for follow-up commands when roots match but nodes differ", async () => {
+  it("refreshes the managed service to current Node when its baked Node cannot run the target", async () => {
     const servicePrefix = await createTrackedTempDir("openclaw-service-prefix-");
     const nodeModules = path.join(servicePrefix, "lib", "node_modules");
     const root = path.join(nodeModules, "openclaw");
@@ -5066,6 +5066,14 @@ describe("update-cli", () => {
       programArguments: [serviceNode, entrypoint, "gateway"],
     });
     serviceLoaded.mockResolvedValue(true);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "latest",
+      version: "2026.7.1",
+      nodeEngine: ">=24.15.0 <25",
+    });
+    nodeVersionSatisfiesEngine.mockImplementation(
+      (version: string | null) => version === "24.15.0",
+    );
     pathExists.mockImplementation(async (candidate: string) => {
       try {
         await fs.access(candidate);
@@ -5078,6 +5086,16 @@ describe("update-cli", () => {
       if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
         return {
           stdout: "v24.14.0\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (Array.isArray(argv) && argv[0] === process.execPath && argv[1] === "--version") {
+        return {
+          stdout: "v24.15.0\n",
           stderr: "",
           code: 0,
           signal: null,
@@ -5133,13 +5151,20 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true });
 
-    // Follow-up commands should use the service Node, not process.execPath.
-    expect(doctorCommandCall()?.[0][0]).toBe(serviceNode);
-    expect(spawnCall()?.[0]).toBe(serviceNode);
+    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("24.14.0", ">=24.15.0 <25");
+    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("24.15.0", ">=24.15.0 <25");
+    expect(doctorCommandCall()?.[0][0]).toBe(process.execPath);
+    expect(spawnCall()?.[0]).toBe(process.execPath);
     const serviceInstallCall = commandCalls().find(
       ([argv]) => argv[2] === "gateway" && argv[3] === "install",
     );
-    expect(serviceInstallCall?.[0][0]).toBe(serviceNode);
+    expect(serviceInstallCall?.[0][0]).toBe(process.execPath);
+    const logs = vi
+      .mocked(defaultRuntime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logs).toContain(`Managed gateway service Node (${serviceNode}) cannot run`);
+    expect(logs).toContain(`Using current Node (${process.execPath})`);
   });
 
   it("pins package install to the service root when nodes differ and no owning npm exists at the prefix", async () => {

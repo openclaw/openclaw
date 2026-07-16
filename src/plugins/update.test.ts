@@ -2173,6 +2173,11 @@ describe("updateNpmInstalledPlugins", () => {
       config: {
         plugins: {
           allow: ["lossless-claw", "keep"],
+          deny: ["lossless-claw", "blocked"],
+          slots: {
+            memory: "lossless-claw",
+            contextEngine: "lossless-claw",
+          },
           entries: {
             "lossless-claw": {
               enabled: true,
@@ -2201,7 +2206,12 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toEqual(["keep"]);
+    expect(result.config.plugins?.allow).toEqual(["lossless-claw", "keep"]);
+    expect(result.config.plugins?.deny).toEqual(["lossless-claw", "blocked"]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
     expect(result.outcomes).toEqual([
       {
         pluginId: "lossless-claw",
@@ -2265,6 +2275,7 @@ describe("updateNpmInstalledPlugins", () => {
     const config = {
       plugins: {
         allow: ["demo", "other"],
+        deny: ["demo", "blocked"],
         slots: { memory: "demo" },
         entries: {
           demo: {
@@ -2297,7 +2308,8 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toEqual(["other"]);
+    expect(result.config.plugins?.allow).toEqual(["demo", "other"]);
+    expect(result.config.plugins?.deny).toEqual(["demo", "blocked"]);
     expect(result.config.plugins?.slots?.memory).toBe("memory-core");
     expect(result.outcomes).toEqual([
       {
@@ -2883,7 +2895,7 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it("disables enabled tracked plugin update failures when requested", async () => {
+  it("disables failed plugin activation without revoking explicit policy", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
@@ -2930,7 +2942,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toEqual(["other"]);
+    expect(result.config.plugins?.allow).toEqual(["demo", "other"]);
     expect(result.config.plugins?.deny).toEqual(["blocked"]);
     expect(result.config.plugins?.slots).toEqual({
       memory: "memory-core",
@@ -3033,7 +3045,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["demo"]);
     expect(result.config.plugins?.slots?.memory).toBe("memory-core");
     expect(result.outcomes).toEqual([
       {
@@ -3182,7 +3194,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["demo"]);
     expect(result.config.plugins?.slots).toEqual({
       memory: "memory-core",
     });

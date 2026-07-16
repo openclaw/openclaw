@@ -121,15 +121,22 @@ function truncateProviderToolText(text: string): string {
   return `${truncateUtf16Safe(text, PROVIDER_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
+/** Media metadata alone is not an attachment; provider emitters need inline bytes. */
+export function hasMediaPayload(
+  block: unknown,
+): block is Record<string, unknown> & { data: string } {
+  return isRecord(block) && typeof block.data === "string" && block.data.trim().length > 0;
+}
+
 export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
   let hasImage = false;
   let hasAudio = false;
 
   for (const block of blocks) {
-    if (!block || typeof block !== "object") {
+    if (!hasMediaPayload(block)) {
       continue;
     }
-    const record = block as Record<string, unknown>;
+    const record = block;
     const type = typeof record.type === "string" ? record.type : undefined;
     const mimeType = readMimeType(record);
 

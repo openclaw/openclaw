@@ -30,6 +30,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import {
+  createInjectedClientDiscoverySdk,
+  loadBedrockDiscoverySdk,
+  sendBedrockDiscoveryCommand,
+  type BedrockDiscoverySdk,
+} from "./discovery-sdk.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { resolveBedrockNativeThinkingLevelMap } from "./thinking-policy.js";
 
@@ -207,38 +213,6 @@ type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelS
 type InferenceProfileSummary = NonNullable<
   ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
 >[number];
-
-type BedrockDiscoverySdk = {
-  createClient(region: string): BedrockClient;
-  createListFoundationModelsCommand(): unknown;
-  createListInferenceProfilesCommand(input: { nextToken?: string }): unknown;
-};
-
-async function loadBedrockDiscoverySdk(): Promise<BedrockDiscoverySdk> {
-  const { BedrockClient, ListFoundationModelsCommand, ListInferenceProfilesCommand } =
-    await import("@aws-sdk/client-bedrock");
-  return {
-    createClient: (region) => new BedrockClient({ region }),
-    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
-    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
-  };
-}
-
-function createInjectedClientDiscoverySdk(): BedrockDiscoverySdk {
-  class ListFoundationModelsCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-  class ListInferenceProfilesCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-  return {
-    createClient() {
-      throw new Error("clientFactory is required for injected Bedrock discovery commands");
-    },
-    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
-    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
-  };
-}
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -425,8 +399,10 @@ async function fetchInferenceProfileSummaries(
     const profiles: InferenceProfileSummary[] = [];
     let nextToken: string | undefined;
     do {
-      const response: ListInferenceProfilesCommandOutput = await client.send(
+      const response = await sendBedrockDiscoveryCommand<ListInferenceProfilesCommandOutput>(
+        client,
         createListInferenceProfilesCommand({ nextToken }) as never,
+        "Bedrock ListInferenceProfiles",
       );
       for (const summary of response.inferenceProfileSummaries ?? []) {
         profiles.push(summary);
@@ -586,13 +562,16 @@ export async function discoverBedrockModels(params: {
     // Both API calls are independent, but we need the foundation model data
     // to resolve inference profile capabilities — so we fetch in parallel,
     // then build the lookup map before processing profiles.
-    const [rawFoundationResponse, profileSummaries] = await Promise.all([
-      client.send(sdk.createListFoundationModelsCommand() as never),
+    const [foundationResponse, profileSummaries] = await Promise.all([
+      sendBedrockDiscoveryCommand<ListFoundationModelsCommandOutput>(
+        client,
+        sdk.createListFoundationModelsCommand() as never,
+        "Bedrock ListFoundationModels",
+      ),
       fetchInferenceProfileSummaries(client, (input) =>
         sdk.createListInferenceProfilesCommand(input),
       ),
     ]);
-    const foundationResponse = rawFoundationResponse as ListFoundationModelsCommandOutput;
 
     const discovered: ModelDefinitionConfig[] = [];
     const seenIds = new Set<string>();

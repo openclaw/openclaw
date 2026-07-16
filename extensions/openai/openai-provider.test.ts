@@ -144,7 +144,20 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
   };
 
   return {
-    ...actual,
+    buildProviderStreamFamilyHooks: actual.buildProviderStreamFamilyHooks,
+    createCodexNativeWebSearchWrapper: actual.createCodexNativeWebSearchWrapper,
+    createOpenAIAttributionHeadersWrapper: actual.createOpenAIAttributionHeadersWrapper,
+    createOpenAIFastModeWrapper: actual.createOpenAIFastModeWrapper,
+    createOpenAIReasoningCompatibilityWrapper: actual.createOpenAIReasoningCompatibilityWrapper,
+    createOpenAIResponsesContextManagementWrapper:
+      actual.createOpenAIResponsesContextManagementWrapper,
+    createOpenAIServiceTierWrapper: actual.createOpenAIServiceTierWrapper,
+    createOpenAITextVerbosityWrapper: actual.createOpenAITextVerbosityWrapper,
+    getOpenRouterModelCapabilities: actual.getOpenRouterModelCapabilities,
+    loadOpenRouterModelCapabilities: actual.loadOpenRouterModelCapabilities,
+    resolveOpenAIFastMode: actual.resolveOpenAIFastMode,
+    resolveOpenAIServiceTier: actual.resolveOpenAIServiceTier,
+    resolveOpenAITextVerbosity: actual.resolveOpenAITextVerbosity,
     OPENAI_RESPONSES_STREAM_HOOKS: {
       ...actual.OPENAI_RESPONSES_STREAM_HOOKS,
       wrapStreamFn,
