@@ -31,8 +31,8 @@ OpenClaw handles failures in two stages:
   <Step title="Use fallback for the current turn">
     Run the winning fallback candidate without changing the session's selected provider/model.
   </Step>
-  <Step title="Retry pure overload exhaustion">
-    If every candidate fails only because providers are overloaded, retry the full turn-local chain up to 10 times with exponential backoff. After 30 seconds, send one status notice so the user is not left waiting silently.
+  <Step title="Retry safe pure overload exhaustion">
+    If every candidate fails only because providers are overloaded, retry the full turn-local chain up to 10 times with exponential backoff while no tool execution or assistant output has started. After 30 seconds, send one status notice so the user is not left waiting silently.
   </Step>
   <Step title="Throw FallbackSummaryError if exhausted">
     If every candidate fails, throw a `FallbackSummaryError` with per-attempt detail and the soonest cooldown expiry when one is known.
@@ -262,7 +262,7 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Provider-busy signals such as `ModelNotReadyException` land in the overloaded bucket and follow the same one-rotation-then-fallback policy as rate limits (see the defaults table above).
 
-If the entire candidate chain is exhausted only by overload failures, the reply runner retries the chain up to 10 times in the same turn. Backoff starts at 2.5 seconds and doubles to a 30-second cap. Once the turn has been waiting for 30 seconds, OpenClaw sends one transient status notice: `The AI service is temporarily overloaded. I’m still retrying; this may take a few minutes.` The retry and any fallback winner remain turn-local; ordinary transient server errors retain their separate one-retry policy.
+If the entire candidate chain is exhausted only by overload failures, the reply runner retries the chain up to 10 times in the same turn. Full-turn retry is allowed only before tool execution or assistant output starts, avoiding duplicate mutations or messages if an overload arrives after observable work. Backoff starts at 2.5 seconds and doubles to a 30-second cap. Once the turn has been waiting for 30 seconds, OpenClaw sends one transient status notice: `The AI service is temporarily overloaded. I’m still retrying; this may take a few minutes.` The retry and any fallback winner remain turn-local; ordinary transient server errors retain their separate one-retry policy.
 
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 

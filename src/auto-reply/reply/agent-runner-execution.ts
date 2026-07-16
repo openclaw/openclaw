@@ -182,6 +182,10 @@ async function runAgentTurnWithFallbackInternalWithRetryState(
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
+    if (info.phase === "tool_execution_started" || info.phase === "assistant_output_started") {
+      // A full-turn retry after observable output or tool work could duplicate messages or mutations.
+      overloadRetryState.unsafeToReplay = true;
+    }
     const isUserVisibleExecutionActivity =
       info.phase === "turn_accepted" ||
       info.phase === "process_spawned" ||
@@ -413,6 +417,7 @@ async function runAgentTurnWithFallbackInternal(
   const overloadRetryState: OverloadRetryState = {
     retryCount: 0,
     turnStartedAtMs: Date.now(),
+    unsafeToReplay: false,
     noticeSent: false,
     completed: false,
   };

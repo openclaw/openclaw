@@ -71,10 +71,12 @@ const OVERLOAD_RETRY_NOTICE_TEXT =
 export type OverloadRetryState = {
   retryCount: number;
   turnStartedAtMs: number;
+  unsafeToReplay: boolean;
   noticeSent: boolean;
   noticeTimer?: ReturnType<typeof setTimeout>;
   noticeDelivery?: Promise<void>;
   noticeAbortController?: AbortController;
+  noticeAbortCleanup?: () => void;
   completed: boolean;
 };
 
@@ -85,6 +87,8 @@ export async function cancelOverloadRetryNotice(state: OverloadRetryState): Prom
     clearTimeout(state.noticeTimer);
     state.noticeTimer = undefined;
   }
+  state.noticeAbortCleanup?.();
+  state.noticeAbortCleanup = undefined;
   state.noticeAbortController?.abort(new Error("overload retry finished"));
   await state.noticeDelivery;
 }
@@ -247,7 +251,11 @@ export async function handleAgentExecutionError(params: {
       }),
     };
   }
-  if (isOverloaded && params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES) {
+  if (
+    isOverloaded &&
+    !params.overloadRetryState.unsafeToReplay &&
+    params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES
+  ) {
     params.state.pendingLifecycleTerminal = undefined;
     params.overloadRetryState.retryCount += 1;
     const retryCount = params.overloadRetryState.retryCount;
@@ -255,11 +263,13 @@ export async function handleAgentExecutionError(params: {
       OVERLOAD_RETRY_BASE_DELAY_MS * 2 ** (retryCount - 1),
       OVERLOAD_RETRY_MAX_DELAY_MS,
     );
+    const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
     const scheduleRetryNotice = () => {
       if (
         params.overloadRetryState.noticeSent ||
         params.overloadRetryState.noticeTimer ||
         params.overloadRetryState.completed ||
+        retryAbortSignal?.aborted ||
         turn.isHeartbeat ||
         !turn.opts?.onBlockReply
       ) {
@@ -271,7 +281,11 @@ export async function handleAgentExecutionError(params: {
       }
       const sendRetryNotice = () => {
         params.overloadRetryState.noticeTimer = undefined;
-        if (params.overloadRetryState.noticeSent || params.overloadRetryState.completed) {
+        if (
+          params.overloadRetryState.noticeSent ||
+          params.overloadRetryState.completed ||
+          retryAbortSignal?.aborted
+        ) {
           return;
         }
         params.overloadRetryState.noticeSent = true;
@@ -327,6 +341,21 @@ export async function handleAgentExecutionError(params: {
         0,
         OVERLOAD_RETRY_NOTICE_AFTER_MS - (Date.now() - params.overloadRetryState.turnStartedAtMs),
       );
+      if (retryAbortSignal) {
+        const abortNotice = () => {
+          if (params.overloadRetryState.noticeTimer) {
+            clearTimeout(params.overloadRetryState.noticeTimer);
+            params.overloadRetryState.noticeTimer = undefined;
+          }
+          params.overloadRetryState.noticeAbortController?.abort(
+            retryAbortSignal.reason ?? new Error("overload retry aborted"),
+          );
+        };
+        retryAbortSignal.addEventListener("abort", abortNotice, { once: true });
+        params.overloadRetryState.noticeAbortCleanup = () => {
+          retryAbortSignal.removeEventListener("abort", abortNotice);
+        };
+      }
       if (noticeDelayMs === 0) {
         sendRetryNotice();
         return;
@@ -341,7 +370,6 @@ export async function handleAgentExecutionError(params: {
       `Overloaded provider before reply (${sanitizeForLog(message)}). ` +
         `Retrying ${retryCount}/${MAX_OVERLOAD_RETRIES} in ${retryDelayMs}ms.`,
     );
-    const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
     try {
       await sleepWithAbort(retryDelayMs, retryAbortSignal);
     } catch (sleepError) {
