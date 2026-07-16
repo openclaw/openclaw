@@ -32,6 +32,8 @@ export type AcpRuntimeHandle = {
   backendSessionId?: string;
   /** Upstream harness session identifier, if exposed by adapter/runtime. */
   agentSessionId?: string;
+  /** Whether the agent advertised session/resume or session/load support. */
+  sessionResumeSupported?: boolean;
 };
 
 export type AcpRuntimeEnsureInput = {

@@ -60,6 +60,11 @@ import {
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
 import {
+  isParentOwnedAcpSessionEntry,
+  isParentOwnedAcpSessionTask,
+  isResumableOneShotAcpSession,
+} from "./task-registry.acp-session-lifecycle.js";
+import {
   configureTaskAuditTaskProvider,
   listTaskAuditFindings,
   summarizeTaskAuditFindings,
@@ -504,31 +509,6 @@ function getNormalizedTaskChildSessionKey(task: TaskRecord): string | undefined 
   return normalizeOptionalString(task.childSessionKey);
 }
 
-function getAcpSessionParentKeys(acpEntry: Pick<AcpSessionStoreEntry, "entry">): string[] {
-  return [
-    normalizeOptionalString(acpEntry.entry?.spawnedBy),
-    normalizeOptionalString(acpEntry.entry?.parentSessionKey),
-  ].filter((value): value is string => Boolean(value));
-}
-
-function isParentOwnedAcpSessionTask(
-  task: TaskRecord,
-  acpEntry: ReturnType<typeof readAcpSessionEntry>,
-): boolean {
-  const entry = acpEntry?.entry;
-  if (!entry) {
-    return false;
-  }
-  const ownerKey = normalizeOptionalString(task.ownerKey);
-  const requesterKey = normalizeOptionalString(task.requesterSessionKey);
-  const parentKeys = getAcpSessionParentKeys({ entry });
-  return parentKeys.some((parentKey) => parentKey === ownerKey || parentKey === requesterKey);
-}
-
-function isParentOwnedAcpSessionEntry(acpEntry: Pick<AcpSessionStoreEntry, "entry">): boolean {
-  return getAcpSessionParentKeys(acpEntry).length > 0;
-}
-
 function hasActiveSessionBinding(sessionKey: string): boolean {
   const listBindings = taskRegistryMaintenanceRuntime.listSessionBindingsBySession;
   if (!listBindings) {
@@ -566,7 +546,7 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
     return false;
   }
   if (acpEntry.acp.mode === "oneshot") {
-    return true;
+    return !isResumableOneShotAcpSession(acpEntry);
   }
   return !hasActiveSessionBinding(sessionKey);
 }
@@ -583,7 +563,7 @@ function shouldCloseOrphanedParentOwnedAcpSession(acpEntry: AcpSessionStoreEntry
     return false;
   }
   if (acpEntry.acp.mode === "oneshot") {
-    return true;
+    return !isResumableOneShotAcpSession(acpEntry);
   }
   return !hasActiveSessionBinding(sessionKey);
 }

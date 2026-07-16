@@ -13,7 +13,6 @@ import {
   createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
-  isRequestedModelUnsupportedError,
   type AcpAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
@@ -22,13 +21,17 @@ import {
   type AcpRuntimeStatus,
   type AcpRuntimeTurn,
   type AcpRuntimeTurnResult,
-  type SessionAgentOptions,
 } from "acpx/runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import {
+  AcpRuntimeError,
+  type AcpRuntime,
+  type AcpRuntimeErrorCode,
+  type AcpRuntimeHandle as OpenClawAcpRuntimeHandle,
+} from "../runtime-api.js";
 import { splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
@@ -42,6 +45,13 @@ import {
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
+import {
+  ensureDelegateSessionWithModelFallback,
+  prepareResumeSafeSessionInput,
+  withResumeEnsureErrorNormalization,
+  withAcpxSessionOptions,
+  withSessionResumeCapability,
+} from "./runtime-session-ensure.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
@@ -58,8 +68,6 @@ type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
 };
 type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0];
-type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
-type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
@@ -581,36 +589,6 @@ function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string |
   return raw.slice(CLAUDE_ACP_OPENCLAW_PREFIX.length).trim() || undefined;
 }
 
-function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
-  const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
-  const model = input.model?.trim() || existingOptions?.model;
-  const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
-  return {
-    ...input,
-    ...(sessionOptions ? { sessionOptions } : {}),
-  } as AcpxDelegateEnsureInput;
-}
-
-function isAcpModelCapabilityMissingError(error: unknown): boolean {
-  return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
-}
-
-// ACPX owns the distinction between missing model capability and an invalid model id.
-// Retry only the former so explicit model mistakes remain visible to the caller.
-async function ensureDelegateSessionWithModelFallback(
-  delegate: BaseAcpxRuntime,
-  input: OpenClawRuntimeEnsureInput,
-): Promise<AcpRuntimeHandle> {
-  try {
-    return await delegate.ensureSession(withAcpxSessionOptions(input));
-  } catch (error) {
-    if (!input.model || !isAcpModelCapabilityMissingError(error)) {
-      throw error;
-    }
-    return await delegate.ensureSession(withAcpxSessionOptions({ ...input, model: undefined }));
-  }
-}
-
 function quoteShellArg(value: string): string {
   if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
     return value;
@@ -1065,8 +1043,12 @@ export class AcpxRuntime implements AcpRuntime {
 
   async ensureSession(
     input: Parameters<AcpRuntime["ensureSession"]>[0],
-  ): Promise<AcpRuntimeHandle> {
+  ): Promise<OpenClawAcpRuntimeHandle> {
     assertSupportedRuntimeSessionMode(input.mode);
+    const resumeSafeInput = prepareResumeSafeSessionInput({
+      input,
+      markFresh: (sessionKey) => this.sessionStore.markFresh(sessionKey),
+    });
     const command = resolveAgentCommand({
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
@@ -1079,50 +1061,64 @@ export class AcpxRuntime implements AcpRuntime {
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
         ? normalizeCodexAcpModelOverride(input.model, input.thinking)
         : undefined;
-    const ensureInput = claudeModelOverride ? { ...input, model: claudeModelOverride } : input;
+    const ensureInput = claudeModelOverride
+      ? { ...resumeSafeInput, model: claudeModelOverride }
+      : resumeSafeInput;
     const stableLaunchCommand =
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
         : command;
     const shouldStartWithLease = !(await this.canReuseStablePersistentSession({
       sessionKey: input.sessionKey,
-      mode: input.mode,
+      mode: ensureInput.mode,
       cwd: input.cwd,
       command: stableLaunchCommand,
       resumeSessionId: input.resumeSessionId,
     }));
 
     if (!codexModelOverride) {
-      return await this.runWithLaunchLease({
-        sessionKey: ensureInput.sessionKey,
-        command: stableLaunchCommand,
-        enabled: shouldStartWithLease,
+      const handle = await withResumeEnsureErrorNormalization({
+        input: ensureInput,
         run: () =>
-          this.withCodexWrapperDiagnostics({
+          this.runWithLaunchLease({
+            sessionKey: ensureInput.sessionKey,
             command: stableLaunchCommand,
-            fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+            enabled: shouldStartWithLease,
+            run: () =>
+              this.withCodexWrapperDiagnostics({
+                command: stableLaunchCommand,
+                fallbackCode: "ACP_SESSION_INIT_FAILED",
+                run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+              }),
           }),
       });
+      const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+      return withSessionResumeCapability(handle, record);
     }
 
     const normalizedInput = {
       ...ensureInput,
       ...(codexModelOverride.model ? { model: codexModelOverride.model } : {}),
     };
-    return await this.runWithLaunchLease({
-      sessionKey: input.sessionKey,
-      command: stableLaunchCommand,
-      enabled: shouldStartWithLease,
+    const handle = await withResumeEnsureErrorNormalization({
+      input: normalizedInput,
       run: () =>
-        this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
-          this.withCodexWrapperDiagnostics({
-            command: stableLaunchCommand,
-            fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),
-          }),
-        ),
+        this.runWithLaunchLease({
+          sessionKey: input.sessionKey,
+          command: stableLaunchCommand,
+          enabled: shouldStartWithLease,
+          run: () =>
+            this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+              this.withCodexWrapperDiagnostics({
+                command: stableLaunchCommand,
+                fallbackCode: "ACP_SESSION_INIT_FAILED",
+                run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),
+              }),
+            ),
+        }),
     });
+    const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    return withSessionResumeCapability(handle, record);
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
