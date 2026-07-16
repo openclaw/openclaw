@@ -13,6 +13,14 @@ import {
   createApnsResponseBodyCapture,
 } from "./push-apns-http2.js";
 import {
+  createApnsAlertPayload,
+  createApnsApprovalAlertPayload,
+  createApnsApprovalResolvedPayload,
+  createApnsBackgroundPayload,
+  resolveExecApprovalAlertBody,
+  resolvePluginApprovalAlertBody,
+} from "./push-apns-payloads.js";
+import {
   isLikelyApnsToken,
   isValidApnsTopic,
   normalizeApnsToken,
@@ -65,9 +73,7 @@ type ApnsPushResult = {
 type ApnsPushAlertResult = ApnsPushResult;
 type ApnsPushWakeResult = ApnsPushResult;
 
-const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
 const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
-const PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH = 256;
 const PLUGIN_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.plugin-approval";
 
 type ApnsPushType = "alert" | "background";
@@ -354,19 +360,6 @@ function resolveDirectSendContext(params: {
   };
 }
 
-function toPushMetadata(params: {
-  kind: "push.test" | "node.wake";
-  nodeId: string;
-  reason?: string;
-}): { kind: "push.test" | "node.wake"; nodeId: string; ts: number; reason?: string } {
-  return {
-    kind: params.kind,
-    nodeId: params.nodeId,
-    ts: Date.now(),
-    ...(params.reason ? { reason: params.reason } : {}),
-  };
-}
-
 function resolveRegistrationDebugSuffix(
   registration: ApnsRegistration,
   relayResult?: Pick<ApnsRelayPushResponse, "tokenSuffix">,
@@ -465,92 +458,6 @@ async function sendRelayApnsPush(params: {
   return toPushResult({ registration: params.registration, response });
 }
 
-function createAlertPayload(params: { nodeId: string; title: string; body: string }): object {
-  return {
-    aps: {
-      alert: {
-        title: params.title,
-        body: params.body,
-      },
-      sound: "default",
-    },
-    openclaw: toPushMetadata({
-      kind: "push.test",
-      nodeId: params.nodeId,
-    }),
-  };
-}
-
-function createBackgroundPayload(params: { nodeId: string; wakeReason?: string }): object {
-  return {
-    aps: {
-      "content-available": 1,
-    },
-    openclaw: toPushMetadata({
-      kind: "node.wake",
-      reason: params.wakeReason ?? "node.invoke",
-      nodeId: params.nodeId,
-    }),
-  };
-}
-
-function resolveExecApprovalAlertBody(): string {
-  return EXEC_APPROVAL_GENERIC_ALERT_BODY;
-}
-
-function createApprovalAlertPayload(params: {
-  kind: "exec" | "plugin";
-  approvalId: string;
-  gatewayDeviceId: string;
-  title: string;
-  body: string;
-  category: string;
-}): object {
-  return {
-    aps: {
-      alert: {
-        title: params.title,
-        body: params.body,
-      },
-      sound: "default",
-      category: params.category,
-      "content-available": 1,
-    },
-    openclaw: {
-      kind: `${params.kind}.approval.requested`,
-      approvalId: params.approvalId,
-      gatewayDeviceId: params.gatewayDeviceId,
-      ts: Date.now(),
-    },
-  };
-}
-
-function resolvePluginApprovalAlertBody(description: string): string {
-  const body = normalizeOptionalString(description) ?? "";
-  if (body.length <= PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH) {
-    return body;
-  }
-  return `${truncateUtf16Safe(body, PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH - 1).trimEnd()}…`;
-}
-
-function createApprovalResolvedPayload(params: {
-  kind: "exec" | "plugin";
-  approvalId: string;
-  gatewayDeviceId: string;
-}): object {
-  return {
-    aps: {
-      "content-available": 1,
-    },
-    openclaw: {
-      kind: `${params.kind}.approval.resolved`,
-      approvalId: params.approvalId,
-      gatewayDeviceId: params.gatewayDeviceId,
-      ts: Date.now(),
-    },
-  };
-}
-
 type ApnsAlertCommonParams = {
   nodeId: string;
   title: string;
@@ -633,7 +540,7 @@ type ApnsPluginApprovalAlertParams = ApnsApprovalParams & {
 export async function sendApnsAlert(
   params: DirectApnsAlertParams | RelayApnsAlertParams,
 ): Promise<ApnsPushAlertResult> {
-  const payload = createAlertPayload({
+  const payload = createApnsAlertPayload({
     nodeId: params.nodeId,
     title: params.title,
     body: params.body,
@@ -667,7 +574,7 @@ export async function sendApnsAlert(
 export async function sendApnsBackgroundWake(
   params: DirectApnsBackgroundWakeParams | RelayApnsBackgroundWakeParams,
 ): Promise<ApnsPushWakeResult> {
-  const payload = createBackgroundPayload({
+  const payload = createApnsBackgroundPayload({
     nodeId: params.nodeId,
     wakeReason: params.wakeReason,
   });
@@ -733,7 +640,7 @@ export async function sendApnsExecApprovalAlert(
 ): Promise<ApnsPushAlertResult> {
   return await sendApnsApprovalPush({
     transport: params,
-    payload: createApprovalAlertPayload({
+    payload: createApnsApprovalAlertPayload({
       kind: "exec",
       approvalId: params.approvalId,
       gatewayDeviceId: params.gatewayDeviceId,
@@ -752,7 +659,7 @@ export async function sendApnsPluginApprovalAlert(
 ): Promise<ApnsPushAlertResult> {
   return await sendApnsApprovalPush({
     transport: params,
-    payload: createApprovalAlertPayload({
+    payload: createApnsApprovalAlertPayload({
       kind: "plugin",
       approvalId: params.approvalId,
       gatewayDeviceId: params.gatewayDeviceId,
@@ -771,7 +678,7 @@ async function sendApnsApprovalResolvedWake(params: {
 }): Promise<ApnsPushWakeResult> {
   return await sendApnsApprovalPush({
     transport: params.transport,
-    payload: createApprovalResolvedPayload({
+    payload: createApnsApprovalResolvedPayload({
       kind: params.kind,
       approvalId: params.transport.approvalId,
       gatewayDeviceId: params.transport.gatewayDeviceId,
