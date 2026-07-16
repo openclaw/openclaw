@@ -561,24 +561,67 @@ function collectLaterMatchingToolResults(params: {
   startIndex: number;
   toolCalls: Array<{ id: string; name?: string }>;
   toolNamesById: Map<string, string>;
-  seenToolResultIds: Set<string>;
-}): Map<string, Extract<AgentMessage, { role: "toolResult" }>> {
-  const resultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
+  emittedToolResultRecords: Set<AgentMessage>;
+}): Map<string, { source: AgentMessage; result: Extract<AgentMessage, { role: "toolResult" }> }> {
+  const resultsById = new Map<
+    string,
+    { source: AgentMessage; result: Extract<AgentMessage, { role: "toolResult" }> }
+  >();
   const toolCallIds = new Set(params.toolCalls.map((toolCall) => toolCall.id));
+  // Tool-call ids can legitimately repeat across assistant turns. Displaced
+  // results are claimed in occurrence order by the last unresolved turns that
+  // call the same id, so this turn may only claim a result when more results
+  // exist than later turns that still need one; otherwise the result is
+  // reserved for the later turn it is adjacent to.
+  const laterTurnCountById = new Map<string, number>();
+  const availableCountById = new Map<string, number>();
+  for (let index = params.startIndex; index < params.messages.length; index += 1) {
+    const candidate = params.messages[index];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    if (candidate.role === "assistant") {
+      const claimedIds = new Set<string>();
+      for (const toolCall of extractToolCallsFromAssistant(
+        candidate as Extract<AgentMessage, { role: "assistant" }>,
+      )) {
+        if (toolCallIds.has(toolCall.id)) {
+          claimedIds.add(toolCall.id);
+        }
+      }
+      for (const id of claimedIds) {
+        laterTurnCountById.set(id, (laterTurnCountById.get(id) ?? 0) + 1);
+      }
+      continue;
+    }
+    if (candidate.role !== "toolResult" || params.emittedToolResultRecords.has(candidate)) {
+      continue;
+    }
+    const id = extractToolResultId(normalizeLegacyToolResultId(candidate, params.toolCalls));
+    if (id && toolCallIds.has(id)) {
+      availableCountById.set(id, (availableCountById.get(id) ?? 0) + 1);
+    }
+  }
   for (let index = params.startIndex; index < params.messages.length; index += 1) {
     const candidate = params.messages[index];
     if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
       continue;
     }
-    const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
-    const id = extractToolResultId(normalizedLegacyResult);
-    if (!id || !toolCallIds.has(id) || params.seenToolResultIds.has(id) || resultsById.has(id)) {
+    if (params.emittedToolResultRecords.has(candidate)) {
       continue;
     }
-    resultsById.set(
-      id,
-      normalizeToolResultName(normalizedLegacyResult, params.toolNamesById.get(id)),
-    );
+    const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
+    const id = extractToolResultId(normalizedLegacyResult);
+    if (!id || !toolCallIds.has(id) || resultsById.has(id)) {
+      continue;
+    }
+    if ((availableCountById.get(id) ?? 0) <= (laterTurnCountById.get(id) ?? 0)) {
+      continue;
+    }
+    resultsById.set(id, {
+      source: candidate,
+      result: normalizeToolResultName(normalizedLegacyResult, params.toolNamesById.get(id)),
+    });
   }
   return resultsById;
 }
@@ -601,6 +644,29 @@ export function repairToolUseResultPairing(
   let droppedOrphanCount = 0;
   let moved = false;
   let changed = false;
+
+  // Pair tool results with the current assistant turn before consulting the
+  // global seen-id dedupe, and track emitted records by identity. Tool-call
+  // ids that legitimately repeat across assistant turns (some providers
+  // restart id numbering every turn, e.g. exec_0/exec_1) previously had their
+  // real results dropped as duplicates, and the synthesized replacement was
+  // dropped by the same seen-id check, emitting dangling assistant tool calls
+  // that providers reject (tool_call_id without a matching response).
+  const emittedToolResultRecords = new Set<AgentMessage>();
+  const pushCurrentTurnToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
+    if (emittedToolResultRecords.has(msg)) {
+      droppedDuplicateCount += 1;
+      changed = true;
+      return;
+    }
+    const id = extractToolResultId(msg);
+    if (id) {
+      seenToolResultIds.add(id);
+      toolResultPositions.set(id, out.length);
+    }
+    emittedToolResultRecords.add(msg);
+    out.push(msg);
+  };
 
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
@@ -693,15 +759,14 @@ export function repairToolUseResultPairing(
       }
 
       if (nextRole === "toolResult") {
+        if (emittedToolResultRecords.has(next)) {
+          continue;
+        }
         const toolResult = normalizeLegacyToolResultId(
           next as Extract<AgentMessage, { role: "toolResult" }>,
           toolCalls,
         );
         const id = extractToolResultId(toolResult);
-        if (id && seenToolResultIds.has(id)) {
-          pushToolResult(normalizeToolResultName(toolResult, toolCallNamesById.get(id)));
-          continue;
-        }
         if (id && toolCallIds.has(id)) {
           if (toolResult !== next) {
             changed = true;
@@ -729,6 +794,10 @@ export function repairToolUseResultPairing(
           }
           continue;
         }
+        if (id && seenToolResultIds.has(id)) {
+          pushToolResult(normalizeToolResultName(toolResult, toolCallNamesById.get(id)));
+          continue;
+        }
       }
 
       // Drop tool results that don't match the current assistant tool calls.
@@ -752,7 +821,7 @@ export function repairToolUseResultPairing(
           if (!result) {
             continue;
           }
-          pushToolResult(result);
+          pushCurrentTurnToolResult(result);
         }
       } else if (spanResultsById.size > 0) {
         changed = true;
@@ -780,19 +849,24 @@ export function repairToolUseResultPairing(
       startIndex: j,
       toolCalls,
       toolNamesById: toolCallNamesById,
-      seenToolResultIds,
+      emittedToolResultRecords,
     });
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
       if (existing) {
-        pushToolResult(existing);
+        pushCurrentTurnToolResult(existing);
       } else {
         const laterResult = laterResultsById.get(call.id);
         if (laterResult) {
           laterResultsById.delete(call.id);
           moved = true;
           changed = true;
-          pushToolResult(laterResult);
+          if (laterResult.source !== laterResult.result) {
+            // Normalization cloned the displaced record; register the original
+            // too so a later turn cannot re-emit the same physical result.
+            emittedToolResultRecords.add(laterResult.source);
+          }
+          pushCurrentTurnToolResult(laterResult.result);
         } else {
           const missing = makeMissingToolResult({
             toolCallId: call.id,
@@ -801,7 +875,7 @@ export function repairToolUseResultPairing(
           });
           added.push(missing);
           changed = true;
-          pushToolResult(missing);
+          pushCurrentTurnToolResult(missing);
         }
       }
     }

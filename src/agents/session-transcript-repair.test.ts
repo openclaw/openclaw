@@ -668,6 +668,174 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
   });
 });
 
+describe("repairToolUseResultPairing repeated per-turn tool-call ids", () => {
+  function makeExecAssistant(...toolCallIds: string[]) {
+    return {
+      role: "assistant" as const,
+      content: toolCallIds.map((id) => ({ type: "toolCall", id, name: "exec", arguments: {} })),
+    };
+  }
+
+  function makeExecResult(toolCallId: string, text: string) {
+    return {
+      role: "toolResult" as const,
+      toolCallId,
+      toolName: "exec",
+      content: [{ type: "text", text }],
+      isError: false,
+    };
+  }
+
+  it("keeps real results when tool-call ids repeat across assistant turns", () => {
+    // Some providers restart tool-call id numbering every assistant turn, so the
+    // same id legitimately recurs; each turn must keep its own real result.
+    const input = castAgentMessages([
+      makeExecAssistant("exec_0", "exec_1"),
+      makeExecResult("exec_0", "turn one first"),
+      makeExecResult("exec_1", "turn one second"),
+      { role: "user", content: "next turn" },
+      makeExecAssistant("exec_0", "exec_1"),
+      makeExecResult("exec_0", "turn two first"),
+      makeExecResult("exec_1", "turn two second"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.droppedDuplicateCount).toBe(0);
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "user",
+      "assistant",
+      "toolResult",
+      "toolResult",
+    ]);
+    expect(
+      result.messages
+        .filter((message) => message.role === "toolResult")
+        .map(
+          (message) =>
+            (message as { toolCallId?: string; content?: Array<{ text?: string }> }).toolCallId,
+        ),
+    ).toEqual(["exec_0", "exec_1", "exec_0", "exec_1"]);
+    expect(
+      result.messages
+        .filter((message) => message.role === "toolResult")
+        .map((message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text),
+    ).toEqual(["turn one first", "turn one second", "turn two first", "turn two second"]);
+  });
+
+  it("synthesizes a missing result for a later turn with a repeated id instead of dropping it", () => {
+    const input = castAgentMessages([
+      makeExecAssistant("exec_0"),
+      makeExecResult("exec_0", "turn one output"),
+      { role: "user", content: "next turn" },
+      makeExecAssistant("exec_0"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(1);
+    expect(result.added[0]?.toolCallId).toBe("exec_0");
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    const synthesized = result.messages[4] as { toolCallId?: string; isError?: boolean };
+    expect(synthesized.toolCallId).toBe("exec_0");
+    expect(synthesized.isError).toBe(true);
+  });
+
+  it("leaves an already-valid transcript with unique ids unchanged", () => {
+    const input = castAgentMessages([
+      makeExecAssistant("call_1", "call_2"),
+      makeExecResult("call_1", "first"),
+      makeExecResult("call_2", "second"),
+      makeExecAssistant("call_3"),
+      makeExecResult("call_3", "third"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.messages).toBe(input);
+    expect(result.added).toHaveLength(0);
+    expect(result.droppedDuplicateCount).toBe(0);
+    expect(result.droppedOrphanCount).toBe(0);
+    expect(result.moved).toBe(false);
+  });
+
+  it("pairs displaced results with repeated ids by occurrence without re-emitting records", () => {
+    const input = castAgentMessages([
+      makeExecAssistant("exec_0"),
+      makeExecAssistant("exec_0"),
+      {
+        role: "toolResult" as const,
+        toolCallId: "exec_0",
+        toolName: "   ",
+        content: [{ type: "text", text: "late second" }],
+        isError: false,
+      },
+      makeExecResult("exec_0", "late third"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+    ]);
+    const first = result.messages[1] as {
+      toolName?: string;
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    };
+    expect(first.toolName).toBe("exec");
+    expect(first.isError).toBe(false);
+    expect(
+      result.messages
+        .filter((message) => message.role === "toolResult")
+        .map((message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text),
+    ).toEqual(["late second", "late third"]);
+  });
+
+  it("reserves a later turn's adjacent result when an earlier repeated-id turn is missing its own", () => {
+    const input = castAgentMessages([
+      makeExecAssistant("exec_0"),
+      makeExecResult("exec_0", "turn zero output"),
+      makeExecAssistant("exec_0"),
+      makeExecAssistant("exec_0"),
+      makeExecResult("exec_0", "turn two output"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(
+      result.messages
+        .filter((message) => message.role === "toolResult")
+        .map((message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text),
+    ).toEqual(["turn zero output", DEFAULT_MISSING_TOOL_RESULT_TEXT, "turn two output"]);
+    expect(result.added).toHaveLength(1);
+    expect(result.added[0]?.toolCallId).toBe("exec_0");
+    expect((result.messages[5] as { isError?: boolean }).isError).toBe(false);
+  });
+});
+
 describe("sanitizeToolCallInputs legacy block filtering", () => {
   it("drops malformed snake_case tool call blocks", () => {
     const input = castAgentMessages([
