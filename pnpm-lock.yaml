@@ -1497,6 +1497,9 @@ importers:
       '@openclaw/matrix':
         specifier: workspace:*
         version: link:../matrix
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../../packages/normalization-core
       p-limit:
         specifier: 7.3.0
         version: 7.3.0

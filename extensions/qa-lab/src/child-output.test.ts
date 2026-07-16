@@ -28,4 +28,20 @@ describe("qa child output", () => {
       "[stderr truncated to last 7 bytes]\ntail",
     );
   });
+
+  it("preserves malformed trailing stdout when no byte cap was hit", () => {
+    const capture = createQaChildOutputCapture(8);
+
+    appendQaChildOutput(capture, Buffer.from([0x6f, 0x6b, 0x20, 0xf0]));
+
+    expect(readQaChildOutput(capture)).toBe("ok �");
+  });
+
+  it("preserves malformed trailing stderr when no tail bytes were dropped", () => {
+    const tail = createQaChildOutputTail(8);
+
+    appendQaChildOutputTail(tail, Buffer.from([0x65, 0x72, 0x72, 0x20, 0xf0]));
+
+    expect(formatQaChildOutputTail(tail, "stderr")).toBe("err �");
+  });
 });
