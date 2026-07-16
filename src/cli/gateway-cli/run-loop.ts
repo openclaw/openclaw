@@ -832,9 +832,7 @@ export async function runGatewayLoop(params: {
       if (!authorized) {
         markGatewaySigusr1RestartHandled();
         if (!isGatewaySigusr1RestartExternallyAllowed()) {
-          gatewayLog.warn(
-            "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
-          );
+          gatewayLog.warn("SIGUSR1 restart ignored (not authorized; commands.restart=false).");
           gatewayLog.warn(
             "An unauthorized SIGUSR1 restart signal was received and ignored. " +
               "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
@@ -907,6 +905,7 @@ export async function runGatewayLoop(params: {
         resetCronActiveJobs,
         resetAllLanes,
         resetGatewayRestartStateForInProcessRestart,
+        resetGatewaySuspendCoordinatorForLifecycleRestart,
         rotateAgentEventLifecycleGeneration,
         waitForActiveCronJobs,
         waitForActiveCronTaskRuns,
@@ -924,6 +923,9 @@ export async function runGatewayLoop(params: {
       }
       retireActiveCronTaskRunTracking();
       resetCronActiveJobs();
+      // Resume the retired scheduler before resetAllLanes invalidates its
+      // suspension admission callback and discards the coordinator entry.
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetAllLanes();
       clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
@@ -992,3 +994,4 @@ export async function runGatewayLoop(params: {
     cleanupSignals();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

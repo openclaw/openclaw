@@ -5,7 +5,6 @@ import {
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type {
-  FastMode,
   GatewaySessionRow,
   SessionCompactionCheckpoint,
   SessionRunStatus,
@@ -29,6 +28,7 @@ import {
 } from "./create.ts";
 import { readSessionCustomGroupNames } from "./custom-groups.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
+import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
@@ -50,9 +50,8 @@ export {
   requestSessionUsageTimeSeries,
   requestSessionsUsage,
 } from "./usage.ts";
-export type { SessionUsageQuery } from "./usage.ts";
 
-export type SessionState = {
+type SessionState = {
   result: SessionsListResult | null;
   agentId: string | null;
   modelOverrides: Readonly<Record<string, string | null>>;
@@ -87,22 +86,12 @@ type SessionRefreshOptions = SessionListOptions & {
 export type SessionRunTerminal = {
   sessionKeys: readonly string[];
   runId?: string | null;
-  status: Exclude<SessionRunStatus, "running">;
+  /** Latest session status after this owned model run leaves the active registry. */
+  status: SessionRunStatus;
   endedAt: number;
 };
 
-export type SessionPatch = {
-  label?: string | null;
-  category?: string | null;
-  model?: string | null;
-  thinkingLevel?: string | null;
-  fastMode?: FastMode | null;
-  verboseLevel?: string | null;
-  reasoningLevel?: string | null;
-  archived?: boolean;
-  pinned?: boolean;
-  unread?: boolean;
-};
+export type { SessionPatch } from "./patch.ts";
 
 type SessionDeleteOptions = {
   agentId?: string;
@@ -116,7 +105,7 @@ type SessionDeleteTarget = {
 };
 
 /** Dirty/unpushed checkouts survive session deletion; callers surface them. */
-export type SessionDeleteOutcome = {
+type SessionDeleteOutcome = {
   deleted: boolean;
   worktreePreserved?: { id: string; branch: string; path: string };
 };
@@ -140,11 +129,11 @@ type SessionSteerResult = {
   status?: unknown;
 };
 
-export type SessionResetOptions = {
+type SessionResetOptions = {
   agentId?: string | null;
 };
 
-export type SessionResetResult = "completed" | "not-started" | "uncertain";
+type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 type SessionGateway = {
   readonly snapshot: {
@@ -190,11 +179,7 @@ export type SessionCapability = {
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
-  patch: (
-    key: string,
-    patch: SessionPatch,
-    options?: { agentId?: string },
-  ) => Promise<SessionsPatchResult | null>;
+  patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
@@ -253,7 +238,6 @@ export type SessionCapability = {
 };
 
 export { requestSessionCreate } from "./create.ts";
-export type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
   compareSessionRowsByUpdatedAt,
@@ -268,11 +252,7 @@ export {
   searchForSession,
   visibleSessionMatches,
 } from "./navigation.ts";
-export { reconcileSessionHistory } from "./reconcile.ts";
-export type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
 export type {
-  SessionNavigation,
-  SessionNavigationInput,
   SessionRefreshTarget,
   SessionScopeHost,
   SessionScopeHostWithKey,
@@ -580,6 +560,7 @@ export function reconcileSessionRunTerminal(
     }
     const remainingRunIds = runId ? row.activeRunIds?.filter((id) => id !== runId) : [];
     if (remainingRunIds?.length) {
+      // Settling one owned model turn must not retire overlapping active runs.
       changed = true;
       return {
         ...row,
@@ -592,7 +573,12 @@ export function reconcileSessionRunTerminal(
     const runtimeMs =
       typeof row.startedAt === "number" ? Math.max(0, endedAt - row.startedAt) : row.runtimeMs;
     const activeRunIds = row.activeRunIds?.length ? [] : row.activeRunIds;
-    const abortedLastRun = terminal.status === "killed" ? true : row.abortedLastRun;
+    const abortedLastRun =
+      terminal.status === "killed"
+        ? true
+        : terminal.status === "running"
+          ? false
+          : row.abortedLastRun;
     if (
       row.hasActiveRun === false &&
       row.status === terminal.status &&
@@ -1047,7 +1033,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const patch = async (
     key: string,
     patchParams: SessionPatch,
-    options: { agentId?: string } = {},
+    options: SessionPatchOptions = {},
   ): Promise<SessionsPatchResult | null> => {
     const scope = captureConnection();
     if (!scope) {
@@ -1075,6 +1061,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       setModelOverride(key, previousModelOverride);
     };
     try {
+      if (options.waitFor) {
+        await options.waitFor;
+        if (!isCurrentConnection(scope)) {
+          restoreModelOverride();
+          return null;
+        }
+      }
       const result = await requestSessionPatch(scope.client, key, patchParams, options);
       if (!isCurrentConnection(scope)) {
         restoreModelOverride();
@@ -1548,3 +1541,4 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

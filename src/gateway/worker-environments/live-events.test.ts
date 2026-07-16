@@ -476,6 +476,30 @@ describe("worker live events", () => {
     expect(deltas()).toEqual(["worker"]);
   });
 
+  it("adopts a visible dispatch-owned run context so worker live events stay visible", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    // A worker-routed turn keeps its dispatch-owned Control UI visibility. The
+    // gateway claims the run context (isControlUiVisible: true for a visible
+    // turn) before handing the turn to the remote worker; adopting live events
+    // must inherit that visibility instead of forcing the run hidden.
+    claimAgentRunContext(RUN, {
+      ...LOCAL,
+      isControlUiVisible: true,
+      lifecycleGeneration,
+    });
+
+    ack(msg(1, "worker"));
+
+    expect(getAgentRunContext(RUN)).toMatchObject({
+      ...LOCAL,
+      isControlUiVisible: true,
+      lifecycleGeneration,
+      projectSessionActive: true,
+    });
+    expect(deltas()).toEqual(["worker"]);
+    expect(events[0]?.controlUiVisible).toBe(true);
+  });
+
   it("rejects pre-registered gateway run contexts with mismatched identity", () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const mismatches: Array<{
@@ -486,7 +510,6 @@ describe("worker live events", () => {
       { name: "session-key", context: { ...LOCAL, sessionKey: `${KEY}-other` } },
       { name: "agent-id", context: { ...LOCAL, agentId: "other" } },
       { name: "lifecycle", context: { ...LOCAL, lifecycleGeneration: "other-lifecycle" } },
-      { name: "visibility", context: { ...LOCAL, isControlUiVisible: true } },
     ];
 
     for (const mismatch of mismatches) {
@@ -502,14 +525,10 @@ describe("worker live events", () => {
     expect(events).toEqual([]);
   });
 
-  it("keeps run ids exclusive", () => {
-    const local = "run-local-first";
-    claimAgentRunContext(local, LOCAL);
-    fail(msg(1, "blocked", 0, local), "invalid-event");
-    clearAgentRunContext(local);
-
+  it("keeps a claimed run id exclusive against a later untracked local claim", () => {
     const worker = "run-worker-first";
     ack(msg(1, "worker", 0, worker));
+    // A same-identity untracked claim cannot hijack a run live events already own.
     claimAgentRunContext(worker, LOCAL);
     clearAgentRunContext(worker);
     emitAgentEvent({

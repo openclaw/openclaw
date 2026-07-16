@@ -28,8 +28,9 @@ import {
   verifyDeviceToken,
   withPairedDeviceRecords,
   type PairedDevice,
-  type RotateDeviceTokenResult,
 } from "./device-pairing.js";
+
+type RotateDeviceTokenResult = Awaited<ReturnType<typeof rotateDeviceToken>>;
 
 async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
   const request = await requestDevicePairing(
@@ -1989,3 +1990,4 @@ describe("device pairing tokens", () => {
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

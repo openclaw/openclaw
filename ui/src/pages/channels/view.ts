@@ -1,137 +1,152 @@
-// Channels page renders its screen content.
+// Channels hub: connected-channel rows, add-a-channel gallery, setup wizard,
+// and a per-channel detail overlay with the full config form.
 import { html, nothing } from "lit";
+import "../../styles/channels.css";
 import type {
   ChannelAccountSnapshot,
-  ChannelUiMetaEntry,
   ChannelsStatusSnapshot,
+  ChannelUiMetaEntry,
   DiscordStatus,
   GoogleChatStatus,
   IMessageStatus,
-  NostrProfile,
   NostrStatus,
   SignalStatus,
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
+import { icons } from "../../components/icons.ts";
 import {
+  renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { renderChannelConfigSection } from "./view.config.ts";
-import { renderDiscordCard } from "./view.discord.ts";
-import { renderGoogleChatCard } from "./view.googlechat.ts";
-import { renderIMessageCard } from "./view.imessage.ts";
-import { renderNostrCard } from "./view.nostr.ts";
-import {
-  boolStatusKind,
-  channelEnabled,
-  formatNullableBoolean,
-  renderChannelAccountRow,
-  renderChannelErrorRow,
-  renderChannelFacts,
-  resolveChannelAccountCount,
-  resolveChannelDisplayState,
-} from "./view.shared.ts";
-import { renderSignalCard } from "./view.signal.ts";
-import { renderSlackCard } from "./view.slack.ts";
-import { renderTelegramCard } from "./view.telegram.ts";
+import { renderChannelArt } from "./hub-meta.ts";
+import { renderChannelDetail } from "./view.detail.ts";
+import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
-import { renderWhatsAppCard } from "./view.whatsapp.ts";
+import { renderChannelWizard } from "./wizard-view.ts";
+
+type ChannelCardState = "running" | "configured" | "attention";
 
 export function renderChannels(props: ChannelsProps) {
-  const channels = props.snapshot?.channels as Record<string, unknown> | null;
-  const whatsapp = (channels?.whatsapp ?? undefined) as WhatsAppStatus | undefined;
-  const telegram = (channels?.telegram ?? undefined) as TelegramStatus | undefined;
-  const discord = (channels?.discord ?? null) as DiscordStatus | null;
-  const googlechat = (channels?.googlechat ?? null) as GoogleChatStatus | null;
-  const slack = (channels?.slack ?? null) as SlackStatus | null;
-  const signal = (channels?.signal ?? null) as SignalStatus | null;
-  const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
-  const nostr = (channels?.nostr ?? null) as NostrStatus | null;
   const channelOrder = resolveChannelOrder(props.snapshot);
-  const orderedChannels = channelOrder
-    .map((key, index) => ({
-      key,
-      enabled: channelEnabled(key, props),
-      order: index,
-    }))
-    .toSorted((a, b) => {
-      if (a.enabled !== b.enabled) {
-        return a.enabled ? -1 : 1;
-      }
-      return a.order - b.order;
-    });
+  const connected = channelOrder.filter((key) => channelEnabled(key, props));
+  const available = channelOrder.filter((key) => !channelEnabled(key, props));
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
   const partialWarnings = props.snapshot?.warnings?.filter((warning) => warning.trim()) ?? [];
+  const data = buildChannelData(props);
+  const selected = props.selectedChannel;
 
-  const healthRows = html`
-    ${showingStaleSnapshot
-      ? html`
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__desc">${t("channels.refreshingStaleSnapshot")}</span>
+  return html`
+    ${renderSettingsPage(html`
+      ${showingStaleSnapshot
+        ? html`<div class="callout info">${t("channels.refreshingStaleSnapshot")}</div>`
+        : nothing}
+      ${props.snapshot?.partial
+        ? html`
+            <div class="callout warn">
+              ${t("channels.hub.partialSnapshot")}
+              ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
             </div>
-          </div>
-        `
-      : nothing}
-    ${props.snapshot?.partial
-      ? html`
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__title"
-                >${renderSettingsStatus({
-                  kind: "warn",
-                  label: "Some channel checks did not finish before the UI budget.",
-                })}</span
-              >
-              ${partialWarnings.length > 0
-                ? html`<span class="settings-row__desc"
-                    >${partialWarnings.slice(0, 3).join("; ")}</span
-                  >`
-                : nothing}
-            </div>
-          </div>
-        `
-      : nothing}
-    ${props.lastError ? renderChannelErrorRow(props.lastError) : nothing}
-    <div class="settings-row settings-row--stacked">
-      <pre class="code-block">
+          `
+        : nothing}
+      ${props.lastError ? html`<div class="callout danger">${props.lastError}</div>` : nothing}
+      ${props.setupBlockedByDirtyConfig && props.configFormDirty
+        ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
+        : nothing}
+      ${renderSettingsSection(
+        {
+          title: t("channels.hub.connectedTitle"),
+          ...(connected.length > 0 ? { count: connected.length } : {}),
+          actions: html`
+            <span class="settings-row__value">
+              ${props.lastSuccessAt
+                ? t("channels.hub.updatedAgo", {
+                    ago: formatRelativeTimestamp(props.lastSuccessAt),
+                  })
+                : t("common.na")}
+            </span>
+            <button
+              type="button"
+              class="btn btn--sm"
+              ?disabled=${props.loading}
+              @click=${() => props.onRefresh(true)}
+            >
+              ${t("common.refresh")}
+            </button>
+          `,
+        },
+        connected.length === 0
+          ? renderSettingsEmpty(t("channels.hub.noneConnected"))
+          : connected.map((key) => renderConnectedRow(key, props)),
+      )}
+      ${renderSettingsSection(
+        {
+          title: t("channels.hub.addTitle"),
+          description: t("channels.hub.addSubtitle"),
+        },
+        html`
+          ${available.map((key) => renderAvailableRow(key, props))} ${renderBrowseAllRow(props)}
+        `,
+      )}
+      ${renderSettingsSection(
+        {
+          title: t("channels.health.title"),
+          description: t("channels.health.subtitle"),
+        },
+        html`
+          <div class="settings-row settings-row--stacked">
+            <pre class="code-block">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
-      </pre>
-    </div>
+            </pre>
+          </div>
+        `,
+      )}
+    `)}
+    ${selected
+      ? renderChannelDetail({
+          channelId: selected,
+          label: resolveChannelLabel(props.snapshot, selected),
+          props,
+          data,
+          onClose: () => props.onCloseDetail(),
+          onSetup: () => props.onStartSetup(selected),
+        })
+      : nothing}
+    ${renderChannelWizard({
+      wizard: props.wizard,
+      channelLabel: (channelId) => resolveChannelLabel(props.snapshot, channelId),
+      multiselectValues: props.wizardMultiselect,
+      onToggleMultiselect: props.onWizardToggleMultiselect,
+      onAnswer: props.onWizardAnswer,
+      onClose: props.onWizardClose,
+      whatsappQrDataUrl: props.whatsappQrDataUrl,
+      whatsappMessage: props.whatsappMessage,
+      whatsappConnected: props.whatsappConnected,
+      whatsappBusy: props.whatsappBusy,
+      onWhatsAppStart: props.onWhatsAppStart,
+      onWhatsAppWait: props.onWhatsAppWait,
+    })}
   `;
+}
 
-  return renderSettingsPage(html`
-    ${orderedChannels.map((channel) =>
-      renderChannel(channel.key, props, {
-        whatsapp,
-        telegram,
-        discord,
-        googlechat,
-        slack,
-        signal,
-        imessage,
-        nostr,
-        channelAccounts: props.snapshot?.channelAccounts ?? null,
-      }),
-    )}
-    ${renderSettingsSection(
-      {
-        title: t("channels.health.title"),
-        description: t("channels.health.subtitle"),
-        actions: html`<span class="settings-row__value"
-          >${props.lastSuccessAt
-            ? formatRelativeTimestamp(props.lastSuccessAt)
-            : t("common.na")}</span
-        >`,
-      },
-      healthRows,
-    )}
-  `);
+function buildChannelData(props: ChannelsProps): ChannelsChannelData {
+  const channels = props.snapshot?.channels as Record<string, unknown> | null;
+  return {
+    whatsapp: (channels?.whatsapp ?? undefined) as WhatsAppStatus | undefined,
+    telegram: (channels?.telegram ?? undefined) as TelegramStatus | undefined,
+    discord: (channels?.discord ?? null) as DiscordStatus | null,
+    googlechat: (channels?.googlechat ?? null) as GoogleChatStatus | null,
+    slack: (channels?.slack ?? null) as SlackStatus | null,
+    signal: (channels?.signal ?? null) as SignalStatus | null,
+    imessage: (channels?.imessage ?? null) as IMessageStatus | null,
+    nostr: (channels?.nostr ?? null) as NostrStatus | null,
+    channelAccounts: props.snapshot?.channelAccounts ?? null,
+  };
 }
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
@@ -142,128 +157,6 @@ function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKe
     return snapshot.channelOrder;
   }
   return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
-}
-
-function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
-  const accountCount = resolveChannelAccountCount(key, data.channelAccounts);
-  switch (key) {
-    case "whatsapp":
-      return renderWhatsAppCard({
-        props,
-        whatsapp: data.whatsapp,
-        accountCount,
-      });
-    case "telegram":
-      return renderTelegramCard({
-        props,
-        telegram: data.telegram,
-        telegramAccounts: data.channelAccounts?.telegram ?? [],
-        accountCount,
-      });
-    case "discord":
-      return renderDiscordCard({
-        props,
-        discord: data.discord,
-        accountCount,
-      });
-    case "googlechat":
-      return renderGoogleChatCard({
-        props,
-        googleChat: data.googlechat,
-        accountCount,
-      });
-    case "slack":
-      return renderSlackCard({
-        props,
-        slack: data.slack,
-        accountCount,
-      });
-    case "signal":
-      return renderSignalCard({
-        props,
-        signal: data.signal,
-        accountCount,
-      });
-    case "imessage":
-      return renderIMessageCard({
-        props,
-        imessage: data.imessage,
-        accountCount,
-      });
-    case "nostr": {
-      const nostrAccounts = data.channelAccounts?.nostr ?? [];
-      const primaryAccount = nostrAccounts[0];
-      const accountId = primaryAccount?.accountId ?? "default";
-      const profile =
-        (primaryAccount as { profile?: NostrProfile | null } | undefined)?.profile ?? null;
-      const showForm =
-        props.nostrProfileAccountId === accountId ? props.nostrProfileFormState : null;
-      const profileFormCallbacks = showForm
-        ? {
-            onFieldChange: props.onNostrProfileFieldChange,
-            onSave: props.onNostrProfileSave,
-            onImport: props.onNostrProfileImport,
-            onCancel: props.onNostrProfileCancel,
-            onToggleAdvanced: props.onNostrProfileToggleAdvanced,
-          }
-        : null;
-      return renderNostrCard({
-        props,
-        nostr: data.nostr,
-        nostrAccounts,
-        accountCount,
-        profileFormState: showForm,
-        profileFormCallbacks,
-        onEditProfile: () => props.onNostrProfileEdit(accountId, profile),
-      });
-    }
-    default:
-      return renderGenericChannelCard(key, props, data.channelAccounts ?? {});
-  }
-}
-
-function renderGenericChannelCard(
-  key: ChannelKey,
-  props: ChannelsProps,
-  channelAccounts: Record<string, ChannelAccountSnapshot[]>,
-) {
-  const label = resolveChannelLabel(props.snapshot, key);
-  const displayState = resolveChannelDisplayState(key, props);
-  const lastError =
-    typeof displayState.status?.lastError === "string" ? displayState.status.lastError : undefined;
-  const accounts = channelAccounts[key] ?? [];
-  const accountCount = resolveChannelAccountCount(key, channelAccounts);
-
-  return renderSettingsSection(
-    {
-      title: label,
-      description: t("channels.generic.subtitle"),
-      ...(accountCount !== undefined ? { count: accountCount } : {}),
-    },
-    html`
-      ${accounts.length > 0
-        ? accounts.map((account) => renderGenericAccount(account))
-        : renderChannelFacts([
-            {
-              label: t("common.configured"),
-              value: formatNullableBoolean(displayState.configured),
-              kind: boolStatusKind(displayState.configured),
-            },
-            {
-              label: t("common.running"),
-              value: formatNullableBoolean(displayState.running),
-              kind: boolStatusKind(displayState.running),
-            },
-            {
-              label: t("common.connected"),
-              value: formatNullableBoolean(displayState.connected),
-              kind: boolStatusKind(displayState.connected),
-            },
-          ])}
-      ${lastError ? renderChannelErrorRow(lastError) : nothing}
-      ${renderChannelConfigSection({ channelId: key, props })}
-    `,
-  );
 }
 
 function resolveChannelMetaMap(
@@ -280,58 +173,128 @@ function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: strin
   return meta?.label ?? snapshot?.channelLabels?.[key] ?? key;
 }
 
-const RECENT_ACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
-
-function hasRecentActivity(account: ChannelAccountSnapshot): boolean {
-  if (!account.lastInboundAt) {
-    return false;
-  }
-  return Date.now() - account.lastInboundAt < RECENT_ACTIVITY_THRESHOLD_MS;
+function resolveChannelDetailLabel(
+  snapshot: ChannelsStatusSnapshot | null,
+  key: string,
+): string | null {
+  const meta = resolveChannelMetaMap(snapshot)[key];
+  const detail = meta?.detailLabel ?? snapshot?.channelDetailLabels?.[key] ?? null;
+  return detail && detail !== resolveChannelLabel(snapshot, key) ? detail : null;
 }
 
-function deriveRunningStatus(account: ChannelAccountSnapshot): string {
-  if (account.running) {
-    return t("common.yes");
+function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardState {
+  const displayState = resolveChannelDisplayState(key, props);
+  const lastError =
+    typeof displayState.status?.lastError === "string" && displayState.status.lastError.trim()
+      ? displayState.status.lastError
+      : (props.snapshot?.channelAccounts?.[key] ?? []).find((account) => account.lastError)
+          ?.lastError;
+  if (lastError) {
+    return "attention";
   }
-  // If we have recent inbound activity, the channel is effectively running
-  if (hasRecentActivity(account)) {
-    return t("common.active");
+  if (displayState.running === true || displayState.connected === true) {
+    return "running";
   }
-  return t("common.no");
+  return "configured";
 }
 
-function deriveConnectedStatus(account: ChannelAccountSnapshot): string {
-  if (account.connected === true) {
-    return t("common.yes");
+function rowStatus(state: ChannelCardState) {
+  switch (state) {
+    case "running":
+      return renderSettingsStatus({ kind: "ok", label: t("channels.hub.stateRunning") });
+    case "configured":
+      return renderSettingsStatus({ kind: "muted", label: t("channels.hub.stateConfigured") });
+    case "attention":
+      return renderSettingsStatus({ kind: "danger", label: t("channels.hub.stateAttention") });
+    default:
+      return state satisfies never;
   }
-  if (account.connected === false) {
-    return t("common.no");
-  }
-  // If connected is null/undefined but we have recent activity, show as active
-  if (hasRecentActivity(account)) {
-    return t("common.active");
-  }
-  return t("common.na");
 }
 
-function renderGenericAccount(account: ChannelAccountSnapshot) {
-  const runningStatus = deriveRunningStatus(account);
-  const connectedStatus = deriveConnectedStatus(account);
-  const effectivelyRunning = account.running || hasRecentActivity(account);
+function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null {
+  const accounts: ChannelAccountSnapshot[] = props.snapshot?.channelAccounts?.[key] ?? [];
+  const lastInbound = accounts
+    .map((account) => account.lastInboundAt ?? 0)
+    .reduce((a, b) => Math.max(a, b), 0);
+  if (!lastInbound) {
+    return null;
+  }
+  return t("channels.hub.lastMessageAgo", { ago: formatRelativeTimestamp(lastInbound) });
+}
 
-  return renderChannelAccountRow({
-    title: account.name || account.accountId,
-    accountId: account.accountId,
-    facts: [
-      `${t("common.running")}: ${runningStatus}`,
-      `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
-      `${t("common.connected")}: ${connectedStatus}`,
-    ],
-    status: {
-      kind: boolStatusKind(effectivelyRunning),
-      label: effectivelyRunning ? t("common.running") : t("common.no"),
-    },
-    lastInboundAt: account.lastInboundAt,
-    lastError: account.lastError,
-  });
+function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
+  const label = resolveChannelLabel(props.snapshot, key);
+  const description =
+    lastActivityLine(key, props) ??
+    resolveChannelDetailLabel(props.snapshot, key) ??
+    t("channels.hub.openDetails");
+  return html`
+    <button
+      type="button"
+      class="settings-row settings-row--nav channels-item"
+      @click=${() => props.onShowDetail(key)}
+    >
+      ${renderChannelArt(key, label, "tile")}
+      <div class="settings-row__text">
+        <span class="settings-row__title">${label}</span>
+        <span class="settings-row__desc">${description}</span>
+      </div>
+      <div class="settings-row__control">
+        ${rowStatus(resolveRowState(key, props))}
+        <span class="settings-row__chevron">${icons.chevronRight}</span>
+      </div>
+    </button>
+  `;
+}
+
+function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
+  const label = resolveChannelLabel(props.snapshot, key);
+  const description =
+    resolveChannelDetailLabel(props.snapshot, key) ?? t("channels.hub.guidedSetup");
+  return html`
+    <div class="settings-row channels-item">
+      <button
+        type="button"
+        class="channels-item__detail"
+        title=${t("channels.hub.openDetails")}
+        @click=${() => props.onShowDetail(key)}
+      >
+        ${renderChannelArt(key, label, "tile")}
+        <span class="settings-row__text">
+          <span class="settings-row__title">${label}</span>
+          <span class="settings-row__desc">${description}</span>
+        </span>
+      </button>
+      <div class="settings-row__control">
+        <button type="button" class="btn btn--sm" @click=${() => props.onStartSetup(key)}>
+          ${t("channels.hub.setUp")}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function renderBrowseAllRow(props: ChannelsProps) {
+  return html`
+    <button
+      type="button"
+      class="settings-row settings-row--nav channels-item"
+      @click=${() => props.onStartSetup(null)}
+    >
+      <span
+        class="channels-tile channels-tile--fallback"
+        style="--channels-art-a:#64748b;--channels-art-b:#1e293b"
+        aria-hidden="true"
+      >
+        <span>+</span>
+      </span>
+      <div class="settings-row__text">
+        <span class="settings-row__title">${t("channels.hub.browseAllTitle")}</span>
+        <span class="settings-row__desc">${t("channels.hub.browseAllSubtitle")}</span>
+      </div>
+      <div class="settings-row__control">
+        <span class="settings-row__chevron">${icons.chevronRight}</span>
+      </div>
+    </button>
+  `;
 }

@@ -62,6 +62,7 @@ import {
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
 } from "./chat-tool-cards.ts";
+import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
@@ -94,7 +95,7 @@ type ChatTimestampDisplay = {
   dateTime: string;
 };
 
-export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
+function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return {
@@ -134,7 +135,7 @@ const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
 
 /** Footer label: relative for recent messages, compact date beyond a week. */
-export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
+function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return t("chat.messages.unknownDate");
@@ -206,25 +207,6 @@ function pinMessageMetaPreview(event: MouseEvent) {
   }
   event.preventDefault();
   delete details.dataset.preview;
-}
-
-export function resetAssistantAttachmentAvailabilityCacheForTest() {
-  assistantAttachmentAvailabilityCache.clear();
-  bumpAssistantAttachmentAvailabilityRenderVersion();
-  for (const timer of assistantAttachmentRefreshTimers.values()) {
-    clearTimeout(timer);
-  }
-  assistantAttachmentRefreshTimers.clear();
-  for (const { timer } of pairingQrExpiryRefreshTimers.values()) {
-    clearTimeout(timer);
-  }
-  pairingQrExpiryRefreshTimers.clear();
-  for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
-    URL.revokeObjectURL(blobUrl);
-  }
-  managedImageBlobUrlCache.clear();
-  managedImageBlobUrlResolvedCache.clear();
-  managedImageBlobUrlMissCache.clear();
 }
 
 export function getAssistantAttachmentAvailabilityRenderVersion(): number {
@@ -583,50 +565,6 @@ type StreamGroupOptions = {
   authToken?: string | null;
 };
 
-// One salt per page load so each run's fighter rerolls between visits while
-// re-renders within a load stay stable for a given item key (same trick as
-// the lobster pet's LOAD_SALT).
-const PUNCH_SALT = Math.trunc(Math.random() * 0xffffffff);
-
-// Weighted fighting styles for the working claw; class suffixes map to the
-// stance variants in styles/chat/tool-cards.css. Orthodox is the unmarked
-// default; southpaw mirrors, flurry speeds the combo up, haymaker is the
-// rare slow heavyweight with the big pow.
-const PUNCH_STANCES: Array<[stance: string, weight: number]> = [
-  ["", 47],
-  ["chat-reading-indicator--southpaw", 35],
-  ["chat-reading-indicator--flurry", 12],
-  ["chat-reading-indicator--haymaker", 6],
-];
-
-function punchStanceClass(key: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < key.length; i++) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  const total = PUNCH_STANCES.reduce((sum, [, weight]) => sum + weight, 0);
-  let roll = ((((hash ^ PUNCH_SALT) >>> 0) % 1000) / 1000) * total;
-  for (const [stance, weight] of PUNCH_STANCES) {
-    roll -= weight;
-    if (roll <= 0) {
-      return stance;
-    }
-  }
-  return "";
-}
-
-function renderReadingIndicatorBubble(key: string) {
-  // Working claw: the brand pincer shadowboxes where the reply will
-  // materialize - jab, jab, cross with a pow on impact. The stance is seeded
-  // per item key so each run fights its own style but re-renders never
-  // flicker. aria-hidden; the composer sr-only run-status announces.
-  const stance = punchStanceClass(key);
-  return html`
-    <div class="chat-bubble chat-reading-indicator ${stance}" aria-hidden="true">${icons.claw}</div>
-  `;
-}
-
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
@@ -646,12 +584,15 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
-    <div class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}">
+    <div
+      class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}"
+      data-chat-row-key=${parts[0]?.key ?? nothing}
+    >
       ${avatar}
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderReadingIndicatorBubble(part.key)
+            ? renderChatWorkingIndicator(part)
             : renderGroupedMessage(
                 {
                   role: "assistant",
@@ -684,13 +625,13 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
  * the turn's done indicator; the expanded groups render after this row.
  */
 export function renderWorkGroupSummary(
-  item: { durationMs: number | null; hasError: boolean },
+  item: { key: string; durationMs: number | null; hasError: boolean },
   opts: { expanded: boolean; onToggle: () => void },
 ) {
   const duration = formatDurationCompact(item.durationMs, { spaced: true });
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   return html`
-    <div class="chat-group tool chat-group--work">
+    <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
       <span class="chat-work-group__gutter" aria-hidden="true"></span>
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
@@ -849,7 +790,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
 
     return html`
-      <div class="chat-group tool chat-group--activity">
+      <div class="chat-group tool chat-group--activity" data-chat-row-key=${group.key}>
         ${renderChatAvatar(
           group.role,
           {
@@ -927,7 +868,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
 
   return html`
-    <div class="chat-group ${roleClass}">
+    <div class="chat-group ${roleClass}" data-chat-row-key=${group.key}>
       ${renderChatAvatar(
         group.role,
         {
@@ -2178,10 +2119,10 @@ function renderGroupedMessage(
   );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
-  const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+  const markdown = extractedText?.trim() ? extractedText : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
+    assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
     fileLinks: true,
   };
@@ -2193,7 +2134,6 @@ function renderGroupedMessage(
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
-    "fade-in",
   ]
     .filter(Boolean)
     .join(" ");
@@ -2491,3 +2431,4 @@ function renderMarkdownText(
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

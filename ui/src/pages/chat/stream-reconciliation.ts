@@ -18,7 +18,7 @@ import {
 } from "../../lib/string-coerce.ts";
 import { resetToolStream } from "./tool-stream.ts";
 
-export type StreamReconciliationState = {
+type StreamReconciliationState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
 };

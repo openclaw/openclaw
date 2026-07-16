@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
@@ -20,6 +19,7 @@ import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sq
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
+  assertOpenClawStateDatabaseForMaintenance,
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -1946,6 +1946,85 @@ describe("openclaw state database", () => {
     );
   });
 
+  it("migrates operator approvals to accept system-agent records", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    const currentSql = (
+      legacyDb
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    legacyDb.exec("ALTER TABLE operator_approvals RENAME TO operator_approvals_current");
+    legacyDb.exec(currentSql.replace("'exec', 'plugin', 'system-agent'", "'exec', 'plugin'"));
+    legacyDb.exec("DROP TABLE operator_approvals_current");
+    legacyDb.close();
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+      kind: "operator-approvals-system-agent",
+      path: databasePath,
+    });
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Migrated shared state operator approvals → OpenClaw system changes"],
+      warnings: [],
+    });
+
+    const reopened = openOpenClawStateDatabase(options);
+    const migratedSql = reopened.db
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'")
+      .get() as { sql: string };
+    expect(migratedSql.sql).toContain("'system-agent'");
+  });
+
+  it("adds managed-image typed columns before creating canonical indexes", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP INDEX idx_managed_outgoing_images_session;
+      DROP INDEX idx_managed_outgoing_images_message;
+      DROP INDEX idx_managed_outgoing_images_agent_session;
+      DROP INDEX idx_managed_outgoing_images_agent_message;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN original_media_root;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN agent_id;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN cleanup_pending;
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(managed_outgoing_image_records)")
+      .all() as Array<{ name?: unknown; notnull?: unknown }>;
+    expect(columns).toContainEqual(
+      expect.objectContaining({ name: "original_media_root", notnull: 1 }),
+    );
+    expect(columns).toContainEqual(expect.objectContaining({ name: "agent_id" }));
+    expect(columns).toContainEqual(expect.objectContaining({ name: "cleanup_pending" }));
+    assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path });
+    const indexes = reopened.db
+      .prepare("PRAGMA index_list(managed_outgoing_image_records)")
+      .all() as Array<{ name?: unknown }>;
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "idx_managed_outgoing_images_session" }),
+        expect.objectContaining({ name: "idx_managed_outgoing_images_message" }),
+        expect.objectContaining({ name: "idx_managed_outgoing_images_agent_session" }),
+        expect.objectContaining({ name: "idx_managed_outgoing_images_agent_message" }),
+      ]),
+    );
+  });
+
   it("serializes concurrent additive schema upgrades across processes", () => {
     const rootDir = createTempStateDir();
     const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
@@ -2272,6 +2351,28 @@ describe("openclaw state database", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("adds task detail storage to an existing state database", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE task_runs DROP COLUMN detail_json");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db.prepare("PRAGMA table_info(task_runs)").all() as Array<{
+      name?: string;
+    }>;
+    expect(columns.some((column) => column.name === "detail_json")).toBe(true);
+  });
+
   it("rolls back the requester attribution column when its backfill fails", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -2477,7 +2578,7 @@ describe("openclaw state database", () => {
     ).toEqual({ delivery_thread_id: "1008013", delivery_thread_id_type: "number" });
   });
 
-  it("opens databases with early cron run-log tables before creating cron indexes", () => {
+  it("imports early cron run-log tables before dropping them", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -2504,26 +2605,14 @@ describe("openclaw state database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(() =>
-      database.db.prepare("SELECT status, entry_json FROM cron_run_logs LIMIT 1").all(),
-    ).not.toThrow();
-
-    const previousStateDir = process.env["OPENCLAW_STATE_DIR"];
-    process.env["OPENCLAW_STATE_DIR"] = stateDir;
-    try {
-      expect(
-        readCronRunLogEntriesSync({
-          storePath: path.join(stateDir, "cron", "jobs.json"),
-          jobId: "legacy-job",
-        }),
-      ).toMatchObject([{ action: "finished", jobId: "legacy-job", ts: 12345 }]);
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env["OPENCLAW_STATE_DIR"];
-      } else {
-        process.env["OPENCLAW_STATE_DIR"] = previousStateDir;
-      }
-    }
+    expect(
+      database.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs'")
+        .get(),
+    ).toBeUndefined();
+    expect(
+      database.db.prepare("SELECT source_id, ended_at FROM task_runs WHERE runtime = 'cron'").all(),
+    ).toEqual([{ source_id: "legacy-job", ended_at: 12345 }]);
   });
 
   it("opens databases with early queue and commitment tables before creating newer indexes", () => {
@@ -2862,3 +2951,4 @@ describe("openclaw state database", () => {
     ).not.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

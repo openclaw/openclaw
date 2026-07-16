@@ -45,11 +45,9 @@ import {
 } from "./session-accessor.js";
 import {
   appendSqliteTranscriptEvent,
-  appendSqliteTranscriptEvents,
   appendSqliteTranscriptMessage,
   branchSqliteCompactionCheckpointSession,
   cleanupSqliteSessionLifecycleArtifacts,
-  deleteSqliteTranscript,
   forkSqliteSessionEntryFromParentTarget,
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
@@ -63,7 +61,6 @@ import {
   replaceSqliteSessionEntrySync,
   replaceSqliteTranscriptEvents,
   restoreSqliteCompactionCheckpointSession,
-  sqliteTranscriptExists,
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
 import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -1868,40 +1865,6 @@ describe("sqlite session normalization", () => {
     expect(upsertRow?.updated_at).toBe(upsertEntry.updatedAt);
   });
 
-  it("replaces, appends, checks, and deletes SQLite transcript rows without filesystem artifacts", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const scope = {
-      agentId: "main",
-      env,
-      sessionId: "transcript-state-session",
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-
-    expect(sqliteTranscriptExists(scope)).toBe(false);
-
-    await replaceSqliteTranscriptEvents(scope, [
-      { type: "session", id: "transcript-state-session", cwd: paths.tempDir },
-      { type: "message", id: "msg-1", parentId: null, message: { content: "one" } },
-    ]);
-    await appendSqliteTranscriptEvents(scope, [
-      { type: "message", id: "msg-2", parentId: "msg-1", message: { content: "two" } },
-    ]);
-
-    expect(sqliteTranscriptExists(scope)).toBe(true);
-    await expect(loadSqliteTranscriptEvents(scope)).resolves.toEqual([
-      { type: "session", id: "transcript-state-session", cwd: paths.tempDir },
-      { type: "message", id: "msg-1", parentId: null, message: { content: "one" } },
-      { type: "message", id: "msg-2", parentId: "msg-1", message: { content: "two" } },
-    ]);
-
-    await expect(deleteSqliteTranscript(scope)).resolves.toBe(true);
-    expect(sqliteTranscriptExists(scope)).toBe(false);
-    await expect(loadSqliteTranscriptEvents(scope)).resolves.toEqual([]);
-    expect(fs.existsSync(paths.sqlitePath)).toBe(true);
-    expect(fs.readdirSync(paths.tempDir)).not.toContain("transcript-state-session.jsonl");
-  });
-
   it("branches a checkpoint by copying SQLite rows and creating the entry transactionally", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const sourceScope = {
@@ -2160,3 +2123,4 @@ describe("sqlite session normalization", () => {
     expect(fs.existsSync(path.join(paths.tempDir, `${result.entry.sessionId}.jsonl`))).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

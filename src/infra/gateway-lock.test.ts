@@ -9,14 +9,10 @@ import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import {
-  acquireGatewayLock,
-  GatewayLockError,
-  readActiveGatewayLockPort,
-  type GatewayLockOptions,
-} from "./gateway-lock.js";
+import { acquireGatewayLock, GatewayLockError, readActiveGatewayLockPort } from "./gateway-lock.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
+type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
 let fixtureRoot = "";

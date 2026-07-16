@@ -10,7 +10,6 @@ import "../../styles/nodes.css";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
 import { renderNodesInventory } from "./view-inventory.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./view-shared.ts";
-export type { NodesProps } from "./view.types.ts";
 import type { NodesProps } from "./view.types.ts";
 
 export function renderNodes(props: NodesProps) {

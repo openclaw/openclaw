@@ -1,15 +1,21 @@
 // Control UI tests cover exec approval behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
-  addExecApproval,
+  enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
-  parseExecApprovalRequested,
-  parsePluginApprovalRequested,
+  parseApprovalRequestedEvent,
   clearResolvedExecApprovalPrompt,
   refreshPendingApprovalQueue,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
+
+const parseExecApprovalRequested = (payload: unknown) =>
+  parseApprovalRequestedEvent("exec.approval.requested", payload);
+const parsePluginApprovalRequested = (payload: unknown) =>
+  parseApprovalRequestedEvent("plugin.approval.requested", payload);
+const parseSystemAgentApprovalRequested = (payload: unknown) =>
+  parseApprovalRequestedEvent("openclaw.approval.requested", payload);
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -156,6 +162,39 @@ describe("parsePluginApprovalRequested", () => {
   });
 });
 
+describe("parseSystemAgentApprovalRequested", () => {
+  it("keeps the exact proposal and only safe prompt fields", () => {
+    const result = parseSystemAgentApprovalRequested({
+      id: "system-agent:1",
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+      request: {
+        title: "OpenClaw change",
+        description: "Set gateway.port to 19001",
+        command: "Set gateway.port to 19001",
+        proposalHash: "a".repeat(64),
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        allowedDecisions: ["allow-once", "deny", "allow-always"],
+      },
+    });
+
+    expect(result).toMatchObject({
+      id: "system-agent:1",
+      kind: "system-agent",
+      pluginTitle: "OpenClaw change",
+      pluginDescription: "Set gateway.port to 19001",
+      proposalHash: "a".repeat(64),
+      request: {
+        command: "Set gateway.port to 19001",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+  });
+});
+
 describe("parseExecApprovalRequested command spans", () => {
   it("preserves command text spacing for span offsets", () => {
     const parsed = parseExecApprovalRequested({
@@ -282,8 +321,8 @@ describe("refreshPendingApprovalQueue", () => {
     const state = createPromptState(request, []);
 
     const refreshPromise = refreshPendingApprovalQueue(state);
-    state.execApprovalQueue = addExecApproval(
-      state.execApprovalQueue,
+    enqueueExecApprovalPrompt(
+      state,
       createExecApproval({ id: "approval-arrived-during-refresh", createdAtMs: 2000 }),
     );
     resolveExecList([]);
@@ -292,6 +331,7 @@ describe("refreshPendingApprovalQueue", () => {
     expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual([
       "approval-arrived-during-refresh",
     ]);
+    clearResolvedExecApprovalPrompt(state, "approval-arrived-during-refresh");
   });
 
   it("does not requeue approvals resolved while a refresh is in flight", async () => {
@@ -341,7 +381,7 @@ describe("refreshPendingApprovalQueue", () => {
     const transientApproval = createExecApproval({ id: "approval-transient" });
 
     const refreshPromise = refreshPendingApprovalQueue(state);
-    state.execApprovalQueue = addExecApproval(state.execApprovalQueue, transientApproval);
+    enqueueExecApprovalPrompt(state, transientApproval);
     resolveExecList([transientApproval]);
     clearResolvedExecApprovalPrompt(state, "approval-transient");
     resolvePluginList([]);

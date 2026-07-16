@@ -3,7 +3,7 @@ import { t } from "../../i18n/index.ts";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
-export type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
+type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
 type TaskTimestamp = number | string;
 
 export type TaskSummary = {
@@ -28,7 +28,7 @@ export type TaskSummary = {
   error?: string;
 };
 
-export type TaskEventPayload =
+type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
@@ -77,7 +77,7 @@ function normalizeTimestamp(value: unknown): TaskTimestamp | undefined {
   return undefined;
 }
 
-export function normalizeTaskSummary(value: unknown): TaskSummary | null {
+function normalizeTaskSummary(value: unknown): TaskSummary | null {
   if (!isRecord(value)) {
     return null;
   }

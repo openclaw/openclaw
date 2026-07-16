@@ -3,12 +3,12 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
-  PluginSearchResponse,
 } from "../../lib/plugins/index.ts";
 import {
   canRunPlaywrightChromium,
@@ -109,7 +109,7 @@ const calendarSearchResponse = {
       },
     },
   ],
-} satisfies PluginSearchResponse;
+} satisfies PluginsSearchResult;
 
 const uninstallResult = {
   ok: true,
@@ -206,7 +206,7 @@ async function waitForNextRequest(
       }
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`Timed out waiting for the next ${method} request`);
@@ -221,10 +221,8 @@ async function captureScreenshot(page: Page, name: string): Promise<void> {
     return;
   }
   await mkdir(artifactDir, { recursive: true });
-  // UI transitions top out at 180ms; capture only after Chromium has painted
-  // the settled catalog grid rather than a partially composited transition.
-  await page.waitForTimeout(250);
   await page.locator(".content").screenshot({
+    animations: "disabled",
     caret: "hide",
     path: path.join(artifactDir, name),
   });
@@ -516,8 +514,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await moreButton.click();
       }
       const workboardMenuItem = sidebar
-        .getByRole("menu", { exact: true, name: "More" })
-        .getByRole("menuitem", { exact: true, name: "Workboard" });
+        .locator("wa-dropdown.sidebar-more-menu")
+        .locator('wa-dropdown-item[value="workboard"] a');
       await workboardMenuItem.waitFor({ state: "visible" });
       expect(await workboardMenuItem.getAttribute("href")).toBe("/workboard");
     } finally {

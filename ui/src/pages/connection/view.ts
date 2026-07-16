@@ -14,7 +14,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import { formatDurationHuman, formatRelativeTimestamp } from "../../lib/format.ts";
 
-export type ConnectionProps = {
+type ConnectionProps = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   settings: UiSettings;

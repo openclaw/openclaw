@@ -9,15 +9,13 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
-  resetGatewaySuspendCoordinatorForTest,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  setDetachedTaskLifecycleRuntime,
-} from "../../tasks/detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
+import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -54,7 +52,7 @@ describe("gateway agent handler", () => {
 
   it("stops continuation release recovery after gateway generation rotation", async () => {
     vi.useFakeTimers();
-    resetGatewaySuspendCoordinatorForTest();
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
     resetGatewayWorkAdmission();
     try {
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
@@ -120,7 +118,7 @@ describe("gateway agent handler", () => {
         status: "running",
       });
     } finally {
-      resetGatewaySuspendCoordinatorForTest();
+      resetGatewaySuspendCoordinatorForLifecycleRestart();
       resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
@@ -1421,3 +1419,4 @@ describe("gateway agent handler", () => {
     expect(callArgs).not.toHaveProperty("bashElevated");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

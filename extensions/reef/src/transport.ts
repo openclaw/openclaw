@@ -4,7 +4,7 @@ import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
 
 type FetchLike = typeof fetch;
 
-class ReefRelayError extends Error {
+export class ReefRelayError extends Error {
   constructor(
     readonly status: number,
     message: string,
@@ -53,14 +53,26 @@ export class ReefTransportClient {
     );
   }
 
+  listOwnHandles(
+    session: string,
+  ): Promise<{ handles: Array<{ handle: string; key_epoch: number; request_policy: string }> }> {
+    return this.unsigned("GET", "/v1/handles", undefined, { authorization: `Bearer ${session}` });
+  }
+
   mintFriendCode(): Promise<{ code: string; expires: number }> {
     return this.signed("POST", "/v1/friend-codes");
   }
   requestFriend(to: string, code?: string): Promise<{ status: string }> {
     return this.signed("POST", "/v1/friends/request", code ? { to, code } : { to });
   }
-  respondFriend(peer: string, accept: boolean): Promise<{ peer: string; status: string }> {
-    return this.signed("POST", "/v1/friends/respond", { peer, accept });
+  respondFriend(friend: RelayFriend, accept: boolean): Promise<{ peer: string; status: string }> {
+    return this.signed("POST", "/v1/friends/respond", {
+      peer: friend.peer,
+      accept,
+      expected_key_epoch: friend.key_epoch,
+      expected_ed25519_pub: friend.ed25519_pub,
+      expected_x25519_pub: friend.x25519_pub,
+    });
   }
   listFriends(): Promise<{ friendships: RelayFriend[] }> {
     return this.signed("GET", "/v1/friends");

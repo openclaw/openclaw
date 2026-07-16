@@ -30,7 +30,15 @@ import {
   configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
+import {
+  ensureColumn,
+  tableExists,
+  tableHasColumn,
+  tablePrimaryKeyColumns,
+} from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawStateSqliteDir,
@@ -82,8 +90,6 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
     "cron_jobs.schedule_kind": ["schedule_kind TEXT NOT NULL DEFAULT 'manual'"],
     "cron_jobs.session_target": ["session_target TEXT NOT NULL DEFAULT 'main'"],
     "cron_jobs.wake_mode": ["wake_mode TEXT NOT NULL DEFAULT 'auto'"],
-    "cron_run_logs.created_at": ["created_at INTEGER NOT NULL DEFAULT 0"],
-    "cron_run_logs.entry_json": ["entry_json TEXT NOT NULL DEFAULT '{}'"],
     "current_conversation_bindings.conversation_kind": [
       "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
     ],
@@ -99,27 +105,20 @@ export type OpenClawStateDatabase = {
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
-
 /** Options for resolving or overriding the shared state database path. */
 export type OpenClawStateDatabaseOptions = {
   env?: NodeJS.ProcessEnv;
   path?: string;
 };
-
-export type OpenClawStateDatabaseSchemaMigration =
-  | {
-      kind: "agent-databases-composite-primary-key";
-      path: string;
-    }
-  | {
-      kind: "audit-events-v2";
-      path: string;
-    };
-
+export type OpenClawStateDatabaseSchemaMigration = {
+  kind:
+    | "agent-databases-composite-primary-key"
+    | "audit-events-v2"
+    | "operator-approvals-system-agent";
+  path: string;
+};
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
-
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
-
 function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
@@ -131,7 +130,6 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
     );
   }
 }
-
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
@@ -215,39 +213,6 @@ export function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.Pro
   }
 }
 
-function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
-  return rows.some((row) => row.name === columnName);
-}
-
-function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-    pk?: unknown;
-  }>;
-  return rows
-    .filter((row) => Number(row.pk ?? 0) > 0 && typeof row.name === "string")
-    .toSorted((left, right) => Number(left.pk ?? 0) - Number(right.pk ?? 0))
-    .map((row) => row.name as string);
-}
-
-function tableExists(db: DatabaseSync, tableName: string): boolean {
-  const row = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
-
-function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
-  const columnName = columnSql.trim().split(/\s+/, 1)[0];
-  if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
-    return false;
-  }
-  // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
-  return true;
-}
-
 function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
   if (!tableExists(db, "operator_approvals")) {
     return;
@@ -265,7 +230,10 @@ function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
       "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
     );
     for (const row of rows) {
-      if (typeof row.approval_id !== "string" || (row.kind !== "exec" && row.kind !== "plugin")) {
+      if (
+        typeof row.approval_id !== "string" ||
+        !operatorApprovalMigration.isCanonicalOperatorApprovalKind(row.kind)
+      ) {
         throw new Error("operator approval row cannot be assigned a transport reference");
       }
       const resolutionRef = buildApprovalResolutionRef({
@@ -769,6 +737,7 @@ function markCurrentStateSchemaVersion(db: DatabaseSync): void {
 }
 
 function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
+  operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     throw new Error(
       `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
@@ -785,7 +754,6 @@ function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): vo
     );
   }
 }
-
 export function detectOpenClawStateDatabaseSchemaMigrations(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabaseSchemaMigration[] {
@@ -803,6 +771,9 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
     if (!hasCanonicalAuditEventsSchema(db)) {
       migrations.push({ kind: "audit-events-v2", path: pathname });
     }
+    migrations.push(
+      ...operatorApprovalMigration.detectOperatorApprovalSchemaMigration(db, pathname),
+    );
     return migrations;
   } finally {
     db.close();
@@ -836,6 +807,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
             `Migrated shared state audit event ledger → versioned message lifecycle schema`,
           );
         }
+        applied.push(...operatorApprovalMigration.repairOperatorApprovalSchema(db));
         assertCanonicalStateSchemaShape(db, pathname);
         markCurrentStateSchemaVersion(db);
         return applied;
@@ -1284,16 +1256,17 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
     .prepare(
       `SELECT queue_name, id, entry_json
          FROM delivery_queue_entries
-        WHERE retry_count = 0
-           OR last_attempt_at IS NULL
-           OR last_error IS NULL
-           OR recovery_state IS NULL
-           OR platform_send_started_at IS NULL
-           OR entry_kind IS NULL
-           OR session_key IS NULL
-           OR channel IS NULL
-           OR target IS NULL
-           OR account_id IS NULL`,
+        WHERE status <> 'completed'
+          AND (retry_count = 0
+            OR last_attempt_at IS NULL
+            OR last_error IS NULL
+            OR recovery_state IS NULL
+            OR platform_send_started_at IS NULL
+            OR entry_kind IS NULL
+            OR session_key IS NULL
+            OR channel IS NULL
+            OR target IS NULL
+            OR account_id IS NULL)`,
     )
     .all() as Array<{ queue_name: string; id: string; entry_json: string }>;
   if (rows.length === 0) {
@@ -1350,6 +1323,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 // The caller owns the state.schema.ensure transaction so every probe, DDL
 // change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
   ensureColumn(db, "device_pairing_paired", "approved_via TEXT");
   ensureColumn(db, "device_pairing_paired", "operator_label TEXT");
@@ -1494,6 +1468,15 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "commitments", "dismissed_at_ms INTEGER");
   ensureColumn(db, "commitments", "snoozed_until_ms INTEGER");
   ensureColumn(db, "commitments", "expired_at_ms INTEGER");
+  // The shipped JSON runtime predeclared this table but never populated it.
+  // Add required typed columns before Doctor or runtime can insert canonical rows.
+  ensureColumn(db, "managed_outgoing_image_records", "original_media_root TEXT NOT NULL");
+  ensureColumn(db, "managed_outgoing_image_records", "agent_id TEXT");
+  ensureColumn(
+    db,
+    "managed_outgoing_image_records",
+    "cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))",
+  );
   ensureColumn(db, "current_conversation_bindings", "target_agent_id TEXT NOT NULL DEFAULT 'main'");
   ensureColumn(db, "current_conversation_bindings", "target_session_id TEXT");
   ensureColumn(
@@ -1525,6 +1508,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   repairLegacyTaskDeliveryStatuses(db);
   ensureColumn(db, "task_runs", "tool_use_count INTEGER");
   ensureColumn(db, "task_runs", "last_tool_name TEXT");
+  ensureColumn(db, "task_runs", "detail_json TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
@@ -1553,6 +1537,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
       ensureAdditiveStateColumns(db);
       assertCanonicalStateSchemaShape(db, pathname);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      migrateLegacyCronRunLogsToTaskRuns(db);
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
       // Retired node_pairing_* tables were created by earlier schema revisions but
       // never had a shipped writer (the node surface lives on device_pairing_paired
@@ -1695,3 +1680,4 @@ export function isOpenClawStateDatabaseOpen(): boolean {
 
 /** Test alias for closing shared state handles from teardown code. */
 export const closeOpenClawStateDatabaseForTest = closeOpenClawStateDatabase;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

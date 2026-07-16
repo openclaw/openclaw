@@ -21,7 +21,9 @@ type GatewayRequestContextParams = {
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
+  pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
+  systemAgentApprovalManager?: GatewayRequestContext["systemAgentApprovalManager"];
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
@@ -73,7 +75,7 @@ type GatewayRequestContextParams = {
   registerToolEventRecipient: GatewayRequestContext["registerToolEventRecipient"];
   dedupe: GatewayRequestContext["dedupe"];
   wizardSessions: GatewayRequestContext["wizardSessions"];
-  crestodianSessions: GatewayRequestContext["crestodianSessions"];
+  systemAgentSessions: GatewayRequestContext["systemAgentSessions"];
   findRunningWizard: GatewayRequestContext["findRunningWizard"];
   purgeWizardSession: GatewayRequestContext["purgeWizardSession"];
   getRuntimeSnapshot: GatewayRequestContext["getRuntimeSnapshot"];
@@ -82,6 +84,7 @@ type GatewayRequestContextParams = {
   stopChannel: GatewayRequestContext["stopChannel"];
   markChannelLoggedOut: GatewayRequestContext["markChannelLoggedOut"];
   wizardRunner: GatewayRequestContext["wizardRunner"];
+  channelWizardRunner: GatewayRequestContext["channelWizardRunner"];
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
   broadcastVoiceWakeRoutingChanged: GatewayRequestContext["broadcastVoiceWakeRoutingChanged"];
   unavailableGatewayMethods: ReadonlySet<string>;
@@ -111,7 +114,9 @@ export function createGatewayRequestContext(
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
+    pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
+    systemAgentApprovalManager: params.systemAgentApprovalManager,
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
@@ -129,6 +134,8 @@ export function createGatewayRequestContext(
     nodeUnsubscribe: params.nodeUnsubscribe,
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
     hasConnectedTalkNode: params.hasConnectedTalkNode,
+    isConnectionActive: (connId) =>
+      [...params.clients].some((client) => client.connId === connId && !client.invalidated),
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
@@ -242,7 +249,7 @@ export function createGatewayRequestContext(
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,
     wizardSessions: params.wizardSessions,
-    crestodianSessions: params.crestodianSessions,
+    systemAgentSessions: params.systemAgentSessions,
     findRunningWizard: params.findRunningWizard,
     purgeWizardSession: params.purgeWizardSession,
     getRuntimeSnapshot: params.getRuntimeSnapshot,
@@ -252,6 +259,7 @@ export function createGatewayRequestContext(
     stopChannel: params.stopChannel,
     markChannelLoggedOut: params.markChannelLoggedOut,
     wizardRunner: params.wizardRunner,
+    channelWizardRunner: params.channelWizardRunner,
     broadcastVoiceWakeChanged: params.broadcastVoiceWakeChanged,
     broadcastVoiceWakeRoutingChanged: params.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,

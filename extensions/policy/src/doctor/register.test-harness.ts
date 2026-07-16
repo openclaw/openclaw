@@ -11,7 +11,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/health";
 import { clearHealthChecksForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { registerPolicyDoctorChecks, resetPolicyDoctorChecksForTest } from "./register.js";
+import { registerPolicyDoctorChecks } from "./register.js";
 
 export let workspaceDir: string;
 
@@ -91,7 +91,6 @@ export async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext
 }
 
 export async function runPolicyRepairCheck(checkId: string, repairCheckCtx: HealthRepairContext) {
-  resetPolicyDoctorChecksForTest();
   const check = registerChecks().find((entry) => entry.id === checkId);
   if (check?.detect === undefined || check.repair === undefined) {
     throw new Error(`${checkId} repair check was not registered`);
@@ -106,7 +105,6 @@ export async function runPolicyRepairCheck(checkId: string, repairCheckCtx: Heal
 
 export const describe0BeforeEach0 = async () => {
   clearHealthChecksForTest();
-  resetPolicyDoctorChecksForTest();
   originalOpenClawHome = process.env.OPENCLAW_HOME;
   originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
   workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-doctor-"));
@@ -140,5 +138,4 @@ export const describe0AfterEach1 = async () => {
   }
   await fs.rm(workspaceDir, { recursive: true, force: true });
   clearHealthChecksForTest();
-  resetPolicyDoctorChecksForTest();
 };

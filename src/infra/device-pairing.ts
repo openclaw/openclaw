@@ -30,22 +30,16 @@ import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type {
   DeviceAuthToken,
-  DevicePairingPendingRecord,
   DevicePairingPendingRequest,
   PairedDevice,
-  PairedDeviceApprovalKind,
-  PairedDeviceNodeSurface,
   PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
 
 /** Pending request summary returned when a replacement supersedes older requests. */
-export type DevicePairingSupersededRequest = Pick<
-  DevicePairingPendingRequest,
-  "requestId" | "deviceId"
->;
+type DevicePairingSupersededRequest = Pick<DevicePairingPendingRequest, "requestId" | "deviceId">;
 
 /** Result for creating or refreshing a pending device pairing request. */
-export type RequestDevicePairingResult = {
+type RequestDevicePairingResult = {
   status: "pending";
   request: DevicePairingPendingRequest;
   created: boolean;
@@ -70,19 +64,19 @@ export type RotateDeviceTokenDenyReason =
   | "caller-missing-scope";
 
 /** Token rotation result with the replacement token entry on success. */
-export type RotateDeviceTokenResult =
+type RotateDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RotateDeviceTokenDenyReason; scope?: string };
 
 export type RevokeDeviceTokenDenyReason = "unknown-device-or-role" | "caller-missing-scope";
 
 /** Token revocation result with the revoked entry on success. */
-export type RevokeDeviceTokenResult =
+type RevokeDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
 
 /** Metadata fields a device may refresh without changing approval or token state. */
-export type PairedDeviceMetadataPatch = Pick<
+type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
   | "displayName"
   | "operatorLabel"
@@ -95,19 +89,19 @@ export type PairedDeviceMetadataPatch = Pick<
 >;
 
 /** Paired-device access metadata refreshed when an existing device reconnects. */
-export type DevicePairingAccessMetadata = Pick<
+type DevicePairingAccessMetadata = Pick<
   PairedDevice,
   "displayName" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
 >;
 
 /** Combined pending/paired view returned by pairing list APIs. */
-export type DevicePairingList = {
+type DevicePairingList = {
   pending: DevicePairingPendingRequest[];
   paired: PairedDevice[];
 };
 
 /** Authorization failure categories for owner approval and bootstrap approval flows. */
-export type DevicePairingForbiddenReason =
+type DevicePairingForbiddenReason =
   | "caller-scopes-required"
   | "caller-missing-scope"
   | "scope-outside-requested-roles"
@@ -115,7 +109,7 @@ export type DevicePairingForbiddenReason =
   | "bootstrap-scope-not-allowed";
 
 /** Structured forbidden result with the missing/disallowed role or scope when known. */
-export type DevicePairingForbiddenResult = {
+type DevicePairingForbiddenResult = {
   status: "forbidden";
   reason: DevicePairingForbiddenReason;
   scope?: string;
@@ -123,7 +117,7 @@ export type DevicePairingForbiddenResult = {
 };
 
 /** Pairing approval outcome: approved, forbidden with reason, or request not found. */
-export type ApproveDevicePairingResult =
+type ApproveDevicePairingResult =
   | { status: "approved"; requestId: string; device: PairedDevice }
   | DevicePairingForbiddenResult
   | null;
@@ -948,6 +942,7 @@ export async function approveBootstrapDevicePairing(
     if (missingScope) {
       return { status: "forbidden", reason: "bootstrap-scope-not-allowed", scope: missingScope };
     }
+
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
     const grantedRoles = requestedRoles;
@@ -1541,3 +1536,4 @@ export async function revokeDeviceToken(params: {
     return { ok: true, entry };
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

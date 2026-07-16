@@ -3,7 +3,6 @@ import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clearApprovalNativeRouteStateForTest } from "../../infra/approval-native-route-coordinator.js";
 import type {
   AcpRuntime,
   AcpRuntimeEnsureInput,
@@ -72,7 +71,7 @@ export const automaticDirectReplyConfig = {
 
 export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 
-export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.js").testing;
+export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.test-support.js").testing;
 
 export let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
@@ -82,7 +81,7 @@ export let createReplyOperation: typeof import("./reply-run-registry.js").create
 
 export let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 
-export let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+export let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 
 export let admitReplyTurn: typeof import("./reply-turn-admission.js").admitReplyTurn;
 
@@ -350,19 +349,16 @@ export function messageAuditEvents(): Array<Record<string, unknown>> {
 }
 
 export const globalBeforeAll0 = async () => {
-  ({ dispatchReplyFromConfig, testing: dispatchFromConfigTesting } =
-    await import("./dispatch-from-config.js"));
+  ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+  ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
   await import("./dispatch-acp-tts.runtime.js");
   await import("./dispatch-acp-session.runtime.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
-  ({
-    createReplyOperation,
-    replyRunRegistry,
-    __testing: replyRunTesting,
-  } = await import("./reply-run-registry.js"));
+  ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
+  ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
     await import("./reply-turn-admission.js"));
 };
@@ -459,7 +455,6 @@ export const describe0BeforeEach0 = () => {
       ...passiveThreadingTestPlugins,
     ]),
   );
-  clearApprovalNativeRouteStateForTest();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
   replyRunTesting.resetReplyRunRegistry();

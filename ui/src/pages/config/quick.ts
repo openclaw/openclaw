@@ -38,12 +38,15 @@ import {
   renderSettingsValue,
   type SettingsSectionProps,
 } from "../../components/settings-ui.ts";
-import { SUPPORTED_LOCALES, t, type Locale } from "../../i18n/index.ts";
+import { t, type Locale } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
+import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { renderLanguageSelect } from "./language-select.ts";
 import { GENERAL_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
 
 // ── Types ──
 
@@ -68,7 +71,7 @@ export type QuickSettingsSecurity = {
   toolProfile: string;
 };
 
-export type QuickSettingsProps = {
+type QuickSettingsProps = {
   // General
   locale: Locale;
   onLocaleChange: (locale: Locale) => void;
@@ -120,16 +123,18 @@ export type QuickSettingsProps = {
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
-  // Pending config changes
-  configDirty?: boolean;
+  // Config staging state (quick edits auto-save through the shared draft)
   configLoading?: boolean;
   configSaving?: boolean;
   configApplying?: boolean;
   configUpdating?: boolean;
-  configReady?: boolean;
-  onResetConfig?: () => void;
-  onSaveConfig?: () => void;
+  configNeedsApply?: boolean;
+  /** Capability-authoritative unsaved raw draft; apply() refuses while set. */
+  configRawDraftPending?: boolean;
+  configAutoSaveStatus?: ConfigAutoSaveStatus;
   onApplyConfig?: () => void;
+  onRetrySaveConfig?: () => void;
+  onDiscardConfig?: () => void;
 
   // Connection
   connected: boolean;
@@ -375,23 +380,7 @@ function renderGeneralSection(props: QuickSettingsProps) {
   return renderSettingsSection({ title: t("nav.settingsGeneral") }, [
     renderSettingsRow({
       title: t("quickSettings.language"),
-      control: html`
-        <select
-          class="settings-select"
-          aria-label=${t("quickSettings.language")}
-          .value=${props.locale}
-          @change=${(event: Event) => {
-            props.onLocaleChange((event.target as HTMLSelectElement).value as Locale);
-          }}
-        >
-          ${SUPPORTED_LOCALES.map((locale) => {
-            const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
-            return html`<option value=${locale} ?selected=${props.locale === locale}>
-              ${t(`languages.${key}`)}
-            </option>`;
-          })}
-        </select>
-      `,
+      control: renderLanguageSelect(props.locale, props.onLocaleChange),
     }),
   ]);
 }
@@ -769,7 +758,7 @@ function renderAppearanceSection(props: QuickSettingsProps) {
     : t("quickSettings.appearance.import");
   const themeOptions: Array<{ value: ThemeName; label: string }> = [
     ...BUILTIN_THEME_OPTIONS.map((option) => ({ value: option.id, label: t(option.labelKey) })),
-    { value: "custom", label: importedThemeName },
+    ...(props.hasCustomTheme ? [{ value: "custom" as const, label: importedThemeName }] : []),
   ];
   return renderTargetSection(
     GENERAL_SETTINGS_TARGET_IDS.appearance,
@@ -778,20 +767,26 @@ function renderAppearanceSection(props: QuickSettingsProps) {
       renderSettingsRow({
         title: t("quickSettings.appearance.theme"),
         stacked: true,
-        control: renderSettingsSegmented<ThemeName>({
-          value: props.theme,
-          options: themeOptions,
-          onChange: (theme, event) => {
-            if (theme === "custom" && !props.hasCustomTheme) {
-              props.onOpenCustomThemeImport?.();
-              return;
-            }
-            if (theme !== props.theme) {
-              // Anchor the theme transition on the clicked segmented button.
-              props.setTheme(theme, { element: (event.currentTarget as HTMLElement) ?? undefined });
-            }
-          },
-        }),
+        control: html`
+          ${renderSettingsSegmented<ThemeName>({
+            value: props.theme,
+            options: themeOptions,
+            onChange: (theme, element) => {
+              if (theme !== props.theme) {
+                props.setTheme(theme, { element });
+              }
+            },
+          })}
+          ${props.hasCustomTheme
+            ? nothing
+            : html`<button
+                type="button"
+                class="btn btn--sm"
+                @click=${() => props.onOpenCustomThemeImport?.()}
+              >
+                ${importedThemeName}
+              </button>`}
+        `,
       }),
       renderSettingsRow({
         title: t("common.mode"),
@@ -801,10 +796,10 @@ function renderAppearanceSection(props: QuickSettingsProps) {
             value: mode,
             label: t(`common.${mode}`),
           })),
-          onChange: (mode, event) => {
+          onChange: (mode, element) => {
             if (mode !== props.themeMode) {
               props.setThemeMode(mode, {
-                element: (event.currentTarget as HTMLElement) ?? undefined,
+                element,
               });
             }
           },
@@ -1036,36 +1031,6 @@ function renderPersonalSection(props: QuickSettingsProps) {
   );
 }
 
-function renderPendingChangesBar(props: QuickSettingsProps) {
-  if (props.configDirty !== true) {
-    return nothing;
-  }
-  const configBusy = isConfigBusy(props);
-  const canCommit = props.connected && props.configReady === true && !configBusy;
-
-  return html`
-    <div class="settings-group" aria-live="polite">
-      ${renderSettingsRow({
-        title: t("quickSettings.pending.title"),
-        description: t("quickSettings.pending.hint"),
-        control: html`
-          <button class="btn btn--sm" ?disabled=${configBusy} @click=${props.onResetConfig}>
-            ${t("quickSettings.pending.discard")}
-          </button>
-          <button class="btn btn--sm primary" ?disabled=${!canCommit} @click=${props.onSaveConfig}>
-            ${props.configSaving === true ? t("common.saving") : t("common.save")}
-          </button>
-          <button class="btn btn--sm" ?disabled=${!canCommit} @click=${props.onApplyConfig}>
-            ${props.configApplying === true
-              ? t("quickSettings.pending.applying")
-              : t("quickSettings.pending.applyNow")}
-          </button>
-        `,
-      })}
-    </div>
-  `;
-}
-
 function renderConnectionFooter(props: QuickSettingsProps) {
   const detail = [props.assistantName, props.version ? `v${props.version}` : ""]
     .filter(Boolean)
@@ -1083,11 +1048,41 @@ function renderConnectionFooter(props: QuickSettingsProps) {
 
 // ── Main render ──
 
+function renderQuickAutoSaveStatus(props: QuickSettingsProps) {
+  const status = renderConfigAutoSaveStatus({
+    status: props.configAutoSaveStatus ?? "idle",
+    onRetry: () => props.onRetrySaveConfig?.(),
+    onReload: () => props.onDiscardConfig?.(),
+  });
+  if (status === nothing) {
+    return nothing;
+  }
+  return html`
+    <div class="config-toolbar__status" role="status" aria-live="polite">${status}</div>
+  `;
+}
+
 export function renderQuickSettings(props: QuickSettingsProps) {
   return renderSettingsPage(html`
+    ${renderQuickAutoSaveStatus(props)}
+    ${renderConfigApplyBanner({
+      needsApply: props.configNeedsApply === true,
+      applying: props.configApplying === true,
+      // Mirrors the schema editor's banner gating: a dirty raw draft blocks
+      // apply outright, so an enabled action here would always fail.
+      busy:
+        props.configSaving === true ||
+        props.configLoading === true ||
+        props.configUpdating === true ||
+        props.configAutoSaveStatus === "saving" ||
+        props.configRawDraftPending === true,
+      connected: props.connected,
+      onApply: () => props.onApplyConfig?.(),
+    })}
     ${renderModelSection(props)} ${renderChannelsSection(props)} ${renderSecuritySection(props)}
     ${renderAutomationsSection(props)} ${renderGeneralSection(props)}
     ${renderAppearanceSection(props)} ${renderPersonalSection(props)} ${renderSystemSection(props)}
-    ${renderPendingChangesBar(props)} ${renderConnectionFooter(props)}
+    ${renderConnectionFooter(props)}
   `);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

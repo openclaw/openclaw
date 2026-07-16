@@ -41,6 +41,14 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
+  it("appends memory migration after model probing without shifting older method indices", () => {
+    expect(listGatewayMethods().slice(-3)).toEqual([
+      "models.probe",
+      "migrations.memory.plan",
+      "migrations.memory.apply",
+    ]);
+  });
+
   it("advertises ClawHub skill trust methods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("skills.securityVerdicts");
@@ -86,12 +94,17 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-5)).toEqual([
+    expect(coreMethods.slice(-10)).toEqual([
+      "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
       "approval.resolve",
       "sessions.search",
       "sessions.dispatch",
+      "sessions.reclaim",
+      "models.probe",
+      "migrations.memory.plan",
+      "migrations.memory.apply",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

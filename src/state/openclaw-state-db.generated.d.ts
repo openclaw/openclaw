@@ -375,31 +375,6 @@ export interface CronJobs {
   wake_mode: string;
 }
 
-export interface CronRunLogs {
-  created_at: number;
-  delivered: number | null;
-  delivery_error: string | null;
-  delivery_status: string | null;
-  diagnostics_summary: string | null;
-  duration_ms: number | null;
-  entry_json: string;
-  error: string | null;
-  job_id: string;
-  model: string | null;
-  next_run_at_ms: number | null;
-  provider: string | null;
-  run_at_ms: number | null;
-  run_id: string | null;
-  seq: number;
-  session_id: string | null;
-  session_key: string | null;
-  status: string | null;
-  store_key: string;
-  summary: string | null;
-  total_tokens: number | null;
-  ts: number;
-}
-
 export interface CurrentConversationBindings {
   account_id: string;
   binding_id: string;
@@ -657,14 +632,17 @@ export interface MacosPortGuardianRecords {
 }
 
 export interface ManagedOutgoingImageRecords {
+  agent_id: string | null;
   alt: string;
   attachment_id: string;
+  cleanup_pending: Generated<number>;
   created_at: string;
   message_id: string | null;
   original_content_type: string;
   original_filename: string | null;
   original_height: number | null;
   original_media_id: string;
+  original_media_root: string;
   original_media_subdir: string;
   original_size_bytes: number | null;
   original_width: number | null;
@@ -737,6 +715,7 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
   gateway_tls: number | null;
@@ -877,6 +856,20 @@ export interface SessionStateHeads {
   updated_at: number;
 }
 
+export interface SessionUpstreamLinks {
+  agent_id: string;
+  catalog_id: string;
+  created_at: number;
+  host_id: string;
+  last_marker_json: string | null;
+  last_scanned_at: number | null;
+  session_key: string;
+  thread_id: string;
+  updated_at: number;
+  upstream_kind: string;
+  upstream_ref_json: string | null;
+}
+
 export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
@@ -903,6 +896,13 @@ export interface SkillLifecycle {
   skill_name: string;
   state: string;
   state_changed_at_ms: number;
+}
+
+export interface SkillUploadChunks {
+  byte_offset: number;
+  chunk_blob: Uint8Array;
+  size_bytes: number;
+  upload_id: string;
 }
 
 export interface SkillUploads {
@@ -1004,6 +1004,7 @@ export interface TaskRuns {
   cleanup_after: number | null;
   created_at: number;
   delivery_status: string;
+  detail_json: string | null;
   ended_at: number | null;
   error: string | null;
   label: string | null;
@@ -1192,6 +1193,31 @@ export interface WorkerTranscriptCommits {
   updated_at_ms: number;
 }
 
+export interface WorkerWorkspacePendingResults {
+  claim_id: string;
+  created_at_ms: number;
+  environment_id: string;
+  gateway_instance_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  recovery_requested_at_ms: number | null;
+  run_id: string;
+  session_id: string;
+  workspace_accepted_at_ms: number | null;
+}
+
+export interface WorkerWorkspaceReconciliations {
+  base_manifest_ref: string;
+  base_pack: Uint8Array;
+  created_at_ms: number;
+  current_manifest_ref: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  plan_json: string;
+  session_id: string;
+}
+
 export interface WorkspaceSetupState {
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
@@ -1241,7 +1267,6 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
-  cron_run_logs: CronRunLogs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
@@ -1277,9 +1302,11 @@ export interface DB {
   session_groups: SessionGroups;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;
+  session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
+  skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
   state_leases: StateLeases;
@@ -1299,6 +1326,8 @@ export interface DB {
   worker_session_placements: WorkerSessionPlacements;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
+  worker_workspace_pending_results: WorkerWorkspacePendingResults;
+  worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_setup_state: WorkspaceSetupState;
   worktrees: Worktrees;
 }

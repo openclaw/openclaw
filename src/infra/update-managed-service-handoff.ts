@@ -460,7 +460,7 @@ function startGatewayServiceBestEffort() {
 });
 `;
 
-export type ManagedServiceUpdateHandoffResult = {
+type ManagedServiceUpdateHandoffResult = {
   status: "started";
   pid?: number;
   command: string;
@@ -552,7 +552,7 @@ function resolveGatewayServiceRecovery(
   return undefined;
 }
 
-export function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next = { ...env };
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
     if (SERVICE_IDENTITY_ENV_VARS.has(key)) {
@@ -828,3 +828,4 @@ export function buildManagedServiceHandoffUnavailableMessage(command: string): s
     `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host UI.`,
   ].join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

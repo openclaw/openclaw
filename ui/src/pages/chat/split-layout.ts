@@ -45,24 +45,12 @@ function nextColumnId(layout: ChatSplitLayout): string {
   return `c${max + 1}`;
 }
 
-export function nextPaneId(layout: ChatSplitLayout): string {
+function nextPaneId(layout: ChatSplitLayout): string {
   const max = panesOf(layout).reduce(
     (current, pane) => Math.max(current, numericSuffix(pane.id, "p")),
     0,
   );
   return `p${max + 1}`;
-}
-
-export function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {
-  return {
-    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
-    columnWeights: [1],
-    activePaneId: "p1",
-  };
-}
-
-export function createSplitLayout(sessionKey: string): ChatSplitLayout {
-  return insertPane(createSinglePaneLayout(sessionKey), "p1", sessionKey, "right");
 }
 
 export function findPane(

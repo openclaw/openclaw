@@ -1,6 +1,12 @@
-import { html, nothing } from "lit";
+import { expectDefined } from "@openclaw/normalization-core";
+import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  canonicalLobsterLook,
+  LOBSTER_PET_PALETTES,
+  renderLobsterSvg,
+} from "../../components/lobster-pet.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -9,20 +15,46 @@ import {
 } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import "../../styles/about.css";
+import { brandIcons } from "./brand-icons.ts";
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 
-export type AboutProps = {
+type AboutProps = {
   buildInfo: ControlUiBuildInfo;
   gatewayVersion: string | null;
   copyState: AboutCommitCopyState;
   onCopyCommit: () => void;
+  clawdWaving: boolean;
+  onPokeClawd: () => void;
 };
 
 const SHORT_COMMIT_LENGTH = 12;
 
-export function formatControlUiBuildDate(
+// Docs-first where a docs page exists; GitHub/Discord match the native
+// macOS/iOS About screens (AboutSettings.swift, SettingsProTabSections.swift).
+const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> = [
+  { href: "https://openclaw.ai", icon: icons.globe, label: () => t("aboutPage.linkWebsite") },
+  { href: "https://docs.openclaw.ai", icon: icons.book, label: () => t("aboutPage.linkDocs") },
+  {
+    href: "https://github.com/openclaw/openclaw",
+    icon: brandIcons.github,
+    label: () => t("aboutPage.linkGitHub"),
+  },
+  {
+    href: "https://discord.gg/clawd",
+    icon: brandIcons.discord,
+    label: () => t("aboutPage.linkDiscord"),
+  },
+  {
+    href: "https://docs.openclaw.ai/releases",
+    icon: icons.scrollText,
+    label: () => t("aboutPage.linkChangelog"),
+  },
+];
+
+function formatControlUiBuildDate(
   value: string | null,
   locales?: Intl.LocalesArgument,
 ): string | null {
@@ -92,6 +124,48 @@ function renderCommit(props: AboutProps) {
   `;
 }
 
+// The same canonical crimson Clawd as the chat welcome hero, rendered big.
+// The poke button replays the claw wave; ambient motion lives in about.css.
+function renderHero(props: AboutProps) {
+  const palette =
+    LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
+    expectDefined(LOBSTER_PET_PALETTES[0], "about lobster palette");
+  const look = canonicalLobsterLook(palette);
+  return html`
+    <section class="about-hero">
+      <button
+        type="button"
+        class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
+        style=${`--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`}
+        aria-label=${t("aboutPage.waveHello")}
+        @click=${props.onPokeClawd}
+      >
+        ${renderLobsterSvg(look)}
+      </button>
+      <h2 class="about-hero__name">${t("aboutPage.productName")}</h2>
+      <p class="about-hero__tagline">${t("aboutPage.tagline")}</p>
+      ${props.buildInfo.version
+        ? html`<code class="about-hero__version" dir="ltr">v${props.buildInfo.version}</code>`
+        : nothing}
+      <nav class="about-hero__links" aria-label=${t("aboutPage.linksLabel")}>
+        ${ABOUT_LINKS.map(
+          (link) => html`
+            <a
+              class="about-hero__link"
+              href=${link.href}
+              target=${EXTERNAL_LINK_TARGET}
+              rel=${buildExternalLinkRel()}
+            >
+              <span class="about-hero__link-icon" aria-hidden="true">${link.icon}</span>
+              <span>${link.label()}</span>
+            </a>
+          `,
+        )}
+      </nav>
+    </section>
+  `;
+}
+
 export function renderAbout(props: AboutProps) {
   const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
   const buildFacts = html`
@@ -128,6 +202,7 @@ export function renderAbout(props: AboutProps) {
     </dl>
   `;
   return renderSettingsPage([
+    renderHero(props),
     renderSettingsSection(
       { title: t("aboutPage.artifactTitle"), description: t("aboutPage.artifactSubtitle") },
       buildFacts,
@@ -145,5 +220,6 @@ export function renderAbout(props: AboutProps) {
           : renderSettingsValue(t("aboutPage.unavailable")),
       }),
     ),
+    html`<p class="about-footer">${t("aboutPage.license")}</p>`,
   ]);
 }

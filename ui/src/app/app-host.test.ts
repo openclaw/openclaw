@@ -7,12 +7,13 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
-import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./app-host.ts";
+import "./app-host.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 
 type AppLifecycleState = {
   loginToken: string;
@@ -76,6 +77,7 @@ type ShellNavigationState = {
   };
   handleNativeToggleSidebar: () => void;
   handleNativeOpenSearch: () => void;
+  handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
   handleNativeHistoryState: (event: Event) => void;
   nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
@@ -446,10 +448,11 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("opens search and starts a session from native titlebar events", () => {
     const navigate = vi.fn();
     const openPalette = vi.fn();
+    const togglePalette = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
     Object.defineProperty(shell, "commandPalette", {
       configurable: true,
-      value: { openPalette },
+      value: { openPalette, togglePalette },
     });
     shell.runtime = {
       context: {
@@ -458,10 +461,32 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       } as unknown as ApplicationContext,
     };
     shell.handleNativeOpenSearch();
+    const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
+    shell.handleNativeToggleSearch(toggleEvent);
     shell.handleNativeNewSession();
 
     expect(openPalette).toHaveBeenCalledOnce();
+    expect(togglePalette).toHaveBeenCalledOnce();
+    // preventDefault is the handled signal for the native legacy fallback.
+    expect(toggleEvent.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+  });
+
+  it("retains a native new-session request until a context exists", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+
+    shell.handleNativeNewSession();
+
+    shell.runtime = {
+      context: {
+        navigate,
+        agentSelection: { state: { selectedId: "main" } },
+      } as unknown as ApplicationContext,
+    };
+    shell.handleNativeNewSession();
+
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", { search: "?agent=main" });
   });
 
   it("does not start a native session during onboarding", () => {
@@ -540,18 +565,16 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 describe("OpenClaw shell update affordance", () => {
   it("renders a floating card only while desktop navigation is collapsed", () => {
     const container = document.createElement("div");
-    const updateAvailable = {
-      currentVersion: "2026.7.1",
-      latestVersion: "2026.7.2",
-      channel: "stable",
-    };
     const shared = {
       onboarding: false,
-      updateAvailable,
+      updateAvailable: {
+        currentVersion: "2026.7.1",
+        latestVersion: "2026.7.2",
+        channel: "stable" as const,
+      },
       updateRunning: false,
       onUpdate: vi.fn(),
     };
-
     const collapsed = navigationSurfaceIsHidden({
       navCollapsed: true,
       navDrawerOpen: false,
@@ -569,7 +592,7 @@ describe("OpenClaw shell update affordance", () => {
     expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
   });
 
-  it("treats the mobile navigation surface as hidden while its drawer is closed", () => {
+  it("treats a closed mobile drawer as hidden navigation", () => {
     expect(
       navigationSurfaceIsHidden({
         navCollapsed: false,

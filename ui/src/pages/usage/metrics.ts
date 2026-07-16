@@ -58,9 +58,19 @@ function forEachSessionHourSlice(
 
   const startMs = Math.min(start, end);
   const endMs = Math.max(start, end);
-  const durationMs = Math.max(endMs - startMs, 1);
-  const totalMinutes = durationMs / 60000;
 
+  if (startMs === endMs) {
+    const date = new Date(startMs);
+    visitor({
+      usage,
+      hour: getZonedHour(date, timeZone),
+      weekday: getZonedWeekday(date, timeZone),
+      share: 1,
+    });
+    return true;
+  }
+
+  const totalMinutes = (endMs - startMs) / 60000;
   let cursor = startMs;
   while (cursor < endMs) {
     const date = new Date(cursor);
@@ -851,13 +861,9 @@ export {
   formatCost,
   formatDayLabel,
   formatFullDate,
-  buildUsageMosaicStats,
-  formatHourLabel,
   formatIsoDate,
   formatTokens,
-  getHourAndWeekdayForUtcQuarterBucket,
-  getZonedHour,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
-  setToHourEnd,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
