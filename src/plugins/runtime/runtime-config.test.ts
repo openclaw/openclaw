@@ -136,4 +136,28 @@ describe("createRuntimeConfig", () => {
       writeOptions: { afterWrite: { mode: "none", reason: "test-controlled" } },
     });
   });
+
+  it("bounds the deprecated config API warning cache and evicts least-recently-used keys", () => {
+    const maxEntries = 4096;
+    const configApi = createRuntimeConfig();
+
+    for (let i = 0; i < maxEntries; i++) {
+      withPluginRuntimePluginScope({ pluginId: `legacy-plugin-${i}` }, () =>
+        configApi.loadConfig(),
+      );
+    }
+    expect(logWarnMock).toHaveBeenCalledTimes(maxEntries);
+
+    // A duplicate read promotes legacy-plugin-0 from the LRU head without re-warning.
+    withPluginRuntimePluginScope({ pluginId: "legacy-plugin-0" }, () => configApi.loadConfig());
+    expect(logWarnMock).toHaveBeenCalledTimes(maxEntries);
+
+    // Overflow evicts legacy-plugin-1 instead of the recently used legacy-plugin-0.
+    withPluginRuntimePluginScope({ pluginId: "legacy-plugin-extra" }, () => configApi.loadConfig());
+    expect(logWarnMock).toHaveBeenCalledTimes(maxEntries + 1);
+    withPluginRuntimePluginScope({ pluginId: "legacy-plugin-0" }, () => configApi.loadConfig());
+    expect(logWarnMock).toHaveBeenCalledTimes(maxEntries + 1);
+    withPluginRuntimePluginScope({ pluginId: "legacy-plugin-1" }, () => configApi.loadConfig());
+    expect(logWarnMock).toHaveBeenCalledTimes(maxEntries + 2);
+  });
 });

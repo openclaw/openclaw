@@ -4,13 +4,19 @@ import {
   mutateConfigFile as mutateConfigFileInternal,
   replaceConfigFile as replaceConfigFileInternal,
 } from "../../config/mutate.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { logWarn } from "../../logger.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
 
 const RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE = "runtime-config-load-write";
 
-const warnedDeprecatedConfigApis = new Set<string>();
+const MAX_WARNED_DEPRECATED_CONFIG_APIS = 4096;
+// Warning state spans fresh config snapshots; bounding it means evicted plugin keys can re-warn.
+const warnedDeprecatedConfigApis = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_DEPRECATED_CONFIG_APIS,
+});
 
 function formatDeprecatedConfigApiSubject(name: "loadConfig" | "writeConfigFile"): string {
   const scope = getPluginRuntimeGatewayRequestScope();
@@ -35,10 +41,9 @@ function warnDeprecatedConfigApiOnce(
   replacement: string,
 ): void {
   const warningKey = formatDeprecatedConfigApiWarningKey(name);
-  if (warnedDeprecatedConfigApis.has(warningKey)) {
+  if (warnedDeprecatedConfigApis.check(warningKey)) {
     return;
   }
-  warnedDeprecatedConfigApis.add(warningKey);
   logWarn(
     `${formatDeprecatedConfigApiSubject(name)} is deprecated (${RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE}); use ${replacement}.${formatDeprecatedConfigApiSource()}`,
   );
