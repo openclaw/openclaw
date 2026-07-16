@@ -7,8 +7,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import type { ProvisionedFileState } from "./provisioned-files.js";
-import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
+import type {
+  ManagedWorktreeOwnerKind,
+  ManagedWorktreeRecord,
+  ProvisionedFileState,
+} from "./types.js";
 
 type WorktreesTable = OpenClawStateKyselyDatabase["worktrees"];
 type WorktreeRow = Selectable<WorktreesTable>;

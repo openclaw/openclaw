@@ -7,6 +7,7 @@ import {
   getRegistryWorktreeProvisionedChunk,
   insertRegistryWorktreeProvisionedChunk,
 } from "./registry.js";
+import type { ProvisionedFileState } from "./types.js";
 
 function normalizeRelativePath(relativePath: string): string | undefined {
   if (path.isAbsolute(relativePath)) {
@@ -128,12 +129,6 @@ export async function provisionIncludedFiles(
   }
   return provisioned.toSorted();
 }
-
-export type ProvisionedFileState = {
-  path: string;
-  mode: number | null;
-  chunks: number;
-};
 
 type ProvisionedFile = {
   path: string;
