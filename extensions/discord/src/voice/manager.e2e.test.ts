@@ -3639,6 +3639,115 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageIncludes("normal answer");
   });
 
+  it("defaults to wake names only while multiple people share agent-proxy voice", async () => {
+    const client = createClient();
+    const ownerState = {
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: "1001",
+      member: { user: { id: "u-owner", username: "owner", bot: false } },
+    };
+    const agentState = {
+      guild_id: "g1",
+      user_id: "bot-user",
+      channel_id: "1001",
+      member: { user: { id: "bot-user", username: "molty", bot: true } },
+    };
+    const helperBotState = {
+      guild_id: "g1",
+      user_id: "helper-bot",
+      channel_id: "1001",
+      member: { user: { id: "helper-bot", username: "helper", bot: true } },
+    };
+    let voiceStates: Array<Record<string, unknown>> = [ownerState, agentState, helperBotState];
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return { listVoiceChannelStates: vi.fn(() => voiceStates) };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto" },
+        },
+      },
+      client,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+    manager.setBotUserId("bot-user");
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as {
+      autoRespondToAudio?: boolean;
+      interruptResponseOnInputAudio?: boolean;
+      onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+    };
+    const beginOwnerTurn = () => {
+      const turn = entry.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      turn?.sendInputAudio(Buffer.alloc(8));
+    };
+
+    expect(bridgeParams.autoRespondToAudio).toBe(false);
+    expect(bridgeParams.interruptResponseOnInputAudio).toBe(false);
+
+    beginOwnerTurn();
+    await emitFinalRealtimeUserTranscript(bridgeParams, "How is it going?");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(lastAgentCommandArgs().message).toContain("How is it going?");
+
+    const friendState = {
+      guild_id: "g1",
+      user_id: "u-friend",
+      channel_id: "1001",
+      member: { user: { id: "u-friend", username: "friend", bot: false } },
+    };
+    voiceStates = [...voiceStates, friendState];
+    await manager.handleVoiceStateUpdate(friendState as never, null);
+
+    beginOwnerTurn();
+    await emitFinalRealtimeUserTranscript(bridgeParams, "What is the plan?");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+
+    beginOwnerTurn();
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Molty, what is the plan?");
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    expect(lastAgentCommandArgs().message).toContain("what is the plan?");
+    expect(lastAgentCommandArgs().message).not.toContain("Molty");
+
+    voiceStates = voiceStates.filter((state) => state.user_id !== "u-friend");
+    await manager.handleVoiceStateUpdate(
+      { ...friendState, channel_id: null } as never,
+      friendState as never,
+    );
+
+    beginOwnerTurn();
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Continue without a wake name.");
+    expect(agentCommandMock).toHaveBeenCalledTimes(3);
+    expect(lastAgentCommandArgs().message).toContain("Continue without a wake name.");
+  });
+
   it("requires the agent wake name before realtime agent-proxy consults", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "wake answer" }] });
     const manager = createManager(

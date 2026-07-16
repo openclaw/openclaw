@@ -125,7 +125,7 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
   resolveManagedServiceNodeRunnerOverride,
   resolveManagedServicePackageUpdateRoot,
-  resolvePackageRuntimePreflightError,
+  resolvePackageRuntimePreflight,
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
@@ -736,6 +736,7 @@ async function updateCommandInternal(
   // where the package root is the same but the user's PATH-resolved node
   // differs from the node baked into the managed gateway service unit.
   let managedServiceNodeRunner: string | undefined;
+  let packageUpdateNodeRunner: string | undefined;
 
   if (updateInstallKind === "package") {
     managedServiceRootRedirect = await resolveManagedServicePackageUpdateRoot({ root });
@@ -781,6 +782,7 @@ async function updateCommandInternal(
         );
       }
     }
+    packageUpdateNodeRunner = managedServiceNodeRunner;
   }
 
   if (updateInstallKind !== "git") {
@@ -983,19 +985,39 @@ async function updateCommandInternal(
   }
 
   if (updateInstallKind === "package") {
-    const runtimePreflightError = await resolvePackageRuntimePreflightError({
+    // Changing runners is safe only when this update owns and will rewrite the
+    // service; otherwise the unchanged unit could still restart on the stale Node.
+    const canRefreshManagedServiceNode =
+      shouldRestart &&
+      managedServiceNodeRunner !== undefined &&
+      (await gatewayServiceCommandUsesRoot({ root })) === true;
+    const runtimePreflight = await resolvePackageRuntimePreflight({
       tag,
       spec: packageInstallSpec ?? undefined,
       timeoutMs,
       nodeRunner: managedServiceNodeRunner,
+      fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
       command: packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined,
       cwd: packageInstallCwd,
       env: packageInstallEnv,
     });
-    if (runtimePreflightError) {
-      defaultRuntime.error(runtimePreflightError);
+    if (runtimePreflight.error) {
+      defaultRuntime.error(runtimePreflight.error);
       defaultRuntime.exit(1);
       return;
+    }
+    packageUpdateNodeRunner = runtimePreflight.nodeRunner;
+    if (runtimePreflight.replacedNodeRunner && !opts.json) {
+      defaultRuntime.log(
+        theme.warn(
+          `Managed gateway service Node (${runtimePreflight.replacedNodeRunner}) cannot run openclaw@${runtimePreflight.targetVersion ?? tag}.`,
+        ),
+      );
+      defaultRuntime.log(
+        theme.muted(
+          `Using current Node (${packageUpdateNodeRunner}) and refreshing the managed service runtime after the update.`,
+        ),
+      );
     }
   }
 
@@ -1109,7 +1131,7 @@ async function updateCommandInternal(
             invocationCwd,
             honorPackageRoot:
               managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
-            nodeRunner: managedServiceNodeRunner,
+            nodeRunner: packageUpdateNodeRunner,
             installEnv: packageInstallEnv,
             installTarget: packageInstallTarget,
           })
@@ -1278,7 +1300,7 @@ async function updateCommandInternal(
       opts,
       pluginInstallRecords: preUpdatePluginInstallRecords,
       updateStartedAtMs: startedAt,
-      nodeRunner: managedServiceNodeRunner,
+      nodeRunner: packageUpdateNodeRunner,
       preUpdateConfig: configSnapshot.valid
         ? {
             sourceConfig: configSnapshot.sourceConfig,
@@ -1472,7 +1494,7 @@ async function updateCommandInternal(
     gatewayPort,
     restartScriptPath,
     invocationCwd,
-    nodeRunner: managedServiceNodeRunner,
+    nodeRunner: packageUpdateNodeRunner,
     skipLegacyServiceRestart,
     requireRunningServiceAfterRestart:
       resultWithPostUpdate.mode === "git" && preManagedServiceStop?.stopped === true,

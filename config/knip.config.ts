@@ -10,6 +10,9 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  ".github/actions/register-bind-mount-cleanup/main.cjs!",
+  ".github/actions/register-bind-mount-cleanup/post.cjs!",
+  "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/build-discord-activity-sdk.mjs!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
@@ -74,6 +77,9 @@ const repositoryScriptEntries = [
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
+  "security/opengrep/check-rule-metadata.mjs!",
+  "security/opengrep/compile-rules.mjs!",
+  "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
 const rootEntries = [
@@ -133,6 +139,17 @@ const rootEntries = [
   "src/commands/doctor/shared/deprecation-compat.ts!",
   // Compiled as the package-boundary failure canary by the extension checker.
   "src/plugins/contracts/rootdir-boundary-canary.ts!",
+  // Mintlify executes every JavaScript file in the docs content directory on each page.
+  "docs/nav-tabs-underline.js!",
+  // Knip loads these audit configurations by command-line path.
+  "config/knip.config.ts!",
+  "config/knip.all-exports.config.ts!",
+  "config/knip.scripts-exports.config.ts!",
+  // Native applications load these JavaScript assets directly rather than through Node imports.
+  "apps/android/app/src/main/assets/katex/katex.min.js!",
+  "apps/android/app/src/main/assets/katex/renderer.js!",
+  "apps/linux/ui/main.js!",
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
@@ -333,6 +350,10 @@ const config = {
         "highlight.js",
         "playwright-core",
         "partial-json",
+        // Optional runtime imports: the native Canvas bundle falls back without Markdown,
+        // and the meme-maker skill emits SVG when sharp is not installed.
+        "@a2ui/markdown-it",
+        "sharp",
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootToolingAndWorkspaceDependencies,
@@ -341,14 +362,30 @@ const config = {
       // Platform tools and shell builtins used by package scripts and process-boundary tests.
       ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
       project: [
+        ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "config/**/*.{ts,mts,cts}!",
+        "docs/**/*.js!",
+        "security/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        "config/**/*.{ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "*.config.{js,mjs,cjs,ts,mts,cts}!",
         "*.mjs!",
       ],
       entry: rootEntries,
+    },
+    "examples/ai-chat": {
+      entry: ["index.mjs!"],
+      project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
+    },
+    "qa/convex-credential-broker": {
+      // Convex discovers these registered functions and schemas by filename.
+      entry: ["convex/credentials.ts!", "convex/crons.ts!", "convex/http.ts!", "convex/schema.ts!"],
+      // This intentionally standalone package is not linked into the pnpm workspace.
+      ignoreBinaries: ["convex"],
+      project: ["convex/**/*.ts!"],
     },
     ui: {
       entry: [

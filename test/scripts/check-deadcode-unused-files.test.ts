@@ -100,6 +100,9 @@ describe("check-deadcode-unused-files", () => {
 Unused files (2)
 src/b.ts: src/b.ts
 src/a.ts: src/a.ts
+C:\\tmp\\outside.ts: C:\\tmp\\outside.ts
+C:outside.ts: C:outside.ts
+\\\\server\\share\\outside.ts: \\\\server\\share\\outside.ts
 
 Unused dependencies (1)
 left-pad: package.json
@@ -112,6 +115,14 @@ left-pad: package.json
       "src/a.ts",
       "src/b.ts",
     ]);
+  });
+
+  it("keeps dot-directory and root entry files", () => {
+    expect(
+      parseKnipCompactUnusedFiles(
+        ".agents/skills/example/scripts/check.mjs: .agents/skills/example/scripts/check.mjs\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
+      ),
+    ).toEqual([".agents/skills/example/scripts/check.mjs", "tsdown.ai.config.ts"]);
   });
 
   it("ignores pnpm dlx progress lines in files-only compact output", () => {
