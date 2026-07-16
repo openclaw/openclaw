@@ -148,6 +148,9 @@ export function selectPreferredLocalModelId(modelIds: readonly string[]): string
     const familyRank = LOCAL_MODEL_FAMILY_PREFERENCES.findIndex((pattern) =>
       pattern.test(normalized),
     );
+    // Rank buckets, best to worst: known family (0..N-1), known-family coder
+    // (N..2N-1), unknown chat (2N), unknown coder (2N+1), specialist (3N).
+    // Strict `<` below keeps the caller's original order within a bucket.
     const rank = LOCAL_MODEL_SPECIALIST_PATTERN.test(normalized)
       ? familyCount * 3
       : familyRank >= 0
