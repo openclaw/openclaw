@@ -5,11 +5,18 @@ import {
 
 const FEISHU_MEDIA_UPLOAD_FAILURE_FALLBACK_TEXT = "Media upload failed. Please try again.";
 
+function hasAsciiControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f;
+  });
+}
+
 async function resolvePublicFeishuMediaReference(
   value: string | undefined,
 ): Promise<string | undefined> {
   const raw = value?.trim();
-  if (!raw) {
+  if (!raw || hasAsciiControlCharacter(raw)) {
     return undefined;
   }
   try {
@@ -23,7 +30,7 @@ async function resolvePublicFeishuMediaReference(
     // A proxy route cannot prove its destination is public. Fail closed unless
     // local pinned DNS validates the URL without private or special-use answers.
     await resolvePinnedHostnameWithPolicy(parsed.hostname);
-    return raw;
+    return parsed.href;
   } catch {
     return undefined;
   }
