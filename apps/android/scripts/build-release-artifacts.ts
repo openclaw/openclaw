@@ -39,6 +39,11 @@ type CliOptions = {
   verifyApk?: string;
 };
 
+type ExecutableCommand = {
+  command: string;
+  prefixArgs: string[];
+};
+
 export type AndroidBuildMetadata = {
   commit: string;
   timestamp: string;
@@ -324,7 +329,19 @@ function verifyAabSignature(path: string): void {
   }
 }
 
-function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
+function resolveJavaExecutable(): string {
+  const executableName = process.platform === "win32" ? "java.exe" : "java";
+  const javaHome = process.env.JAVA_HOME;
+  if (javaHome) {
+    const candidate = join(javaHome, "bin", executableName);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return executableName;
+}
+
+function resolveApkSignerFromSdk(sdkRoot: string | undefined): ExecutableCommand | null {
   if (!sdkRoot) {
     return null;
   }
@@ -334,16 +351,34 @@ function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
     return null;
   }
 
-  const executableName = process.platform === "win32" ? "apksigner.bat" : "apksigner";
-  return (
-    readdirSync(buildToolsDir)
-    .toSorted((left, right) => right.localeCompare(left))
-      .map((version) => join(buildToolsDir, version, executableName))
-      .find((candidate) => existsSync(candidate)) ?? null
+  const buildToolVersions = readdirSync(buildToolsDir).toSorted((left, right) =>
+    right.localeCompare(left),
   );
+  for (const version of buildToolVersions) {
+    const versionDir = join(buildToolsDir, version);
+    if (process.platform === "win32") {
+      const jarPath = join(versionDir, "lib", "apksigner.jar");
+      if (existsSync(jarPath)) {
+        return {
+          command: resolveJavaExecutable(),
+          prefixArgs: ["-jar", jarPath],
+        };
+      }
+      continue;
+    }
+
+    const executablePath = join(versionDir, "apksigner");
+    if (existsSync(executablePath)) {
+      return {
+        command: executablePath,
+        prefixArgs: [],
+      };
+    }
+  }
+  return null;
 }
 
-function resolveApkSigner(): string {
+function resolveApkSigner(): ExecutableCommand {
   const sdkApkSigner =
     resolveApkSignerFromSdk(process.env.ANDROID_HOME) ??
     resolveApkSignerFromSdk(process.env.ANDROID_SDK_ROOT);
@@ -354,9 +389,22 @@ function resolveApkSigner(): string {
   const executableName = process.platform === "win32" ? "apksigner.bat" : "apksigner";
   for (const pathDir of (process.env.PATH ?? "").split(delimiter)) {
     const candidate = join(pathDir, executableName);
+    if (process.platform === "win32") {
+      const jarPath = join(pathDir, "lib", "apksigner.jar");
+      if (existsSync(candidate) && existsSync(jarPath)) {
+        return {
+          command: resolveJavaExecutable(),
+          prefixArgs: ["-jar", jarPath],
+        };
+      }
+      continue;
+    }
     try {
       accessSync(candidate, constants.X_OK);
-      return candidate;
+      return {
+        command: candidate,
+        prefixArgs: [],
+      };
     } catch {
       continue;
     }
@@ -411,37 +459,52 @@ function resolveApkAnalyzer(): string {
   throw new Error("Missing apkanalyzer. Install Android SDK command-line tools or put it on PATH.");
 }
 
-function verifyApkSignature(path: string, expectedCertificateSha256: string): void {
-  const apkSigner = resolveApkSigner();
-  let output: string;
-  try {
-    output = execFileSync(apkSigner, ["verify", "--print-certs", path], {
-      encoding: "utf8",
-      shell: process.platform === "win32",
-      stdio: ["ignore", "pipe", "inherit"],
-    });
-  } catch {
-    throw new Error(`apksigner verification failed for ${path}`);
-  }
-
-  const fingerprints: string[] = [];
+export function verifyApkSigningCertificateOutput(
+  output: string,
+  expectedCertificateSha256: string,
+  path: string,
+): void {
+  const fingerprints = new Set<string>();
   for (const match of output.matchAll(
-    /^Signer #[0-9]+ certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu,
+    /^(?:Signer #[0-9]+|V[0-9]+ Signer:) certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu,
   )) {
     const fingerprint = match[1];
     if (!fingerprint) {
       throw new Error(`Malformed SHA-256 signing certificate output for ${path}`);
     }
-    fingerprints.push(fingerprint.replaceAll(":", "").toLowerCase());
+    fingerprints.add(fingerprint.replaceAll(":", "").toLowerCase());
   }
-  if (fingerprints.length !== 1 || !/^[a-f0-9]{64}$/u.test(fingerprints[0] ?? "")) {
+  const uniqueFingerprints = [...fingerprints];
+  if (
+    uniqueFingerprints.length !== 1 ||
+    !/^[a-f0-9]{64}$/u.test(uniqueFingerprints[0] ?? "")
+  ) {
     throw new Error(`Expected exactly one SHA-256 signing certificate for ${path}`);
   }
-  if (fingerprints[0] !== expectedCertificateSha256) {
+  if (uniqueFingerprints[0] !== expectedCertificateSha256) {
     throw new Error(
-      `APK signing certificate mismatch for ${path}: expected ${expectedCertificateSha256}, got ${fingerprints[0]}`,
+      `APK signing certificate mismatch for ${path}: expected ${expectedCertificateSha256}, got ${uniqueFingerprints[0]}`,
     );
   }
+}
+
+function verifyApkSignature(path: string, expectedCertificateSha256: string): void {
+  const apkSigner = resolveApkSigner();
+  let output: string;
+  try {
+    output = execFileSync(
+      apkSigner.command,
+      [...apkSigner.prefixArgs, "verify", "--print-certs", path],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      },
+    );
+  } catch {
+    throw new Error(`apksigner verification failed for ${path}`);
+  }
+
+  verifyApkSigningCertificateOutput(output, expectedCertificateSha256, path);
 }
 
 function readApkManifestValue(path: string, verb: string): string {

@@ -1,19 +1,15 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach } from "vitest";
 import { describe, expect, it } from "vitest";
 import {
   androidBuildMetadataGradleArgs,
   isVerifiedJarSignatureOutput,
   resolveAndroidBuildMetadata,
   verifyAndroidReleaseSource,
+  verifyApkSigningCertificateOutput,
 } from "../../apps/android/scripts/build-release-artifacts.ts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "apps/android/scripts/build-release-artifacts.ts";
 const APK_CERTIFICATE_SHA256 = "80dbc62315ea216dd6e8a7060735a866ddc464a48ed50fef29ff0550468b9a63";
-const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function run(args: string[], env: NodeJS.ProcessEnv = {}) {
   const processEnv = { ...process.env };
@@ -28,28 +24,13 @@ function run(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-function fakeApkSigner(certificateSha256: string, signerCount = 1) {
-  const tempRoot = tempRoots.make("openclaw-apksigner-");
-  const buildToolsDir = path.join(tempRoot, "build-tools", "36.0.0");
-  fs.mkdirSync(buildToolsDir, { recursive: true });
-  const apkSignerPath = path.join(
-    buildToolsDir,
-    process.platform === "win32" ? "apksigner.bat" : "apksigner",
-  );
-  const signerLines = Array.from(
-    { length: signerCount },
-    (_, index) => `Signer #${index + 1} certificate SHA-256 digest: ${certificateSha256}`,
-  );
-  fs.writeFileSync(
-    apkSignerPath,
-    process.platform === "win32"
-      ? `@echo off\r\n${signerLines.map((line) => `echo ${line}`).join("\r\n")}\r\n`
-      : `#!/bin/sh\nprintf '%s\\n' ${signerLines.map((line) => `'${line}'`).join(" ")}\n`,
-  );
-  fs.chmodSync(apkSignerPath, 0o755);
-  const apkPath = path.join(tempRoot, "OpenClaw-Android.apk");
-  fs.writeFileSync(apkPath, "fake apk bytes");
-  return { apkPath, sdkRoot: tempRoot };
+function apkSignerOutput(...certificateSha256Values: string[]): string {
+  return certificateSha256Values
+    .map(
+      (certificateSha256, index) =>
+        `Signer #${index + 1} certificate SHA-256 digest: ${certificateSha256}`,
+    )
+    .join("\n");
 }
 
 describe("Android release artifacts", () => {
@@ -194,38 +175,45 @@ describe("Android release artifacts", () => {
   });
 
   it("accepts the pinned standalone APK signing certificate", () => {
-    const { apkPath, sdkRoot } = fakeApkSigner(APK_CERTIFICATE_SHA256);
+    expect(() =>
+      verifyApkSigningCertificateOutput(
+        apkSignerOutput(APK_CERTIFICATE_SHA256),
+        APK_CERTIFICATE_SHA256,
+        "OpenClaw-Android.apk",
+      ),
+    ).not.toThrow();
+  });
 
-    const result = run(["--verify-apk", apkPath], {
-      ANDROID_HOME: sdkRoot,
-      ANDROID_SDK_ROOT: sdkRoot,
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Verified pinned APK signing certificate");
+  it("accepts the current apksigner scheme-prefixed certificate output", () => {
+    expect(() =>
+      verifyApkSigningCertificateOutput(
+        [
+          `V2 Signer: certificate SHA-256 digest: ${APK_CERTIFICATE_SHA256}`,
+          `V3 Signer: certificate SHA-256 digest: ${APK_CERTIFICATE_SHA256}`,
+        ].join("\n"),
+        APK_CERTIFICATE_SHA256,
+        "OpenClaw-WearOS-release.apk",
+      ),
+    ).not.toThrow();
   });
 
   it("rejects an APK signed by another certificate", () => {
-    const { apkPath, sdkRoot } = fakeApkSigner("a".repeat(64));
-
-    const result = run(["--verify-apk", apkPath], {
-      ANDROID_HOME: sdkRoot,
-      ANDROID_SDK_ROOT: sdkRoot,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("APK signing certificate mismatch");
+    expect(() =>
+      verifyApkSigningCertificateOutput(
+        apkSignerOutput("a".repeat(64)),
+        APK_CERTIFICATE_SHA256,
+        "OpenClaw-Android.apk",
+      ),
+    ).toThrow("APK signing certificate mismatch");
   });
 
   it("rejects APKs with multiple signers", () => {
-    const { apkPath, sdkRoot } = fakeApkSigner(APK_CERTIFICATE_SHA256, 2);
-
-    const result = run(["--verify-apk", apkPath], {
-      ANDROID_HOME: sdkRoot,
-      ANDROID_SDK_ROOT: sdkRoot,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Expected exactly one SHA-256 signing certificate");
+    expect(() =>
+      verifyApkSigningCertificateOutput(
+        apkSignerOutput(APK_CERTIFICATE_SHA256, "b".repeat(64)),
+        APK_CERTIFICATE_SHA256,
+        "OpenClaw-Android.apk",
+      ),
+    ).toThrow("Expected exactly one SHA-256 signing certificate");
   });
 });
