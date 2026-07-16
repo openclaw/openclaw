@@ -164,12 +164,15 @@ export function hasSuccessfulCiGateJob(run, ciGateJobs, nowMs) {
   if (!run?.id || !Array.isArray(ciGateJobs)) {
     return false;
   }
-  const runAttempt = run.run_attempt ?? 1;
   return ciGateJobs.some((job) => {
     if (job?.name !== CI_GATE_CHECK_NAME) {
       return false;
     }
-    if (job?.run_id !== run.id || (job?.run_attempt ?? 1) !== runAttempt) {
+    // The job list is fetched per run with filter=latest, which already scopes
+    // to the current attempt (the REST jobs payload does not expose
+    // run_attempt), so a run_id match plus filter=latest binds the gate to the
+    // attempt in progress — a prior attempt's gate cannot appear here.
+    if (job?.run_id !== run.id) {
       return false;
     }
     if (job?.status !== "completed" || job?.conclusion !== "success") {
