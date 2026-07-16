@@ -13,6 +13,9 @@ import { logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { toErrorObject } from "./errors.js";
 
+const TAILSCALE_BINARY_PROBE_TIMEOUT_MS = 3_000;
+const TAILSCALE_BINARY_SEARCH_TIMEOUT_MS = 5_000;
+
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
@@ -39,7 +42,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
       return false;
     }
     try {
-      await runExec(path, ["--version"], { timeoutMs: 3000 });
+      await runExec(path, ["--version"], { timeoutMs: TAILSCALE_BINARY_PROBE_TIMEOUT_MS });
       return true;
     } catch {
       return false;
@@ -48,7 +51,9 @@ export async function findTailscaleBinary(): Promise<string | null> {
 
   // Strategy 1: which command
   try {
-    const { stdout } = await runExec("which", ["tailscale"]);
+    const { stdout } = await runExec("which", ["tailscale"], {
+      timeoutMs: TAILSCALE_BINARY_PROBE_TIMEOUT_MS,
+    });
     const fromPath = stdout.trim();
     if (fromPath && (await checkBinary(fromPath))) {
       return fromPath;
@@ -76,7 +81,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
         "-path",
         "*/Tailscale.app/Contents/MacOS/Tailscale",
       ],
-      { timeoutMs: 5000 },
+      { timeoutMs: TAILSCALE_BINARY_SEARCH_TIMEOUT_MS },
     );
     const found = stdout.trim().split("\n")[0];
     if (found && (await checkBinary(found))) {
@@ -88,7 +93,9 @@ export async function findTailscaleBinary(): Promise<string | null> {
 
   // Strategy 4: locate command
   try {
-    const { stdout } = await runExec("locate", ["Tailscale.app"]);
+    const { stdout } = await runExec("locate", ["Tailscale.app"], {
+      timeoutMs: TAILSCALE_BINARY_SEARCH_TIMEOUT_MS,
+    });
     const candidates = stdout
       .trim()
       .split("\n")

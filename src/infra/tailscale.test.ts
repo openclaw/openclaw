@@ -1,9 +1,18 @@
 // Covers Tailscale whois, Serve, and Funnel helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+
+const { runExecMock } = vi.hoisted(() => ({ runExecMock: vi.fn() }));
+
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/exec.js")>();
+  return { ...actual, runExec: runExecMock };
+});
+
 import * as tailscale from "./tailscale.js";
 
 const {
+  findTailscaleBinary,
   getTailnetHostname,
   readTailscaleWhoisIdentity,
   enableTailscaleServe,
@@ -37,6 +46,7 @@ describe("tailscale helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    runExecMock.mockReset();
     envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY", "NODE_ENV", "VITEST"]);
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
     process.env.VITEST ??= "true";
@@ -46,6 +56,30 @@ describe("tailscale helpers", () => {
     vi.useRealTimers();
     envSnapshot.restore();
     vi.restoreAllMocks();
+  });
+
+  it("bounds every external command used for binary discovery", async () => {
+    runExecMock.mockRejectedValue(new Error("command unavailable"));
+
+    await expect(findTailscaleBinary()).resolves.toBeNull();
+
+    expect(runExecMock).toHaveBeenCalledWith("which", ["tailscale"], { timeoutMs: 3_000 });
+    expect(runExecMock).toHaveBeenCalledWith(
+      "find",
+      [
+        "/Applications",
+        "-maxdepth",
+        "3",
+        "-name",
+        "Tailscale",
+        "-path",
+        "*/Tailscale.app/Contents/MacOS/Tailscale",
+      ],
+      { timeoutMs: 5_000 },
+    );
+    expect(runExecMock).toHaveBeenCalledWith("locate", ["Tailscale.app"], {
+      timeoutMs: 5_000,
+    });
   });
 
   it("parses DNS name from tailscale status", async () => {
