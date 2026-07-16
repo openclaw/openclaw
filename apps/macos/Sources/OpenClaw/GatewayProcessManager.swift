@@ -1,5 +1,14 @@
 import Foundation
 import Observation
+import OpenClawKit
+
+private struct GatewayHealthProbeTimeout: LocalizedError, Sendable {
+    let timeoutMs: Double
+
+    var errorDescription: String? {
+        "Gateway health probe timed out after \(Int(self.timeoutMs))ms"
+    }
+}
 
 @MainActor
 @Observable
@@ -294,7 +303,7 @@ final class GatewayProcessManager {
         let hasListener = instance != nil
 
         let attemptAttach = {
-            try await self.connection.requestRaw(method: .health, timeoutMs: 2000)
+            try await self.probeGatewayHealth(timeoutMs: 2000)
         }
 
         for attempt in 0..<(hasListener ? 3 : 1) {
@@ -435,7 +444,8 @@ final class GatewayProcessManager {
         while Date() < deadline {
             if !self.desiredActive { return }
             do {
-                _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+                let remainingMs = max(1, deadline.timeIntervalSinceNow * 1000)
+                _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 let instance = await PortGuardian.shared.describe(port: port)
                 let details = instance.map { "pid \($0.pid)" }
                 self.launchAgentReadinessFailure = nil
@@ -446,7 +456,10 @@ final class GatewayProcessManager {
                 self.refreshLog()
                 return
             } catch {
-                try? await Task.sleep(nanoseconds: 400_000_000)
+                let retryDelay = min(0.4, max(0, deadline.timeIntervalSinceNow))
+                if retryDelay > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                }
             }
         }
 
@@ -487,16 +500,36 @@ final class GatewayProcessManager {
         while Date() < deadline {
             if !self.desiredActive { return false }
             do {
-                _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
+                let remainingMs = max(1, deadline.timeIntervalSinceNow * 1000)
+                _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 self.clearLastFailure()
                 return true
             } catch {
-                try? await Task.sleep(nanoseconds: 300_000_000)
+                let retryDelay = min(0.3, max(0, deadline.timeIntervalSinceNow))
+                if retryDelay > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                }
             }
         }
         self.appendLog("[gateway] readiness wait timed out\n")
         self.logger.warning("gateway readiness wait timed out")
         return false
+    }
+
+    private func probeGatewayHealth(timeoutMs: Double) async throws -> Data {
+        let connection = self.connection
+        // Startup owns recovery and its wall-clock deadline. A normal request can recursively
+        // start the Gateway and spend several 30-second connect retries before its RPC timer begins.
+        return try await AsyncTimeout.withTimeout(
+            seconds: max(0.001, timeoutMs / 1000),
+            onTimeout: { GatewayHealthProbeTimeout(timeoutMs: timeoutMs) },
+            operation: {
+                try await connection.request(
+                    method: GatewayConnection.Method.health.rawValue,
+                    params: nil,
+                    timeoutMs: timeoutMs,
+                    retryTransportFailures: false)
+            })
     }
 
     func clearLog() {

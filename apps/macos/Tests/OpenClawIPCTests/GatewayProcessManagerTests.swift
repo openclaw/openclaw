@@ -447,6 +447,40 @@ struct GatewayProcessManagerTests {
         #expect(manager.lastFailureReason == nil)
     }
 
+    @Test func `readiness timeout includes a stalled socket connect`() async throws {
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    receiveHook: { _, receiveIndex in
+                        if receiveIndex == 0 {
+                            try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                        }
+                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                    })
+            })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let connection = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        let manager = GatewayProcessManager.shared
+        manager.setTestingConnection(connection)
+        manager.setTestingDesiredActive(true)
+        defer {
+            manager.setTestingConnection(nil)
+            manager.setTestingDesiredActive(false)
+        }
+
+        let startedAt = Date()
+        let ready = await manager.waitForGatewayReady(timeout: 0.1)
+        let elapsed = Date().timeIntervalSince(startedAt)
+        await connection.shutdown()
+
+        #expect(!ready)
+        #expect(elapsed < 1)
+        #expect(session.snapshotMakeCount() == 1)
+    }
+
     @Test func `attaches to existing gateway without spawning launchd`() async throws {
         let port = 19097
         do {
