@@ -202,16 +202,6 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "browser.ts"),
       },
       {
-        find: "@openclaw/agent-core/tool-round-limit-hook",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "agent-core",
-          "src",
-          "tool-round-limit-hook.ts",
-        ),
-      },
-      {
         find: "@openclaw/gateway-client/readiness",
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "readiness.ts"),
       },
@@ -485,6 +475,7 @@ export const sharedVitestConfig = {
         find: /^@openclaw\/normalization-core$/u,
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
+      sourcePackageAlias("agent-core", "tool-round-limit-hook"),
       sourcePackageAlias("markdown-core", "code-spans"),
       sourcePackageAlias("markdown-core", "fences"),
       sourcePackageAlias("media-core", "base64"),

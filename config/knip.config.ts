@@ -248,6 +248,7 @@ const config = {
         "src/llm.ts!",
         "src/node.ts!",
         "src/runtime-deps.ts!",
+        "src/tool-round-limit-hook.ts!",
         "src/validation.ts!",
         "src/types.ts!",
         "src/harness/agent-harness.ts!",

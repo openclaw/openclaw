@@ -53,6 +53,11 @@ const nodeResolveFilenameProperty = "_resolveFilename" as const;
 const PLUGIN_SDK_PACKAGE_PREFIXES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const INTERNAL_CORE_PACKAGE_ALIASES = [
   {
+    packageName: "@openclaw/agent-core",
+    packageDir: "agent-core",
+    subpaths: [["tool-round-limit-hook", "tool-round-limit-hook.ts"]],
+  },
+  {
     packageName: "@openclaw/markdown-core",
     packageDir: "markdown-core",
     subpaths: [
