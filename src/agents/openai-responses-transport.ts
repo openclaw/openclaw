@@ -32,6 +32,7 @@ import {
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
+  hasMediaPayload,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -49,7 +50,7 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import { sha256HexPrefix } from "../infra/crypto-digest.js";
-import type { Api, Context, Model } from "../llm/types.js";
+import type { Api, Context, ImageContent, Model } from "../llm/types.js";
 import "../llm/ai-transport-host.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -1134,7 +1135,7 @@ function convertResponsesMessages(
       const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-      const hasImages = msg.content.some((item) => item.type === "image");
+      const hasImages = msg.content.some((item) => item.type === "image" && hasMediaPayload(item));
       const separatorIndex = msg.toolCallId.indexOf("|");
       const callId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
@@ -1150,7 +1151,9 @@ function convertResponsesMessages(
                     ? [{ type: "input_text", text: mediaPlaceholder }]
                     : []),
                 ...msg.content
-                  .filter((item) => item.type === "image")
+                  .filter(
+                    (item): item is ImageContent => item.type === "image" && hasMediaPayload(item),
+                  )
                   .map((item) => ({
                     type: "input_image",
                     detail: "auto",

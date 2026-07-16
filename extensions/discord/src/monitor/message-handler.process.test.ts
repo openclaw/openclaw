@@ -2,10 +2,12 @@
 import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+
+vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -4418,7 +4420,7 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
     // same vi.spyOn pattern used in native-command.model-picker.test.ts so the
     // production module keeps its real logVerbose import while the test still
     // sees every invocation that the deliver lambda surfaces.
-    const verboseSpy = vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => {});
+    const verboseSpy = vi.mocked(logVerbose).mockImplementation(() => {});
 
     const abortController = new AbortController();
     // Drive the dispatcher so deliver actually runs: abort the signal inside
@@ -4469,7 +4471,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     new Error("reply session initialization conflicted for agent:main:discord:channel:c1");
 
   it("retries only dispatch while recording, acknowledging, and adding history once", async () => {
-    const sleepSpy = vi.spyOn(runtimeEnvModule, "sleepWithAbort").mockResolvedValue(undefined);
+    const sleepSpy = vi.mocked(sleepWithAbort).mockResolvedValue(undefined);
     dispatchInboundMessage
       .mockRejectedValueOnce(conflictError())
       .mockRejectedValueOnce(conflictError())
@@ -4508,7 +4510,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
   });
 
   it("commits replay ownership after a visible terminal failure notice", async () => {
-    const sleepSpy = vi.spyOn(runtimeEnvModule, "sleepWithAbort").mockResolvedValue(undefined);
+    const sleepSpy = vi.mocked(sleepWithAbort).mockResolvedValue(undefined);
     const originalError = conflictError();
     dispatchInboundMessage.mockRejectedValue(originalError);
 
@@ -4527,7 +4529,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
   });
 
   it("keeps exhaustion retryable when the visible failure notice cannot land", async () => {
-    const sleepSpy = vi.spyOn(runtimeEnvModule, "sleepWithAbort").mockResolvedValue(undefined);
+    const sleepSpy = vi.mocked(sleepWithAbort).mockResolvedValue(undefined);
     const originalError = conflictError();
     dispatchInboundMessage.mockRejectedValue(originalError);
     deliverDiscordReply.mockRejectedValueOnce(new Error("Discord unavailable"));
@@ -4548,7 +4550,7 @@ describe("processDiscordMessage reply session init conflict retry", () => {
   });
 
   it("rebuilds a released replay without duplicating its pending history", async () => {
-    const sleepSpy = vi.spyOn(runtimeEnvModule, "sleepWithAbort").mockResolvedValue(undefined);
+    const sleepSpy = vi.mocked(sleepWithAbort).mockResolvedValue(undefined);
     dispatchInboundMessage.mockRejectedValue(conflictError());
     deliverDiscordReply.mockRejectedValueOnce(new Error("Discord unavailable"));
     const guildHistories = new Map();

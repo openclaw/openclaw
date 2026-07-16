@@ -724,6 +724,32 @@ describe("convertResponsesMessages", () => {
     expect(functionOutput?.output).not.toBe("(no output)");
   });
 
+  it("does not emit image parts or placeholders for payload-less tool media", () => {
+    const input = convertResponsesMessages(
+      { ...nativeOpenAIModel, input: ["text", "image"] },
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as unknown as Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    const functionOutput = input.find((item) => item.type === "function_call_output");
+    expect(functionOutput?.output).toBe("(no output)");
+    expect(JSON.stringify(functionOutput)).not.toContain("input_image");
+    expect(JSON.stringify(functionOutput)).not.toContain("see attached image");
+  });
+
   it("keeps encrypted reasoning replay item ids when requested", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,

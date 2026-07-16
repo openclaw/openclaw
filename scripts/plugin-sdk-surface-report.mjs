@@ -227,7 +227,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +12: typed plan step/status and checklist formatter across channel barrels.
       // +8: plan-step ingress union and normalizer across channel barrels.
       // +4: dual-field plan payload builder for the steps deprecation window.
-      10639,
+      // +12: active plan-step consumers pinned through channel-outbound and mirrors.
+      // +6: app-guided provider setup types retained by plugin-entry and mirrors.
+      // Used-union narrowing: 31 wildcard barrels drop to explicit used exports;
+      // proxy stream API and codex marker/scaffold pins retained.
+      7942,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -239,7 +243,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: shared plan checklist formatter across channel barrels.
       // +4: plan-step normalizer across channel barrels.
       // +4: dual-field plan payload builder for the steps deprecation window.
-      5353,
+      // +6: active plan-step helpers pinned through channel-outbound and mirrors.
+      // Used-union narrowing of the 31 wildcard barrels.
+      4433,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -250,12 +256,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +9: typed plan exports and formatter through deprecated channel barrels.
       // +6: plan-step ingress union and normalizer through deprecated channel barrels.
       // +3: dual-field plan payload builder through deprecated channel barrels.
-      3357,
+      // +8: channel-outbound plan pins mirrored through deprecated barrels.
+      // Used-union narrowing drops inherited deprecated exports.
+      2977,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      209,
+      // Used-union narrowing removes 103 wildcard re-exports.
+      106,
       env,
     ),
   };

@@ -63,7 +63,11 @@ import {
   type ResponsesToolCallState,
 } from "./openai-responses-tool-call-tracker.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  hasMediaPayload,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -446,7 +450,9 @@ export function convertResponsesMessages<TApi extends Api>(
     } else if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeSurrogates(textResult);
-      const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
+      const hasImages = msg.content.some(
+        (c): c is ImageContent => c.type === "image" && hasMediaPayload(c),
+      );
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasText = sanitizedTextResult.trim().length > 0;
       const [callId] = splitResponsesToolCallId(msg.toolCallId);
@@ -468,7 +474,7 @@ export function convertResponsesMessages<TApi extends Api>(
         }
 
         for (const block of msg.content) {
-          if (block.type === "image") {
+          if (block.type === "image" && hasMediaPayload(block)) {
             contentParts.push({
               type: "input_image",
               detail: "auto",
