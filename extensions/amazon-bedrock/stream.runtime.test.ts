@@ -233,7 +233,7 @@ describe("Bedrock thinking effort mapping", () => {
 
   it("does not force adaptive thinking for optional Claude models when callers omit reasoning", () => {
     const model = bedrockModel({
-      id: "anthropic.claude-sonnet-4-6-v1:0",
+      id: "anthropic.claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
       reasoning: true,
     });
@@ -357,7 +357,7 @@ describe("Bedrock thinking effort mapping", () => {
     expect(
       testing.mapThinkingLevelToEffort(
         bedrockModel({
-          id: "anthropic.claude-sonnet-4-6-v1:0",
+          id: "anthropic.claude-sonnet-4-6",
           name: "Claude Sonnet 4.6",
         }),
         "max",
@@ -369,7 +369,7 @@ describe("Bedrock thinking effort mapping", () => {
     expect(
       testing.mapThinkingLevelToEffort(
         bedrockModel({
-          id: "anthropic.claude-opus-4-6-v1:0",
+          id: "anthropic.claude-opus-4-6-v1",
           name: "Claude Opus 4.6",
         }),
         "xhigh",

@@ -182,6 +182,15 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       assertSanitizedFields: true,
     },
     {
+      label: "preserves Kimi K2.7 HighSpeed reasoning_content replay with stale reasoning metadata",
+      model: {
+        ...staleKimiK27Model,
+        id: "kimi-k2.7-code-highspeed",
+        name: "Kimi K2.7 Code HighSpeed",
+      },
+      assertSanitizedFields: true,
+    },
+    {
       label: "preserves Kimi K3 reasoning_content replay with stale reasoning metadata",
       model: { ...staleKimiK27Model, id: "kimi-k3", name: "Kimi K3" },
       assertSanitizedFields: true,
