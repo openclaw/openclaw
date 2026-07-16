@@ -90,13 +90,6 @@ async function postJson<T>(
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 
   return await new Promise<T>((resolve, reject) => {
-    const abortError = () =>
-      Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
-    if (signal?.aborted) {
-      reject(abortError());
-      return;
-    }
-
     const request = client.request(
       url,
       {

@@ -324,6 +324,46 @@ describe("qa-bus client", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(10_000);
   });
 
+  it("bounds message responses that stall after headers", async () => {
+    let markBodyStarted: () => void = () => {};
+    const bodyStarted = new Promise<void>((resolve) => {
+      markBodyStarted = resolve;
+    });
+    const server = createServer((_req, res) => {
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "128",
+      });
+      res.write('{"message":', markBodyStarted);
+    });
+    const port = await listenLoopbackServer(server);
+    stops.push(async () => {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    });
+
+    const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementationOnce(() => realAbortSignalTimeout(100));
+    const request = sendQaBusMessage({
+      baseUrl: `http://127.0.0.1:${port}`,
+      accountId: "acct-a",
+      to: "dm:alice",
+      text: "hello",
+    });
+    const rejection = expect(
+      withTimeout(request, 1_000, "stalled response body did not settle"),
+    ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
+
+    await withTimeout(bodyStarted, 500, "server did not start the response body");
+    await rejection;
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+  });
+
   it("keeps long polls within the server wait window plus response grace", async () => {
     const server = await startJsonServer(() => ({
       body: JSON.stringify({ cursor: 1, events: [] }),
