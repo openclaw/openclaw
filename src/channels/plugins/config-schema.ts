@@ -92,9 +92,11 @@ type OptionalAccountValue<T, TOptional extends boolean> = TOptional extends true
   : T;
 
 type MultiAccountEnvelopeShape<TAccount extends ZodTypeAny, TOptional extends boolean> = {
-  accounts: z.ZodType<
-    Record<string, OptionalAccountValue<z.output<TAccount>, TOptional>> | undefined,
-    Record<string, OptionalAccountValue<z.input<TAccount>, TOptional>> | undefined
+  accounts: z.ZodOptional<
+    z.ZodType<
+      Record<string, OptionalAccountValue<z.output<TAccount>, TOptional>>,
+      Record<string, OptionalAccountValue<z.input<TAccount>, TOptional>>
+    >
   >;
   defaultAccount: z.ZodOptional<z.ZodString>;
 };

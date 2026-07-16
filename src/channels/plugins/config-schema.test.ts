@@ -77,6 +77,7 @@ describe("channel config composition", () => {
   it("preserves distinct account input and output types", () => {
     const account = z.object({ port: z.string().transform((value) => Number(value)) });
     const schema = buildMultiAccountChannelSchema(account);
+    const rootOnlyInput: z.input<typeof schema> = { port: "80" };
 
     expectTypeOf<z.input<typeof schema>["accounts"]>().toEqualTypeOf<
       Record<string, { port: string }> | undefined
@@ -84,8 +85,9 @@ describe("channel config composition", () => {
     expectTypeOf<z.output<typeof schema>["accounts"]>().toEqualTypeOf<
       Record<string, { port: number }> | undefined
     >();
+    expect(schema.parse(rootOnlyInput).port).toBe(80);
     expect(
-      schema.parse({ port: "80", accounts: { work: { port: "443" } } }).accounts?.work?.port,
+      schema.parse({ ...rootOnlyInput, accounts: { work: { port: "443" } } }).accounts?.work?.port,
     ).toBe(443);
   });
 });
