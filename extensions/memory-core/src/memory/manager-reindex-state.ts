@@ -192,7 +192,12 @@ export function resolveMemoryIndexIdentityState(params: {
       reason: "index chunking changed",
     };
   }
-  if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
+  if (
+    params.provider &&
+    params.vectorReady &&
+    params.hasIndexedChunks !== false &&
+    !meta.vectorDims
+  ) {
     return {
       status: "mismatched",
       reason: "index vector dimensions are missing",

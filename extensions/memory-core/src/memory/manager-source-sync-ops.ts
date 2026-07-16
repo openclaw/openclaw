@@ -61,7 +61,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
     );
     const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
+      this.vector.enabled && this.vector.available && this.vector.dims
         ? this.db.prepare(
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
           )
@@ -191,7 +191,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
     );
     const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
+      this.vector.enabled && this.vector.available && this.vector.dims
         ? this.db.prepare(
             `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
           )

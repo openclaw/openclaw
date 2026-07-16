@@ -560,6 +560,7 @@ describe("memory index", () => {
         { reason: "test", force: true },
       ]),
     ).resolves.toBeUndefined();
+    await expect(manager.sync({ reason: "test" })).resolves.toBeUndefined();
   });
 
   async function getFtsSessionManager(params: {
