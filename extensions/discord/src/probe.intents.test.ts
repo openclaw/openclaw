@@ -31,21 +31,37 @@ function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
   return response;
 }
 
-function stalledDiscordProbeJsonResponse(onCancel: () => void): Response {
-  const response = new Response(
+function abortableTricklingDiscordProbeJsonResponse(
+  signal: AbortSignal | null | undefined,
+  onAbort: () => void,
+): Response {
+  let interval: ReturnType<typeof setInterval> | undefined;
+  return new Response(
     new ReadableStream<Uint8Array>({
+      start(controller) {
+        const abort = () => {
+          if (interval) {
+            clearInterval(interval);
+          }
+          onAbort();
+          controller.error(signal?.reason ?? new Error("request aborted"));
+        };
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        controller.enqueue(new TextEncoder().encode('{"id":"bot-1"'));
+        interval = setInterval(() => controller.enqueue(new Uint8Array([0x20])), 10);
+        signal?.addEventListener("abort", abort, { once: true });
+      },
       cancel() {
-        onCancel();
+        if (interval) {
+          clearInterval(interval);
+        }
       },
     }),
     { headers: { "content-type": "application/json" }, status: 200 },
   );
-  Object.defineProperty(response, "json", {
-    value: async () => {
-      throw new Error("unbounded json reader was used");
-    },
-  });
-  return response;
 }
 
 function abortableStalledDiscordJsonResponse(
@@ -183,23 +199,50 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   it("times out and cancels stalled getMe probe JSON response bodies", async () => {
     vi.useFakeTimers();
     try {
-      let cancelCount = 0;
-      const fetcher = withFetchPreconnect(async () =>
-        stalledDiscordProbeJsonResponse(() => {
-          cancelCount += 1;
+      let abortCount = 0;
+      const fetcher = withFetchPreconnect(async (_input, init) =>
+        abortableStalledDiscordJsonResponse(init?.signal, () => {
+          abortCount += 1;
         }),
       );
 
       const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
       const assertion = expect(probe).resolves.toMatchObject({
         ok: false,
-        error: "discord.probe.getMe: JSON response stalled after 50ms",
+        error: "discord.probe.getMe: JSON response timed out after 50ms",
       });
 
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(50);
       await assertion;
-      expect(cancelCount).toBe(1);
+      expect(abortCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses one total deadline across getMe headers and a trickling JSON body", async () => {
+    vi.useFakeTimers();
+    try {
+      let abortCount = 0;
+      const fetcher = withFetchPreconnect(async (_input, init) => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 30);
+        });
+        return abortableTricklingDiscordProbeJsonResponse(init?.signal, () => {
+          abortCount += 1;
+        });
+      });
+
+      const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
+      const assertion = expect(probe).resolves.toMatchObject({
+        ok: false,
+        error: "discord.probe.getMe: JSON response timed out after 50ms",
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      await assertion;
+      expect(abortCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }
