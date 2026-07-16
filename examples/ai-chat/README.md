@@ -26,8 +26,9 @@ node index.mjs "Say hello"
 $env:OPENAI_API_KEY = "example-openai-key-not-real"
 node index.mjs --provider openai "Say hello"
 
-# Clear whichever key was set.
-Remove-Item Env:ANTHROPIC_API_KEY, Env:OPENAI_API_KEY -ErrorAction SilentlyContinue
+# Clear the session-scoped keys.
+$env:ANTHROPIC_API_KEY = $null
+$env:OPENAI_API_KEY = $null
 ```
 
 Text deltas stream to stdout; stop reason and token usage go to stderr.
