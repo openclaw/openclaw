@@ -16,12 +16,10 @@ import {
   LEGACY_WORKSPACE_ATTESTATION_HEADER,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   LEGACY_WORKSPACE_STATE_DIRNAME,
-  LEGACY_WORKSPACE_STATE_FILENAME,
-  resetLegacyWorkspaceStateCheckForTest,
 } from "./workspace-legacy-state.js";
+import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import {
   mergeWorkspaceSetupState,
-  readWorkspaceSetupState,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
   resolveWorkspaceStateIdentity,
@@ -85,7 +83,7 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
 
 const LEGACY_WORKSPACE_STATE_PATH_SEGMENTS = [
   LEGACY_WORKSPACE_STATE_DIRNAME,
-  LEGACY_WORKSPACE_STATE_FILENAME,
+  "workspace-state.json",
 ] as const;
 
 async function readWorkspaceState(dir: string): Promise<{
@@ -93,7 +91,7 @@ async function readWorkspaceState(dir: string): Promise<{
   bootstrapSeededAt?: string;
   setupCompletedAt?: string;
 }> {
-  return readWorkspaceSetupState(dir);
+  return readWorkspaceStateSnapshot(dir).setup;
 }
 
 async function writeLegacyWorkspaceState(dir: string, state: unknown): Promise<void> {

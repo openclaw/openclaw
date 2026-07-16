@@ -12,10 +12,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.js";
+import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import {
   mergeWorkspaceSetupState,
-  readWorkspaceSetupState,
+  readWorkspaceStateSnapshot,
   resolveWorkspaceStateIdentity,
 } from "./workspace-state-store.js";
 import {
@@ -71,7 +71,7 @@ describe("workspace setup-only SQLite safety", () => {
     await expect(
       fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
     ).resolves.toBeUndefined();
-    expect(readWorkspaceSetupState(tempDir).setupCompletedAt).toBeUndefined();
+    expect(readWorkspaceStateSnapshot(tempDir).setup.setupCompletedAt).toBeUndefined();
   });
 
   it("clears expired state when only one generated bootstrap file survives", async () => {
@@ -97,7 +97,7 @@ describe("workspace setup-only SQLite safety", () => {
     await expect(
       fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
     ).resolves.toBeUndefined();
-    expect(readWorkspaceSetupState(tempDir).setupCompletedAt).toBeUndefined();
+    expect(readWorkspaceStateSnapshot(tempDir).setup.setupCompletedAt).toBeUndefined();
   });
 
   it("refuses an empty recent setup-only workspace when bootstrap creation is disabled", async () => {

@@ -11,7 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.js";
+import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
 type WorkspaceReceiptDatabase = Pick<OpenClawStateKyselyDatabase, "migration_sources">;
 

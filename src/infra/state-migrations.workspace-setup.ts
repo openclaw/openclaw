@@ -32,28 +32,16 @@ import {
   type ParsedSource,
   type SourceSnapshot,
 } from "./state-migrations.workspace-setup-store.js";
+import type {
+  LegacyWorkspaceStateDetection,
+  LegacyWorkspaceStateSource,
+} from "./state-migrations.workspace-setup.types.js";
 
 const SETUP_MAX_BYTES = 64 * 1024;
 const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
 const MIGRATION_LOCK_TIMEOUT_MS = 250;
 const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-export type LegacyWorkspaceStateSource = {
-  kind: "setup" | "attestation";
-  rootDir: string;
-  relativePath: string;
-  sourcePath: string;
-  workspaceKey: string;
-  workspaceDir?: string;
-  workspaceAliasPath?: string;
-  priority: number;
-};
-
-export type LegacyWorkspaceStateDetection = {
-  sources: LegacyWorkspaceStateSource[];
-  hasLegacy: boolean;
-};
 
 function pathMayExist(filePath: string): boolean {
   try {

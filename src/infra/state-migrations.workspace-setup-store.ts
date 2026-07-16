@@ -19,7 +19,7 @@ import {
 } from "./kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { resolveWorkspaceMigrationSourceKey } from "./state-migrations.workspace-setup-receipts.js";
-import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.js";
+import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
 const MIGRATION_KIND = WORKSPACE_LEGACY_STATE_MIGRATION_KIND;
 

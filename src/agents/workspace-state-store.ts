@@ -64,12 +64,12 @@ export type WorkspaceStateSnapshot = {
   attestation?: WorkspaceAttestation;
 };
 
-export type WorkspaceStateIdentity = {
+type WorkspaceStateIdentity = {
   workspaceKey: string;
   workspacePath: string;
 };
 
-export type WorkspaceStateDeletionPlan = {
+type WorkspaceStateDeletionPlan = {
   lexicalAlias: WorkspaceStateIdentity;
   currentCanonicalIdentity: WorkspaceStateIdentity;
   pathEntryExisted: boolean;
@@ -397,14 +397,6 @@ export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceState
     }
     return snapshot;
   });
-}
-
-export function readWorkspaceSetupState(workspaceDir: string): WorkspaceSetupState {
-  return readWorkspaceStateSnapshot(workspaceDir).setup;
-}
-
-export function readWorkspaceAttestation(workspaceDir: string): WorkspaceAttestation | undefined {
-  return readWorkspaceStateSnapshot(workspaceDir).attestation;
 }
 
 export function mergeWorkspaceSetupState(

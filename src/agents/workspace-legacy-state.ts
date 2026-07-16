@@ -3,16 +3,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { root } from "@openclaw/fs-safe";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
+import { root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-store.js";
 
 export const LEGACY_WORKSPACE_STATE_DIRNAME = ".openclaw";
-export const LEGACY_WORKSPACE_STATE_FILENAME = "workspace-state.json";
+const LEGACY_WORKSPACE_STATE_FILENAME = "workspace-state.json";
 export const LEGACY_WORKSPACE_STATE_CURRENT_FILENAME = "openclaw-workspace-state.json";
 export const LEGACY_WORKSPACE_ATTESTATION_DIRNAME = "workspace-attestations";
-export const LEGACY_WORKSPACE_ATTESTATION_SUFFIX = ".attested";
+const LEGACY_WORKSPACE_ATTESTATION_SUFFIX = ".attested";
 export const LEGACY_WORKSPACE_ATTESTATION_HEADER = "openclaw-workspace-attestation:v1";
 export const LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES = 2048;
 export const WORKSPACE_DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
@@ -21,14 +21,14 @@ export const WORKSPACE_DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 // agent turn does not poll retired paths; Doctor/restart owns later changes.
 const checkedWorkspaceSourceSets = new Set<string>();
 
-export type LegacyWorkspaceSourcePaths = {
+type LegacyWorkspaceSourcePaths = {
   workspacePath: string;
   setupStatePaths: string[];
   stateDirAttestationPaths: string[];
   siblingAttestationPaths: string[];
 };
 
-export type LegacyWorkspaceResetCleanup = {
+type LegacyWorkspaceResetCleanup = {
   removedPaths: string[];
   warnings: string[];
 };
@@ -39,7 +39,7 @@ type LegacyWorkspaceResetCandidate = {
   requireAttestationHeader: boolean;
 };
 
-export type LegacyWorkspaceResetPlan = {
+type LegacyWorkspaceResetPlan = {
   candidates: LegacyWorkspaceResetCandidate[];
 };
 
@@ -190,8 +190,13 @@ export function assertNoUnmigratedWorkspaceState(params: { workspaceDir: string 
   checkedWorkspaceSourceSets.add(sourceSetKey);
 }
 
-export function resetLegacyWorkspaceStateCheckForTest(): void {
+function resetLegacyWorkspaceStateCheckForTest(): void {
   checkedWorkspaceSourceSets.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.workspaceLegacyStateTestApi")] =
+    { resetLegacyWorkspaceStateCheckForTest };
 }
 
 function isOwnedAttestationBuffer(buffer: Buffer): boolean {

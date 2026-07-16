@@ -7,9 +7,9 @@ import {
   LEGACY_WORKSPACE_ATTESTATION_HEADER,
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
-  resetLegacyWorkspaceStateCheckForTest,
   resolveLegacyWorkspaceSourcePaths,
 } from "./workspace-legacy-state.js";
+import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-store.js";
 
 describe("legacy workspace reset cleanup", () => {
