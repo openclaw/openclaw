@@ -18,6 +18,7 @@ describe("gradium speech provider", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -212,5 +213,37 @@ describe("gradium speech provider", () => {
         process.env.GRADIUM_API_KEY = original;
       }
     }
+  });
+
+  it("rejects a blank environment key before normal or telephony requests", async () => {
+    vi.stubEnv("GRADIUM_API_KEY", "   ");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(false);
+    await expect(
+      provider.synthesize({
+        text: "test",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium API key missing");
+
+    const synthesizeTelephony = provider.synthesizeTelephony;
+    if (!synthesizeTelephony) {
+      throw new Error("Expected Gradium provider synthesizeTelephony");
+    }
+    await expect(
+      synthesizeTelephony({
+        text: "test",
+        cfg: {} as never,
+        providerConfig: {},
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium API key missing");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

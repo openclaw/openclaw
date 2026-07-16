@@ -2,9 +2,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
-import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { OnePasswordError } from "./errors.js";
 
 const MAX_STDOUT_BYTES = 1024 * 1024;
@@ -208,8 +208,8 @@ export class OpClient {
       }
     } catch (error) {
       const message =
-        error instanceof FsSafeError && error.code === "too-large"
-          ? "1Password service account token file is too large"
+        error instanceof Error && extractErrorCode(error) === "too-large"
+          ? error.message
           : "1Password service account token file is missing";
       throw new OnePasswordError("TOKEN_MISSING", message, { cause: error });
     }

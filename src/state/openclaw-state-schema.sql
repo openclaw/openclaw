@@ -1536,6 +1536,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
   owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
   owner_id TEXT,
   snapshot_ref TEXT,
+  provisioned_paths_json TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER
@@ -1546,6 +1547,14 @@ CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
   ON worktrees(removed_at);
+
+CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
+  worktree_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+  data BLOB NOT NULL,
+  PRIMARY KEY (worktree_id, path, chunk_index)
+) STRICT;
 
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only

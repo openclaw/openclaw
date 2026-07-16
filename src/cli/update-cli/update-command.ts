@@ -1461,7 +1461,11 @@ async function updateCommandInternal(
           processEnv: process.env,
           serviceEnv: gatewayServiceEnv,
         });
-        restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
+        restartScriptPath = await prepareRestartScript(
+          serviceState.env,
+          gatewayPort,
+          serviceOwnershipConfirmed ? serviceState.command?.programArguments : undefined,
+        );
         // An ambiguous wrapper may be stopped and restored, but only proven
         // ownership authorizes rewriting the service definition.
         refreshGatewayServiceEnvLocal = serviceOwnershipConfirmed;

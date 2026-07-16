@@ -570,15 +570,6 @@ function normalizeCodexAcpModelOverride(
   };
 }
 
-function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
-  if (!override.model) {
-    return "";
-  }
-  return override.reasoningEffort
-    ? `${override.model}/${override.reasoningEffort}`
-    : override.model;
-}
-
 function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
   const raw = rawModel?.trim();
   if (!raw) {
@@ -1117,9 +1108,7 @@ export class AcpxRuntime implements AcpRuntime {
 
     const normalizedInput = {
       ...ensureInput,
-      ...(codexAcpSessionModelId(codexModelOverride)
-        ? { model: codexAcpSessionModelId(codexModelOverride) }
-        : {}),
+      ...(codexModelOverride.model ? { model: codexModelOverride.model } : {}),
     };
     return await this.runWithLaunchLease({
       sessionKey: input.sessionKey,
@@ -1286,8 +1275,10 @@ export class AcpxRuntime implements AcpRuntime {
     };
   }
 
-  getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
-    return this.delegate.getCapabilities();
+  getCapabilities(
+    input?: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0],
+  ): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
+    return this.delegate.getCapabilities(input);
   }
 
   async getStatus(
@@ -1408,7 +1399,6 @@ export {
 export const testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
-  codexAcpSessionModelId,
   isClaudeAcpCommand,
   isCodexAcpCommand,
   normalizeClaudeAcpModelOverride,

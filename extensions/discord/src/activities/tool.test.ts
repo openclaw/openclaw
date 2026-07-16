@@ -8,7 +8,7 @@ import { buildDiscordComponentMessage } from "../components.js";
 import type { sendDiscordComponentMessage } from "../send.components.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import { createActivityTestRuntime } from "./test-helpers.test-support.js";
-import { createDiscordWidgetTool } from "./tool.js";
+import { createDiscordShowWidgetTool, createDiscordWidgetTool } from "./tool.js";
 
 function discordContext(overrides: Partial<OpenClawPluginToolContext> = {}) {
   return {
@@ -26,6 +26,20 @@ describe("discord_widget", () => {
         runtime: createActivityTestRuntime(),
       }),
     ).toBeNull();
+  });
+
+  it("marks the legacy name deprecated", () => {
+    const tool = createDiscordWidgetTool(discordContext(), {
+      runtime: createActivityTestRuntime(),
+    });
+    if (!tool) {
+      throw new Error("expected deprecated Discord widget tool");
+    }
+
+    expect(tool.description).toMatch(/^Deprecated: use show_widget\./);
+    expect((tool.parameters as { properties?: Record<string, unknown> }).properties).toHaveProperty(
+      "html",
+    );
   });
 
   it("stores a wrapped widget and posts its launch button", async () => {
@@ -242,5 +256,49 @@ describe("discord_widget", () => {
     await expect(tool.execute("dm-target", { html: "hello", title: "No channel" })).rejects.toThrow(
       "requires a concrete Discord channel",
     );
+  });
+});
+
+describe("show_widget", () => {
+  it("maps widget_code to the Discord Activity document", async () => {
+    const runtime = createActivityTestRuntime();
+    const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
+      messageId: "message-1",
+      channelId: "987654321",
+      receipt: {},
+    }));
+    const tool = createDiscordShowWidgetTool(discordContext(), {
+      runtime,
+      sendComponentMessage: send as unknown as typeof sendDiscordComponentMessage,
+    });
+    if (!tool) {
+      throw new Error("expected unified Discord widget tool");
+    }
+
+    expect(tool.name).toBe("show_widget");
+    expect(tool.description).toMatch(/^Show an interactive, self-contained HTML widget/);
+    expect((tool.parameters as { properties?: Record<string, unknown> }).properties).toMatchObject({
+      title: expect.any(Object),
+      widget_code: expect.any(Object),
+      button_label: expect.any(Object),
+    });
+    expect(
+      (tool.parameters as { properties?: Record<string, unknown> }).properties,
+    ).not.toHaveProperty("html");
+
+    const result = await tool.execute("unified-widget", {
+      title: "Unified",
+      widget_code: "<p>Discord surface</p>",
+      button_label: "Launch",
+    });
+    const details = result.details as { widgetId: string };
+
+    await expect(runtime.store.lookupWidget(details.widgetId)).resolves.toMatchObject({
+      title: "Unified",
+      html: expect.stringContaining("<p>Discord surface</p>"),
+    });
+    expect(send.mock.calls[0]?.[1]).toMatchObject({
+      blocks: [{ buttons: [{ label: "Launch" }] }],
+    });
   });
 });
