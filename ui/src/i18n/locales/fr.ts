@@ -1704,6 +1704,7 @@ export const fr: TranslationMap = {
   tabs: {
     agents: "Agents",
     activity: "Activité",
+    approvals: "Approbations",
     workboard: "Tableau de travail",
     worktrees: "Worktrees",
     channels: "Canaux",
@@ -1736,6 +1737,7 @@ export const fr: TranslationMap = {
   subtitles: {
     agents: "Espaces de travail, outils, identités.",
     activity: "Résumés d’activité des outils locaux au navigateur.",
+    approvals: "Approbations récentes d’exécution, de plugin et d’agent système.",
     workboard: "File de travail de l’agent et transfert de session.",
     worktrees: "Checkouts de tâches d’agent isolés et instantanés de récupération.",
     channels: "Canaux et paramètres.",
@@ -2816,6 +2818,56 @@ export const fr: TranslationMap = {
     cronOverdue: "{count} tâche(s) cron en retard",
     modelAuthExpired: "Authentification du modèle expirée : {providers}",
     modelAuthExpiring: "Authentification du modèle bientôt expirée : {providers}",
+    pendingApproval: "{count} approbation en attente",
+    pendingApprovals: "{count} approbations en attente",
+  },
+  approvalHistory: {
+    description:
+      "Approbations d’exécution dans le terminal, de plugin et d’agent système enregistrées par ce Gateway, les plus récentes en premier.",
+    loading: "Chargement de l’historique des approbations…",
+    loadingMore: "Chargement…",
+    loadMore: "Charger davantage",
+    empty: "Aucune approbation traitée dans la fenêtre glissante de 30 jours.",
+    retention: "L’historique des approbations couvre une fenêtre glissante de 30 jours.",
+    offline: "Connectez-vous au Gateway pour charger l’historique des approbations.",
+    invalidResponse:
+      "Le Gateway a renvoyé une réponse non valide pour l’historique des approbations.",
+    unknown: "Inconnu",
+    notApplicable: "N/A",
+    columns: {
+      resolved: "Traitée",
+      kind: "Type",
+      request: "Demande",
+      decision: "Décision",
+      reason: "Motif de la résolution",
+      source: "Agent source / session",
+      resolver: "Responsable de la résolution",
+    },
+    kinds: {
+      exec: "Exécution",
+      plugin: "Plugin",
+      systemAgent: "Agent système",
+    },
+    statuses: {
+      allowed: "Autorisée",
+      denied: "Refusée",
+      expired: "Expiré",
+      cancelled: "Annulé",
+    },
+    decisions: {
+      allowOnce: "Autoriser une fois",
+      allowAlways: "Toujours autoriser",
+      deny: "Refuser",
+    },
+    reasons: {
+      user: "Décision de l’utilisateur",
+      timeout: "Expiration du délai",
+      malformedVerdict: "Verdict mal formé",
+      noRoute: "Aucune route",
+      runAborted: "Exécution interrompue",
+      gatewayRestart: "Redémarrage du Gateway",
+      storageCorrupt: "Stockage corrompu",
+    },
   },
   palette: {
     placeholder: "Rechercher des discussions et des commandes…",

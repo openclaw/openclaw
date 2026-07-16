@@ -1,7 +1,10 @@
 export * from "./clawhub-trust-error-details.js";
 export * from "./terminal-validators.js";
-export { validateApprovalGetResult } from "./approval-result-validators.js";
-export { validateApprovalResolveResult } from "./approval-result-validators.js";
+export {
+  validateApprovalGetResult,
+  validateApprovalHistoryResult,
+  validateApprovalResolveResult,
+} from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import { lazyCompile } from "./protocol-validator.js";
@@ -148,6 +151,8 @@ import {
   ApprovalDecisionSchema,
   ApprovalGetParamsSchema,
   ApprovalGetResultSchema,
+  ApprovalHistoryParamsSchema,
+  ApprovalHistoryResultSchema,
   ApprovalKindSchema,
   ApprovalPresentationSchema,
   ApprovalResolveParamsSchema,
@@ -797,6 +802,7 @@ export const validateCancelledApprovalSnapshot = lazyCompile(CancelledApprovalSn
 export const validateApprovalSnapshot = lazyCompile(ApprovalSnapshotSchema);
 export const validateTerminalApprovalSnapshot = lazyCompile(TerminalApprovalSnapshotSchema);
 export const validateApprovalGetParams = lazyCompile(ApprovalGetParamsSchema);
+export const validateApprovalHistoryParams = lazyCompile(ApprovalHistoryParamsSchema);
 export const validateApprovalResolveParams = lazyCompile(ApprovalResolveParamsSchema);
 export const validateExecApprovalsGetParams = lazyCompile(ExecApprovalsGetParamsSchema);
 export const validateExecApprovalsSetParams = lazyCompile(ExecApprovalsSetParamsSchema);
@@ -1240,6 +1246,8 @@ export {
   TerminalApprovalSnapshotSchema,
   ApprovalGetParamsSchema,
   ApprovalGetResultSchema,
+  ApprovalHistoryParamsSchema,
+  ApprovalHistoryResultSchema,
   ApprovalResolveParamsSchema,
   ApprovalResolveResultSchema,
   SessionApprovalEventSchema,
@@ -1622,6 +1630,8 @@ export type {
   TerminalApprovalSnapshot,
   ApprovalGetParams,
   ApprovalGetResult,
+  ApprovalHistoryParams,
+  ApprovalHistoryResult,
   ApprovalResolveParams,
   ApprovalResolveResult,
   SessionApprovalEvent,
