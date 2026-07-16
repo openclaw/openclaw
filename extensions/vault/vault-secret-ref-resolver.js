@@ -211,7 +211,7 @@ async function resolveVaultTokenFromJwt(baseUrl, method) {
     headers,
     body: JSON.stringify({
       role: resolveVaultAuthRole(method),
-      jwt: await resolveVaultJwt(method),
+      jwt: resolveVaultJwt(method),
     }),
   });
   if (!response.ok) {
@@ -225,7 +225,7 @@ async function resolveVaultClientToken(baseUrl) {
     case "token":
       return resolveVaultTokenEnv();
     case "token_file":
-      return await resolveVaultTokenFile();
+      return resolveVaultTokenFile();
     case "jwt":
       return await resolveVaultTokenFromJwt(baseUrl, "jwt");
     case "kubernetes":
