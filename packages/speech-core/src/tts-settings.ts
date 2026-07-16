@@ -239,7 +239,10 @@ export function readTtsPrefs(prefsPath: string): TtsUserPrefs {
     if (!existsSync(prefsPath)) {
       return {};
     }
-    return JSON.parse(readFileSync(prefsPath, "utf8")) as TtsUserPrefs;
+    const parsed: unknown = JSON.parse(readFileSync(prefsPath, "utf8"));
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as TtsUserPrefs)
+      : {};
   } catch {
     return {};
   }
