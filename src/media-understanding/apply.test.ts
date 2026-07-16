@@ -1501,6 +1501,55 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
+  it("limits native-harness preprocessing to audio", async () => {
+    const dir = await createTempMediaDir();
+    const imagePath = path.join(dir, "photo.jpg");
+    const audioPath = path.join(dir, "note.ogg");
+    const filePath = path.join(dir, "notes.txt");
+    await fs.writeFile(imagePath, "image-bytes");
+    await fs.writeFile(audioPath, createSafeAudioFixtureBuffer(2048));
+    await fs.writeFile(filePath, "file text");
+
+    const describeImage = vi.fn(async () => ({ text: "image ok" }));
+    const transcribeAudio = vi.fn(async () => ({ text: "audio ok" }));
+    const ctx: MsgContext = {
+      Body: "<media:mixed>",
+      MediaPaths: [imagePath, audioPath, filePath],
+      MediaTypes: ["image/jpeg", "audio/ogg", "text/plain"],
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
+          audio: { enabled: true, models: [{ provider: "groq" }] },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      processingMode: "audio-only",
+      providers: {
+        openai: { id: "openai", describeImage },
+        groq: { id: "groq", transcribeAudio },
+      },
+    });
+
+    expect(describeImage).not.toHaveBeenCalled();
+    expect(transcribeAudio).toHaveBeenCalledOnce();
+    expect(result).toEqual(
+      expect.objectContaining({
+        appliedImage: false,
+        appliedAudio: true,
+        appliedVideo: false,
+        appliedFile: false,
+        extractedFileImages: [],
+      }),
+    );
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\naudio ok");
+  });
+
   it("orders synthetic too-small audio output between image and video", async () => {
     const dir = await createTempMediaDir();
     const imagePath = path.join(dir, "photo.jpg");
