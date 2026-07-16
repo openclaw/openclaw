@@ -3,6 +3,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   hasMediaPayload,
+  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 
 describe("hasMediaPayload", () => {
@@ -13,6 +14,18 @@ describe("hasMediaPayload", () => {
     expect(hasMediaPayload({ type: "image", data: "  ", mimeType: "image/png" })).toBe(false);
     expect(hasMediaPayload({ type: "image", path: "/tmp/image.png" })).toBe(false);
     expect(hasMediaPayload({ type: "image", url: "https://example.test/image.png" })).toBe(false);
+  });
+});
+
+describe("isImageWithMediaPayload", () => {
+  it("requires both the image type and inline payload bytes", () => {
+    expect(isImageWithMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(
+      true,
+    );
+    expect(isImageWithMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
+    expect(
+      isImageWithMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" }),
+    ).toBe(false);
   });
 });
 

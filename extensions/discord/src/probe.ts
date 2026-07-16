@@ -1,7 +1,6 @@
 // Discord plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -117,11 +116,15 @@ function getResolvedFetch(fetcher: typeof fetch): typeof fetch {
 async function readDiscordProbeGetMeJson(
   response: Response,
   timeoutMs: number,
+  deadlineMs: number,
 ): Promise<{ id?: string; username?: string }> {
   const bytes = await readResponseWithLimit(response, DISCORD_PROBE_JSON_MAX_BYTES, {
     chunkTimeoutMs: timeoutMs,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`${DISCORD_PROBE_GET_ME_LABEL}: JSON response stalled after ${chunkTimeoutMs}ms`),
+    timeoutMs: Math.max(1, deadlineMs - Date.now()),
+    onTimeout: () =>
+      new Error(`${DISCORD_PROBE_GET_ME_LABEL}: JSON response timed out after ${timeoutMs}ms`),
     onOverflow: ({ maxBytes }) =>
       new Error(`${DISCORD_PROBE_GET_ME_LABEL}: JSON response exceeds ${maxBytes} bytes`),
   });
@@ -157,49 +160,24 @@ export async function probeDiscord(
   let res: Response | undefined;
   try {
     const getMeUrl = `${DISCORD_API_BASE}/users/@me`;
-    const getMeTimeout = buildTimeoutAbortSignal({
+    const getMeDeadlineMs = Date.now() + timeoutMs;
+    res = await fetchWithTimeout(
+      getMeUrl,
+      { headers: { Authorization: `Bot ${normalized}` } },
       timeoutMs,
-      operation: DISCORD_PROBE_GET_ME_LABEL,
-      url: getMeUrl,
-    });
-    try {
-      res = await fetchWithTimeout(
-        getMeUrl,
-        {
-          headers: { Authorization: `Bot ${normalized}` },
-          signal: getMeTimeout.signal,
-        },
-        timeoutMs,
-        getResolvedFetch(fetcher),
-      );
-      if (!res.ok) {
-        result.status = res.status;
-        result.error = `getMe failed (${res.status})`;
-        return { ...result, elapsedMs: Date.now() - started };
-      }
-      let json: { id?: string; username?: string };
-      try {
-        json = await readDiscordProbeGetMeJson(res, timeoutMs);
-      } catch (error) {
-        if (getMeTimeout.signal?.aborted) {
-          const message = `${DISCORD_PROBE_GET_ME_LABEL}: JSON response timed out after ${timeoutMs}ms`;
-          if (error instanceof Error) {
-            error.message = message;
-            throw error;
-          }
-          throw new Error(message, { cause: error });
-        }
-        throw error;
-      }
-      result.ok = true;
-      result.bot = {
-        id: json.id ?? null,
-        username: json.username ?? null,
-      };
-    } finally {
-      // The timeout must outlive header receipt so the same caller budget covers body reads.
-      getMeTimeout.cleanup();
+      getResolvedFetch(fetcher),
+    );
+    if (!res.ok) {
+      result.status = res.status;
+      result.error = `getMe failed (${res.status})`;
+      return { ...result, elapsedMs: Date.now() - started };
     }
+    const json = await readDiscordProbeGetMeJson(res, timeoutMs, getMeDeadlineMs);
+    result.ok = true;
+    result.bot = {
+      id: json.id ?? null,
+      username: json.username ?? null,
+    };
     if (includeApplication) {
       // Application metadata is optional. Keep its deadline inside the outer status budget so a
       // stalled secondary response cannot discard the already-resolved bot identity.

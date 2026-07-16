@@ -68,29 +68,16 @@ export async function withMSTeamsAbortableRequestTimeout<T>(params: {
   work: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   const controller = new AbortController();
-  let timeoutError: Error | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MSTEAMS_REQUEST_TIMEOUT_MS, 1);
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      timeoutError = createMSTeamsRequestTimeoutError(params.label, timeoutMs);
-      controller.abort(timeoutError);
-      reject(timeoutError);
-    }, timeoutMs);
-    (timer as { unref?: () => void }).unref?.();
-  });
-  const workPromise = params.work(controller.signal);
-
+  // Defer callback setup so withTimeout arms first; synchronous token-provider
+  // work must count against the request deadline.
+  const work = Promise.resolve().then(() => params.work(controller.signal));
   try {
-    return await Promise.race([workPromise, timeoutPromise]);
+    return await withTimeout(work, timeoutMs, {
+      createError: () => createMSTeamsRequestTimeoutError(params.label, timeoutMs),
+    });
   } catch (error) {
-    if (controller.signal.aborted && timeoutError) {
-      throw timeoutError;
-    }
+    controller.abort(error);
     throw error;
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
   }
 }

@@ -144,7 +144,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     const start = (await rpc(socket, "process/start", {
       processId: "proc-1",
       argv: ["/bin/sh", "-lc", "printf ok"],
-      cwd: "/workspace",
+      cwd: "file:///workspace",
       env: { POLICY_SET: "env-wins", TEST_FLAG: "1" },
       envPolicy: {
         inherit: "none",
@@ -177,6 +177,77 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     expect(notifications.map((notification) => notification.method)).toEqual(
       expect.arrayContaining(["process/output", "process/exited", "process/closed"]),
     );
+    socket.close();
+  });
+
+  it("decodes a Codex file URI cwd before sandbox execution", async () => {
+    const buildExecSpec = vi.fn(async () => ({
+      argv: [process.execPath, "-e", ""],
+      env: testExecEnv(),
+      stdinMode: "pipe-closed" as const,
+    }));
+    const sandbox = createSandboxContext({ buildExecSpec });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await rpc(socket, "process/start", {
+      processId: "proc-uri-cwd",
+      argv: ["/usr/bin/pwd"],
+      cwd: "file:///projects/example%20repo",
+      env: {},
+      tty: false,
+      pipeStdin: false,
+      arg0: null,
+    });
+
+    expect(buildExecSpec).toHaveBeenCalledWith(
+      expect.objectContaining({ workdir: "/projects/example repo" }),
+    );
+    socket.close();
+  });
+
+  it.each([
+    ["a non-file scheme", "https://example.test/workspace"],
+    ["a remote file authority", "file://remote.example.test/workspace"],
+    ["a query", "file:///workspace?revision=1"],
+    ["a fragment", "file:///workspace#section"],
+    ["a Windows drive path", "file:///C:/workspace"],
+    ["an encoded Windows drive path", "file:///%43:/workspace"],
+    ["an encoded null byte", "file:///workspace%00"],
+  ])("rejects a process cwd with %s", async (_label, cwd) => {
+    const buildExecSpec = vi.fn(async () => ({
+      argv: [process.execPath, "-e", ""],
+      env: testExecEnv(),
+      stdinMode: "pipe-closed" as const,
+    }));
+    const sandbox = createSandboxContext({ buildExecSpec });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "process/start", {
+        processId: "proc-invalid-cwd",
+        argv: ["/usr/bin/pwd"],
+        cwd,
+        env: {},
+        tty: false,
+        pipeStdin: false,
+        arg0: null,
+      }),
+    ).rejects.toThrow(/process cwd/u);
+    expect(buildExecSpec).not.toHaveBeenCalled();
     socket.close();
   });
 

@@ -7283,6 +7283,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
+  - H3: Terminal tool outcomes
   - H2: Current limitations
   - H2: Related
 
