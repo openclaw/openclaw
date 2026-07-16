@@ -11,6 +11,10 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
+import {
+  cleanSchemaForLlamacppGbnf,
+  isLlamacppGbnfToolSchemaProvider,
+} from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
 /**
@@ -832,11 +836,19 @@ function normalizeToolParameterSchemaUncached(
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
 
+  const isLlamacppGbnfProvider = isLlamacppGbnfToolSchemaProvider({
+    modelProvider: normalizedProvider,
+    toolSchemaProfile: normalizedToolSchemaProfile,
+  });
+
   function applyProviderCleaning(s: unknown): TSchema {
     const normalizedSchema = normalizeArraySchemasMissingItems(s);
-    const arrayItemsCompatibleSchema = omitEmptyArrayItems
+    let arrayItemsCompatibleSchema = omitEmptyArrayItems
       ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
       : normalizedSchema;
+    if (isLlamacppGbnfProvider) {
+      arrayItemsCompatibleSchema = cleanSchemaForLlamacppGbnf(arrayItemsCompatibleSchema);
+    }
     if (isGeminiProvider && !isAnthropicProvider) {
       const geminiCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
       return unsupportedToolSchemaKeywords.size > 0
