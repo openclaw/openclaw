@@ -250,7 +250,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const result = { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"];
     const page = createPage("openclaw-usage-page", context) as TestPage & {
       routeData: UsageRouteData;
-      applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+      refreshRuntime: {
+        applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+      };
     };
     page.routeData = {
       gateway: context.gateway,
@@ -271,8 +273,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page);
     await page.updateComplete;
-    page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
-    page.applyGatewaySnapshot(context.gateway.snapshot);
+    page.refreshRuntime.applyGatewaySnapshot({
+      ...context.gateway.snapshot,
+      connected: false,
+    });
+    page.refreshRuntime.applyGatewaySnapshot(context.gateway.snapshot);
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
@@ -289,7 +294,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createPage("openclaw-usage-page", context) as TestPage & {
       routeData: UsageRouteData;
       usageLoading: boolean;
-      applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+      refreshRuntime: {
+        applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+      };
     };
     page.routeData = {
       gateway: context.gateway,
@@ -311,8 +318,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     document.body.append(page);
     await page.updateComplete;
     page.usageLoading = true;
-    page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
-    page.applyGatewaySnapshot(context.gateway.snapshot);
+    page.refreshRuntime.applyGatewaySnapshot({
+      ...context.gateway.snapshot,
+      connected: false,
+    });
+    page.refreshRuntime.applyGatewaySnapshot(context.gateway.snapshot);
 
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object)),
@@ -336,9 +346,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const result = { sessions: [] } as unknown as UsageRouteData["result"];
     const page = createPage("openclaw-usage-page", harness.context) as TestPage & {
       routeData: UsageRouteData;
-      lastUsageLoadedAtMs: number | null;
       usageLoading: boolean;
-      requestUsageRefresh: (reason: UsageRefreshReason) => void;
+      refreshRuntime: {
+        request: (reason: UsageRefreshReason) => void;
+        setLastLoadedAtMs: (value: number | null) => void;
+      };
     };
     page.routeData = {
       gateway: harness.context.gateway,
@@ -364,7 +376,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     harness.emitConnected(true);
     expect(request).not.toHaveBeenCalled();
 
-    page.lastUsageLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
+    page.refreshRuntime.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
     visibility.mockReturnValue("hidden");
     harness.emitConnected(false);
     harness.emitConnected(true);
@@ -381,16 +393,16 @@ describe("gateway source replacement across reconnect with a reused client", () 
     ]);
 
     page.usageLoading = true;
-    page.requestUsageRefresh("manual");
+    page.refreshRuntime.request("manual");
     await vi.waitFor(() => expect(page.usageLoading).toBe(false));
     expect(request).toHaveBeenCalledTimes(6);
 
     const failedRefresh = deferred<never>();
     request.mockImplementationOnce(() => failedRefresh.promise);
-    page.lastUsageLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
-    page.requestUsageRefresh("manual");
+    page.refreshRuntime.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
+    page.refreshRuntime.request("manual");
     expect(request).toHaveBeenCalledTimes(9);
-    page.requestUsageRefresh("focus");
+    page.refreshRuntime.request("focus");
     failedRefresh.reject(new Error("connection interrupted"));
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(12));
     await vi.waitFor(() => expect(page.usageLoading).toBe(false));
