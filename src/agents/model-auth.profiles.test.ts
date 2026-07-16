@@ -534,7 +534,7 @@ describe("getApiKeyForModel", () => {
         lockedProfile: true,
         store,
       }),
-    ).rejects.toThrow(/requires a ChatGPT subscription OAuth profile/);
+    ).rejects.toThrow(/requires a ChatGPT subscription \(OAuth or token\) profile/);
   });
 
   it("uses the config default agent dir when resolving provider profiles", async () => {

@@ -149,7 +149,9 @@ function isAuthModeAllowedForModel(params: {
   mode: ResolvedProviderAuth["mode"];
 }): boolean {
   if (openAICodexTransportRequiresOAuth(params)) {
-    return params.mode === "oauth";
+    // Subscription-class credentials are oauth profiles and ChatGPT tokens;
+    // api-key must fail closed here or the codex backend 401s at request time.
+    return params.mode === "oauth" || params.mode === "token";
   }
   return !directOpenAIPlatformModelRequiresApiKey(params) || params.mode === "api-key";
 }
@@ -165,7 +167,7 @@ function assertAuthModeAllowedForModel(params: {
   }
   if (openAICodexTransportRequiresOAuth(params)) {
     throw new Error(
-      `Auth profile "${params.profileId}" uses ${params.mode} auth, but ${params.provider}/${params.modelApi} requires a ChatGPT subscription OAuth profile.`,
+      `Auth profile "${params.profileId}" uses ${params.mode} auth, but ${params.provider}/${params.modelApi} requires a ChatGPT subscription (OAuth or token) profile.`,
     );
   }
   throw new Error(
