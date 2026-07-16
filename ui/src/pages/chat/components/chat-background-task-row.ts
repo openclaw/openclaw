@@ -85,7 +85,7 @@ export function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): T
                   type="button"
                   aria-label=${t("chat.backgroundTasks.stopTask", { title })}
                   ?disabled=${cancelling || !props.connected}
-                  @click=${() => props.onCancel(task.taskId)}
+                  @click=${() => props.onCancel(task.id)}
                 >
                   ${cancelling ? icons.loader : icons.stop}
                 </button>

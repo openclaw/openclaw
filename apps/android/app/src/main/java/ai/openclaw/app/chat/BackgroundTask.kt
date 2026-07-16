@@ -12,7 +12,6 @@ import java.time.Instant
 
 data class BackgroundTask(
   val id: String,
-  val taskId: String,
   val status: String,
   val runtime: String,
   val title: String?,
@@ -31,7 +30,7 @@ data class BackgroundTask(
     get() = status == "queued" || status == "running"
 
   val displayTitle: String
-    get() = title?.trim()?.takeIf { it.isNotEmpty() } ?: taskId
+    get() = title?.trim()?.takeIf { it.isNotEmpty() } ?: id
 
   val statusLabel: String
     get() =
@@ -71,10 +70,8 @@ internal fun parseBackgroundTask(element: JsonElement): BackgroundTask? {
   fun string(key: String): String? = objectValue[key]?.jsonPrimitive?.contentOrNull
 
   val id = string("id")?.takeIf { it.isNotBlank() } ?: return null
-  val taskId = string("taskId")?.takeIf { it.isNotBlank() } ?: id
   return BackgroundTask(
     id = id,
-    taskId = taskId,
     status = string("status") ?: "running",
     runtime = string("runtime") ?: "background",
     title = string("title"),

@@ -331,7 +331,11 @@ describe("background tasks rail rendering", () => {
         loading: false,
         error: null,
         tasks: [
-          makeTask({ id: "task-1", childSessionKey: "agent:main:subagent:abc" }),
+          makeTask({
+            id: "task-1",
+            taskId: "runtime-task-1",
+            childSessionKey: "agent:main:subagent:abc",
+          }),
           makeTask({ id: "task-2", status: "completed", title: "Finished work" }),
         ],
         cancellingTaskIds: new Set(),

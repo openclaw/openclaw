@@ -40,6 +40,21 @@ struct BackgroundTasksScreenTests {
         #expect(merged.filter { !$0.isActive }.map(\.id) == ["finished"])
     }
 
+    @Test func `untitled task uses canonical ledger id`() throws {
+        let data = Data(#"""
+        {
+          "id":"ledger-1",
+          "taskId":"runtime-1",
+          "status":"running",
+          "runtime":"cli"
+        }
+        """#.utf8)
+
+        let task = try JSONDecoder().decode(MobileBackgroundTask.self, from: data)
+
+        #expect(task.displayTitle == "ledger-1")
+    }
+
     @Test func `terminal snapshot wins a timestamp tie`() throws {
         let running = try self.task(id: "same", status: "running", updatedAt: 4000)
         let finished = try self.task(id: "same", status: "completed", updatedAt: 4000)

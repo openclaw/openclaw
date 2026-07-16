@@ -16419,7 +16419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 47,
+      "line": 46,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Background task",
       "surface": "apple",
@@ -16427,7 +16427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 56,
+      "line": 55,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Queued",
       "surface": "apple",
@@ -16435,7 +16435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 58,
+      "line": 57,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Completed",
       "surface": "apple",
@@ -16443,7 +16443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 59,
+      "line": 58,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Failed",
       "surface": "apple",
@@ -16451,7 +16451,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 65,
+      "line": 64,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Subagent",
       "surface": "apple",
@@ -16459,7 +16459,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 66,
+      "line": 65,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Cron",
       "surface": "apple",
@@ -16467,7 +16467,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 69,
+      "line": 68,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Task",
       "surface": "apple",
@@ -16475,7 +16475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 159,
+      "line": 158,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Loading background tasks…",
       "surface": "apple",
@@ -16483,7 +16483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 171,
+      "line": 170,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Tasks for this agent will appear here.",
       "surface": "apple",
@@ -16491,7 +16491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 182,
+      "line": 181,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "No running tasks",
       "surface": "apple",
@@ -16499,7 +16499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 191,
+      "line": 190,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Running",
       "surface": "apple",
@@ -16507,7 +16507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 195,
+      "line": 194,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "No finished tasks",
       "surface": "apple",
@@ -16515,7 +16515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 204,
+      "line": 203,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Finished",
       "surface": "apple",
@@ -16523,7 +16523,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 211,
+      "line": 210,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Background Tasks",
       "surface": "apple",
@@ -16531,7 +16531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 219,
+      "line": 218,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -16539,7 +16539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 329,
+      "line": 328,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Prompt",
       "surface": "apple",
@@ -16547,7 +16547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 331,
+      "line": 330,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Loading…",
       "surface": "apple",
@@ -16555,7 +16555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 332,
+      "line": 331,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Prompt unavailable.",
       "surface": "apple",
@@ -16563,7 +16563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 334,
+      "line": 333,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Output",
       "surface": "apple",
@@ -16571,7 +16571,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 335,
+      "line": 334,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "No output yet.",
       "surface": "apple",
@@ -16579,7 +16579,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 345,
+      "line": 344,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Task Details",
       "surface": "apple",

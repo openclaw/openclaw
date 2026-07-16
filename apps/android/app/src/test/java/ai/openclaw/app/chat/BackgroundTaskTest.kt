@@ -122,7 +122,6 @@ class BackgroundTaskTest {
     endedAtMs: Long?,
   ) = BackgroundTask(
     id = id,
-    taskId = id,
     status = status,
     runtime = "cli",
     title = id,

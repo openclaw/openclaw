@@ -25,7 +25,6 @@ struct MobileBackgroundTask: Decodable, Identifiable, Equatable {
     }
 
     let id: String
-    let taskId: String?
     let status: String
     let runtime: String?
     let title: String?
@@ -43,7 +42,7 @@ struct MobileBackgroundTask: Decodable, Identifiable, Equatable {
 
     var displayTitle: String {
         self.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-            ?? self.taskId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? self.id.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             ?? String(localized: "Background task")
     }
 
