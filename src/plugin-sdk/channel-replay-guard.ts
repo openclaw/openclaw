@@ -2,7 +2,7 @@ import type {
   ClaimableDedupe,
   ClaimableDedupeOptions,
   PersistentDedupeCheckOptions,
-} from "./persistent-dedupe.js";
+} from "./persistent-dedupe.types.js";
 
 type ReplayKeys = string | readonly (string | null | undefined)[] | null | undefined;
 
