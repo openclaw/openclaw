@@ -492,11 +492,16 @@ final class GatewayProcessManager {
             do {
                 let data = try await attemptAttach()
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
+                let attachedInstance = await PortGuardian.shared.describe(port: port)
+                guard self.isCurrentGatewayStart(startGeneration) else { return true }
                 let snap = decodeHealthSnapshot(from: data)
-                let details = self.describe(details: instanceText, port: port, snap: snap)
+                let attachedInstanceText = attachedInstance.map { self.describe(instance: $0) }
+                let details = self.describe(details: attachedInstanceText, port: port, snap: snap)
                 let endpointPIDChanged = Self.gatewayPIDChanged(
                     from: self.lastObservedGatewayPID,
-                    to: instance?.pid)
+                    to: attachedInstance?.pid) || Self.gatewayPIDChanged(
+                    from: instance?.pid,
+                    to: attachedInstance?.pid)
                 self.existingGatewayDetails = details
                 self.setLaunchAgentReadinessState(candidate: nil, failure: nil)
                 self.clearLastFailure()
@@ -506,7 +511,7 @@ final class GatewayProcessManager {
                 self.refreshControlChannelIfNeeded(
                     reason: "attach existing",
                     force: endpointPIDChanged)
-                self.lastObservedGatewayPID = instance?.pid ?? self.lastObservedGatewayPID
+                self.lastObservedGatewayPID = attachedInstance?.pid ?? self.lastObservedGatewayPID
                 self.refreshLog()
                 return true
             } catch {

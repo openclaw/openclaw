@@ -1694,6 +1694,20 @@ struct GatewayProcessManagerTests {
                         sendHook: { task, message, sendIndex in
                             guard sendIndex > 0 else { return }
                             guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                            if sendIndex == 1 {
+                                let response = Data(
+                                    """
+                                    {"type":"res","id":"\(id)","ok":false,
+                                     "error":{"code":"UNAVAILABLE","message":"gateway restarting"}}
+                                    """.utf8)
+                                task.emitReceiveSuccess(.data(response))
+                                return
+                            }
+                            let replacement = PortGuardian.Descriptor(
+                                pid: 4343,
+                                command: "openclaw-gateway",
+                                executablePath: "/tmp/openclaw-gateway")
+                            await PortGuardian.shared.setTestingDescriptor(replacement, forPort: port)
                             let json = """
                             {
                               "type": "res",
@@ -1720,7 +1734,7 @@ struct GatewayProcessManagerTests {
             manager.setTestingSkipControlChannelRefresh(true)
             manager.setTestingLastFailureReason("stale")
             manager._testClearControlChannelRefreshForces()
-            manager._testSetLastObservedGatewayPID(4141)
+            manager._testSetLastObservedGatewayPID(4242)
 
             @MainActor
             func cleanup() async {
@@ -1746,7 +1760,7 @@ struct GatewayProcessManagerTests {
                 #expect(details.contains("port \(port)"))
                 #expect(details.contains("Telegram linked"))
                 #expect(details.contains("auth 1m"))
-                #expect(details.contains("pid 4242 openclaw-gateway @ /tmp/openclaw-gateway"))
+                #expect(details.contains("pid 4343 openclaw-gateway @ /tmp/openclaw-gateway"))
                 #expect(manager._testControlChannelRefreshForces().last == true)
                 await cleanup()
             } catch {
