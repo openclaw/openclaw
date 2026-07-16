@@ -1047,6 +1047,7 @@ describe("handleLineWebhookEvents", () => {
             id: "m-past",
             type: "text",
             text: "earlier chatter",
+            quoteToken: "q-past",
           },
           source: { type: "group", groupId: "grp-race", userId: "user-b" },
           webhookEventId: "evt-past",
@@ -1065,8 +1066,9 @@ describe("handleLineWebhookEvents", () => {
             id: "m-mention",
             type: "text",
             text: "@Bot summarize",
+            quoteToken: "q-mention",
             mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
-          } as unknown as MessageEvent["message"],
+          },
           source: { type: "group", groupId: "grp-race", userId: "user-a" },
           webhookEventId: "evt-mention",
           timestamp: 2000,
@@ -1084,6 +1086,7 @@ describe("handleLineWebhookEvents", () => {
             id: "m-concurrent",
             type: "text",
             text: "ping",
+            quoteToken: "q-concurrent",
           },
           source: { type: "group", groupId: "grp-race", userId: "user-c" },
           webhookEventId: "evt-concurrent",
@@ -1126,7 +1129,12 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-past", type: "text", text: "earlier chatter" },
+          message: {
+            id: "m-past",
+            type: "text",
+            text: "earlier chatter",
+            quoteToken: "q-past",
+          },
           source: { type: "group", groupId: "grp-mid", userId: "user-b" },
           webhookEventId: "evt-past",
           timestamp: 1000,
@@ -1154,8 +1162,9 @@ describe("handleLineWebhookEvents", () => {
             id: "m-mention",
             type: "text",
             text: "@Bot summarize",
+            quoteToken: "q-mention",
             mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
-          } as unknown as MessageEvent["message"],
+          },
           source: { type: "group", groupId: "grp-mid", userId: "user-a" },
           webhookEventId: "evt-mention",
           timestamp: 2000,
@@ -1169,7 +1178,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-mid", type: "text", text: "ping" },
+          message: { id: "m-mid", type: "text", text: "ping", quoteToken: "q-mid" },
           source: { type: "group", groupId: "grp-mid", userId: "user-c" },
           webhookEventId: "evt-mid",
           timestamp: 3000,
@@ -1200,8 +1209,9 @@ describe("handleLineWebhookEvents", () => {
             id: "m-mention-2",
             type: "text",
             text: "@Bot again",
+            quoteToken: "q-mention-2",
             mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
-          } as unknown as MessageEvent["message"],
+          },
           source: { type: "group", groupId: "grp-mid", userId: "user-a" },
           webhookEventId: "evt-mention-2",
           timestamp: 4000,
@@ -1234,7 +1244,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-ambient", type: "text", text: "context" },
+          message: { id: "m-ambient", type: "text", text: "context", quoteToken: "q-ambient" },
           source: { type: "group", groupId: "grp-fail", userId: "user-b" },
           webhookEventId: "evt-ambient",
           timestamp: 1000,
@@ -1253,8 +1263,9 @@ describe("handleLineWebhookEvents", () => {
               id: "m-mention-fail",
               type: "text",
               text: "@Bot help",
+              quoteToken: "q-mention-fail",
               mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
-            } as unknown as MessageEvent["message"],
+            },
             source: { type: "group", groupId: "grp-fail", userId: "user-a" },
             webhookEventId: "evt-mention-fail",
             timestamp: 2000,
