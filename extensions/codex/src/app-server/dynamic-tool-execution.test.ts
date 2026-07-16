@@ -234,7 +234,7 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
   });
 
-  it("rejects hex, exponent, and fraction computer duration strings", () => {
+  it("aligns computer duration strings with computer-tool parseStrictFiniteNumber", () => {
     // Hex "0x10" would be 16 under Number() — reject, fall back to baseline.
     expect(
       resolveDynamicToolCallTimeoutMs({
@@ -249,7 +249,7 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(120_000);
-    // Exponent "1e2" would be 100 under Number() — reject.
+    // Exponent "1e2" honored (100s) — same as computer-tool strict finite parse.
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
@@ -262,8 +262,8 @@ describe("dynamic tool execution helpers", () => {
         },
         config: undefined,
       }),
-    ).toBe(150_000);
-    // Fraction string "100.5" would be 100.5 → 220500ms under Number() — reject.
+    ).toBe(250_000);
+    // Fraction string "100.5" honored — avoid underbudgeting computer-tool.
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
@@ -276,8 +276,8 @@ describe("dynamic tool execution helpers", () => {
         },
         config: undefined,
       }),
-    ).toBe(120_000);
-    // Fraction string "0.5" — reject.
+    ).toBe(220_500);
+    // Fraction string "0.5" honored.
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
@@ -290,7 +290,7 @@ describe("dynamic tool execution helpers", () => {
         },
         config: undefined,
       }),
-    ).toBe(120_000);
+    ).toBe(120_500);
     // Numeric fraction 0.5 — preserved (500ms).
     expect(
       resolveDynamicToolCallTimeoutMs({

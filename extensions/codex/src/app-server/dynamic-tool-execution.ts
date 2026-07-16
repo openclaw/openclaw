@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   addTimerTimeoutGraceMs,
+  parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -512,15 +513,17 @@ function readComputerToolTimeoutMs(value: JsonValue | undefined): number {
   );
 }
 
-/** Returns a non-negative duration in seconds, rejecting hex/exponent strings. */
+/** Seconds for wait/hold_key; matches computer-tool readFiniteNumberParam grammar. */
 function readComputerDurationMs(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, value);
   }
   if (typeof value === "string") {
-    const parsed = parseStrictNonNegativeInteger(value);
+    // parseStrictFiniteNumber rejects hex ("0x10") but accepts decimal/scientific
+    // fractions ("100.5", "1e2") — same as computer-tool strict number params.
+    const parsed = parseStrictFiniteNumber(value);
     if (parsed !== undefined) {
-      return parsed;
+      return Math.max(0, parsed);
     }
   }
   return 0;
