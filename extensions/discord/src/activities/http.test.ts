@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
@@ -31,10 +34,16 @@ async function startServer(
   options: {
     fetchGuard?: typeof fetchWithSsrFGuard;
     now?: () => number;
-    readVendorAsset?: () => Promise<Buffer>;
+    vendorAssetPath?: string;
+    readVendorAsset?: (assetPath: string) => Promise<Buffer>;
   } = {},
 ): Promise<string> {
-  const route = createDiscordActivityHttpHandler({ runtime, ...options });
+  const route = createDiscordActivityHttpHandler({
+    runtime,
+    ...options,
+    vendorAssetPath:
+      options.vendorAssetPath ?? path.join(os.tmpdir(), "missing-discord-activity-sdk.mjs"),
+  });
   const server = createServer((req, res) => {
     void route.handleHttpRequest(req, res).then((handled) => {
       if (!handled) {
@@ -88,13 +97,18 @@ async function createWidget(
   runtime: DiscordActivitiesRuntime,
   params?: { createdAt?: number; channelId?: string; accountId?: string },
 ) {
+  const createdAt = params?.createdAt ?? 1;
   const widgetId = await runtime.store.createWidget({
     html: "<!doctype html><html><body><script>document.body.dataset.ready='yes'</script></body></html>",
     title: "Activity status",
     channelId: params?.channelId ?? "777",
     accountId: params?.accountId ?? "default",
-    createdAt: params?.createdAt ?? 1,
+    createdAt,
   });
+  await runtime.store.markWidgetDelivered(
+    widgetId,
+    String(1_000_000_000_000_000_000n + BigInt(createdAt)),
+  );
   return widgetId;
 }
 
@@ -525,21 +539,21 @@ describe("Discord Activity widget routes", () => {
     );
   });
 
-  it("returns 404 when multiple widgets match the Activity Instance API channel", async () => {
+  it("uses the latest widget when a client omits the custom ID", async () => {
     const runtime = createActivityTestRuntime();
     await createWidget(runtime, { channelId: "777", createdAt: 1 });
-    await createWidget(runtime, { channelId: "777", createdAt: 2 });
+    const newestId = await createWidget(runtime, { channelId: "777", createdAt: 2 });
     const session = await runtime.store.createSession({
       discordUserId: "42",
       accountId: "default",
     });
     const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
-    const response = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=missing&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${session}` } },
-    );
+    const response = await fetch(`${base}/discord/activity/api/widget?instance_id=instance-1`, {
+      headers: { Authorization: `Bearer ${session}` },
+    });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ id: newestId });
   });
 
   it("returns 404 when the Activity instance cannot be resolved", async () => {
@@ -577,6 +591,29 @@ describe("Discord Activity widget routes", () => {
 });
 
 describe("Discord Activity shell assets", () => {
+  it("serves the generated SDK from a dist plugin root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-activity-dist-"));
+    const vendorAssetPath = path.join(
+      root,
+      "dist",
+      "extensions",
+      "discord",
+      "assets",
+      "embedded-app-sdk.mjs",
+    );
+    try {
+      await fs.mkdir(path.dirname(vendorAssetPath), { recursive: true });
+      await fs.writeFile(vendorAssetPath, "export class DiscordSDK {}\n");
+      const base = await startServer(createActivityTestRuntime(), { vendorAssetPath });
+
+      const vendor = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
+      expect(vendor.status).toBe(200);
+      await expect(vendor.text()).resolves.toContain("DiscordSDK");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("serves the shell, module, and generated SDK asset", async () => {
     // The SDK bundle is a gitignored build artifact absent from synced checkouts, so
     // the vendor read is injected; generation is covered by bundled-plugin-assets tests.
@@ -606,5 +643,20 @@ describe("Discord Activity shell assets", () => {
     });
     const vendor = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
     expect(vendor.status).toBe(404);
+  });
+
+  it("retries the vendor asset read after a transient failure", async () => {
+    const readVendorAsset = vi
+      .fn<(assetPath: string) => Promise<Buffer>>()
+      .mockRejectedValueOnce(new Error("transient read failure"))
+      .mockResolvedValue(Buffer.from("export class DiscordSDK {}\n"));
+    const base = await startServer(createActivityTestRuntime(), { readVendorAsset });
+
+    const first = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
+    expect(first.status).toBe(404);
+    const second = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
+    expect(second.status).toBe(200);
+    await expect(second.text()).resolves.toContain("DiscordSDK");
+    expect(readVendorAsset).toHaveBeenCalledTimes(2);
   });
 });

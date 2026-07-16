@@ -370,14 +370,86 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
       // Post a spoofed data message from the PARENT window (event.source !== the
       // iframe's contentWindow). The bridge must ignore it: #value stays the
       // legitimate value and never shows the injected marker.
-      await page.evaluate(() => {
-        window.postMessage(
-          { v: 1, type: "workspace:data", requestId: "x", bindingId: "value", data: "SPOOFED" },
-          "*",
-        );
+      await frame.locator("#value").evaluate((node) => {
+        type SpoofObservationWindow = Window & {
+          openclawSawSpoofed?: boolean;
+          openclawSpoofObserver?: MutationObserver;
+        };
+        const targetWindow = window as SpoofObservationWindow;
+        const valueNode = node as HTMLElement;
+        const recordSpoof = () => {
+          if (valueNode.textContent?.includes("SPOOFED")) {
+            targetWindow.openclawSawSpoofed = true;
+          }
+        };
+        targetWindow.openclawSawSpoofed = false;
+        targetWindow.openclawSpoofObserver?.disconnect();
+        targetWindow.openclawSpoofObserver = new MutationObserver(recordSpoof);
+        targetWindow.openclawSpoofObserver.observe(valueNode, {
+          characterData: true,
+          childList: true,
+          subtree: true,
+        });
+        recordSpoof();
       });
-      await page.waitForTimeout(300);
-      expect(await frame.locator("#value").textContent()).not.toContain("SPOOFED");
+      await page.evaluate(async () => {
+        await new Promise<void>((resolve) => {
+          const onMessage = (event: MessageEvent) => {
+            const data = event.data as { requestId?: string } | undefined;
+            if (event.source !== window || data?.requestId !== "x") {
+              return;
+            }
+            window.removeEventListener("message", onMessage);
+            resolve();
+          };
+          window.addEventListener("message", onMessage);
+          window.postMessage(
+            { v: 1, type: "workspace:data", requestId: "x", bindingId: "value", data: "SPOOFED" },
+            "*",
+          );
+        });
+      });
+      await frame.locator("#value").evaluate(async () => {
+        type WidgetBridge = {
+          postMessage: (message: unknown) => void;
+          addEventListener: (type: "message", listener: (event: MessageEvent) => void) => void;
+          removeEventListener: (type: "message", listener: (event: MessageEvent) => void) => void;
+        };
+        const bridge = (window as Window & { openclawWorkspaceBridge?: WidgetBridge })
+          .openclawWorkspaceBridge;
+        if (!bridge) {
+          throw new Error("workspace bridge unavailable");
+        }
+        await new Promise<void>((resolve) => {
+          const onMessage = (event: MessageEvent) => {
+            const data = event.data as { requestId?: string } | undefined;
+            if (data?.requestId !== "after-spoof") {
+              return;
+            }
+            bridge.removeEventListener("message", onMessage);
+            resolve();
+          };
+          bridge.addEventListener("message", onMessage);
+          const barrierRequest = {
+            v: 1,
+            type: "workspace:getData",
+            requestId: "after-spoof",
+            bindingId: "value",
+          };
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- This is a MessagePort-style widget bridge, not Window.postMessage.
+          bridge.postMessage(barrierRequest);
+        });
+      });
+      const sawSpoofed = await frame.locator("#value").evaluate((node) => {
+        type SpoofObservationWindow = Window & {
+          openclawSawSpoofed?: boolean;
+          openclawSpoofObserver?: MutationObserver;
+        };
+        const targetWindow = window as SpoofObservationWindow;
+        targetWindow.openclawSpoofObserver?.disconnect();
+        return targetWindow.openclawSawSpoofed === true || node.textContent?.includes("SPOOFED");
+      });
+      expect(sawSpoofed).toBe(false);
     } finally {
       await page.context().close();
     }

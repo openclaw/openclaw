@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DISCORD_EPOCH_MS = 1_420_070_400_000;
 const WIDGET_TTL_MS = 7 * DAY_MS;
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const DOC_TOKEN_TTL_MS = 60 * 1000;
@@ -12,6 +13,7 @@ type DiscordActivityWidget = {
   channelId: string;
   accountId: string;
   createdAt: number;
+  deliveredMessageId?: string | null;
 };
 
 type DiscordActivitySession = {
@@ -24,8 +26,12 @@ type DiscordActivityDocToken = {
   accountId: string;
 };
 
+type AtomicPluginStateKeyedStore<T> = PluginStateKeyedStore<T> & {
+  update: NonNullable<PluginStateKeyedStore<T>["update"]>;
+};
+
 type DiscordActivityStores = {
-  widgets: PluginStateKeyedStore<DiscordActivityWidget>;
+  widgets: AtomicPluginStateKeyedStore<DiscordActivityWidget>;
   sessions: PluginStateKeyedStore<DiscordActivitySession>;
   docTokens: PluginStateKeyedStore<DiscordActivityDocToken>;
 };
@@ -37,14 +43,23 @@ type OpenKeyedStore = <T>(options: {
   defaultTtlMs: number;
 }) => PluginStateKeyedStore<T>;
 
+function requireAtomicUpdate<T>(store: PluginStateKeyedStore<T>): AtomicPluginStateKeyedStore<T> {
+  if (!store.update) {
+    throw new Error("Discord Activities require atomic plugin state updates");
+  }
+  return store as AtomicPluginStateKeyedStore<T>;
+}
+
 export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): DiscordActivityStores {
   return {
-    widgets: openKeyedStore<DiscordActivityWidget>({
-      namespace: "activities-widgets",
-      maxEntries: 64,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: WIDGET_TTL_MS,
-    }),
+    widgets: requireAtomicUpdate(
+      openKeyedStore<DiscordActivityWidget>({
+        namespace: "activities-widgets",
+        maxEntries: 64,
+        overflowPolicy: "evict-oldest",
+        defaultTtlMs: WIDGET_TTL_MS,
+      }),
+    ),
     sessions: openKeyedStore<DiscordActivitySession>({
       namespace: "activities-sessions",
       maxEntries: 256,
@@ -69,8 +84,20 @@ export class DiscordActivityStore {
     const id = randomBytes(16).toString("base64url");
     const createdAt = Math.max(value.createdAt, this.lastWidgetCreatedAt + 1);
     this.lastWidgetCreatedAt = createdAt;
-    await this.stores.widgets.register(id, { ...value, createdAt });
+    await this.stores.widgets.register(id, { ...value, createdAt, deliveredMessageId: null });
     return id;
+  }
+
+  async markWidgetDelivered(id: string, messageId: string): Promise<void> {
+    if (!/^\d+$/u.test(messageId)) {
+      throw new Error("Discord Activity delivery returned an invalid message ID");
+    }
+    const updated = await this.stores.widgets.update(id, (widget) =>
+      widget ? { ...widget, deliveredMessageId: messageId } : undefined,
+    );
+    if (!updated) {
+      throw new Error("Discord Activity widget disappeared before delivery was recorded");
+    }
   }
 
   async deleteWidget(id: string): Promise<void> {
@@ -81,7 +108,7 @@ export class DiscordActivityStore {
     return await this.stores.widgets.lookup(id);
   }
 
-  async singleWidgetForChannel(
+  async latestPostedWidgetForChannel(
     accountId: string,
     channelId: string,
   ): Promise<{
@@ -89,17 +116,24 @@ export class DiscordActivityStore {
     widget: DiscordActivityWidget;
   } | null> {
     const entries = await this.stores.widgets.entries();
-    let match: (typeof entries)[number] | undefined;
+    let match: { entry: (typeof entries)[number]; deliveryOrder: bigint } | undefined;
     for (const entry of entries) {
       if (entry.value.accountId !== accountId || entry.value.channelId !== channelId) {
         continue;
       }
-      if (match) {
-        return null;
+      // Discord snowflakes preserve canonical message order even when API responses arrive out of
+      // order. Pre-tracking records fall back to their creation time; null marks a pending send.
+      if (entry.value.deliveredMessageId === null) {
+        continue;
       }
-      match = entry;
+      const deliveryOrder = entry.value.deliveredMessageId
+        ? BigInt(entry.value.deliveredMessageId)
+        : BigInt(Math.max(0, Math.trunc(entry.value.createdAt - DISCORD_EPOCH_MS))) << 22n;
+      if (!match || deliveryOrder > match.deliveryOrder) {
+        match = { entry, deliveryOrder };
+      }
     }
-    return match ? { id: match.key, widget: match.value } : null;
+    return match ? { id: match.entry.key, widget: match.entry.value } : null;
   }
 
   async createSession(value: DiscordActivitySession): Promise<string> {

@@ -333,6 +333,20 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("blocks external-supervisor installs before reading or mutating config", async () => {
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain(
+      "gateway lifecycle is managed by an external supervisor",
+    );
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
   it("validates token SecretRef but does not serialize resolved token into service env", async () => {
     mockResolvedGatewayTokenSecretRef();
 

@@ -1189,11 +1189,6 @@
       "translated": "OpenClaw सक्रिय"
     },
     {
-      "id": "native.android.f7a4f3bbcb0b2090",
-      "source": "${firstLine.take(157)}…",
-      "translated": "${firstLine.take(157)}…"
-    },
-    {
       "id": "native.android.356609f717b92350",
       "source": "$preview…",
       "translated": "$preview…"
@@ -7457,6 +7452,21 @@
       "id": "native.android.98a0d4d5bba788c4",
       "source": "OpenClaw is preparing a response.",
       "translated": "OpenClaw जवाब तैयार कर रहा है।"
+    },
+    {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "योजना चेकलिस्ट संक्षिप्त करें"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "योजना चेकलिस्ट विस्तृत करें"
     },
     {
       "id": "native.android.f3806d79e43f568f",
@@ -19554,9 +19564,9 @@
       "translated": "किसी भी inference सेटिंग को बदलने से पहले OpenClaw फिर से जाँच करेगा।"
     },
     {
-      "id": "native.apple.c7a02803addf11fa",
-      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
-      "translated": "Claude Code, Codex, Gemini, और सहेजी गई API कुंजियों की जाँच हो रही है।"
+      "id": "native.apple.a0a8f45082d0ba99",
+      "source": "Checking CLI logins, saved API keys, and local model servers on the Gateway.",
+      "translated": "Gateway पर CLI लॉगिन, सहेजी गई API कुंजियों और स्थानीय मॉडल सर्वरों की जाँच की जा रही है।"
     },
     {
       "id": "native.apple.0fd3e5267cdf8250",
@@ -19564,9 +19574,9 @@
       "translated": "इस Gateway पर AI खातों की जाँच नहीं की जा सकी"
     },
     {
-      "id": "native.apple.0af61b95d249c351",
-      "source": "Couldn’t check this Mac for AI accounts",
-      "translated": "इस Mac पर AI खातों की जाँच नहीं की जा सकी"
+      "id": "native.apple.82ba8c9a69fbb84b",
+      "source": "Couldn’t check this Gateway for AI access",
+      "translated": "इस Gateway पर AI एक्सेस की जाँच नहीं की जा सकी"
     },
     {
       "id": "native.apple.ab05bb1569f89077",
@@ -19609,14 +19619,24 @@
       "translated": "सेटअप विवरण कॉपी करें"
     },
     {
-      "id": "native.apple.f5a157404f7a0eff",
-      "source": "No AI accounts found on this Mac",
-      "translated": "इस Mac पर कोई AI खाता नहीं मिला"
+      "id": "native.apple.e0458fcb8c0536ea",
+      "source": "No usable AI access found on this Gateway",
+      "translated": "इस Gateway पर उपयोग योग्य AI एक्सेस नहीं मिला"
     },
     {
-      "id": "native.apple.76072d0308a553ca",
-      "source": "That’s fine — you can connect one with an API key or token. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
-      "translated": "कोई बात नहीं — आप इसे API key या token से कनेक्ट कर सकते हैं। यदि आप इस Mac पर Claude Code, Codex, या Gemini CLI का उपयोग करते हैं, तो पहले वहाँ साइन इन करें और “फिर से जाँचें” दबाएँ।"
+      "id": "native.apple.06b98c6084617183",
+      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
+      "translated": "कोई बात नहीं — आप API कुंजी या टोकन से कनेक्ट कर सकते हैं। आप Claude Code या Codex में साइन इन भी कर सकते हैं, या किसी उपयुक्त मॉडल के साथ Ollama या LM Studio शुरू करके फिर “फिर से जाँचें” दबा सकते हैं।"
+    },
+    {
+      "id": "native.apple.e2749739df556643",
+      "source": "Detected, but not auto-tested",
+      "translated": "पता चला, लेकिन स्वचालित रूप से जाँचा नहीं गया"
+    },
+    {
+      "id": "native.apple.5f604e17336ca8a7",
+      "source": "\\(candidate.label) — \\(candidate.detail)",
+      "translated": "\\(candidate.label) — \\(candidate.detail)"
     },
     {
       "id": "native.apple.5f28927fe23c11cb",
@@ -22337,6 +22357,16 @@
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "टूल चल रहे हैं…"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "योजना संक्षिप्त करें"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "योजना विस्तृत करें"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
