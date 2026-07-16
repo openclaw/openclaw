@@ -5,6 +5,9 @@ import {
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
 
+// The env variable name is part of the observable contract the messages
+// reference; the mode resolver is internal and proven through the public
+// isGatewayExternallySupervised surface.
 const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 
 describe("gateway supervision", () => {

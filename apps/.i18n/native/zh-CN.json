@@ -7454,6 +7454,21 @@
       "translated": "OpenClaw 正在准备回复。"
     },
     {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "收起计划清单"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "展开计划清单"
+    },
+    {
       "id": "native.android.f3806d79e43f568f",
       "source": "Dismiss shared-image warning",
       "translated": "关闭共享图片警告"
@@ -22342,6 +22357,16 @@
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "正在运行工具…"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "收起计划"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "展开计划"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
