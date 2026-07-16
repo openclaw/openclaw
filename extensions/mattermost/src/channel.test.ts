@@ -1409,6 +1409,40 @@ describe("mattermostPlugin", () => {
       expect(JSON.stringify(options)).not.toContain("/approve");
     });
 
+    it("skips hosted widget actions without a Mattermost URL", async () => {
+      const renderPresentation = requireMattermostRenderPresentation();
+      const cfg = createMattermostTestConfig();
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "Hosted widget",
+                action: {
+                  type: "web-app" as const,
+                  widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(
+        await renderPresentation({
+          payload: { presentation },
+          presentation,
+          ctx: {
+            cfg,
+            to: "channel:CHAN1",
+            text: "",
+            payload: { presentation },
+          },
+        }),
+      ).toBeNull();
+    });
+
     it("requires upload success for local media on presentation button payloads", async () => {
       const renderPresentation = requireMattermostRenderPresentation();
       const sendPayload = requireMattermostSendPayload();

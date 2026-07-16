@@ -115,7 +115,7 @@ function hasMattermostPresentationNavigation(presentation: MessagePresentation):
       block.type === "buttons" &&
       block.buttons.some((button) => {
         const action = resolveMessagePresentationButtonAction(button);
-        return action?.type === "url" || action?.type === "web-app";
+        return action?.type === "url" || (action?.type === "web-app" && Boolean(action.url));
       }),
   );
 }

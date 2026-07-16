@@ -287,6 +287,90 @@ describe("interactive payload helpers", () => {
     });
   });
 
+  it("requires a web-app target and preserves hosted widget ids", () => {
+    const normalized = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Hosted widget",
+              action: { type: "web-app", widgetId: " AAAAAAAAAAAAAAAAAAAAAA " },
+            },
+            {
+              label: "Hosted fallback",
+              action: {
+                type: "web-app",
+                widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+                url: " https://example.com/app ",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Hosted widget",
+              action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+            },
+            {
+              label: "Hosted fallback",
+              action: {
+                type: "web-app",
+                widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+                url: "https://example.com/app",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const interactive = presentationToInteractiveReply(normalized!);
+    expect(interactive?.blocks[0]).toMatchObject({
+      type: "buttons",
+      buttons: [
+        {
+          label: "Hosted widget",
+          action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+        },
+        {
+          label: "Hosted fallback",
+          action: {
+            type: "web-app",
+            widgetId: "BBBBBBBBBBBBBBBBBBBBBB",
+            url: "https://example.com/app",
+          },
+          webApp: { url: "https://example.com/app" },
+        },
+      ],
+    });
+    expect(interactive?.blocks[0]).not.toHaveProperty("buttons.0.webApp");
+    expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
+      "- Hosted widget\n- Hosted fallback: https://example.com/app",
+    );
+    expect(
+      resolveMessagePresentationButtonAction({
+        action: { type: "web-app" },
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeMessagePresentation({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Missing", action: { type: "web-app" } }],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
   it("resolves deprecated button inputs without overriding a canonical action", () => {
     expect(
       resolveMessagePresentationButtonAction({
