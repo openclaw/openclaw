@@ -27,10 +27,15 @@ export async function fetchWithTimeout(
     // accounts.google.com mirror / enterprise proxy) cannot force the
     // runtime to buffer an unbounded body before the caller sees it.
     // Complements #97587, which caps at the call site — this is the
-    // shared entry-point cap.
+    // shared entry-point cap. fetchWithSsrFGuard resolves after headers;
+    // keep the request deadline on the body so a stalled OAuth response
+    // cannot hang token exchange/identity calls.
     const body = await readResponseWithLimit(response, GOOGLE_OAUTH_BODY_MAX_BYTES, {
+      chunkTimeoutMs: timeoutMs,
       onOverflow: ({ size, maxBytes }) =>
         new Error(`google HTTP fetch: body exceeds ${maxBytes} bytes (got ${size})`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`google HTTP fetch: body stalled for ${chunkTimeoutMs}ms`),
     });
     // `readResponseWithLimit` returns a `Buffer` (Node Uint8Array view). The
     // global `Response` constructor accepts `BufferSource` (Uint8Array /

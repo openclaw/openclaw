@@ -94,6 +94,34 @@ describe("oauth.http fetchWithTimeout body byte cap", () => {
       expect.objectContaining({ signal: controller.signal }),
     );
   });
+
+  it("times out when a response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"access_token":'));
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+        finalUrl: TOKEN_URL,
+        release: releaseMock,
+      });
+
+      const resultPromise = fetchWithTimeout(TOKEN_URL, { method: "POST" }, 50);
+      const settled = expect(resultPromise).rejects.toThrow(
+        "google HTTP fetch: body stalled for 50ms",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await settled;
+      expect(releaseMock).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // Real-wire loopback proof. These tests bypass `fetchWithSsrFGuard` (which
