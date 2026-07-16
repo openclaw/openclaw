@@ -75,9 +75,6 @@ export const pluginSdkDocMetadata = {
   "channel-pairing": {
     category: "channel",
   },
-  "channel-ingress": {
-    category: "channel",
-  },
   "channel-ingress-runtime": {
     category: "channel",
   },
@@ -117,6 +114,9 @@ export const pluginSdkDocMetadata = {
   "tool-results": {
     category: "utilities",
   },
+  "widget-html": {
+    category: "utilities",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },
@@ -137,9 +137,6 @@ export const pluginSdkDocMetadata = {
   },
   "sqlite-runtime": {
     category: "runtime",
-  },
-  "qa-live-transport-scenarios": {
-    category: "utilities",
   },
   "agent-runtime": {
     category: "runtime",

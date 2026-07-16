@@ -201,7 +201,8 @@ SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*)(?=[ \t]*\()|"
     r"(?P<reference_value>[A-Za-z_$][A-Za-z0-9_$]*"
     r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
-    r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+)"
+    r"|(?:\?\.)?\[(?:[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+)"
     r"(?![A-Za-z0-9_./+=:@#$%&*!?-])|"
     r"(?P<bare_value>[A-Za-z0-9_./+=:@#$%&*!?-]{8,}))"
 )
@@ -411,6 +412,20 @@ CSHARP_METHOD_PREFIX_PATTERN = (
     r"(?:where\s+[^{;]+)?\{"
 )
 CSHARP_EVIDENCE_WINDOW = 8192
+SOURCE_CODE_REFERENCE_ROOT_VALUES = {
+    "attemptAuthProfileStore",
+}
+SOURCE_CODE_REFERENCE_ROOT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])(?:"
+    + "|".join(
+        re.escape(value)
+        for value in sorted(SOURCE_CODE_REFERENCE_ROOT_VALUES, key=len, reverse=True)
+    )
+    + r")(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|(?:\?\.)?\[(?:[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|[\"']profiles[\"']|[0-9]+)\])+"
+    r"(?![A-Za-z0-9_$])"
+)
 QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$"),
     re.compile(r"^\$env:[A-Za-z_][A-Za-z0-9_]*$", re.IGNORECASE),
@@ -419,7 +434,7 @@ QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
     re.compile(
         r"^\$\{(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
-        r"request|response|result|account|client|options|auth|auth_response|oauth_response|"
+        r"request|response|result|input|runtime|account|client|options|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
         r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+\}$"
@@ -430,7 +445,7 @@ UNQUOTED_SECRET_REFERENCE_PATTERNS = (
     *QUOTED_SECRET_REFERENCE_PATTERNS,
     re.compile(
         r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
-        r"request|response|result|account|client|options|auth|auth_response|oauth_response|"
+        r"request|response|result|input|runtime|account|client|options|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:(?:\?\.|[.\[]).*)$"
     ),
@@ -480,6 +495,15 @@ SOURCE_CODE_REFERENCE_PATTERN = re.compile(
         re.escape(value)
         for value in sorted(SOURCE_CODE_REFERENCE_VALUES, key=len, reverse=True)
     ) + r")(?![A-Za-z0-9_$])"
+)
+SOURCE_CODE_LIFECYCLE_REFERENCE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])"
+    r"(?:(?:cached|current|existing|loaded|previous|resolved|saved|stored|successful)"
+    r"[A-Za-z0-9_$]*"
+    r"(?:ApiKey|Credential|Credentials|Password|Secret|Token)"
+    r"|(?:apiKey|credential|credentials|password|secret|token))(?:Info)?"
+    r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*"
+    r"(?![A-Za-z0-9_$])"
 )
 DEFAULT_ENGINE_PATHS = ("/usr/local/bin", "/usr/bin", "/bin")
 # Keep this explicit: suffix matching leaks unrelated process credentials such
@@ -942,6 +966,29 @@ def safe_temp_root(repo: Path) -> Path:
             "unset or relocate TMPDIR/TMP/TEMP"
         )
     return root
+
+
+def parallel_test_temp_root(repo: Path) -> Path:
+    root = safe_temp_root(repo)
+    if os.name == "nt" or not env_truthy("OPENCLAW_TESTBOX"):
+        return root
+
+    # Blacksmith stores its SSH control socket below HOME. macOS temp roots can
+    # already consume the Unix-socket path budget before the socket name.
+    try:
+        short_root = Path("/tmp").resolve(strict=True)
+        short_root_stat = short_root.stat()
+    except OSError as exc:
+        raise SystemExit(f"unable to resolve short Testbox temp root: {exc}") from exc
+    if not stat.S_ISDIR(short_root_stat.st_mode):
+        raise SystemExit("short Testbox temp root must be a directory")
+    if is_within(short_root, repo.resolve()):
+        raise SystemExit("short Testbox temp root must be outside the reviewed repository")
+    if short_root_stat.st_mode & stat.S_IWOTH and not (
+        short_root_stat.st_mode & stat.S_ISVTX
+    ):
+        raise SystemExit("world-writable Testbox temp root must have the sticky bit set")
+    return short_root
 
 
 def safe_proxy_url(value: str) -> bool:
@@ -3764,7 +3811,12 @@ def shell_command_prefix(text: str, position: int) -> bool:
     )
 
 
-def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
+def secret_literal_risk(
+    expression: str,
+    minimum_length: int = 12,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     if credentialed_uri_risk(expression) or basic_authorization_risk(expression) or any(
         pattern.search(expression) for pattern in SECRET_VALUE_PATTERNS
     ):
@@ -3794,6 +3846,11 @@ def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
         if match.group("bare") is not None:
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
                 continue
+            if (
+                javascript_dialect is not None
+                and SOURCE_CODE_REFERENCE_ROOT_PATTERN.fullmatch(value)
+            ):
+                continue
             suffix = expression[match.end() :].lstrip()
             if suffix.startswith("("):
                 continue
@@ -3805,15 +3862,24 @@ def fallback_secret_risk(
     text: str,
     minimum_length: int = 8,
     *,
-    typescript: bool = False,
+    javascript_dialect: str | None = None,
 ) -> bool:
     return secret_literal_risk(
-        fallback_expression(text, typescript=typescript),
+        fallback_expression(
+            text,
+            typescript=javascript_dialect == "typescript",
+        ),
         minimum_length=minimum_length,
+        javascript_dialect=javascript_dialect,
     )
 
 
-def safe_secret_assignment_suffix(text: str, end: int) -> bool:
+def safe_secret_assignment_suffix(
+    text: str,
+    end: int,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     cursor = end
     raw_diff = text.startswith("diff --git ")
     while cursor < len(text):
@@ -3847,7 +3913,10 @@ def safe_secret_assignment_suffix(text: str, end: int) -> bool:
                 or (suffix.startswith("?") and not suffix.startswith("?."))
                 or re.match(r"(?:or|and)\b", suffix) is not None
             ):
-                return not fallback_secret_risk(suffix)
+                return not fallback_secret_risk(
+                    suffix,
+                    javascript_dialect=javascript_dialect,
+                )
             return True
         if text.startswith("//", cursor) or text.startswith("#", cursor):
             cursor = text.find("\n", cursor)
@@ -3866,7 +3935,10 @@ def safe_secret_assignment_suffix(text: str, end: int) -> bool:
             or (suffix.startswith("?") and not suffix.startswith("?."))
             or re.match(r"(?:or|and|if|unless)\b", suffix) is not None
         ):
-            return not fallback_secret_risk(suffix)
+            return not fallback_secret_risk(
+                suffix,
+                javascript_dialect=javascript_dialect,
+            )
         if text[cursor] in ",;)]}":
             return True
         if text[cursor] in {'"', "'", "`"}:
@@ -4561,7 +4633,12 @@ def public_call_argument_risk(
     return False if generic_credential_prompt_is_safe(value) else None
 
 
-def call_arguments_risk(arguments: str, call_target: str) -> bool:
+def call_arguments_risk(
+    arguments: str,
+    call_target: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     for index, argument in enumerate(split_top_level_call_arguments(arguments)):
         public_risk = public_call_argument_risk(call_target, argument, index)
         if public_risk is not None:
@@ -4570,12 +4647,22 @@ def call_arguments_risk(arguments: str, call_target: str) -> bool:
             continue
         if not safe_credential_lookup_argument(
             call_target, argument, index
-        ) and fallback_secret_risk(argument, minimum_length=12):
+        ) and fallback_secret_risk(
+            argument,
+            minimum_length=12,
+            javascript_dialect=javascript_dialect,
+        ):
             return True
     return False
 
 
-def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
+def safe_secret_call_suffix(
+    text: str,
+    end: int,
+    call_target: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     if end >= len(text) or text[end] != "(":
         return False
 
@@ -4647,7 +4734,15 @@ def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
         if cursor is None:
             return None
         arguments = text[start + 1 : cursor - 1]
-        return None if call_arguments_risk(arguments, target) else cursor
+        return (
+            None
+            if call_arguments_risk(
+                arguments,
+                target,
+                javascript_dialect=javascript_dialect,
+            )
+            else cursor
+        )
 
     cursor = safe_call_end(end, call_target)
     if cursor is None:
@@ -4867,7 +4962,12 @@ def mask_reference_declaration_evidence(text: str) -> str:
 def javascript_reference_spans(text: str) -> frozenset[tuple[int, int]]:
     return frozenset(
         (match.start(), match.end())
-        for match in SOURCE_CODE_REFERENCE_PATTERN.finditer(text)
+        for pattern in (
+            SOURCE_CODE_REFERENCE_PATTERN,
+            SOURCE_CODE_REFERENCE_ROOT_PATTERN,
+            SOURCE_CODE_LIFECYCLE_REFERENCE_PATTERN,
+        )
+        for match in pattern.finditer(text)
     )
 
 
@@ -4934,7 +5034,7 @@ def safe_javascript_reference_suffix(
     if continuation:
         return not fallback_secret_risk(
             text[cursor:],
-            typescript=typescript,
+            javascript_dialect="typescript" if typescript else "javascript",
         )
     return saw_newline
 
@@ -5061,7 +5161,10 @@ def secret_text_risk(
                 and prefix.start() in chained_assignment_positions
             ),
         )
-        if fallback is not None and fallback_secret_risk(fallback):
+        if fallback is not None and fallback_secret_risk(
+            fallback,
+            javascript_dialect=javascript_dialect,
+        ):
             return True
     for match in secret_assignment_matches(
         SECRET_ASSIGNMENT_PATTERN,
@@ -5090,7 +5193,11 @@ def secret_text_risk(
         if (
             key.strip("\"'").lower() == "credentials"
             and value.lower() in FETCH_CREDENTIAL_MODE_VALUES
-            and safe_secret_assignment_suffix(text, match.end())
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
         if (
@@ -5102,11 +5209,19 @@ def secret_text_risk(
                 )
                 or safe_backtick_secret_template(value)
             )
-            and safe_secret_assignment_suffix(text, match.end())
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
         if value.lower() in SECRET_PLACEHOLDER_VALUES:
-            if safe_secret_assignment_suffix(text, match.end()):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if (
@@ -5114,7 +5229,11 @@ def secret_text_risk(
             and len(value) < 12
             and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", value)
         ):
-            if safe_secret_assignment_suffix(text, match.end()):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if (
@@ -5126,14 +5245,24 @@ def secret_text_risk(
                 separator,
                 value,
             )
-            and safe_secret_assignment_suffix(text, match.end())
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
         if not quoted:
             source_start = match.end() - len(value)
             source_end = match.end() - (1 if value.endswith("!") else 0)
             if (
-                (source_start, source_end) in source_reference_spans
+                (
+                    (source_start, source_end) in source_reference_spans
+                    or (
+                        javascript_dialect is not None
+                        and SOURCE_CODE_REFERENCE_ROOT_PATTERN.fullmatch(value)
+                    )
+                )
                 and safe_javascript_reference_suffix(
                     text,
                     match.end(),
@@ -5167,6 +5296,7 @@ def secret_text_risk(
                     text,
                     call_start,
                     call_target.group(0),
+                    javascript_dialect=javascript_dialect,
                 )
             ):
                 continue
@@ -5176,11 +5306,20 @@ def secret_text_risk(
             and call_target
             and text[call_start : call_start + 1] == "("
         ):
-            if safe_secret_call_suffix(text, call_start, value):
+            if safe_secret_call_suffix(
+                text,
+                call_start,
+                value,
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if any(pattern.fullmatch(value) for pattern in reference_patterns):
-            if safe_secret_assignment_suffix(text, match.end()):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         return True
@@ -8855,7 +8994,10 @@ def start_parallel_tests(
 ) -> tuple[subprocess.Popen, float]:
     print(f"tests: {command}")
     test_home = Path(
-        tempfile.mkdtemp(prefix="autoreview-test-home-", dir=safe_temp_root(repo))
+        tempfile.mkdtemp(
+            prefix="autoreview-test-home-",
+            dir=parallel_test_temp_root(repo),
+        )
     )
     try:
         env = safe_test_env(repo, test_home)

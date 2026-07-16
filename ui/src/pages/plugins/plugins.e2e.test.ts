@@ -206,7 +206,7 @@ async function waitForNextRequest(
       }
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`Timed out waiting for the next ${method} request`);
@@ -221,10 +221,8 @@ async function captureScreenshot(page: Page, name: string): Promise<void> {
     return;
   }
   await mkdir(artifactDir, { recursive: true });
-  // UI transitions top out at 180ms; capture only after Chromium has painted
-  // the settled catalog grid rather than a partially composited transition.
-  await page.waitForTimeout(250);
   await page.locator(".content").screenshot({
+    animations: "disabled",
     caret: "hide",
     path: path.join(artifactDir, name),
   });

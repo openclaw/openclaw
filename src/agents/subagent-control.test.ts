@@ -22,7 +22,7 @@ import {
   listControlledSubagentRuns,
   sendControlledSubagentMessage,
   steerControlledSubagentRun,
-} from "./subagent-control.js";
+} from "./subagent-control.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -32,7 +32,7 @@ import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
+} from "./subagent-registry.test-helpers.js";
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),

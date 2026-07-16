@@ -500,6 +500,29 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(appModel.gatewayPairingRequestId == nil)
     }
 
+    @Test @MainActor func `stable gateway owner preserves focused chat across route changes`() throws {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig()
+        let focusedSessionKey = "agent:main:ios-focused"
+        appModel.applyGatewayConnectConfig(currentConfig)
+        appModel.focusChatSession(focusedSessionKey)
+
+        let replacementURL = try #require(URL(string: "wss://127.0.0.1:2"))
+        let refreshedRoute = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: currentConfig.stableID)
+        appModel.applyGatewayConnectConfig(refreshedRoute, forceReconnect: true)
+        #expect(appModel.chatSessionKey == focusedSessionKey)
+
+        let replacementConfig = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: "manual|replacement.example.com|443")
+        appModel.applyGatewayConnectConfig(replacementConfig, forceReconnect: true)
+
+        #expect(appModel.chatSessionKey != focusedSessionKey)
+    }
+
     @Test func `gateway connect config matches equivalent inputs`() {
         let lhs = Self.makeGatewayConnectConfig()
         let rhs = GatewayConnectConfig(
@@ -2537,11 +2560,14 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         defer { appModel.disconnectGateway() }
 
         let config = Self.makeGatewayConnectConfig()
+        let focusedSessionKey = "agent:main:ios-foreground-focused"
         appModel.applyGatewayConnectConfig(config)
+        appModel.focusChatSession(focusedSessionKey)
         await appModel._test_restartGatewaySessionsAfterForegroundStaleConnection()
 
         #expect(appModel.gatewayStatusText == "Reconnecting…")
         #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: config) == true)
+        #expect(appModel.chatSessionKey == focusedSessionKey)
         #expect(appModel._test_hasGatewayLoopTasks().node)
         #expect(appModel._test_hasGatewayLoopTasks().operator)
     }

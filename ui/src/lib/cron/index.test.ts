@@ -1368,6 +1368,102 @@ describe("cron controller", () => {
     ).not.toHaveProperty("cooldownMs");
   });
 
+  it("clears persisted failure alert routing fields when their edit inputs are blanked", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-alert-fields" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-alert-fields" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-clear-alert-fields",
+      name: "Clear failure alert fields",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      delivery: { mode: "announce" as const },
+      failureAlert: {
+        after: 2,
+        channel: "telegram",
+        to: "123456",
+        cooldownMs: 60_000,
+        accountId: "bot-a",
+      },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.failureAlertAfter = "";
+    state.cronForm.failureAlertTo = "";
+    state.cronForm.failureAlertCooldownSeconds = "";
+    state.cronForm.failureAlertAccountId = "";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requireRecord(requestPatch(updateCall).failureAlert, "failureAlert"), {
+      after: null,
+      to: null,
+      cooldownMs: null,
+      accountId: null,
+    });
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the websocket JSON wire shape
+    const serializedPayload = JSON.parse(JSON.stringify(requestPayload(updateCall))) as unknown;
+    expectRecordFields(
+      requireRecord(
+        requireRecord(requireRecord(serializedPayload, "payload").patch, "patch").failureAlert,
+        "failureAlert",
+      ),
+      { after: null, to: null, cooldownMs: null, accountId: null },
+    );
+  });
+
+  it("clears a persisted failure alert override when switching back to inherit", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-inherit-alert" };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-inherit-alert",
+      name: "Inherit failure alerts",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      failureAlert: { after: 2, channel: "telegram" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.failureAlertMode = "inherit";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expect(requestPatch(updateCall).failureAlert).toBeNull();
+  });
+
   it("includes failureAlert=false when disabled per job", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {

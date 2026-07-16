@@ -4,6 +4,7 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+import { assertWidgetHtmlSize, WidgetHtmlInputError } from "openclaw/plugin-sdk/widget-html";
 import { resolveCanvasHostConfig } from "./config.js";
 import { createCanvasDocument } from "./documents.js";
 import { SHOW_WIDGET_REQUIRED_CLIENT_CAPS, ShowWidgetToolSchema } from "./tool-schema.js";
@@ -17,13 +18,6 @@ type ShowWidgetToolOptions = {
   agentId?: string;
   stateDir?: string;
 };
-
-class WidgetToolInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolInputError";
-  }
-}
 
 function buildWidgetDocument(title: string, widgetCode: string): string {
   const isSvg = /^<svg/i.test(widgetCode);
@@ -69,13 +63,12 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         trim: false,
       });
       if (!rawWidgetCode.trim()) {
-        throw new WidgetToolInputError("widget_code required");
+        throw new WidgetHtmlInputError("widget_code required");
       }
-      if (rawWidgetCode.length > WIDGET_CODE_MAX_CHARS) {
-        throw new WidgetToolInputError(
-          `widget_code exceeds maximum size (${WIDGET_CODE_MAX_CHARS} characters)`,
-        );
-      }
+      assertWidgetHtmlSize(rawWidgetCode, WIDGET_CODE_MAX_CHARS, {
+        inputName: "widget_code",
+        unit: "characters",
+      });
       const widgetCode = rawWidgetCode.trim();
       const canvasRootDir = resolveCanvasHostConfig({ config: options.config }).root;
       const document = await createCanvasDocument(

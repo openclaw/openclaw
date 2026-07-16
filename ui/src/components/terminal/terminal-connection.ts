@@ -13,7 +13,8 @@ export interface TerminalGatewayClient {
   ): Promise<T>;
   addEventListener(listener: (evt: { event: string; payload: unknown }) => void): () => void;
   inboundActivitySeq?: number;
-  forceReconnect?(reason: string): void;
+  /** Recovers unreplayable output gaps and half-open terminal streams. */
+  forceReconnect(reason: string): void;
 }
 
 type TerminalOpenResult = {
@@ -58,7 +59,7 @@ type TerminalExitInfo = {
 type SessionSink = {
   onData: (data: string) => void;
   /** Clears emulator state before replaying the authoritative ring snapshot. */
-  onReplay?: (data: string) => void;
+  onReplay?: (data: string, newlyObservedFrom: number) => void;
   onExit: (info: TerminalExitInfo) => void;
 };
 
@@ -75,6 +76,29 @@ type PendingEvent =
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+// The Gateway owns the 30s open deadline. This longer browser watchdog only
+// recovers a half-open socket when the Gateway's response cannot arrive.
+const TERMINAL_OPEN_WATCHDOG_MS = 35_000;
+export class TerminalOpenTimeoutError extends Error {
+  constructor(cause: unknown) {
+    super("terminal open timed out", { cause });
+    this.name = "TerminalOpenTimeoutError";
+  }
+}
+
+function isTerminalOpenRequestTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /^gateway request timed out after \d+ms: terminal\.open$/u.test(error.message)
+  );
+}
+
+function isTerminalOpenTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === "terminal open timed out" || isTerminalOpenRequestTimeout(error))
+  );
+}
 
 /** Routes the shared terminal event stream to the session that owns each id. */
 export class TerminalConnection {
@@ -161,9 +185,24 @@ export class TerminalConnection {
     params: { agentId?: string; cols: number; rows: number; catalog?: TerminalCatalogReference },
     sink: SessionSink,
   ): Promise<TerminalOpenResult> {
-    const result = await this.requestWhileHoldingStream(() =>
-      this.client.request<TerminalOpenResult>("terminal.open", params),
-    );
+    let result: TerminalOpenResult;
+    try {
+      result = await this.requestWhileHoldingStream(() =>
+        this.client.request<TerminalOpenResult>("terminal.open", params, {
+          timeoutMs: TERMINAL_OPEN_WATCHDOG_MS,
+        }),
+      );
+    } catch (error) {
+      if (!isTerminalOpenTimeout(error)) {
+        throw error;
+      }
+      if (isTerminalOpenRequestTimeout(error)) {
+        // The server should answer first. A later browser timeout means this
+        // socket cannot carry the response, so disconnect to cancel ownership.
+        this.client.forceReconnect("terminal open watchdog timeout");
+      }
+      throw new TerminalOpenTimeoutError(error);
+    }
     this.adoptSession(result.sessionId, sink, { seqMode: "unknown", expectedSeq: 0 });
     return result;
   }
@@ -220,7 +259,11 @@ export class TerminalConnection {
     this.streams.set(sessionId, stream);
     this.lastTerminalActivityAtMs = Date.now();
     if (replay !== undefined) {
-      (sink.onReplay ?? sink.onData)(replay);
+      if (sink.onReplay) {
+        sink.onReplay(replay, replay.length);
+      } else {
+        sink.onData(replay);
+      }
     }
     this.flushPending(sessionId, stream, coveredThroughSeq, replay !== undefined);
     this.scheduleLivenessCheck();
@@ -294,6 +337,7 @@ export class TerminalConnection {
           this.flushPending(sessionId, stream, undefined, true);
           return;
         }
+        const previouslyObservedThrough = stream.expectedSeq;
         stream.seqMode = "offset";
         stream.expectedSeq = offset;
         if (!stream.sink.onReplay) {
@@ -301,10 +345,18 @@ export class TerminalConnection {
           // would duplicate bytes already rendered before the detected gap.
           stream.recovering = false;
           this.pending.delete(sessionId);
-          this.client.forceReconnect?.("terminal replay reset unavailable");
+          this.client.forceReconnect("terminal replay reset unavailable");
           return;
         }
-        stream.sink.onReplay(result.buffer);
+        // The ring may include both bytes already delivered and the gap's
+        // missing suffix. Preserve that boundary so response-producing
+        // emulators do not answer historical control queries twice.
+        const replayStart = offset - result.buffer.length;
+        const newlyObservedFrom =
+          typeof previouslyObservedThrough === "number"
+            ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
+            : 0;
+        stream.sink.onReplay(result.buffer, newlyObservedFrom);
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset, true);
       })
@@ -331,7 +383,7 @@ export class TerminalConnection {
         }
         stream.recovering = false;
         this.pending.delete(sessionId);
-        this.client.forceReconnect?.("terminal replay failed");
+        this.client.forceReconnect("terminal replay failed");
       });
   }
 
@@ -437,7 +489,7 @@ export class TerminalConnection {
         const activityNow = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
         if (activityNow === activityBefore) {
           this.lastTerminalActivityAtMs = Date.now();
-          this.client.forceReconnect?.("terminal liveness timeout");
+          this.client.forceReconnect("terminal liveness timeout");
         } else {
           // Any valid inbound frame proves the socket is not half-open.
           this.lastTerminalActivityAtMs = Date.now();

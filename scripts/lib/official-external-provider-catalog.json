@@ -389,7 +389,7 @@
                 "method": "app-server",
                 "choiceId": "codex",
                 "choiceLabel": "Codex app-server",
-                "choiceHint": "Use the Codex app-server runtime and managed model catalog.",
+                "choiceHint": "Keep using your Codex CLI or ChatGPT app sign-in via the Codex app-server runtime.",
                 "assistantPriority": -40,
                 "groupId": "codex",
                 "groupLabel": "Codex",
