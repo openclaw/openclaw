@@ -262,17 +262,24 @@ describe("native app i18n inventory", () => {
     ).toBe(false);
   });
 
-  it("ignores generated Android resource entries", () => {
+  it("ignores generated and non-translatable Android resource entries", () => {
     const entries = extractNativeI18nCandidates(
       "android",
       "apps/android/app/src/main/res/values/strings.xml",
       `<resources>
         <string name="manual_status">Gateway ready</string>
         <string name="native_0123456789abcdef">Generated feedback</string>
+        <string name="protocol_id" translatable="false">openclaw_phone_status_v1</string>
+        <string-array name="capabilities" translatable="false">
+          <item>openclaw_phone_status_v1</item>
+        </string-array>
+        <string-array name="status_labels">
+          <item>Visible status</item>
+        </string-array>
       </resources>`,
     );
 
-    expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
+    expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready", "Visible status"]);
   });
 
   it("collects stable Android and Apple UI entries", async () => {
