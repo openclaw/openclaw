@@ -27,6 +27,7 @@ export const ru: TranslationMap = {
     close: "Закрыть",
     previous: "Назад",
     next: "Далее",
+    continue: "Продолжить",
     back: "Назад",
     create: "Создать",
     copy: "Копировать",
@@ -1871,6 +1872,28 @@ export const ru: TranslationMap = {
     replaceExisting: "Заменять существующие импорты",
     replaceHint:
       "Повторно просмотрите конфликты и сохраните резервные копии элементов перед заменой.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Перенесите память своего ассистента",
+      body: "OpenClaw обнаружил память других ассистентов для программирования. Импортировать её в рабочее пространство вашего агента?",
+      plannedCount: "Готово к импорту: {count}",
+      alreadyImported: "Уже импортировано: {count}",
+      sourceUnavailable: "Путь к источнику недоступен",
+      import: "Импорт",
+      skip: "Пропустить",
+      reviewDetails: "Просмотреть сведения",
+      importingProvider: "Импорт…",
+      providerResult: "Перенесено: {migrated}, пропущено: {skipped}",
+      providerIncomplete:
+        "Перенесено: {migrated}, пропущено: {skipped}, с ошибкой: {errors}, конфликтов: {conflicts}",
+      providerError: "Не удалось выполнить импорт: {error}",
+      connectionChanged: "Пропущено: подключение к Gateway изменилось во время импорта",
+      unknownError: "Не удалось выполнить запрос",
+      doneTitle: "Импорт памяти завершён",
+      doneBody:
+        "Перенесено: {migrated}, пропущено: {skipped}. Можно продолжить настройку OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Управляйте серверами на странице плагинов.",

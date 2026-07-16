@@ -132,6 +132,7 @@ import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
   setChannelSourceTurnId,
+  shouldMintChannelSourceTurnId,
 } from "./source-turn-id.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -1446,12 +1447,14 @@ export async function runPreparedReply(
     normalizeOptionalString(sessionCtx.MessageSid);
   const sourceTurnId =
     readChannelSourceTurnId(sessionCtx) ??
-    buildChannelSourceTurnId({
-      provider: messageProvider,
-      accountId: replyRoute.accountId,
-      conversationId: replyRoute.to,
-      messageId: sourceMessageId,
-    });
+    (shouldMintChannelSourceTurnId(ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider)
+      ? buildChannelSourceTurnId({
+          provider: messageProvider,
+          accountId: replyRoute.accountId,
+          conversationId: replyRoute.to,
+          messageId: sourceMessageId,
+        })
+      : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);

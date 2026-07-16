@@ -9,6 +9,8 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -110,6 +112,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -168,6 +171,7 @@ fun ChatScreen(
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val planSteps by viewModel.chatPlanSteps.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
@@ -457,6 +461,10 @@ fun ChatScreen(
       onToggleListen = viewModel::toggleChatMessageSpeech,
       modifier = Modifier.weight(1f),
     )
+
+    if (pendingRunCount > 0 && planSteps.isNotEmpty()) {
+      PlanChecklistPill(steps = planSteps)
+    }
 
     ChatComposer(
       value = input,
@@ -1254,6 +1262,100 @@ private fun ChatNotice(
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+    }
+  }
+}
+
+@Composable
+private fun PlanChecklistPill(steps: List<ChatPlanStep>) {
+  var expanded by rememberSaveable { mutableStateOf(false) }
+  val currentStep =
+    steps.firstOrNull { it.status == ChatPlanStepStatus.InProgress }
+      ?: steps.lastOrNull { it.status == ChatPlanStepStatus.Completed }
+      ?: steps.first()
+  val completedCount = steps.count { it.status == ChatPlanStepStatus.Completed }
+
+  Surface(
+    onClick = { expanded = !expanded },
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    color = ClawTheme.colors.canvas,
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Column(
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
+        Text(
+          text = currentStep.step,
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.text,
+          modifier = Modifier.weight(1f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+          text = "$completedCount/${steps.size}",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+        )
+        Icon(
+          imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+          contentDescription = if (expanded) nativeString("Collapse plan checklist") else nativeString("Expand plan checklist"),
+          modifier = Modifier.size(16.dp),
+          tint = ClawTheme.colors.textSubtle,
+        )
+      }
+
+      if (expanded) {
+        HorizontalDivider(color = ClawTheme.colors.border)
+        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+          steps.forEach { step ->
+            val textColor =
+              when (step.status) {
+                ChatPlanStepStatus.Completed -> ClawTheme.colors.textMuted
+                ChatPlanStepStatus.InProgress -> ClawTheme.colors.primary
+                ChatPlanStepStatus.Pending -> ClawTheme.colors.textSubtle
+              }
+            val textStyle =
+              when (step.status) {
+                ChatPlanStepStatus.InProgress -> ClawTheme.type.label
+                else -> ClawTheme.type.caption
+              }
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Box(modifier = Modifier.width(14.dp), contentAlignment = Alignment.Center) {
+                when (step.status) {
+                  ChatPlanStepStatus.Completed ->
+                    Text(
+                      text = "✓",
+                      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Bold),
+                      color = ClawTheme.colors.success,
+                    )
+                  ChatPlanStepStatus.InProgress ->
+                    Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
+                  ChatPlanStepStatus.Pending ->
+                    Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.textSubtle, CircleShape))
+                }
+              }
+              Text(
+                text = step.step,
+                style = textStyle,
+                color = textColor,
+                textDecoration = if (step.status == ChatPlanStepStatus.Completed) TextDecoration.LineThrough else null,
+              )
+            }
+          }
+        }
       }
     }
   }

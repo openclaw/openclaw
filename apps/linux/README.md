@@ -26,6 +26,8 @@ cargo build
 
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
+After a first-run CLI install, the app opens the local dashboard once with onboarding mode enabled. Reconnects and later app launches use the normal dashboard URL.
+
 ## Updates
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files.

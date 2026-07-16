@@ -22,6 +22,7 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
@@ -338,13 +339,8 @@ async function readFileProviderPayload(params: {
 }): Promise<unknown> {
   const cacheKey = params.providerName;
   const cache = params.cache;
-  const cachedFilePayload = cache?.filePayloadByProvider?.get(cacheKey);
-  if (cachedFilePayload) {
-    return await cachedFilePayload;
-  }
-
-  const filePath = resolveUserPath(params.providerConfig.path);
-  const readPromise = (async () => {
+  const read = async () => {
+    const filePath = resolveUserPath(params.providerConfig.path);
     const timeoutMs = normalizePositiveTimerMs(
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
@@ -374,15 +370,15 @@ async function readFileProviderPayload(params: {
       }
       throw error;
     }
-  })();
+  };
 
-  if (cache) {
-    // Cache the in-flight read, not just the fulfilled payload, so concurrent refs share one
-    // permission-checked file read and observe the same provider error.
-    cache.filePayloadByProvider ??= new Map();
-    cache.filePayloadByProvider.set(cacheKey, readPromise);
+  if (!cache) {
+    return await read();
   }
-  return await readPromise;
+  // Cache the in-flight read, not just the fulfilled payload, so concurrent refs share one
+  // permission-checked file read and observe the same provider error.
+  cache.filePayloadByProvider ??= new Map();
+  return await getOrCreatePromise(cache.filePayloadByProvider, cacheKey, read);
 }
 
 async function resolveEnvRefs(params: {
@@ -876,12 +872,7 @@ export async function resolveSecretRefValue(
 ): Promise<unknown> {
   const cache = options.cache;
   const key = secretRefKey(ref);
-  const cachedResolvedValue = cache?.resolvedByRefKey?.get(key);
-  if (cachedResolvedValue) {
-    return await cachedResolvedValue;
-  }
-
-  const promise = (async () => {
+  const resolve = async () => {
     const resolved = await resolveSecretRefValues([ref], options);
     if (!resolved.has(key)) {
       throw refResolutionError({
@@ -892,14 +883,14 @@ export async function resolveSecretRefValue(
       });
     }
     return resolved.get(key);
-  })();
+  };
 
-  if (cache) {
-    // Store the in-flight promise so repeated callers do not race duplicate provider work.
-    cache.resolvedByRefKey ??= new Map();
-    cache.resolvedByRefKey.set(key, promise);
+  if (!cache) {
+    return await resolve();
   }
-  return await promise;
+  // Store the in-flight promise so repeated callers do not race duplicate provider work.
+  cache.resolvedByRefKey ??= new Map();
+  return await getOrCreatePromise(cache.resolvedByRefKey, key, resolve);
 }
 
 /** Resolves one SecretRef and requires a non-empty string result. */

@@ -1,4 +1,3 @@
-// Imported by openai-transport-stream.test.ts to keep its mocked suite in one Vitest module graph.
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";

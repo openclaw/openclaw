@@ -2700,7 +2700,8 @@ function isPathLikeTargetArg(arg, cwd) {
     isGlobTarget(arg) ||
     isFileLikeTarget(arg) ||
     isVitestConfigPathLikeTarget(relative) ||
-    isExistingPathTarget(arg, cwd)
+    isExistingPathTarget(arg, cwd) ||
+    Boolean(resolveExplicitTestPrefixTargets(arg, cwd)?.length)
   );
 }
 
@@ -2767,6 +2768,26 @@ function listExplicitTestTargetFilesForCwd(cwd) {
   return cachedExplicitTestTargetFiles;
 }
 
+function resolveExplicitTestPrefixTargets(targetArg, cwd) {
+  if (isExistingPathTarget(targetArg, cwd) || isGlobTarget(targetArg)) {
+    return null;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd).replace(/\/+$/u, "");
+  if (!relative || isLikelyFileTarget(relative)) {
+    return null;
+  }
+  const directory = path.posix.dirname(relative);
+  const prefix = `${relative}.`;
+  const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
+    (file) =>
+      fs.existsSync(path.join(cwd, file)) &&
+      path.posix.dirname(file) === directory &&
+      file.startsWith(prefix) &&
+      isTestFileTarget(file),
+  );
+  return targets.length > 0 ? targets.toSorted((left, right) => left.localeCompare(right)) : null;
+}
+
 function includePatternMatchesAnyFile(pattern, files) {
   return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
 }
@@ -2810,6 +2831,10 @@ function expandExplicitSourceTestTargets(targetArgs, cwd) {
   const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
   return targetArgs.flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    const prefixTargets = resolveExplicitTestPrefixTargets(targetArg, cwd);
+    if (prefixTargets) {
+      return prefixTargets;
+    }
     if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
     }
@@ -2928,6 +2953,9 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
 
     const absolute = path.resolve(cwd, targetArg);
     if (!fs.existsSync(absolute)) {
+      if (resolveExplicitTestPrefixTargets(targetArg, cwd)) {
+        continue;
+      }
       unmatched.push({
         target: targetArg,
         reason: "path-does-not-exist",
