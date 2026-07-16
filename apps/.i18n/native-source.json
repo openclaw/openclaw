@@ -22259,7 +22259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 70,
+      "line": 76,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -22267,7 +22267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 74,
+      "line": 80,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Connect to this Gateway",
       "surface": "apple",
@@ -22275,7 +22275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 100,
+      "line": 106,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Use Manual Setup",
       "surface": "apple",
@@ -22283,7 +22283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 114,
+      "line": 120,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Not now",
       "surface": "apple",
@@ -22291,7 +22291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 121,
+      "line": 127,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Don't show this again",
       "surface": "apple",
@@ -22299,7 +22299,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 131,
+      "line": 137,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Quick Setup",
       "surface": "apple",
@@ -22307,7 +22307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 139,
+      "line": 145,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Close",
       "surface": "apple",
@@ -22315,7 +22315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 233,
+      "line": 256,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Connect a nearby Gateway",
       "surface": "apple",
@@ -22323,7 +22323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 283,
+      "line": 306,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Local",
       "surface": "apple",
@@ -22331,7 +22331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 283,
+      "line": 306,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Secure",
       "surface": "apple",
@@ -22339,7 +22339,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 297,
+      "line": 320,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Discovery",
       "surface": "apple",
@@ -22347,7 +22347,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 298,
+      "line": 321,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -22355,7 +22355,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 299,
+      "line": 322,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Node",
       "surface": "apple",
@@ -22363,7 +22363,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 300,
+      "line": 323,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Operator",
       "surface": "apple",
@@ -22371,7 +22371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 406,
+      "line": 429,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Looking for a Gateway",
       "surface": "apple",
@@ -22379,7 +22379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 408,
+      "line": 431,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Keep your iPhone on the same LAN or tailnet, then start the Gateway on your host machine.",
       "surface": "apple",
@@ -22387,7 +22387,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 415,
+      "line": 438,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Run openclaw gateway --port 18789.",
       "surface": "apple",
@@ -22395,7 +22395,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 416,
+      "line": 439,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Check that Bonjour discovery is enabled.",
       "surface": "apple",
@@ -22403,7 +22403,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 417,
+      "line": 440,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Open Settings if you need a manual host.",
       "surface": "apple",
@@ -23275,7 +23275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 163,
+      "line": 167,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Security notice",
       "surface": "apple",
@@ -23283,7 +23283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 167,
+      "line": 171,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "The connected OpenClaw agent can use device capabilities you enable.",
       "surface": "apple",
@@ -23291,7 +23291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 169,
+      "line": 173,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Camera, microphone, photos, contacts, calendar, and location may be available.",
       "surface": "apple",
@@ -23299,7 +23299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 172,
+      "line": 176,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Continue only if you trust the gateway and agent you connect to.",
       "surface": "apple",
@@ -23307,7 +23307,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 206,
+      "line": 210,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Copy setup code command",
       "surface": "apple",
@@ -23315,7 +23315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 207,
+      "line": 211,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Copied",
       "surface": "apple",
@@ -23323,7 +23323,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 244,
+      "line": 248,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -23331,7 +23331,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 245,
+      "line": 249,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Your agent, in your pocket. Pair this iPhone with your gateway to get started.",
       "surface": "apple",
@@ -23339,7 +23339,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 252,
+      "line": 256,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Your agent runs on your own computer",
       "surface": "apple",
@@ -23347,7 +23347,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 255,
+      "line": 259,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Pair this iPhone by scanning a setup code",
       "surface": "apple",
@@ -23355,7 +23355,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 258,
+      "line": 262,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Chat, talk, and approve actions from anywhere",
       "surface": "apple",
@@ -23363,7 +23363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 272,
+      "line": 276,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Continue",
       "surface": "apple",
@@ -23371,7 +23371,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 294,
+      "line": 298,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Connect Gateway",
       "surface": "apple",
@@ -23379,7 +23379,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 300,
+      "line": 305,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Run this on your gateway host and scan the code",
       "surface": "apple",
@@ -23387,7 +23387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 310,
+      "line": 315,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -23395,7 +23395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 314,
+      "line": 319,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Scan QR",
       "surface": "apple",
@@ -23403,7 +23403,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 323,
+      "line": 328,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "or",
       "surface": "apple",
@@ -23411,7 +23411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 326,
+      "line": 331,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Connect Manually",
       "surface": "apple",
@@ -23419,7 +23419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 382,
+      "line": 387,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "You're connected",
       "surface": "apple",
@@ -23427,7 +23427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 405,
+      "line": 410,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Go to Chat",
       "surface": "apple",

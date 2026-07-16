@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
@@ -25,7 +26,12 @@ struct GatewayQuickSetupSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    GatewayQuickSetupHeader(hasCandidate: self.bestCandidate != nil)
+                    GatewayQuickSetupHeader(
+                        hasCandidate: self.bestCandidate != nil,
+                        mood: Self.headerMood(
+                            connecting: self.connecting,
+                            hasError: self.connectError != nil,
+                            hasCandidate: self.bestCandidate != nil))
 
                     if let gatewayProblem = self.appModel.lastGatewayProblem {
                         GatewayProblemBanner(
@@ -159,6 +165,22 @@ struct GatewayQuickSetupSheet: View {
         self.gatewayController.preferredDiscoveredGateway()
     }
 
+    static func headerMood(
+        connecting: Bool,
+        hasError: Bool,
+        hasCandidate: Bool) -> OpenClawMascotMood
+    {
+        if connecting {
+            .working
+        } else if hasError {
+            .sad
+        } else if hasCandidate {
+            .curious
+        } else {
+            .idle
+        }
+    }
+
     private func fullRowToggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
         Toggle(isOn: isOn) {
             Text(title)
@@ -207,11 +229,12 @@ struct GatewayQuickSetupSheet: View {
 
 private struct GatewayQuickSetupHeader: View {
     let hasCandidate: Bool
+    let mood: OpenClawMascotMood
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ZStack(alignment: .bottomTrailing) {
-                OpenClawActivationGlyph(size: 70, interactive: true)
+                OpenClawActivationGlyph(size: 70, mood: self.mood, interactive: true)
                     .shadow(color: OpenClawBrand.activationGlow.opacity(0.18), radius: 10, x: 0, y: 5)
 
                 Image(systemName: "antenna.radiowaves.left.and.right")
