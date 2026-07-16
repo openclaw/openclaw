@@ -2470,6 +2470,7 @@ export const id: TranslationMap = {
     agentDefaultLinked: "Using default agent {agent}",
     engineOpenAI: "OpenAI",
     engineClaude: "Claude",
+    engineUnknown: "Tidak diketahui",
     engineDisabledRuntime:
       "{agent} uses the {runtime} ACP runtime. Use default start for that session.",
     runEngine: "Jalankan {engine}",

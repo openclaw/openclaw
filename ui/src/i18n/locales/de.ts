@@ -2501,6 +2501,7 @@ export const de: TranslationMap = {
     agentDefaultLinked: "Using default agent {agent}",
     engineOpenAI: "OpenAI",
     engineClaude: "Claude",
+    engineUnknown: "Unbekannt",
     engineDisabledRuntime:
       "{agent} uses the {runtime} ACP runtime. Use default start for that session.",
     runEngine: "{engine} ausführen",

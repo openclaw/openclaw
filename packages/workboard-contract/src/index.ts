@@ -12,7 +12,7 @@ export const WORKBOARD_STATUSES = [
 ] as const;
 
 export const WORKBOARD_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
-export const WORKBOARD_EXECUTION_ENGINES = ["codex", "claude"] as const;
+export const WORKBOARD_EXECUTION_ENGINES = ["codex", "claude", "unknown"] as const;
 export const WORKBOARD_EXECUTION_MODES = ["autonomous", "manual"] as const;
 export const WORKBOARD_EXECUTION_STATUSES = [
   "idle",

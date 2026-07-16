@@ -2434,6 +2434,7 @@ export const th: TranslationMap = {
     agentDefaultLinked: "Using default agent {agent}",
     engineOpenAI: "OpenAI",
     engineClaude: "Claude",
+    engineUnknown: "ไม่ทราบ",
     engineDisabledRuntime:
       "{agent} uses the {runtime} ACP runtime. Use default start for that session.",
     runEngine: "เรียกใช้ {engine}",

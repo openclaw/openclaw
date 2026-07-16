@@ -3,6 +3,7 @@ import path from "node:path";
 import type {
   WorkboardCard,
   WorkboardExecution,
+  WorkboardExecutionEngine,
   WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -90,17 +91,36 @@ function buildSessionKey(card: WorkboardCard): string {
   return card.agentId ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}` : suffix;
 }
 
+/**
+ * Map a canonical runtime identifier to the workboard execution engine label.
+ * When the runtime is not a known workboard engine (or is absent), return
+ * "unknown" rather than guessing from provider strings.
+ *
+ * The canonical runtime is populated by the subagent system through
+ * SubagentRunResult.engine when available.
+ */
+function resolveEngine(runtime: string | undefined): WorkboardExecutionEngine {
+  if (runtime === "codex") {
+    return "codex";
+  }
+  if (runtime === "claude") {
+    return "claude";
+  }
+  return "unknown";
+}
+
 function buildExecution(params: {
   card: WorkboardCard;
   sessionKey: string;
   runId: string;
   model: string;
+  engine: WorkboardExecutionEngine;
   now: number;
 }): WorkboardExecution {
   return {
-    id: params.card.execution?.id ?? `${params.card.id}:codex`,
+    id: params.card.execution?.id ?? `${params.card.id}:${params.engine}`,
     kind: "agent-session",
-    engine: "codex",
+    engine: params.engine,
     mode: "autonomous",
     status: "running",
     model: params.model,
@@ -431,6 +451,7 @@ export async function dispatchAndStartWorkboardCards(params: {
           sessionKey,
           runId: run.runId,
           model,
+          engine: resolveEngine(run.engine),
           now,
         }),
         ...(materializedWorkspace ? { workspace: materializedWorkspace } : {}),

@@ -35,6 +35,9 @@ type PluginManagedWorktree = {
 
 type SubagentRunResult = {
   runId: string;
+  /** Canonical resolved engine/runtime identifier (e.g. "codex", "claude", "openclaw").
+   *  When absent the caller should use "unknown" rather than guessing from provider. */
+  engine?: string;
 };
 
 type SubagentWaitParams = {

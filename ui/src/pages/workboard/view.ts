@@ -443,7 +443,11 @@ function isCardActionTarget(event: Event): boolean {
 }
 
 function engineDisplayName(engine: WorkboardExecutionEngine): string {
-  return engine === "codex" ? t("workboard.engineOpenAI") : t("workboard.engineClaude");
+  return engine === "codex"
+    ? t("workboard.engineOpenAI")
+    : engine === "claude"
+      ? t("workboard.engineClaude")
+      : t("workboard.engineUnknown");
 }
 
 function engineBlockedByRuntime(

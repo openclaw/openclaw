@@ -2422,6 +2422,7 @@ export const zh_TW: TranslationMap = {
     agentDefaultLinked: "Using default agent {agent}",
     engineOpenAI: "OpenAI",
     engineClaude: "Claude",
+    engineUnknown: "未知",
     engineDisabledRuntime:
       "{agent} uses the {runtime} ACP runtime. Use default start for that session.",
     runEngine: "執行 {engine}",

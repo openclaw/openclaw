@@ -2487,6 +2487,7 @@ export const ru: TranslationMap = {
     agentDefaultLinked: "Используется агент по умолчанию {agent}",
     engineOpenAI: "OpenAI",
     engineClaude: "Claude",
+    engineUnknown: "Неизвестно",
     engineDisabledRuntime:
       "{agent} использует среду выполнения ACP {runtime}. Используйте запуск по умолчанию для этого сеанса.",
     runEngine: "Запустить {engine}",

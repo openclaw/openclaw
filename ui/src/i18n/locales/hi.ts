@@ -2444,6 +2444,7 @@ export const hi: TranslationMap = {
     agentDefaultLinked: "डिफ़ॉल्ट एजेंट {agent} का उपयोग किया जा रहा है",
     engineOpenAI: "OpenAI",
     engineClaude: "Claude",
+    engineUnknown: "अज्ञात",
     engineDisabledRuntime:
       "{agent} {runtime} ACP रनटाइम का उपयोग करता है। उस सत्र के लिए डिफ़ॉल्ट स्टार्ट का उपयोग करें।",
     runEngine: "{engine} चलाएँ",
