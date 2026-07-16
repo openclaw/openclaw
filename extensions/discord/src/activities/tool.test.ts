@@ -153,7 +153,7 @@ describe("discord_widget", () => {
       tool.execute("failed-send", { html: "<p>temporary</p>", title: "Temporary" }),
     ).rejects.toBe(failure);
     await expect(
-      runtime.store.singleWidgetForChannel("default", "987654321"),
+      runtime.store.latestWidgetForChannel("default", "987654321"),
     ).resolves.toMatchObject({ id: existingId, widget: { title: "Existing" } });
   });
 

@@ -81,7 +81,7 @@ export class DiscordActivityStore {
     return await this.stores.widgets.lookup(id);
   }
 
-  async singleWidgetForChannel(
+  async latestWidgetForChannel(
     accountId: string,
     channelId: string,
   ): Promise<{
@@ -94,10 +94,9 @@ export class DiscordActivityStore {
       if (entry.value.accountId !== accountId || entry.value.channelId !== channelId) {
         continue;
       }
-      if (match) {
-        return null;
+      if (!match || entry.value.createdAt > match.value.createdAt) {
+        match = entry;
       }
-      match = entry;
     }
     return match ? { id: match.key, widget: match.value } : null;
   }

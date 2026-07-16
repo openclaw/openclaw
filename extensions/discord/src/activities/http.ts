@@ -279,7 +279,9 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       }
       resolved = { id: requestedWidgetId, widget };
     } else {
-      resolved = await deps.runtime.store.singleWidgetForChannel(session.accountId, channelId);
+      // Some Discord clients omit the launch custom ID. Prefer the latest channel widget while
+      // keeping older widgets addressable through buttons that do preserve their custom IDs.
+      resolved = await deps.runtime.store.latestWidgetForChannel(session.accountId, channelId);
     }
     if (!resolved) {
       return respondJson(res, 404, { error: "widget not found" });
