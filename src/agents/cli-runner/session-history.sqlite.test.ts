@@ -199,6 +199,98 @@ describe("SQLite CLI session history", () => {
     });
   });
 
+  it("uses the current explicit store after the state directory is relocated", async () => {
+    const oldStateDir = tempDirs.make("openclaw-cli-old-state-");
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-relocated-store";
+    const sessionKey = "agent:main:main";
+    const oldStorePath = path.join(
+      oldStateDir,
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath: oldStorePath,
+    });
+
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: sessionId,
+        timestamp: new Date(0).toISOString(),
+        cwd: stateDir,
+      },
+      {
+        type: "message",
+        id: "msg-0",
+        parentId: null,
+        message: { role: "user", content: "relocated SQLite history" },
+      },
+    ]);
+
+    await withCliSessionState(stateDir, async () => {
+      await expect(
+        hasCliSessionTranscript({
+          sessionId,
+          sessionFile,
+          sessionKey,
+          agentId: "main",
+          storePath,
+        }),
+      ).resolves.toBe(true);
+      const history = await loadCliSessionHistoryMessages({
+        sessionId,
+        sessionFile,
+        sessionKey,
+        agentId: "main",
+        storePath,
+      });
+      expect(history).toHaveLength(1);
+      expectMessageFields(history[0], { role: "user", content: "relocated SQLite history" });
+    });
+  });
+
+  it("checks SQLite transcript existence without computing full transcript stats", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-exists";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionFile = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const accessor = await import("../../config/sessions/session-accessor.js");
+    const statsSpy = vi
+      .spyOn(accessor, "readTranscriptStatsSync")
+      .mockImplementation(() => {
+        throw new Error("full transcript stats should not be read");
+      });
+
+    try {
+      await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+        {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: sessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: stateDir,
+        },
+      ]);
+
+      await withCliSessionState(stateDir, async () => {
+        await expect(
+          hasCliSessionTranscript({ sessionId, sessionFile, sessionKey, agentId: "main" }),
+        ).resolves.toBe(true);
+      });
+      expect(statsSpy).not.toHaveBeenCalled();
+    } finally {
+      statsSpy.mockRestore();
+    }
+  });
+
   it("rejects markers outside the configured session identity and store", async () => {
     const stateDir = tempDirs.make("openclaw-cli-state-");
     const sessionId = "session-sqlite-guard";
