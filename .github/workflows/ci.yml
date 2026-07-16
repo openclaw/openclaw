@@ -1473,7 +1473,9 @@ jobs:
               // Frozen/compat targets ship older planners that declare fewer
               // profile parts; the declared parts still cover every scenario.
               if (/unknown QA smoke CI profile part/.test(String(error)) && partId !== "profile-1") {
-                console.log(`[skip] ${partId} is not declared by this checkout's smoke plan`);
+                // stdout is the TSV contract consumed below. Keep diagnostics on stderr
+                // so an empty compatibility shard remains empty instead of becoming a run.
+                console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`);
                 process.exit(0);
               }
               throw error;
@@ -1718,7 +1720,18 @@ jobs:
         run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
-        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+        # Scale the in-process Vitest worker budget with the runner class. Bins
+        # run one Vitest process at a time (planConcurrency 1), so workers are
+        # the only in-job parallelism; import-bound suites scale near-linearly.
+        # Timing-sensitive groups stay pinned to 2 via plan-level env.
+        env:
+          SHARD_RUNNER: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+        run: |
+          if [[ "$SHARD_RUNNER" == *"-8vcpu-"* ]]; then
+            echo "OPENCLAW_VITEST_MAX_WORKERS=6" >> "$GITHUB_ENV"
+          else
+            echo "OPENCLAW_VITEST_MAX_WORKERS=3" >> "$GITHUB_ENV"
+          fi
 
       - name: Run Node test shard
         # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
@@ -2746,54 +2759,18 @@ jobs:
           echo "checkout failed after 5 attempts" >&2
           exit 1
 
-      - name: Setup Java
-        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+      - name: Checkout CI Android toolchain action
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          distribution: temurin
-          # Keep sdkmanager on the stable JDK path for Linux CI runners.
-          java-version: 17
-          cache: gradle
-          cache-dependency-path: |
-            apps/android/**/*.gradle*
-            apps/android/**/gradle-wrapper.properties
-            apps/android/gradle/libs.versions.toml
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: .github/actions/setup-android-toolchain
+          persist-credentials: false
 
-      - name: Cache Android SDK
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-v1-
-
-      - name: Setup Android SDK cmdline-tools
-        run: |
-          set -euo pipefail
-          ANDROID_SDK_ROOT="$HOME/.android-sdk"
-          CMDLINE_TOOLS_VERSION="14742923"
-          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-          URL="https://dl.google.com/android/repository/${ARCHIVE}"
-
-          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-            curl -fsSL --connect-timeout 10 --max-time 300 "$URL" -o "/tmp/${ARCHIVE}"
-            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-            unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          fi
-
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
-            "platform-tools" \
-            "platforms;android-37.0" \
-            "build-tools;36.0.0"
+      - name: Setup Android toolchain
+        # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
+        # workflow-owned as before. Load them from the workflow revision so old targets work.
+        uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android

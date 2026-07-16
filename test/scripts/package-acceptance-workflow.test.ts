@@ -2911,6 +2911,8 @@ describe("package artifact reuse", () => {
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
+      'or (.name | startswith("Run QA Lab runtime parity tier ("))',
+      'or .name == "Run QA Lab live Discord lane"',
       "is a package-safety Tideclaw alpha release-check lane",
       '"Run package acceptance" | \\',
       '"Run package acceptance / "*)',
