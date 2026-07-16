@@ -1,8 +1,18 @@
 package ai.openclaw.app
 
-internal fun String.firstCodePointOrNull(): String? {
+import android.icu.text.BreakIterator
+import java.util.Locale
+
+// BreakIterator creation is relatively expensive, and instances are not thread-safe.
+private val graphemeBreakIterator = ThreadLocal.withInitial { BreakIterator.getCharacterInstance(Locale.ROOT) }
+
+internal fun String.firstGraphemeOrNull(): String? {
   if (isEmpty()) return null
-  return substring(0, offsetByCodePoints(0, 1))
+  val iterator = graphemeBreakIterator.get()
+  iterator.setText(this)
+  iterator.first()
+  val end = iterator.next()
+  return if (end == BreakIterator.DONE) null else substring(0, end)
 }
 
 internal fun String.takeUtf16Safe(maxChars: Int): String {

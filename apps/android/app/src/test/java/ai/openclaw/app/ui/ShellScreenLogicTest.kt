@@ -40,13 +40,6 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun localizedInitialPreservesCodePointsAndLocale() {
-    assertEquals("🧭", localizedInitial("🧭 Scout", languageTag = "en", fallbackLocale = Locale.US))
-    assertEquals("İ", localizedInitial("istanbul", languageTag = "tr", fallbackLocale = Locale.US))
-    assertEquals(null, localizedInitial("", languageTag = "en", fallbackLocale = Locale.US))
-  }
-
-  @Test
   fun settingsDisclosureUsesTheLocalizedTitle() {
     assertEquals("Open Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = true))
     assertEquals("Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = false))

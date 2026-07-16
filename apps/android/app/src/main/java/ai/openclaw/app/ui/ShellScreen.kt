@@ -16,7 +16,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
-import ai.openclaw.app.firstCodePointOrNull
+import ai.openclaw.app.firstGraphemeOrNull
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -857,7 +857,7 @@ internal fun localizedInitial(
   languageTag: String?,
   fallbackLocale: Locale = Locale.getDefault(),
 ): String? {
-  return value.firstCodePointOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
+  return value.firstGraphemeOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
 }
 
 @Composable
