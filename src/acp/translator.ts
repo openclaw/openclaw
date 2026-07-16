@@ -1356,7 +1356,7 @@ export class AcpGatewayAgent implements Agent {
   private disconnectDeadlineInterruptionMessage(pending: PendingPrompt): string {
     return pending.sendAccepted
       ? "Gateway disconnected after accepting your message. Its final outcome is unknown. Do not resend it automatically."
-      : "Gateway disconnected before accepting your message. Please resend it.";
+      : "Gateway disconnected while your message may still be processing. Its final outcome is unknown. Do not resend it automatically.";
   }
 
   private clearPendingDisconnectState(

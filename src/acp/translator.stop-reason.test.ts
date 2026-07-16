@@ -230,7 +230,7 @@ describe("acp translator stop reason mapping", () => {
     }
   });
 
-  it("records a resend interruption when an unaccepted prompt reaches the disconnect deadline", async () => {
+  it("does not advise resending after an unacknowledged prompt reaches the disconnect deadline", async () => {
     vi.useFakeTimers();
     try {
       const connection = createAcpConnection();
@@ -270,7 +270,7 @@ describe("acp translator stop reason mapping", () => {
           sessionUpdate: "agent_message_chunk",
           content: {
             type: "text",
-            text: "Gateway disconnected before accepting your message. Please resend it.",
+            text: "Gateway disconnected while your message may still be processing. Its final outcome is unknown. Do not resend it automatically.",
           },
         },
       });

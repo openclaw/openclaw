@@ -17,10 +17,7 @@ The translator will settle a grace-expired pending prompt through one asynchrono
 
 The recorded chunk is emitted with the existing `sessionUpdates.emit({ record: true })` contract, preserving the current ACP-client delivery and SQLite-backed replay behavior. If the update transport or ledger write fails, the helper will log the failure and still reject the prompt so an infrastructure failure cannot leave the prompt hanging.
 
-The notice is determined by the already-captured `PendingPrompt.sendAccepted` state:
-
-- When `sendAccepted !== true`, it states that the Gateway did not confirm receipt and asks the user to resend.
-- When `sendAccepted === true`, it states that the Gateway accepted the message but its final outcome is unknown, and explicitly does not ask for an automatic resend.
+At a disconnect deadline, a missing `chat.send` acknowledgement cannot prove that Gateway did not accept the message: the response may have been lost after acceptance. Every recorded interruption therefore reports an outcome-unknown state and explicitly does not ask for an automatic resend. `PendingPrompt.sendAccepted` still controls reconciliation, but its absence is not delivery proof.
 
 All other rejection paths retain their current behavior. In particular, a known immediate `chat.send` failure remains unrecorded, preventing a prompt that Gateway never accepted from being presented as session history.
 
@@ -39,7 +36,7 @@ The settlement helper must keep the existing stale-prompt identity check and set
 Tests will be written before runtime changes and will prove:
 
 1. A grace-expired accepted prompt emits one recorded interruption chunk, rejects with the existing disconnect error, and never recommends a resend.
-2. A grace-expired unaccepted prompt emits one recorded interruption chunk, rejects with the existing disconnect error, and recommends a resend.
+2. A grace-expired unacknowledged prompt emits one recorded outcome-unknown interruption chunk, rejects with the existing disconnect error, and never recommends a resend.
 3. The emitted interruption is present in event-ledger replay after a new ACP agent loads the session.
 4. Existing transient reconnect, stale-timer, and direct pre-accept send-failure behavior remains unchanged.
 
