@@ -27,6 +27,7 @@ const tmpFixtureFiles = [
   "/tmp/openclaw-codex-inspect.json",
   "/tmp/openclaw-codex-plugin-inspect.json",
   "/tmp/openclaw-codex-plugins-list.json",
+  "/tmp/openclaw-onboard.json",
   "/tmp/openclaw-plugins-list.json",
 ];
 
@@ -542,13 +543,17 @@ function createCodexInstallFixture(root: string) {
   });
   const codexBin = path.join(openAiCodexRoot, "bin", "codex.js");
   mkdirSync(path.dirname(codexBin), { recursive: true });
-  writeFileSync(codexBin, "#!/usr/bin/env node\n", { mode: 0o755 });
+  writeFileSync(codexBin, '#!/usr/bin/env node\nconsole.log("codex-cli 0.0.0-test");\n', {
+    mode: 0o755,
+  });
   chmodSync(codexBin, 0o755);
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
-    plugins: {
-      installs: {
+  });
+  writePluginInstallIndexForE2E(
+    {
+      installRecords: {
         codex: {
           installPath,
           source: "npm",
@@ -556,6 +561,12 @@ function createCodexInstallFixture(root: string) {
         },
       },
     },
+    { stateDir },
+  );
+  writeJson("/tmp/openclaw-onboard.json", {
+    ok: true,
+    mode: "local",
+    authChoice: "openai-api-key",
   });
   writeJson("/tmp/openclaw-codex-inspect.json", {
     plugin: { id: "codex", status: "loaded", agentHarnessIds: ["codex"] },
@@ -681,6 +692,32 @@ describe("Codex install helpers", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  it("rejects on-demand fixtures without the canonical SQLite install record", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-no-index-");
+    createCodexInstallFixture(root);
+    rmSync(path.join(root, "state", "state", "openclaw.sqlite"), { force: true });
+
+    const result = runCodexOnDemandAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("missing codex install record");
+  });
+
+  it("rejects duplicate onboarding terminal JSON documents", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-duplicate-terminal-");
+    createCodexInstallFixture(root);
+    writeFileSync(
+      "/tmp/openclaw-onboard.json",
+      `${JSON.stringify({ ok: true })}\n${JSON.stringify({ ok: true })}\n`,
+      "utf8",
+    );
+
+    const result = runCodexOnDemandAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Unexpected non-whitespace character after JSON");
   });
 
   it("accepts SQLite-backed session and Codex binding state in the npm live assertion", () => {
@@ -930,5 +967,33 @@ describe("Codex install helpers", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing managed Codex binary:");
+  });
+
+  it("rejects a present managed Codex wrapper when its native executable is unavailable", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-broken-native-");
+    createCodexInstallFixture(root);
+    const codexBin = path.join(
+      root,
+      "state",
+      "npm",
+      "projects",
+      "codex",
+      "node_modules",
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js",
+    );
+    writeFileSync(
+      codexBin,
+      '#!/usr/bin/env node\nconsole.error("Missing optional dependency @openai/codex-linux-x64");\nprocess.exit(1);\n',
+      { mode: 0o755 },
+    );
+
+    const result = runCodexOnDemandAssertions(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("managed Codex --version failed (exit status 1)");
+    expect(result.stderr).toContain("Missing optional dependency @openai/codex-linux-x64");
   });
 });
