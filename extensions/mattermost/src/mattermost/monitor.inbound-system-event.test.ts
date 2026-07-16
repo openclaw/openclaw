@@ -385,7 +385,7 @@ const testConfig: OpenClawConfig = {
     mattermost: {
       enabled: true,
       baseUrl: "https://mattermost.example.com",
-      botToken: "bot-token",
+      botToken: "test-auth-token",
       chatmode: "onmessage",
       dmPolicy: "open",
       groupPolicy: "open",
