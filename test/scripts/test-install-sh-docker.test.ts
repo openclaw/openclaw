@@ -463,6 +463,13 @@ describe("test-install-sh-docker", () => {
     expect(nonrootDockerfile).toContain("USER app");
     expect(nonrootDockerfile).toContain("WORKDIR /home/app");
     expect(nonrootDockerfile).toContain("NPM_CONFIG_UPDATE_NOTIFIER=false");
+    expect(nonrootDockerfile).toContain('installer="$(mktemp)"');
+    expect(nonrootDockerfile).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" https://deb.nodesource.com/setup_24.x',
+    );
+    expect(nonrootDockerfile).toContain('bash "$installer"');
+    expect(nonrootDockerfile).toContain('rm -f "$installer"');
+    expect(nonrootDockerfile).not.toMatch(/curl[^\n]+\|\s*bash/u);
   });
 
   it("keeps shared install helpers parsing and verifying installed CLI versions", () => {
