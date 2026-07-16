@@ -53,7 +53,7 @@ describe("plugin manifest id normalization", () => {
     ).toBe("blocked-by-denylist");
     expect(
       isActivatedManifestOwner({
-        plugin: { id: result.manifest.id, origin: "installed", enabledByDefault: true },
+        plugin: { id: result.manifest.id, origin: "bundled", enabledByDefault: true },
         normalizedConfig,
       }),
     ).toBe(false);
@@ -103,7 +103,10 @@ describe("plugin manifest id normalization", () => {
     const dir = writePluginDir({ id: "Node-MCP", configSchema: { type: "object" } });
     const result = loadPluginManifest(dir);
     expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error).toContain("reserved by OpenClaw core");
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("reserved by OpenClaw core");
   });
 
   it("leaves already-lowercase manifest ids unchanged", () => {
