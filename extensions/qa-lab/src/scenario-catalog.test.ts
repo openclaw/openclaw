@@ -950,6 +950,19 @@ describe("qa scenario catalog", () => {
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
+  it("settles subagent completions before reading the SQLite session store", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
+    const flow = JSON.stringify(scenario.execution.flow);
+    const completionWaits = [...flow.matchAll(/expectedChildCompletionMarkers/gu)].map(
+      (match) => match.index,
+    );
+    const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
+
+    expect(completionWaits).toHaveLength(2);
+    expect(storeReads).toHaveLength(2);
+    expect(completionWaits.every((wait, index) => wait < (storeReads[index] ?? -1))).toBe(true);
+  });
+
   it("adds a dreaming shadow trial report scenario", () => {
     const scenario = readQaScenarioById("dreaming-shadow-trial-report");
     const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
