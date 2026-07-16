@@ -283,6 +283,7 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
         (scenario) =>
           isQaMergePatchObject(scenario.gatewayConfigPatch) ||
           (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined) ||
+          (scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined) ||
           (scenario.execution.kind === "flow" && scenario.execution.transportPolicy !== undefined),
       ))
   );
@@ -294,6 +295,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   }
   return (
     scenario.execution.suiteIsolation === "isolated" ||
+    scenario.execution.runtime !== undefined ||
     // Transport policy is fixed when the gateway starts; sharing it would leak routing rules.
     scenario.execution.transportPolicy !== undefined ||
     isQaMergePatchObject(scenario.gatewayConfigPatch) ||

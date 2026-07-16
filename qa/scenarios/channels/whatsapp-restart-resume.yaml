@@ -20,8 +20,8 @@ scenario:
     channel: whatsapp
     suiteIsolation: isolated
     summary: Exercise normalized restart and continuation delivery.
+    driver: live
     config:
-      requiredChannelDriver: live
       conversationKind: direct
       conversationId: 15550000001@s.whatsapp.net
       senderId: 15550000002@s.whatsapp.net
