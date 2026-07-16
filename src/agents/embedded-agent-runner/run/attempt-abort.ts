@@ -54,14 +54,18 @@ function createTimeoutAbortReason(): Error {
 export function abortEmbeddedAttemptForStuckRecovery(input: {
   abortRun: RunAbort;
   modelCallActive: boolean;
+  compactionActive: boolean;
   runId: string;
   state: Pick<
     EmbeddedAttemptAbortStatePort,
-    "markIdleTimedOut" | "markTimedOutDuringToolExecution"
+    | "markIdleTimedOut"
+    | "markTimedOutDuringCompaction"
+    | "markTimedOutDuringToolExecution"
   >;
 }): boolean {
   const classification = classifyStuckRecoveryAbort({
     modelCallActive: input.modelCallActive,
+    compactionActive: input.compactionActive,
     activePotentialSideEffectToolExecutions: countActivePotentialSideEffectToolExecutions(
       input.runId,
     ),
@@ -71,6 +75,8 @@ export function abortEmbeddedAttemptForStuckRecovery(input: {
   }
   if (classification === "model_idle_timeout") {
     input.state.markIdleTimedOut();
+  } else if (classification === "compaction_timeout") {
+    input.state.markTimedOutDuringCompaction();
   } else {
     input.state.markTimedOutDuringToolExecution();
   }

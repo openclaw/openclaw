@@ -6,6 +6,7 @@ describe("classifyStuckRecoveryAbort", () => {
     expect(
       classifyStuckRecoveryAbort({
         modelCallActive: true,
+        compactionActive: false,
         activePotentialSideEffectToolExecutions: 0,
       }),
     ).toBe("model_idle_timeout");
@@ -15,6 +16,7 @@ describe("classifyStuckRecoveryAbort", () => {
     const stalePostModelRecovery = {
       modelCallStarted: true,
       modelCallActive: false,
+      compactionActive: false,
       activePotentialSideEffectToolExecutions: 0,
     };
 
@@ -25,15 +27,27 @@ describe("classifyStuckRecoveryAbort", () => {
     expect(
       classifyStuckRecoveryAbort({
         modelCallActive: true,
+        compactionActive: false,
         activePotentialSideEffectToolExecutions: 1,
       }),
     ).toBe("tool_execution_timeout");
+  });
+
+  it("keeps compaction model-call stalls out of model fallback", () => {
+    expect(
+      classifyStuckRecoveryAbort({
+        modelCallActive: true,
+        compactionActive: true,
+        activePotentialSideEffectToolExecutions: 0,
+      }),
+    ).toBe("compaction_timeout");
   });
 
   it("keeps pre-model stuck recovery out of replay paths", () => {
     expect(
       classifyStuckRecoveryAbort({
         modelCallActive: false,
+        compactionActive: false,
         activePotentialSideEffectToolExecutions: 0,
       }),
     ).toBe("external_abort");

@@ -68,6 +68,7 @@ describe("abortEmbeddedAttemptForStuckRecovery", () => {
     const abortRun = vi.fn();
     const state = {
       markIdleTimedOut: vi.fn(),
+      markTimedOutDuringCompaction: vi.fn(),
       markTimedOutDuringToolExecution: vi.fn(),
     };
 
@@ -75,6 +76,7 @@ describe("abortEmbeddedAttemptForStuckRecovery", () => {
       abortEmbeddedAttemptForStuckRecovery({
         abortRun,
         modelCallActive: true,
+        compactionActive: false,
         runId: "run-model-stall",
         state,
       }),
@@ -90,6 +92,7 @@ describe("abortEmbeddedAttemptForStuckRecovery", () => {
     const abortRun = vi.fn();
     const state = {
       markIdleTimedOut: vi.fn(),
+      markTimedOutDuringCompaction: vi.fn(),
       markTimedOutDuringToolExecution: vi.fn(),
     };
 
@@ -97,6 +100,7 @@ describe("abortEmbeddedAttemptForStuckRecovery", () => {
       abortEmbeddedAttemptForStuckRecovery({
         abortRun,
         modelCallActive: true,
+        compactionActive: false,
         runId: "run-tool-stall",
         state,
       }),
@@ -107,10 +111,35 @@ describe("abortEmbeddedAttemptForStuckRecovery", () => {
     expect(abortRun).toHaveBeenCalledWith(true, expect.objectContaining({ name: "TimeoutError" }));
   });
 
+  it("classifies compaction model stalls before model retry", () => {
+    const abortRun = vi.fn();
+    const state = {
+      markIdleTimedOut: vi.fn(),
+      markTimedOutDuringCompaction: vi.fn(),
+      markTimedOutDuringToolExecution: vi.fn(),
+    };
+
+    expect(
+      abortEmbeddedAttemptForStuckRecovery({
+        abortRun,
+        modelCallActive: true,
+        compactionActive: true,
+        runId: "run-compaction-stall",
+        state,
+      }),
+    ).toBe(true);
+
+    expect(state.markIdleTimedOut).not.toHaveBeenCalled();
+    expect(state.markTimedOutDuringCompaction).toHaveBeenCalledOnce();
+    expect(state.markTimedOutDuringToolExecution).not.toHaveBeenCalled();
+    expect(abortRun).toHaveBeenCalledWith(true, expect.objectContaining({ name: "TimeoutError" }));
+  });
+
   it("leaves unknown phases on the external-abort path", () => {
     const abortRun = vi.fn();
     const state = {
       markIdleTimedOut: vi.fn(),
+      markTimedOutDuringCompaction: vi.fn(),
       markTimedOutDuringToolExecution: vi.fn(),
     };
 
@@ -118,6 +147,7 @@ describe("abortEmbeddedAttemptForStuckRecovery", () => {
       abortEmbeddedAttemptForStuckRecovery({
         abortRun,
         modelCallActive: false,
+        compactionActive: false,
         runId: "run-unknown-stall",
         state,
       }),

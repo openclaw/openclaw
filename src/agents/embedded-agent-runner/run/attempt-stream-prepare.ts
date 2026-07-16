@@ -353,6 +353,7 @@ export function prepareEmbeddedAttemptStream(input: {
       abortEmbeddedAttemptForStuckRecovery({
         abortRun: input.abortRun,
         modelCallActive: input.isModelCallActive(),
+        compactionActive: subscription.isCompacting() || input.activeSession.isCompacting,
         runId: attempt.runId,
         state: input.abortState,
       })
