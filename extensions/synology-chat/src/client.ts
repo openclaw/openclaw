@@ -6,7 +6,10 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -19,6 +22,8 @@ import { z } from "zod";
 const MIN_SEND_INTERVAL_MS = 500;
 /** user_list JSON can be larger than inbound webhook pre-auth payloads. */
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
+/** Wall-clock budget for user_list fetch including response body. */
+const USER_LIST_REQUEST_TIMEOUT_MS = 15_000;
 let lastSendTime = 0;
 let sendQueue: Promise<void> = Promise.resolve();
 
@@ -154,6 +159,7 @@ async function fetchChatUsers(
   incomingUrl: string,
   allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
+  timeoutMs?: number,
 ): Promise<ChatUser[]> {
   const now = Date.now();
   const listUrl = incomingUrl.replace(/method=\w+/, "method=user_list");
@@ -161,14 +167,23 @@ async function fetchChatUsers(
   if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
     return cached.users;
   }
+  const deadlineMs = resolveTimerTimeoutMs(timeoutMs, USER_LIST_REQUEST_TIMEOUT_MS);
 
   return new Promise((resolve) => {
     let settled = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearDeadline = () => {
+      if (deadlineTimer !== undefined) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = undefined;
+      }
+    };
     const finish = (users: ChatUser[]) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearDeadline();
       resolve(users);
     };
     let parsedUrl: URL;
@@ -230,11 +245,15 @@ async function fetchChatUsers(
         log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
         finish(cached?.users ?? []);
       });
-    req.setTimeout?.(15_000, () => {
+    // Use a wall-clock deadline, not ClientRequest.setTimeout. Node's socket
+    // idle timer resets on every data chunk, so a slow drip can hang user_list
+    // past the intended budget while body reads have no separate idle bound.
+    deadlineTimer = setTimeout(() => {
       log?.warn("fetchChatUsers: request timed out, using cached data");
       req.destroy?.();
       finish(cached?.users ?? []);
-    });
+    }, deadlineMs);
+    deadlineTimer.unref?.();
   });
 }
 
@@ -280,8 +299,15 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   mutableWebhookUsername: string;
   allowInsecureSsl?: boolean;
   log?: { warn: (...args: unknown[]) => void };
+  /** Override for tests; production uses USER_LIST_REQUEST_TIMEOUT_MS. */
+  timeoutMs?: number;
 }): Promise<number | undefined> {
-  const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
+  const users = await fetchChatUsers(
+    params.incomingUrl,
+    params.allowInsecureSsl,
+    params.log,
+    params.timeoutMs,
+  );
   const lower = normalizeLowercaseStringOrEmpty(params.mutableWebhookUsername);
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
