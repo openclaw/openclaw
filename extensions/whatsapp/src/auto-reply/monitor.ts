@@ -321,15 +321,9 @@ export async function monitorWebChannel(
         return shouldDebounceTextInbound({
           text: normalized.payload.commandBody ?? normalized.payload.body,
           cfg,
-          hasMedia: Boolean(
-            normalized.payload.media?.path ||
-            normalized.payload.media?.type ||
-            normalized.payload.media?.url ||
-            normalized.payload.mediaItems?.length,
-          ),
-          // Quoted replies retain their structured context through the rich inbound
-          // debounce path, so they must follow the conversation's debounce policy.
-          allowDebounce: !normalized.payload.location,
+          // WhatsApp's rich inbound debounce preserves media, location, and quoted
+          // context, so only command detection should bypass the configured window.
+          hasMedia: false,
         });
       };
       const resolveDebounceDecision = (

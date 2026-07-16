@@ -1130,6 +1130,23 @@ describe("web auto-reply connection", () => {
         }),
       ),
     ).toBe(true);
+    expect(
+      capture.getLastOptions()?.shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: { body: "<media:image>", media: { path: "/tmp/image.jpg", type: "image/jpeg" } },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      capture.getLastOptions()?.shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: {
+            body: "Shared location",
+            location: { latitude: -27.59487, longitude: -48.548219 },
+          },
+        }),
+      ),
+    ).toBe(true);
     await expect(
       Promise.resolve(
         capture.getLastOptions()?.resolveDebounceDecision?.(
@@ -1184,7 +1201,7 @@ describe("web auto-reply connection", () => {
     ).rejects.toThrow(/legacy flat or canonical nested/);
   });
 
-  it("lets a plugin opt rich messages into debounce with a conversation-specific window", async () => {
+  it("lets a plugin override the debounce window for rich messages", async () => {
     const capture = createWebListenerFactoryCapture();
     const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
     inboundDebounceHookMocks.hasHooks.mockReturnValueOnce(true);
@@ -1225,7 +1242,7 @@ describe("web auto-reply connection", () => {
     expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenCalledWith(
       expect.objectContaining({
         debounceKey: "default:120363@g.us:15550001111@s.whatsapp.net",
-        defaultAction: "bypass",
+        defaultAction: "debounce",
         conversationKind: "group",
         message: { hasMedia: true, hasLocation: false, hasQuote: false },
       }),
