@@ -1,6 +1,7 @@
 /** Extension that safeguards compaction with structured summaries and quality repair. */
 
 import fs from "node:fs";
+import { emitTrustedAISafetyEvent } from "../../infra/diagnostic-ai-safety-events.js";
 import path from "node:path";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
@@ -1441,6 +1442,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifiers,
           latestAsk: latestUserAsk,
           identifierPolicy,
+        });
+        // Fix #3 (evaluation): emit at the real compaction quality-audit boundary.
+        emitTrustedAISafetyEvent({
+          type: "ai_safety.eval.result",
+          sessionId: "unknown",
+          evalName: "compaction.summary_quality",
+          score: quality.ok ? 1.0 : 0.0,
+          passed: quality.ok,
+          severity: quality.ok ? "info" : "warn",
         });
         summary = summaryWithPreservedTurns;
         if (quality.ok || attempt >= totalAttempts - 1) {

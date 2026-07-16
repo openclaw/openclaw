@@ -8,9 +8,9 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import type { AISafetyEventEmitResult, AISafetyEventInput } from "./safety-event-emission.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { PluginLogger } from "./logger-types.js";
-import type { AISafetyEventEmitResult, AISafetyEventInput } from "./safety-event-emission.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
@@ -265,11 +265,13 @@ export type OpenClawPluginServiceContext = {
     ) => () => void;
   };
   /**
-   * Emit an AI safety taxonomy event. Event types must be declared in the
-   * plugin manifest `safetyEventTypes` field for non-bundled plugins.
-   * Returns `{ ok: false, reason }` when the event is rejected by policy.
+   * Fix #2: Host-bound safety diagnostics emitter.
+   * Trust level, pluginId, and origin are locked in by the host at load time.
+   * Plugins cannot self-attest their own provenance.
    */
-  emitSafetyEvent?: (event: AISafetyEventInput) => AISafetyEventEmitResult;
+  safetyDiagnostics?: {
+    emit: (event: AISafetyEventInput) => AISafetyEventEmitResult;
+  };
 };
 
 /** Background service registered by a plugin during `register(api)`. */

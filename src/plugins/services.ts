@@ -6,6 +6,7 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
+import { emitPluginSafetyEvent } from "./safety-event-emission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
@@ -61,6 +62,21 @@ function createServiceContext(params: {
           },
         }
       : {}),
+    // Fix #2: Inject a host-bound safety diagnostics emitter so plugins cannot
+    // self-attest trust or origin. The host stamps pluginId, trusted flag, and
+    // declared event types at load time — the plugin just passes event data.
+    safetyDiagnostics: {
+      emit: (event) =>
+        emitPluginSafetyEvent({
+          pluginId: params.service.pluginId,
+          event,
+          trusted: params.service.origin === "bundled" || params.service.trustedOfficialInstall === true,
+          // safetyEventTypes is a manifest-level field not carried on
+          // PluginServiceRegistration; external plugins that need it must declare
+          // it in their manifest and have it forwarded here by the loader.
+          declaredSafetyEventTypes: undefined,
+        }),
+    },
   };
 }
 

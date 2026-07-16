@@ -40,6 +40,7 @@ import {
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
+import { emitTrustedAISafetyEvent } from "../../infra/diagnostic-ai-safety-events.js";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
@@ -928,6 +929,13 @@ export function createWebFetchTool(options?: {
           lookupFn: options?.lookupFn,
           signal,
           resolveProviderFallback,
+        });
+        // Fix #3 (external-content): emit at real web_fetch boundary.
+        emitTrustedAISafetyEvent({
+          type: "ai_safety.external_content.consumed",
+          sessionId: "unknown",
+          sourceType: "web_fetch",
+          trusted: false,
         });
         return jsonResult(result);
       } finally {
