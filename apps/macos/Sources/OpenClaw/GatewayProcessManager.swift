@@ -18,6 +18,7 @@ final class GatewayProcessManager {
     private struct LaunchAgentEnableRequest: Equatable {
         let bundlePath: String
         let port: Int
+        let generation: UInt64
     }
 
     private struct LaunchAgentReadinessFailure: Equatable {
@@ -64,6 +65,8 @@ final class GatewayProcessManager {
     private var launchAgentEnableTask: Task<String?, Never>?
     private var launchAgentEnableCurrentRequest: LaunchAgentEnableRequest?
     private var launchAgentEnablePendingRequest: LaunchAgentEnableRequest?
+    private var launchAgentDisableTask: Task<Void, Never>?
+    private var launchAgentDisableGeneration: UInt64?
     private var launchAgentReadinessFailure: LaunchAgentReadinessFailure?
     /// Async readiness audits may outlive stop/restart. Only the current generation may publish
     /// their failure state or retain a PID for a later repair.
@@ -106,6 +109,7 @@ final class GatewayProcessManager {
 
     func ensureLaunchAgentEnabledIfNeeded() async {
         guard !CommandResolver.connectionModeIsRemote() else { return }
+        guard self.desiredActive else { return }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
@@ -113,14 +117,27 @@ final class GatewayProcessManager {
         }
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
-        let err = await self.enableLaunchAgentIfNeeded(bundlePath: bundlePath, port: port)
+        let err = await self.enableLaunchAgentIfNeeded(
+            bundlePath: bundlePath,
+            port: port,
+            generation: self.gatewayStartGeneration)
         if let err {
             self.appendLog("[gateway] launchd auto-enable failed: \(err)\n")
         }
     }
 
-    private func enableLaunchAgentIfNeeded(bundlePath: String, port: Int) async -> String? {
-        let request = LaunchAgentEnableRequest(bundlePath: bundlePath, port: port)
+    private func enableLaunchAgentIfNeeded(
+        bundlePath: String,
+        port: Int,
+        generation expectedGeneration: UInt64? = nil) async -> String?
+    {
+        let generation = expectedGeneration ?? self.gatewayStartGeneration
+        await self.waitForPendingLaunchAgentDisable()
+        guard generation == self.gatewayStartGeneration else { return nil }
+        let request = LaunchAgentEnableRequest(
+            bundlePath: bundlePath,
+            port: port,
+            generation: generation)
         if let task = self.launchAgentEnableTask {
             if self.launchAgentEnableCurrentRequest == request {
                 // The in-flight request already represents the newest configuration. Drop an
@@ -138,6 +155,14 @@ final class GatewayProcessManager {
         }
         self.launchAgentEnableTask = task
         return await task.value
+    }
+
+    private func waitForPendingLaunchAgentDisable() async {
+        // A stop may already be uninstalling launchd. Wait until it finishes so a newer start's
+        // attach/install is ordered last; loop because another stop can supersede it while waiting.
+        while let disableTask = self.launchAgentDisableTask {
+            await disableTask.value
+        }
     }
 
     private func drainLaunchAgentEnableRequests() async -> String? {
@@ -227,7 +252,7 @@ final class GatewayProcessManager {
         // First try to latch onto an already-running gateway to avoid spawning a duplicate.
         Task { [weak self] in
             guard let self else { return }
-            if await self.attachExistingGatewayIfAvailable() {
+            if await self.attachExistingGatewayAfterPendingDisable(startGeneration: startGeneration) {
                 return
             }
             await self.enableLaunchdGateway(startGeneration: startGeneration)
@@ -236,22 +261,35 @@ final class GatewayProcessManager {
 
     func stop() {
         self.gatewayStartGeneration &+= 1
+        let stopGeneration = self.gatewayStartGeneration
         self.desiredActive = false
         self.existingGatewayDetails = nil
         self.lastFailureReason = nil
         self.launchAgentReadinessFailure = nil
+        // Queued work belongs to the previous lifecycle. The active enable cannot be cancelled
+        // safely, so the disable waits for its drain and wins unless a newer start supersedes it.
+        self.launchAgentEnablePendingRequest = nil
+        let enableTask = self.launchAgentEnableTask
         self.status = .stopped
         self.logger.info("gateway stop requested")
-        if CommandResolver.connectionModeIsRemote() {
-            return
-        }
         let bundlePath = Bundle.main.bundleURL.path
-        Task {
-            _ = await GatewayLaunchAgentManager.set(
-                enabled: false,
-                bundlePath: bundlePath,
-                port: GatewayEnvironment.gatewayPort())
+        let priorDisableTask = self.launchAgentDisableTask
+        let disableTask = Task { @MainActor in
+            _ = await priorDisableTask?.value
+            _ = await enableTask?.value
+            if self.launchAgentDisableGeneration == stopGeneration {
+                _ = await GatewayLaunchAgentManager.set(
+                    enabled: false,
+                    bundlePath: bundlePath,
+                    port: GatewayEnvironment.gatewayPort())
+            }
+            if self.launchAgentDisableGeneration == stopGeneration {
+                self.launchAgentDisableTask = nil
+                self.launchAgentDisableGeneration = nil
+            }
         }
+        self.launchAgentDisableGeneration = stopGeneration
+        self.launchAgentDisableTask = disableTask
     }
 
     func clearLastFailure() {
@@ -301,11 +339,33 @@ final class GatewayProcessManager {
 
     // MARK: - Internals
 
+    private func isCurrentGatewayStart(_ generation: UInt64?) -> Bool {
+        guard let generation else { return true }
+        return self.desiredActive && self.gatewayStartGeneration == generation
+    }
+
+    private func attachExistingGatewayAfterPendingDisable(
+        port requestedPort: Int? = nil,
+        startGeneration: UInt64) async -> Bool
+    {
+        // A gateway that is still reachable during uninstall is not reusable. Let the stop finish
+        // before attachment so the new lifecycle cannot latch onto a process launchd then removes.
+        await self.waitForPendingLaunchAgentDisable()
+        guard self.isCurrentGatewayStart(startGeneration) else { return true }
+        return await self.attachExistingGatewayIfAvailable(
+            port: requestedPort,
+            startGeneration: startGeneration)
+    }
+
     /// Attempt to connect to an already-running gateway on the configured port.
     /// If successful, mark status as attached and skip spawning a new process.
-    private func attachExistingGatewayIfAvailable(port requestedPort: Int? = nil) async -> Bool {
+    private func attachExistingGatewayIfAvailable(
+        port requestedPort: Int? = nil,
+        startGeneration: UInt64? = nil) async -> Bool
+    {
         let port = requestedPort ?? GatewayEnvironment.gatewayPort()
         let instance = await PortGuardian.shared.describe(port: port)
+        guard self.isCurrentGatewayStart(startGeneration) else { return true }
         let instanceText = instance.map { self.describe(instance: $0) }
         let hasListener = instance != nil
 
@@ -314,8 +374,10 @@ final class GatewayProcessManager {
         }
 
         for attempt in 0..<(hasListener ? 3 : 1) {
+            guard self.isCurrentGatewayStart(startGeneration) else { return true }
             do {
                 let data = try await attemptAttach()
+                guard self.isCurrentGatewayStart(startGeneration) else { return true }
                 let snap = decodeHealthSnapshot(from: data)
                 let details = self.describe(details: instanceText, port: port, snap: snap)
                 self.existingGatewayDetails = details
@@ -328,6 +390,7 @@ final class GatewayProcessManager {
                 self.refreshLog()
                 return true
             } catch {
+                guard self.isCurrentGatewayStart(startGeneration) else { return true }
                 if attempt < 2, hasListener {
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     continue
@@ -412,10 +475,12 @@ final class GatewayProcessManager {
     }
 
     private func enableLaunchdGateway(startGeneration: UInt64) async {
+        guard self.isCurrentGatewayStart(startGeneration) else { return }
         self.existingGatewayDetails = nil
         let resolution = await Task.detached(priority: .utility) {
             GatewayEnvironment.resolveGatewayCommand()
         }.value
+        guard self.isCurrentGatewayStart(startGeneration) else { return }
         await MainActor.run { self.environmentStatus = resolution.status }
         guard resolution.command != nil else {
             await MainActor.run {
@@ -437,7 +502,11 @@ final class GatewayProcessManager {
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
         self.logger.info("gateway ensuring launchd port=\(port)")
-        let err = await self.enableLaunchAgentIfNeeded(bundlePath: bundlePath, port: port)
+        let err = await self.enableLaunchAgentIfNeeded(
+            bundlePath: bundlePath,
+            port: port,
+            generation: startGeneration)
+        guard self.isCurrentGatewayStart(startGeneration) else { return }
         if let err {
             self.status = .failed(err)
             self.lastFailureReason = err
@@ -446,14 +515,16 @@ final class GatewayProcessManager {
         }
 
         let readinessPID = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port)
+        guard self.isCurrentGatewayStart(startGeneration) else { return }
         // Best-effort: wait for the gateway to accept connections.
         let deadline = Date().addingTimeInterval(6)
         while Date() < deadline {
-            if !self.desiredActive { return }
+            guard self.isCurrentGatewayStart(startGeneration) else { return }
             do {
                 let remainingMs = max(1, deadline.timeIntervalSinceNow * 1000)
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 let instance = await PortGuardian.shared.describe(port: port)
+                guard self.isCurrentGatewayStart(startGeneration) else { return }
                 let details = instance.map { "pid \($0.pid)" }
                 self.launchAgentReadinessFailure = nil
                 self.clearLastFailure()
@@ -486,9 +557,7 @@ final class GatewayProcessManager {
         let failure = await self.resolveLaunchAgentReadinessFailure(
             port: port,
             startingPID: startingPID)
-        guard self.desiredActive, self.gatewayStartGeneration == startGeneration else {
-            return
-        }
+        guard self.isCurrentGatewayStart(startGeneration) else { return }
         self.launchAgentReadinessFailure = failure
         self.status = .failed("Gateway did not start in time")
         self.lastFailureReason = "launchd start timeout"
@@ -599,6 +668,12 @@ extension GatewayProcessManager {
 
     func _testAttachExistingGatewayIfAvailable(port: Int) async -> Bool {
         await self.attachExistingGatewayIfAvailable(port: port)
+    }
+
+    func _testAttachExistingGatewayAfterPendingDisable(port: Int) async -> Bool {
+        await self.attachExistingGatewayAfterPendingDisable(
+            port: port,
+            startGeneration: self.gatewayStartGeneration)
     }
 
     func _testEnableLaunchAgentIfNeeded(bundlePath: String, port: Int) async -> String? {

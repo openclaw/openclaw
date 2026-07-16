@@ -6,14 +6,21 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
-    private func withLocalGatewayConfig<T>(
+    private func withGatewayConfig<T>(
+        mode: String,
         _ body: () async throws -> T) async throws -> T
     {
         let configPath = TestIsolation.tempConfigPath()
-        try Data(#"{"gateway":{"mode":"local"}}"#.utf8)
+        try Data(#"{"gateway":{"mode":"\#(mode)"}}"#.utf8)
             .write(to: URL(fileURLWithPath: configPath))
         defer { try? FileManager.default.removeItem(atPath: configPath) }
         return try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath], body)
+    }
+
+    private func withLocalGatewayConfig<T>(
+        _ body: () async throws -> T) async throws -> T
+    {
+        try await self.withGatewayConfig(mode: "local", body)
     }
 
     @Test func `coalesces concurrent launch agent enable requests`() async throws {
@@ -148,6 +155,258 @@ struct GatewayProcessManagerTests {
                     return arguments[portIndex + 1]
                 }
             #expect(finalInstallPorts == [String(newestPort)])
+        }
+    }
+
+    @Test func `stop discards queued enables and disables after the active request`() async throws {
+        let firstPort = 19095
+        let secondPort = 19096
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        try await self.withLocalGatewayConfig {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"ok":true,"service":{"loaded":false}}"#)
+            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared.setTestingDesiredActive(false)
+            }
+
+            let manager = GatewayProcessManager.shared
+            manager.setTestingDesiredActive(true)
+            let first = Task { @MainActor in
+                await manager._testEnableLaunchAgentIfNeeded(
+                    bundlePath: "/Applications/OpenClaw.app",
+                    port: firstPort)
+            }
+            for _ in 0..<100 {
+                if !GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            let second = Task { @MainActor in
+                await manager._testEnableLaunchAgentIfNeeded(
+                    bundlePath: "/Applications/OpenClaw.app",
+                    port: secondPort)
+            }
+            for _ in 0..<100 {
+                if manager._testPendingLaunchAgentPort() == secondPort {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            #expect(manager._testPendingLaunchAgentPort() == secondPort)
+
+            manager.stop()
+            _ = await (first.value, second.value)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            let installPorts = calls.compactMap { arguments -> String? in
+                guard arguments.first == "install",
+                      let portIndex = arguments.firstIndex(of: "--port"),
+                      arguments.indices.contains(portIndex + 1)
+                else {
+                    return nil
+                }
+                return arguments[portIndex + 1]
+            }
+            #expect(installPorts == [String(firstPort)])
+            #expect(calls.filter { $0.first == "uninstall" }.count == 1)
+            #expect(manager._testPendingLaunchAgentPort() == nil)
+            #expect(manager.status == .stopped)
+        }
+    }
+
+    @Test func `restart waits for an in-progress disable`() async throws {
+        let port = 19098
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        try await self.withLocalGatewayConfig {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"ok":true,"service":{"loaded":false}}"#)
+            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared.setTestingDesiredActive(false)
+            }
+
+            let manager = GatewayProcessManager.shared
+            manager.setTestingDesiredActive(true)
+            manager.stop()
+            for _ in 0..<100 {
+                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "uninstall" })
+                {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .contains(where: { $0.first == "uninstall" }))
+
+            manager._testBeginGatewayStartGeneration()
+            _ = await manager._testEnableLaunchAgentIfNeeded(
+                bundlePath: "/Applications/OpenClaw.app",
+                port: port)
+
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls.map(\.first) == ["uninstall", "status", "install"])
+        }
+    }
+
+    @Test func `restart waits for disable before attaching`() async throws {
+        let port = 19099
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    })
+            })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let connection = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let descriptor = PortGuardian.Descriptor(
+            pid: 4242,
+            command: "openclaw-gateway",
+            executablePath: "/tmp/openclaw-gateway")
+
+        try await self.withLocalGatewayConfig {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            let manager = GatewayProcessManager.shared
+            manager.setTestingConnection(connection)
+            manager.setTestingSkipControlChannelRefresh(true)
+            manager.setTestingDesiredActive(true)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                manager.setTestingConnection(nil)
+                manager.setTestingSkipControlChannelRefresh(false)
+                manager.setTestingDesiredActive(false)
+            }
+
+            manager.stop()
+            for _ in 0..<100 {
+                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "uninstall" })
+                {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            manager._testBeginGatewayStartGeneration()
+
+            let startedAt = Date()
+            let attached = await manager._testAttachExistingGatewayAfterPendingDisable(port: port)
+            let elapsed = Date().timeIntervalSince(startedAt)
+
+            #expect(attached)
+            #expect(elapsed >= 0.05)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .filter { $0.first == "uninstall" }.count == 1)
+            guard case .attachedExisting = manager.status else {
+                Issue.record("expected attachedExisting status")
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                await connection.shutdown()
+                return
+            }
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            await connection.shutdown()
+        }
+    }
+
+    @Test func `remote mode still removes the local launch agent`() async throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        try await self.withGatewayConfig(mode: "remote") {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared.setTestingDesiredActive(false)
+            }
+
+            let manager = GatewayProcessManager.shared
+            manager.setTestingDesiredActive(true)
+            manager.stop()
+            for _ in 0..<100 {
+                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "uninstall" })
+                {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls.filter { $0.first == "uninstall" }.count == 1)
+            #expect(manager.status == .stopped)
+        }
+    }
+
+    @Test func `newer inactive lifecycle retains the pending disable`() async throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        try await self.withLocalGatewayConfig {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared.setTestingDesiredActive(false)
+            }
+
+            let manager = GatewayProcessManager.shared
+            manager.setTestingDesiredActive(true)
+            manager.stop()
+            manager.stop()
+            for _ in 0..<200 {
+                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "uninstall" })
+                {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls.filter { $0.first == "uninstall" }.count == 1)
+            #expect(manager.status == .stopped)
         }
     }
 
