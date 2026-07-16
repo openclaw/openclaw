@@ -750,41 +750,40 @@ describe("waitForGatewayReady", () => {
   });
 
   it("returns promptly when abortSignal fires during the READY retry backoff", async () => {
-    // Regression for: backoff sleep used raw setTimeout without an abort listener, so a
-    // monitor.stop() firing during the 2s backoff waited the full backoff before returning.
-    // Real-timer proof: abort at +150ms into the 2000ms backoff → must resolve in <1s, not ~2s.
-    // Call-count assertions pin the loop to a single restart cycle: if the abort fell through
-    // to another iteration, `connect` would fire a second time.
-    const controller = new AbortController();
-    const gateway = {
-      isConnected: false,
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      ws: null,
-    };
-    const runtime: RuntimeEnv = {
-      log: () => {},
-      error: () => {},
-      exit: () => {},
-    };
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const gateway = {
+        isConnected: false,
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        ws: null,
+      };
+      const runtime: RuntimeEnv = {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      };
 
-    const started = Date.now();
-    const readyPromise = waitForGatewayReady({
-      gateway,
-      abortSignal: controller.signal,
-      readyTimeoutMs: 200,
-      runtime,
-    });
+      const readyPromise = waitForGatewayReady({
+        gateway,
+        abortSignal: controller.signal,
+        readyTimeoutMs: 200,
+        runtime,
+      });
 
-    // Fire abort while the post-restart backoff sleep is in flight. Backoff is 2000ms,
-    // so firing 150ms into it should resolve well before 2000ms if the abort listener is wired.
-    setTimeout(() => controller.abort(), 350);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      controller.abort();
 
-    await expect(readyPromise).resolves.toBeUndefined();
-    const elapsedMs = Date.now() - started;
-    expect(elapsedMs).toBeLessThan(1_000);
-    expect(gateway.connect).toHaveBeenCalledTimes(1);
-    expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+      await expect(readyPromise).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

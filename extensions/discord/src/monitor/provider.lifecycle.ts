@@ -400,11 +400,9 @@ async function waitForGatewayReady(params: {
       return;
     }
     try {
-      // sleepWithAbort rejects on abort; the catch returns quietly. The helper does not
-      // unref its timer, but the surrounding lifecycle keeps the process alive anyway,
-      // so dropping the previous bare setTimeout's unref is behavior-neutral here.
       await sleepWithAbort(DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS, params.abortSignal);
     } catch {
+      // Abort is normal lifecycle shutdown; do not enter another reconnect attempt.
       return;
     }
   }
