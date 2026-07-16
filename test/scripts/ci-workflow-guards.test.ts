@@ -1958,7 +1958,9 @@ describe("ci workflow guards", () => {
       "actionlint install step",
     );
 
-    expect(installStep.run).toContain("curl --connect-timeout 10 --max-time 120");
+    const boundedCurlPattern = /curl --connect-timeout 10 --max-time 120/gu;
+    const boundedCurlCount = (installStep.run!.match(boundedCurlPattern) ?? []).length;
+    expect(boundedCurlCount).toBe(2);
     expect(installStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
     expect(installStep.run).toContain("${base_url}/${archive}");
     expect(installStep.run).toContain("checksums.txt");
