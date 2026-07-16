@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import pLimit from "p-limit";
@@ -396,9 +397,13 @@ async function readPreview(filePath: string, mediaKind: QaEvidenceArtifactView["
   }
   const handle = await fs.open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, TEXT_PREVIEW_BYTES, 0);
-    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const decoder = new StringDecoder("utf8");
+    let text = decoder.write(buffer.subarray(0, Math.min(bytesRead, TEXT_PREVIEW_BYTES)));
+    if (bytesRead <= TEXT_PREVIEW_BYTES) {
+      text += decoder.end();
+    }
     if (mediaKind !== "json") {
       return text;
     }

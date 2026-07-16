@@ -602,6 +602,83 @@ describe("qa-lab server", () => {
     expect(outsideResponse.status).toBe(404);
   });
 
+  it("preserves UTF-8 at the evidence preview byte boundary", async () => {
+    const repoRoot = await createQaLabRepoRootFixture();
+    const evidenceDir = path.join(repoRoot, ".artifacts", "qa-e2e", "utf8-preview");
+    const previewBytes = 12 * 1024;
+    const splitPrefix = "a".repeat(previewBytes - 1);
+    const completePrefix = "a".repeat(previewBytes - Buffer.byteLength("😀"));
+    await mkdir(evidenceDir, { recursive: true });
+    await writeFile(path.join(evidenceDir, "split.log"), `${splitPrefix}😀tail`, "utf8");
+    await writeFile(path.join(evidenceDir, "complete.log"), `${completePrefix}😀tail`, "utf8");
+    await writeFile(
+      path.join(evidenceDir, "qa-evidence.json"),
+      `${JSON.stringify(
+        {
+          kind: "openclaw.qa.evidence-summary",
+          schemaVersion: 2,
+          generatedAt: "2026-07-16T00:00:00.000Z",
+          evidenceMode: "full",
+          entries: [
+            {
+              test: {
+                kind: "vitest-test",
+                id: "qa-lab.utf8-preview-boundary",
+                title: "UTF-8 preview boundary",
+              },
+              coverage: [{ id: "qa.evidence-preview", role: "primary" }],
+              execution: {
+                runner: "vitest",
+                environment: {
+                  ref: "utf8-preview-test",
+                  os: process.platform,
+                  nodeVersion: process.version,
+                },
+                provider: {
+                  id: "mock-openai",
+                  live: false,
+                  model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
+                },
+                packageSource: { kind: "source-checkout" },
+                artifacts: [
+                  { kind: "log", path: "split.log", source: "vitest" },
+                  { kind: "log", path: "complete.log", source: "vitest" },
+                ],
+              },
+              result: { status: "pass" },
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const lab = await startQaLabServerForTest({
+      host: "127.0.0.1",
+      port: 0,
+      repoRoot,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    const evidenceUrl = new URL("/api/evidence", lab.baseUrl);
+    evidenceUrl.searchParams.set("path", ".artifacts/qa-e2e/utf8-preview/qa-evidence.json");
+
+    const response = await fetchWithRetry(evidenceUrl.toString());
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      evidence: { entries: Array<{ artifacts: Array<{ path: string; preview: string | null }> }> };
+    };
+    const artifacts = payload.evidence.entries[0]?.artifacts ?? [];
+    const split = artifacts.find((artifact) => artifact.path.endsWith("split.log"));
+    const complete = artifacts.find((artifact) => artifact.path.endsWith("complete.log"));
+    expect(split?.preview).toBe(splitPrefix);
+    expect(complete?.preview).toBe(`${completePrefix}😀`);
+    expect(JSON.stringify(payload)).not.toContain("�");
+  });
+
   it("returns controlled errors for malformed JSON body reads", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(async () => {
