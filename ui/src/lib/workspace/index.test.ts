@@ -229,7 +229,7 @@ describe("loadWorkspace", () => {
     expect(state.error).toBe("temporary failure");
   });
 
-  it("consumes retained navigation when the successful document lacks the requested tab", async () => {
+  it("invalidates captured navigation when the successful document lacks the requested tab", async () => {
     const state = getWorkspaceState({});
     const requests: Array<{
       resolve: (value: unknown) => void;
@@ -245,9 +245,7 @@ describe("loadWorkspace", () => {
     });
 
     const requestedLoad = loadWorkspace(state, client, { requestedSlug: "future" });
-    const failedSilentLoad = loadWorkspace(state, client, { silent: true });
-    requests[1]?.reject(new Error("temporary failure"));
-    await failedSilentLoad;
+    const silentLoad = loadWorkspace(state, client, { silent: true });
     requests[0]?.resolve({ doc: sampleWorkspace(), workspaceVersion: 3 });
     await requestedLoad;
     expect(state.activeSlug).toBe("main");
@@ -259,9 +257,8 @@ describe("loadWorkspace", () => {
         { slug: "future", title: "Future", hidden: false, widgets: [] },
       ],
     });
-    const laterLoad = loadWorkspace(state, client, { silent: true });
-    requests[2]?.resolve({ doc: laterWorkspace, workspaceVersion: 4 });
-    await laterLoad;
+    requests[1]?.resolve({ doc: laterWorkspace, workspaceVersion: 4 });
+    await silentLoad;
 
     expect(state.activeSlug).toBe("main");
   });

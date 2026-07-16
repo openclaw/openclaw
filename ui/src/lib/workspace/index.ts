@@ -372,6 +372,9 @@ export async function loadWorkspace(
         );
         if (retainedIntentIsCurrent && workspaceLoadIntents.get(state) === retainedIntent) {
           workspaceLoadIntents.delete(state);
+          // Consuming the shared intent invalidates copies already captured by
+          // newer in-flight loads, so they cannot revive removed navigation.
+          state.activeSlugRevision += 1;
         }
         state.loaded = true;
         staleDocumentApplied = true;
