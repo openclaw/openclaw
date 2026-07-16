@@ -387,6 +387,14 @@ extension ApplicationRelocator {
               fcntl(readyFD, F_GETFD) != -1,
               let bundleIdentifier = bundle.bundleIdentifier,
               let identity = runningCodeIdentity(bundleIdentifier: bundleIdentifier),
+              let executableURL = bundle.executableURL,
+              // Revalidate the bound bundle in the child. The parent cannot make
+              // the sealed resources immutable across posix_spawn.
+              trustedCodeDirectoryHash(
+                  at: bundle.bundleURL,
+                  executableURL: executableURL,
+                  matching: identity.requirementData
+              ) == expectedHash,
               process(parentPID, matches: identity.requirementData)
         else { return false }
 
