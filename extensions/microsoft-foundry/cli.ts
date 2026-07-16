@@ -189,8 +189,12 @@ export async function azLoginDeviceCodeWithOptions(params: {
       stderrLen = appendBoundedChunk(stderrChunks, text, stderrLen);
       process.stderr.write(text);
     });
-    child.stdout?.on("error", reject);
-    child.stderr?.on("error", reject);
+    const rejectStreamError = (error: Error) => {
+      child.kill();
+      reject(error);
+    };
+    child.stdout?.on("error", rejectStreamError);
+    child.stderr?.on("error", rejectStreamError);
     child.on("close", (code) => {
       if (code === 0) {
         resolve();

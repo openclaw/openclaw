@@ -19,9 +19,11 @@ function createChild() {
   const child = new EventEmitter() as ChildProcess;
   const stdout = new PassThrough();
   const stderr = new PassThrough();
+  const kill = vi.fn().mockReturnValue(true);
   child.stdout = stdout;
   child.stderr = stderr;
-  return { child, stdout, stderr };
+  child.kill = kill;
+  return { child, stdout, stderr, kill };
 }
 
 describe("azLoginDeviceCodeWithOptions", () => {
@@ -49,17 +51,20 @@ describe("azLoginDeviceCodeWithOptions", () => {
     expect(stderrWrite).toHaveBeenCalledWith("😀");
   });
 
-  it.each(["stdout", "stderr"] as const)("rejects when %s becomes unreadable", async (stream) => {
-    const { child } = createChild();
-    spawnMock.mockReturnValue(child);
-    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  it.each(["stdout", "stderr"] as const)(
+    "terminates the child when %s becomes unreadable",
+    async (stream) => {
+      const { child, kill } = createChild();
+      spawnMock.mockReturnValue(child);
+      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    const login = azLoginDeviceCodeWithOptions({});
-    const error = new Error(`${stream} failed`);
-    child[stream]?.emit("error", error);
-    child.emit("close", 0);
+      const login = azLoginDeviceCodeWithOptions({});
+      const error = new Error(`${stream} failed`);
+      child[stream]?.emit("error", error);
 
-    await expect(login).rejects.toThrow(`${stream} failed`);
-  });
+      await expect(login).rejects.toThrow(`${stream} failed`);
+      expect(kill).toHaveBeenCalledOnce();
+    },
+  );
 });
