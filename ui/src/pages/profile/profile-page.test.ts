@@ -50,6 +50,28 @@ function createContext(
   } as unknown as ApplicationContext<RouteId>;
 }
 
+function createCostSummary(cacheStatus?: CostUsageSummary["cacheStatus"]): CostUsageSummary {
+  return {
+    updatedAt: 0,
+    days: 0,
+    daily: [],
+    totals: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      totalCost: 1,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    },
+    ...(cacheStatus ? { cacheStatus } : {}),
+  };
+}
+
 beforeEach(async () => {
   await i18n.setLocale("en");
 });
@@ -85,7 +107,7 @@ it("keeps settled profile usage across a same-client reconnect", async () => {
   page.context = context;
   page.client = client;
   page.connected = true;
-  page.costSummary = { totalCost: 1 } as CostUsageSummary;
+  page.costSummary = createCostSummary();
   page.sessionsResult = { sessions: [] } as unknown as SessionsUsageResult;
 
   page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
@@ -97,7 +119,7 @@ it("keeps settled profile usage across a same-client reconnect", async () => {
 
 it("resumes a settling profile cache after a same-client reconnect", async () => {
   const request = vi.fn(async (method: string) =>
-    method === "sessions.usage" ? { sessions: [] } : { totalCost: 1 },
+    method === "sessions.usage" ? { sessions: [] } : createCostSummary(),
   );
   const client = { request } as unknown as GatewayBrowserClient;
   const context = createContext(client, true);
@@ -105,10 +127,12 @@ it("resumes a settling profile cache after a same-client reconnect", async () =>
   page.context = context;
   page.client = client;
   page.connected = true;
-  page.costSummary = {
-    totalCost: 1,
-    cacheStatus: { status: "refreshing" },
-  } as CostUsageSummary;
+  page.costSummary = createCostSummary({
+    status: "refreshing",
+    cachedFiles: 0,
+    pendingFiles: 1,
+    staleFiles: 0,
+  });
   page.sessionsResult = { sessions: [] } as unknown as SessionsUsageResult;
 
   page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
