@@ -70,6 +70,7 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
 export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
   gatewayPort: number = DEFAULT_GATEWAY_PORT,
+  windowsGatewayArgv: readonly string[] = [],
 ): Promise<string | null> {
   const timestamp = Date.now();
   const platform = process.platform;
@@ -178,6 +179,7 @@ exit "$status"
       const quotedTaskName = powerShellSingleQuote(taskName);
       const gatewayScriptPath = resolveGatewayTaskScriptPath({ ...process.env, ...env });
       const quotedGatewayScriptPath = powerShellSingleQuote(gatewayScriptPath);
+      const expectedGatewayArgv = windowsGatewayArgv.map(powerShellSingleQuote).join(", ");
       filename = `openclaw-restart-${timestamp}.cmd`;
       scriptContent = `@echo off
 REM Standalone restart script - survives parent process termination.
@@ -284,136 +286,322 @@ function Get-OpenClawScheduledTaskState {
   return "Unknown"
 }
 
-function Get-OpenClawListenerPids {
+$nativeSource = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+namespace OpenClaw.Restart {
+  public sealed class ProcessLease : IDisposable {
+    private IntPtr handle;
+    public long CreationTimeFileTime { get; private set; }
+
+    internal ProcessLease(IntPtr handle, long creationTimeFileTime) {
+      this.handle = handle;
+      CreationTimeFileTime = creationTimeFileTime;
+    }
+
+    public bool Terminate() {
+      return handle != IntPtr.Zero && NativeMethods.TerminateProcess(handle, 1);
+    }
+
+    public void Dispose() {
+      if (handle != IntPtr.Zero) {
+        NativeMethods.CloseHandle(handle);
+        handle = IntPtr.Zero;
+      }
+    }
+  }
+
+  public static class NativeMethods {
+    private const uint PROCESS_TERMINATE = 0x0001;
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FILETIME {
+      public uint Low;
+      public uint High;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(
+      IntPtr process,
+      out FILETIME creation,
+      out FILETIME exit,
+      out FILETIME kernel,
+      out FILETIME user
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("shell32.dll", SetLastError = true)]
+    private static extern IntPtr CommandLineToArgvW(
+      [MarshalAs(UnmanagedType.LPWStr)] string commandLine,
+      out int argumentCount
+    );
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    public static ProcessLease TryOpenProcess(int processId) {
+      IntPtr handle = OpenProcess(
+        PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+        false,
+        processId
+      );
+      if (handle == IntPtr.Zero) {
+        return null;
+      }
+
+      FILETIME creation;
+      FILETIME exit;
+      FILETIME kernel;
+      FILETIME user;
+      if (!GetProcessTimes(handle, out creation, out exit, out kernel, out user)) {
+        CloseHandle(handle);
+        return null;
+      }
+
+      long creationTime = ((long)creation.High << 32) | creation.Low;
+      // Win32_Process.CreationDate exposes microseconds. Truncate FILETIME's
+      // finer 100-nanosecond digit so both identity sources compare exactly.
+      long normalizedCreationTime = creationTime - (creationTime % 10);
+      return new ProcessLease(handle, normalizedCreationTime);
+    }
+
+    public static string[] ParseCommandLine(string commandLine) {
+      int argumentCount;
+      IntPtr arguments = CommandLineToArgvW(commandLine, out argumentCount);
+      if (arguments == IntPtr.Zero) {
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+      }
+      try {
+        var result = new List<string>(argumentCount);
+        for (int index = 0; index < argumentCount; index++) {
+          IntPtr argument = Marshal.ReadIntPtr(arguments, index * IntPtr.Size);
+          result.Add(Marshal.PtrToStringUni(argument));
+        }
+        return result.ToArray();
+      } finally {
+        LocalFree(arguments);
+      }
+    }
+  }
+}
+'@
+
+try {
+  Add-Type -TypeDefinition $nativeSource -Language CSharp -ErrorAction Stop
+} catch {
+  Write-RestartLog "openclaw restart native ownership helper unavailable source=update error=$($_.Exception.Message)"
+}
+
+function Get-OpenClawListenerSnapshot {
   param([int]$Port)
-  $listenerPids = @()
 
   try {
     if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
-      $listenerPids += Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-        ForEach-Object { [int]$_.OwningProcess }
+      $listenerPids = @(
+        Get-NetTCPConnection -State Listen -ErrorAction Stop |
+          Where-Object { [int]$_.LocalPort -eq $Port } |
+          ForEach-Object { [int]$_.OwningProcess } |
+          Sort-Object -Unique
+      )
+      return [pscustomobject]@{ Known = $true; Pids = $listenerPids }
     }
   } catch {
+    Write-RestartLog "openclaw restart Get-NetTCPConnection query failed source=update error=$($_.Exception.Message)"
   }
 
-  if ($listenerPids.Count -eq 0) {
-    try {
-      $portPattern = [regex]::Escape(":$Port")
-      $linePattern = "^\\s*TCP\\s+\\S+$portPattern\\s+\\S+\\s+LISTENING\\s+(\\d+)\\s*$"
-      & netstat.exe -ano -p tcp 2>$null | ForEach-Object {
-        if ($_ -match $linePattern) {
-          $listenerPids += [int]$Matches[1]
-        }
-      }
-    } catch {
-    }
-  }
-
-  $listenerPids | Sort-Object -Unique
-}
-
-function Split-OpenClawCommandLine {
-  param([string]$CommandLine)
-  @([regex]::Matches($CommandLine, '[^\\s"]+|"([^"]*)"') | ForEach-Object { $_.Value.Trim('"') })
-}
-
-function Normalize-OpenClawProcessArg {
-  param([string]$Arg)
-  ($Arg -replace '/', '\\').ToLowerInvariant()
-}
-
-function Test-OpenClawGatewayBinaryArg {
-  param([string]$NormalizedArg)
-  return $NormalizedArg -match '(?i)(^|\\\\)openclaw-gateway(\\.exe)?$'
-}
-
-function Test-OpenClawEntrypointArg {
-  param([string]$NormalizedArg)
-  # Generic JS entry names are accepted only while reading the trusted installed
-  # launcher; listener verification later requires an exact launcher-derived arg.
-  return (
-    $NormalizedArg -match '(?i)(^|\\\\)openclaw\\.(cmd|ps1|exe)$' -or
-    $NormalizedArg -match '(?i)\\\\node_modules\\\\openclaw\\\\' -or
-    $NormalizedArg -match '(?i)(^|\\\\)openclaw\\.mjs$' -or
-    $NormalizedArg -match '(?i)(^|\\\\)dist\\\\(index|entry)\\.js$' -or
-    $NormalizedArg -match '(?i)(^|\\\\)scripts\\\\run-node\\.mjs$' -or
-    $NormalizedArg -match '(?i)(^|\\\\)src\\\\(index|entry)\\.ts$'
-  )
-}
-
-function Get-OpenClawInstalledGatewayEntrypoints {
-  param([string]$ScriptPath)
-  $entrypoints = @()
   try {
-    if (-not (Test-Path -LiteralPath $ScriptPath)) {
-      return $entrypoints
+    $netstatOutput = @(& netstat.exe -ano -p tcp 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+      return [pscustomobject]@{ Known = $false; Pids = @() }
     }
-    foreach ($rawLine in Get-Content -LiteralPath $ScriptPath) {
-      $line = $rawLine.Trim()
-      if (-not $line) {
+
+    $listenerPids = @()
+    $localPortPattern = ":" + [regex]::Escape([string]$Port) + '$'
+    foreach ($line in $netstatOutput) {
+      $tokens = @($line.Trim() -split '\\s+' | Where-Object { $_ })
+      if ($tokens.Count -lt 5 -or $tokens[0] -ine "TCP") {
         continue
       }
-      $lower = $line.ToLowerInvariant()
-      if (
-        $lower.StartsWith("@echo") -or
-        $lower.StartsWith("rem ") -or
-        $lower.StartsWith("set ") -or
-        $lower.StartsWith("cd /d ")
-      ) {
+      # Listening rows use a wildcard foreign endpoint with port zero. Avoid the
+      # localized state column entirely; protocol/endpoints/PID stay numeric.
+      if ($tokens[1] -notmatch $localPortPattern -or $tokens[2] -notmatch ':0$') {
         continue
       }
-      foreach ($arg in Split-OpenClawCommandLine -CommandLine $line) {
-        $normalizedArg = Normalize-OpenClawProcessArg -Arg $arg
-        if (
-          (Test-OpenClawEntrypointArg -NormalizedArg $normalizedArg) -or
-          (Test-OpenClawGatewayBinaryArg -NormalizedArg $normalizedArg)
-        ) {
-          $entrypoints += $normalizedArg
-        }
+      $listenerPid = 0
+      if ([int]::TryParse($tokens[-1], [ref]$listenerPid) -and $listenerPid -gt 0) {
+        $listenerPids += $listenerPid
       }
-      break
+    }
+    return [pscustomobject]@{
+      Known = $true
+      Pids = @($listenerPids | Sort-Object -Unique)
     }
   } catch {
-    Write-RestartLog "openclaw restart could not read installed gateway launcher source=update path=$ScriptPath error=$($_.Exception.Message)"
+    Write-RestartLog "openclaw restart netstat query failed source=update error=$($_.Exception.Message)"
+    return [pscustomobject]@{ Known = $false; Pids = @() }
   }
-  $entrypoints | Sort-Object -Unique
 }
 
-function Test-OpenClawGatewayListenerProcess {
-  param(
-    [int]$ProcessId,
-    [string[]]$ExpectedEntrypoints
-  )
+function Get-OpenClawProcessFacts {
+  param([int]$ProcessId)
+
   try {
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
-    if (-not $process) {
-      return $false
+    if (-not $process -or -not $process.CommandLine -or -not $process.CreationDate) {
+      return $null
     }
-
-    $commandLine = [string]$process.CommandLine
-    if (-not $commandLine) {
-      return $false
+    $creationDate = if ($process.CreationDate -is [datetime]) {
+      [datetime]$process.CreationDate
+    } else {
+      [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$process.CreationDate)
     }
-
-    $commandArgs = Split-OpenClawCommandLine -CommandLine $commandLine
-    $hasGatewayCommand = $commandArgs -contains "gateway"
-    $hasGatewayBinary = $false
-    $hasOpenClawEntrypoint = $false
-    foreach ($arg in $commandArgs) {
-      $normalizedArg = Normalize-OpenClawProcessArg -Arg $arg
-      if (Test-OpenClawGatewayBinaryArg -NormalizedArg $normalizedArg) {
-        $hasGatewayBinary = $true
-        break
-      }
-      if ($ExpectedEntrypoints -contains $normalizedArg) {
-        $hasOpenClawEntrypoint = $true
-        break
-      }
+    $creationTimeFileTime = [long]$creationDate.ToUniversalTime().ToFileTimeUtc()
+    $creationTimeFileTime -= $creationTimeFileTime % 10
+    return [pscustomobject]@{
+      ProcessId = [int]$process.ProcessId
+      CreationTimeFileTime = [string]$creationTimeFileTime
+      Argv = @([OpenClaw.Restart.NativeMethods]::ParseCommandLine([string]$process.CommandLine))
     }
-    return $hasGatewayBinary -or ($hasOpenClawEntrypoint -and $hasGatewayCommand)
   } catch {
-    Write-RestartLog "openclaw restart could not verify listener owner source=update pid=$ProcessId error=$($_.Exception.Message)"
+    Write-RestartLog "openclaw restart process query failed source=update pid=$ProcessId error=$($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Test-OpenClawArgvEqual {
+  param([string[]]$Actual, [string[]]$Expected)
+  if ($Actual.Count -ne $Expected.Count) {
     return $false
+  }
+  for ($index = 0; $index -lt $Actual.Count; $index++) {
+    $actualArg = $Actual[$index]
+    $expectedArg = $Expected[$index]
+    # Windows may expand a bare launcher executable in the process command line.
+    # Qualified paths and every non-executable argument remain exact.
+    if ($index -eq 0 -and $expectedArg -notmatch '[\\\\/]') {
+      $actualArg = [IO.Path]::GetFileName($actualArg)
+      if (-not $actualArg.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase)) {
+        $actualArg += '.exe'
+      }
+      if (-not $expectedArg.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase)) {
+        $expectedArg += '.exe'
+      }
+    }
+    if (-not [string]::Equals($actualArg, $expectedArg, [StringComparison]::OrdinalIgnoreCase)) {
+      return $false
+    }
+  }
+  return $true
+}
+
+function Test-OpenClawSameProcess {
+  param($Expected, $Actual)
+  return (
+    $null -ne $Actual -and
+    $Actual.ProcessId -eq $Expected.ProcessId -and
+    $Actual.CreationTimeFileTime -eq $Expected.CreationTimeFileTime -and
+    (Test-OpenClawArgvEqual -Actual $Actual.Argv -Expected $Expected.Argv)
+  )
+}
+
+function Get-OpenClawListenerKillDecision {
+  # Keep this fail-closed branch order aligned with decideWindowsListenerKill.
+  # This standalone script cannot import package code while an update replaces it.
+  param(
+    [int]$CandidatePid,
+    [string[]]$ExpectedArgv,
+    $ObservedProcess,
+    [string]$HeldProcessCreationTimeFileTime,
+    $RecheckedListeners,
+    $RecheckedProcess
+  )
+  if ($ExpectedArgv.Count -eq 0) {
+    return "expected-command-unavailable"
+  }
+  if ($null -eq $ObservedProcess -or $ObservedProcess.ProcessId -ne $CandidatePid) {
+    return "process-unavailable"
+  }
+  if (-not (Test-OpenClawArgvEqual -Actual $ObservedProcess.Argv -Expected $ExpectedArgv)) {
+    return "command-mismatch"
+  }
+  if ($HeldProcessCreationTimeFileTime -ne $ObservedProcess.CreationTimeFileTime) {
+    return "process-replaced"
+  }
+  if (-not $RecheckedListeners.Known) {
+    return "listener-query-unavailable"
+  }
+  if ($RecheckedListeners.Pids -notcontains $CandidatePid) {
+    return "no-longer-listening"
+  }
+  if (-not (Test-OpenClawSameProcess -Expected $ObservedProcess -Actual $RecheckedProcess)) {
+    return "process-replaced"
+  }
+  return "kill"
+}
+
+function Invoke-OpenClawVerifiedListenerKill {
+  param([int]$ProcessId, [int]$Port, [string[]]$ExpectedArgv)
+
+  $observedProcess = Get-OpenClawProcessFacts -ProcessId $ProcessId
+  if ($null -eq $observedProcess) {
+    Write-RestartLog "openclaw restart skipped listener source=update pid=$ProcessId decision=process-unavailable"
+    return
+  }
+  if ($ExpectedArgv.Count -eq 0) {
+    Write-RestartLog "openclaw restart skipped listener source=update pid=$ProcessId decision=expected-command-unavailable"
+    return
+  }
+  if (-not (Test-OpenClawArgvEqual -Actual $observedProcess.Argv -Expected $ExpectedArgv)) {
+    Write-RestartLog "openclaw restart skipped listener source=update pid=$ProcessId decision=command-mismatch"
+    return
+  }
+
+  $lease = $null
+  try {
+    $lease = [OpenClaw.Restart.NativeMethods]::TryOpenProcess($ProcessId)
+    if ($null -eq $lease) {
+      Write-RestartLog "openclaw restart skipped listener source=update pid=$ProcessId decision=process-handle-unavailable"
+      return
+    }
+
+    $recheckedListeners = Get-OpenClawListenerSnapshot -Port $Port
+    $recheckedProcess = Get-OpenClawProcessFacts -ProcessId $ProcessId
+    $decisionParams = @{
+      CandidatePid = $ProcessId
+      ExpectedArgv = $ExpectedArgv
+      ObservedProcess = $observedProcess
+      HeldProcessCreationTimeFileTime = [string]$lease.CreationTimeFileTime
+      RecheckedListeners = $recheckedListeners
+      RecheckedProcess = $recheckedProcess
+    }
+    $decision = Get-OpenClawListenerKillDecision @decisionParams
+    if ($decision -ne "kill") {
+      Write-RestartLog "openclaw restart skipped listener source=update pid=$ProcessId decision=$decision"
+      return
+    }
+
+    if ($lease.Terminate()) {
+      Write-RestartLog "openclaw restart killed stale listener source=update pid=$ProcessId"
+    } else {
+      Write-RestartLog "openclaw restart failed to kill stale listener source=update pid=$ProcessId"
+    }
+  } catch {
+    Write-RestartLog "openclaw restart ownership verification failed source=update pid=$ProcessId error=$($_.Exception.Message)"
+  } finally {
+    if ($null -ne $lease) {
+      $lease.Dispose()
+    }
   }
 }
 
@@ -438,7 +626,7 @@ function Invoke-OpenClawStartupLauncher {
 $taskName = ${quotedTaskName}
 $port = ${port}
 $gatewayScriptPath = ${quotedGatewayScriptPath}
-$expectedGatewayEntrypoints = @(Get-OpenClawInstalledGatewayEntrypoints -ScriptPath $gatewayScriptPath)
+$expectedGatewayArgv = @(${expectedGatewayArgv})
 Write-RestartLog "openclaw restart attempt source=update target=$taskName"
 
 $taskState = Get-OpenClawScheduledTaskState -TaskName $taskName
@@ -452,23 +640,24 @@ if ($taskState -eq "Running") {
 }
 
 for ($attempt = 1; $attempt -le 10; $attempt++) {
-  $listeners = @(Get-OpenClawListenerPids -Port $port)
+  $listenerSnapshot = Get-OpenClawListenerSnapshot -Port $port
+  if (-not $listenerSnapshot.Known) {
+    if ($attempt -eq 10) {
+      Write-RestartLog "openclaw restart listener ownership unavailable source=update; refusing force-kill"
+      break
+    }
+    Start-Sleep -Seconds 1
+    continue
+  }
+
+  $listeners = @($listenerSnapshot.Pids)
   if ($listeners.Count -eq 0) {
     break
   }
 
   if ($attempt -eq 10) {
     foreach ($listenerPid in $listeners) {
-      if (Test-OpenClawGatewayListenerProcess -ProcessId $listenerPid -ExpectedEntrypoints $expectedGatewayEntrypoints) {
-        try {
-          Stop-Process -Id $listenerPid -Force -ErrorAction Stop
-          Write-RestartLog "openclaw restart killed stale listener source=update pid=$listenerPid"
-        } catch {
-          Write-RestartLog "openclaw restart failed to kill stale listener source=update pid=$listenerPid error=$($_.Exception.Message)"
-        }
-      } else {
-        Write-RestartLog "openclaw restart skipped non-openclaw listener source=update pid=$listenerPid"
-      }
+      Invoke-OpenClawVerifiedListenerKill -ProcessId $listenerPid -Port $port -ExpectedArgv $expectedGatewayArgv
     }
     break
   }

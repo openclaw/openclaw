@@ -4025,6 +4025,12 @@ describe("update-cli", () => {
 
     expect(serviceStop).toHaveBeenCalledTimes(1);
     expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
+    expect(prepareRestartScript).toHaveBeenCalledWith(expect.anything(), expect.any(Number), [
+      "node",
+      serviceEntrypoint,
+      "gateway",
+      "run",
+    ]);
     const serviceStopCall = serviceStop.mock.calls[0]?.[0] as
       | { env?: NodeJS.ProcessEnv }
       | undefined;
@@ -4062,7 +4068,11 @@ describe("update-cli", () => {
 
     expect(serviceStop).toHaveBeenCalledTimes(1);
     expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
-    expect(prepareRestartScript).toHaveBeenCalled();
+    expect(prepareRestartScript).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Number),
+      undefined,
+    );
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(preparations).toEqual([
