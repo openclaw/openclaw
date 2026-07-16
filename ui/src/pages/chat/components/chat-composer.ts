@@ -56,6 +56,7 @@ import {
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
+import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import {
   renderChatVoiceError,
   renderMicrophoneActivity,
@@ -1160,68 +1161,6 @@ function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   `;
 }
 
-function renderPlanChecklist(status: PlanStatus | null | undefined, active: boolean) {
-  if (!active || !status || status.steps.length === 0) {
-    return nothing;
-  }
-  const completed = status.steps.filter((step) => step.status === "completed").length;
-  let current = status.steps.find((step) => step.status === "in_progress");
-  if (!current) {
-    for (let index = status.steps.length - 1; index >= 0; index -= 1) {
-      const step = status.steps[index];
-      if (step?.status === "completed") {
-        current = step;
-        break;
-      }
-    }
-  }
-  current ??= status.steps[0];
-  if (!current) {
-    return nothing;
-  }
-  const statusLabels: Record<PlanStatus["steps"][number]["status"], string> = {
-    completed: "completed",
-    in_progress: "in progress",
-    pending: "pending",
-  };
-  return html`
-    <details class="plan-checklist">
-      <summary
-        class="plan-checklist__summary"
-        aria-label=${`Plan: ${current.step}. ${completed} of ${status.steps.length} completed`}
-      >
-        <span class="plan-checklist__current-marker" aria-hidden="true">▸</span>
-        <span class="plan-checklist__current">${current.step}</span>
-        <span class="plan-checklist__count">${completed}/${status.steps.length}</span>
-      </summary>
-      <div class="plan-checklist__body">
-        ${status.explanation
-          ? html`<div class="plan-checklist__explanation">${status.explanation}</div>`
-          : nothing}
-        <ol class="plan-checklist__steps">
-          ${status.steps.map(
-            (step) => html`
-              <li
-                class=${`plan-checklist__step plan-checklist__step--${step.status}`}
-                aria-label=${`${step.step}, ${statusLabels[step.status]}`}
-              >
-                <span class="plan-checklist__step-marker" aria-hidden="true"
-                  >${step.status === "completed"
-                    ? "✓"
-                    : step.status === "in_progress"
-                      ? "▸"
-                      : "▢"}</span
-                >
-                <span class="plan-checklist__step-text">${step.step}</span>
-              </li>
-            `,
-          )}
-        </ol>
-      </div>
-    </details>
-  `;
-}
-
 type ContextNoticeOptions = {
   compactBusy?: boolean;
   compactDisabled?: boolean;
@@ -2256,7 +2195,10 @@ export function renderChatComposer(props: ChatComposerProps) {
             `
           : nothing}
         <div class="agent-chat__composer-status-stack">
-          ${renderPlanChecklist(props.planStatus, showAbortableUi)}
+          ${renderChatPlanChecklist(props.planStatus, {
+            active: showAbortableUi,
+            variant: "bar",
+          })}
           ${renderFallbackIndicator(props.fallbackStatus)}
           ${renderCompactionIndicator(props.compactionStatus)}
           ${renderChatGoal(state, activeSession?.goal, {

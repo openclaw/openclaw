@@ -35,6 +35,17 @@ inputs:
       alongside.
     required: false
     default: "false"
+  vitest-fs-cache:
+    description: Whether to persist Vitest's experimental filesystem module cache.
+    required: false
+    default: "false"
+  save-vitest-fs-cache:
+    description: >
+      Whether this job may save the shared Vitest filesystem module cache.
+      Other matrix jobs restore the warm seed without committing competing
+      snapshots.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -91,6 +102,47 @@ runs:
         # v1.4.0 skips commit after failed/cancelled steps or ambiguous failure
         # detection, so an incomplete first hydration cannot seed this key.
         commit: if-missing
+
+    - name: Mount Vitest transform cache sticky disk
+      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk == 'true' && runner.os != 'Windows'
+      uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+      with:
+        # Match dependency-cache trust scoping. Vitest content-addresses module
+        # entries; the lockfile key rotates dependency/plugin generations.
+        key: ${{ github.repository }}-vitest-fs-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}
+        path: /var/tmp/openclaw-vitest-fs-cache
+        commit: ${{ inputs.save-vitest-fs-cache == 'true' && 'on-change' || 'false' }}
+
+    - name: Restore and save Vitest transform cache
+      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk != 'true' && inputs.save-vitest-fs-cache == 'true' && runner.os != 'Windows'
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: /var/tmp/openclaw-vitest-fs-cache
+        # actions/cache entries are immutable. One matrix job writes a new
+        # run key; every job restores the newest cache through coarse prefixes.
+        key: ${{ github.repository }}-vitest-fs-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ github.repository }}-vitest-fs-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}-
+
+    - name: Restore Vitest transform cache
+      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk != 'true' && inputs.save-vitest-fs-cache != 'true' && runner.os != 'Windows'
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: /var/tmp/openclaw-vitest-fs-cache
+        key: ${{ github.repository }}-vitest-fs-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ github.repository }}-vitest-fs-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}-
+
+    - name: Configure Vitest transform cache
+      if: inputs.vitest-fs-cache == 'true' && runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cache_root=/var/tmp/openclaw-vitest-fs-cache
+        mkdir -p "$cache_root"
+        # The shard runner treats this as a persistent root and assigns one
+        # isolated subdirectory per concurrent Vitest worker.
+        echo "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root" >> "$GITHUB_ENV"
 
     # Post actions run last-in-first-out. Register after stickydisk so this bind
     # is gone before stickydisk flushes, unmounts, and snapshots its filesystem.

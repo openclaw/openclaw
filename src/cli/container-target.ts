@@ -184,7 +184,7 @@ function isLoopbackProxyHostname(hostname: string): boolean {
     return true;
   }
   if (isIP(normalizedHostname) === 4) {
-    return normalizedHostname.split(".", 1)[0] === "127";
+    return normalizedHostname.startsWith("127.");
   }
   const ipv6Hostname = normalizedHostname.replace(/^\[|\]$/g, "");
   if (isIP(ipv6Hostname) !== 6) {

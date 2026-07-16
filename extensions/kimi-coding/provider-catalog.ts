@@ -3,13 +3,13 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
 const KIMI_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_USER_AGENT = "claude-code/0.1.0";
 const KIMI_DEFAULT_MODEL_ID = "kimi-for-coding";
 // Kimi's Claude Code endpoint uses k3[1m] as the wire id for the 1M plan;
 // normalizing it to k3 would lose the server-side context entitlement signal.
-const KIMI_K3_MODEL_IDS = ["k3", "k3[1m]"] as const;
 const KIMI_LEGACY_MODEL_IDS = ["kimi-code", "k2p5"] as const;
 const KIMI_CODING_DEFAULT_CONTEXT_WINDOW = 262144;
 const KIMI_CODING_DEFAULT_MAX_TOKENS = 32768;
@@ -73,10 +73,6 @@ export function normalizeKimiCodingModelId(modelId: string): string {
   return KIMI_LEGACY_MODEL_IDS.includes(modelId as (typeof KIMI_LEGACY_MODEL_IDS)[number])
     ? KIMI_DEFAULT_MODEL_ID
     : modelId;
-}
-
-export function isKimiK3ModelId(modelId: string): boolean {
-  return KIMI_K3_MODEL_IDS.includes(modelId as (typeof KIMI_K3_MODEL_IDS)[number]);
 }
 
 export const KIMI_CODING_BASE_URL = KIMI_BASE_URL;

@@ -1777,6 +1777,53 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("persists isolated Vitest transform caches for Linux Node shards", () => {
+    const workflow = readCiWorkflow();
+    const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    const setupNodeStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const stickyStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Mount Vitest transform cache sticky disk",
+    );
+    const writerStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Restore and save Vitest transform cache",
+    );
+    const readerStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Restore Vitest transform cache",
+    );
+    const configureStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Configure Vitest transform cache",
+    );
+
+    expect(setupNodeStep.with).toMatchObject({
+      "vitest-fs-cache": "true",
+      "save-vitest-fs-cache": "${{ strategy.job-index == 0 && 'true' || 'false' }}",
+    });
+    expect(action.inputs["vitest-fs-cache"].default).toBe("false");
+    expect(action.inputs["save-vitest-fs-cache"].default).toBe("false");
+    expect(stickyStep).toMatchObject({
+      uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
+      with: {
+        path: "/var/tmp/openclaw-vitest-fs-cache",
+        commit: "${{ inputs.save-vitest-fs-cache == 'true' && 'on-change' || 'false' }}",
+      },
+    });
+    expect(stickyStep.if).toContain("inputs.sticky-disk == 'true'");
+    expect(stickyStep.with.key).toContain("vitest-fs-v1-");
+    expect(stickyStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
+    expect(stickyStep.with.key).toContain("hashFiles('pnpm-lock.yaml')");
+    expect(writerStep.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
+    expect(writerStep.if).toContain("inputs.save-vitest-fs-cache == 'true'");
+    expect(writerStep.with.key).toContain("github.run_id");
+    expect(writerStep.with["restore-keys"]).toContain("hashFiles('pnpm-lock.yaml')");
+    expect(readerStep.uses).toBe(CACHE_V5);
+    expect(readerStep.if).toContain("inputs.save-vitest-fs-cache != 'true'");
+    expect(readerStep.with["restore-keys"]).toBe(writerStep.with["restore-keys"]);
+    expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
+  });
+
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
