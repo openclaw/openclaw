@@ -83,6 +83,16 @@ and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
 workspace through their normal setup flow.
 
+After inference passes, onboarding checks for memories from supported local AI
+tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
+files. When it finds any, one page offers to copy them into the agent workspace
+under `memory/imports/` for indexed recall. Nothing is imported without
+confirmation, previously imported files are skipped, and you can always import
+later from the Control UI [Memory import page](/web/control-ui), which offers
+the same memory-only scope. (A full [`openclaw migrate`](/cli/migrate) run is
+broader: it can also import config, skills, and credentials.) The classic
+wizard shows the same page after it prepares the workspace.
+
 After inference passes, guided onboarding immediately starts OpenClaw with
 the verified model. OpenClaw can then configure the workspace, Gateway,
 channels, agents, plugins, and other optional features. Inside OpenClaw, use

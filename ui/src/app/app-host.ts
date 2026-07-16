@@ -16,6 +16,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
+import "../components/onboarding-memory-import.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
@@ -451,6 +452,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   private readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   private readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
   @query("openclaw-command-palette") private commandPalette?: CommandPaletteElement;
+  @query("openclaw-exec-approval")
+  private approvalOverlay?: HTMLElement & { show(): void };
   private commandPaletteTarget?: CommandPaletteTargetDetail;
   private navDrawerTrigger: HTMLElement | null = null;
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
@@ -1324,6 +1327,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .updateRunning=${overlaySnapshot.updateRunning}
                 .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
+                .onOpenApprovals=${() => this.approvalOverlay?.show()}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
                   const search = newSessionSearch(agentId, target);
@@ -1427,6 +1431,12 @@ class OpenClawShell extends OpenClawLightDomElement {
             this.navigate("nodes");
           },
         })}
+        ${this.onboarding
+          ? html`<openclaw-onboarding-memory-import
+              .active=${true}
+              .context=${context}
+            ></openclaw-onboarding-memory-import>`
+          : nothing}
       </div>
     `;
   }

@@ -39,6 +39,7 @@
           "windows": ["main"],
           "permissions": [
             "allow-bootstrap",
+            "allow-build-info",
             "allow-check-for-updates",
             "allow-connect-discovered-gateway",
             "allow-discover-gateways",

@@ -27,6 +27,7 @@ export const it: TranslationMap = {
     close: "Chiudi",
     previous: "Precedente",
     next: "Prossimo",
+    continue: "Continua",
     back: "Indietro",
     create: "Crea",
     copy: "Copia",
@@ -1701,6 +1702,7 @@ export const it: TranslationMap = {
   tabs: {
     agents: "Agenti",
     activity: "Attività",
+    approvals: "Approvazioni",
     workboard: "Bacheca di lavoro",
     worktrees: "Worktree",
     channels: "Canali",
@@ -1733,6 +1735,7 @@ export const it: TranslationMap = {
   subtitles: {
     agents: "Spazi di lavoro, strumenti, identità.",
     activity: "Riepiloghi dell'attività degli strumenti locali al browser.",
+    approvals: "Approvazioni recenti di esecuzioni, plugin e agenti di sistema.",
     workboard: "Coda di lavoro degli agenti e passaggio di sessione.",
     worktrees: "Checkout isolati delle attività degli agenti e snapshot di ripristino.",
     channels: "Canali e impostazioni.",
@@ -1878,6 +1881,28 @@ export const it: TranslationMap = {
     replaceExisting: "Sostituisci importazioni esistenti",
     replaceHint:
       "Visualizza nuovamente l'anteprima dei conflitti e conserva i backup degli elementi prima della sostituzione.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Porta con te la memoria del tuo assistente",
+      body: "OpenClaw ha trovato la memoria di altri assistenti di programmazione. Importarla nell'area di lavoro del tuo agente?",
+      plannedCount: "{count} pronti per l'importazione",
+      alreadyImported: "Già importati: {count}",
+      sourceUnavailable: "Percorso di origine non disponibile",
+      import: "Importa",
+      skip: "Salta",
+      reviewDetails: "Rivedi i dettagli",
+      importingProvider: "Importazione in corso…",
+      providerResult: "Migrati: {migrated}, ignorati: {skipped}",
+      providerIncomplete:
+        "Migrati: {migrated}, ignorati: {skipped}, non riusciti: {errors}, conflitti: {conflicts}",
+      providerError: "Importazione non riuscita: {error}",
+      connectionChanged:
+        "Operazione ignorata: la connessione al Gateway è cambiata durante l'importazione",
+      unknownError: "Richiesta non riuscita",
+      doneTitle: "Importazione della memoria completata",
+      doneBody: "Migrati: {migrated}, ignorati: {skipped}. Puoi continuare a configurare OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Gestisci i server nella pagina Plugins.",
@@ -2774,6 +2799,56 @@ export const it: TranslationMap = {
     cronOverdue: "{count} processi cron scaduti",
     modelAuthExpired: "Autenticazione del modello scaduta: {providers}",
     modelAuthExpiring: "Autenticazione del modello in scadenza: {providers}",
+    pendingApproval: "{count} approvazione in sospeso",
+    pendingApprovals: "{count} approvazioni in sospeso",
+  },
+  approvalHistory: {
+    description:
+      "Approvazioni di esecuzioni nel terminale, plugin e agenti di sistema registrate da questo gateway, dalla più recente.",
+    loading: "Caricamento della cronologia delle approvazioni…",
+    loadingMore: "Caricamento…",
+    loadMore: "Carica altro",
+    empty: "Nessuna approvazione risolta nella finestra mobile di 30 giorni.",
+    retention: "La cronologia delle approvazioni copre una finestra mobile di 30 giorni.",
+    offline: "Connettiti al gateway per caricare la cronologia delle approvazioni.",
+    invalidResponse:
+      "Il gateway ha restituito una risposta non valida per la cronologia delle approvazioni.",
+    unknown: "Sconosciuto",
+    notApplicable: "N/D",
+    columns: {
+      resolved: "Risolta",
+      kind: "Tipo",
+      request: "Richiesta",
+      decision: "Decisione",
+      reason: "Motivo della risoluzione",
+      source: "Agente / sessione di origine",
+      resolver: "Responsabile della risoluzione",
+    },
+    kinds: {
+      exec: "Esecuzione",
+      plugin: "Plugin",
+      systemAgent: "Agente di sistema",
+    },
+    statuses: {
+      allowed: "Consentita",
+      denied: "Negato",
+      expired: "Scaduto",
+      cancelled: "Annullato",
+    },
+    decisions: {
+      allowOnce: "Consenti una volta",
+      allowAlways: "Consenti sempre",
+      deny: "Nega",
+    },
+    reasons: {
+      user: "Decisione dell'utente",
+      timeout: "Tempo scaduto",
+      malformedVerdict: "Verdetto non valido",
+      noRoute: "Nessun percorso",
+      runAborted: "Esecuzione interrotta",
+      gatewayRestart: "Riavvio del Gateway",
+      storageCorrupt: "Archivio danneggiato",
+    },
   },
   palette: {
     placeholder: "Cerca chat e comandi…",

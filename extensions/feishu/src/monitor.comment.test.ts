@@ -742,7 +742,7 @@ describe("resolveDriveCommentEventTurn", () => {
   });
 
   it("retries comment reply lookup when the requested reply is not immediately visible", async () => {
-    const waitMs = vi.fn(async () => true);
+    vi.useFakeTimers();
     const client = makeOpenApiClient({
       includeTargetReplyInBatch: false,
       repliesSequence: [
@@ -770,7 +770,7 @@ describe("resolveDriveCommentEventTurn", () => {
       ],
     });
 
-    const turn = await resolveDriveCommentEventTurn({
+    const turnPromise = resolveDriveCommentEventTurn({
       cfg: buildMonitorConfig(),
       accountId: "default",
       event: makeDriveCommentEvent({
@@ -782,14 +782,17 @@ describe("resolveDriveCommentEventTurn", () => {
       }),
       botOpenId: "ou_bot",
       createClient: () => client as never,
-      waitMs,
     });
+
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const turn = await turnPromise;
 
     expect(turn?.targetReplyText).toBe("Insert a sentence below this paragraph");
     expect(turn?.prompt).toContain("Insert a sentence below this paragraph");
-    expect(waitMs).toHaveBeenCalledTimes(2);
-    expect(waitMs).toHaveBeenNthCalledWith(1, 1000, undefined);
-    expect(waitMs).toHaveBeenNthCalledWith(2, 1000, undefined);
+    expect(vi.getTimerCount()).toBe(0);
     expect(
       client.request.mock.calls.filter(
         ([request]: [{ method: string; url: string }]) =>

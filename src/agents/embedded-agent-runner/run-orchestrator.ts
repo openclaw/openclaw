@@ -26,14 +26,14 @@ import {
   type SessionSuspensionParams,
 } from "../session-suspension.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { executePreparedEmbeddedRun } from "./run-execution.js";
 import {
+  createEmbeddedRunStageSummaryEmitter,
   createEmbeddedRunStageTracker,
-  formatEmbeddedRunStageSummary,
-  shouldWarnEmbeddedRunStageSummary,
 } from "./run/attempt-stage-timing.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import { buildHandledReplyPayloads } from "./run/handled-reply.js";
@@ -161,6 +161,13 @@ async function runEmbeddedAgentInternal(
     throwIfAborted();
     return enqueueGlobal(async () => {
       throwIfAborted();
+      // Subscription-scoped claude-cli auth executes via the CLI backend;
+      // resolved post-admission so dispatched runs obey the same lifecycle,
+      // placement, and concurrency gates as native embedded runs.
+      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible(params);
+      if (cliDispatched) {
+        return cliDispatched;
+      }
       const started = Date.now();
       const startupStages = createEmbeddedRunStageTracker();
       const progressController = createEmbeddedRunProgressController({
@@ -169,22 +176,13 @@ async function runEmbeddedAgentInternal(
         startedAtMs: started,
       });
       const { notifyExecutionPhase } = progressController;
-      const emitStartupStageSummary = (phase: string) => {
-        const summary = startupStages.snapshot();
-        const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
-        if (!shouldWarn && !log.isEnabled("trace")) {
-          return;
-        }
-        const message = formatEmbeddedRunStageSummary(
-          `[trace:embedded-run] startup stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
-          summary,
-        );
-        if (shouldWarn) {
-          log.warn(message);
-        } else {
-          log.trace(message);
-        }
-      };
+      const emitStartupStageSummary = createEmbeddedRunStageSummaryEmitter({
+        label: "startup stages",
+        log,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        tracker: startupStages,
+      });
       params.onExecutionStarted?.({ lifecycleGeneration });
       notifyExecutionPhase("runner_entered");
       const workspaceResolution = resolveRunWorkspaceDir({

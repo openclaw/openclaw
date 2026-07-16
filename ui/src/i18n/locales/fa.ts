@@ -27,6 +27,7 @@ export const fa: TranslationMap = {
     close: "بستن",
     previous: "قبلی",
     next: "بعدی",
+    continue: "ادامه",
     back: "بازگشت",
     create: "ایجاد",
     copy: "کپی",
@@ -1682,6 +1683,7 @@ export const fa: TranslationMap = {
   tabs: {
     agents: "عامل‌ها",
     activity: "فعالیت",
+    approvals: "تأییدها",
     workboard: "تابلوی کار",
     worktrees: "Worktreeها",
     channels: "کانال‌ها",
@@ -1714,6 +1716,7 @@ export const fa: TranslationMap = {
   subtitles: {
     agents: "فضاهای کاری، ابزارها، هویت‌ها.",
     activity: "خلاصه‌های فعالیت ابزار در مرورگر محلی.",
+    approvals: "تأییدهای اخیر اجرای دستور، افزونه و عامل سیستم.",
     workboard: "صف کار عامل و واگذاری جلسه.",
     worktrees: "checkoutهای ایزولهٔ وظایف عامل و snapshotهای بازیابی.",
     channels: "کانال‌ها و تنظیمات.",
@@ -1858,6 +1861,28 @@ export const fa: TranslationMap = {
     replaceExisting: "جایگزینی موارد واردشده موجود",
     replaceHint:
       "تداخل‌ها را دوباره پیش‌نمایش کنید و پیش از جایگزینی، نسخه‌های پشتیبان موارد را حفظ کنید.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "حافظه دستیار خود را همراه بیاورید",
+      body: "OpenClaw حافظه‌ای از دستیارهای کدنویسی دیگر پیدا کرد. آن را به فضای کاری عامل خود وارد می‌کنید؟",
+      plannedCount: "{count} مورد آماده وارد کردن",
+      alreadyImported: "قبلاً واردشده: {count}",
+      sourceUnavailable: "مسیر منبع در دسترس نیست",
+      import: "وارد کردن",
+      skip: "رد کردن",
+      reviewDetails: "بررسی جزئیات",
+      importingProvider: "در حال وارد کردن…",
+      providerResult: "{migrated} مورد منتقل شد، {skipped} مورد نادیده گرفته شد",
+      providerIncomplete:
+        "{migrated} مورد منتقل شد، {skipped} مورد نادیده گرفته شد، {errors} مورد ناموفق بود، {conflicts} مورد تداخل داشت",
+      providerError: "وارد کردن ناموفق بود: {error}",
+      connectionChanged: "نادیده گرفته شد: اتصال Gateway هنگام وارد کردن تغییر کرد",
+      unknownError: "درخواست ناموفق بود",
+      doneTitle: "وارد کردن حافظه پایان یافت",
+      doneBody:
+        "{migrated} مورد منتقل شد، {skipped} مورد نادیده گرفته شد. می‌توانید راه‌اندازی OpenClaw را ادامه دهید.",
+    },
   },
   mcpPage: {
     manageServersLink: "مدیریت سرورها در صفحه Plugins.",
@@ -2740,6 +2765,55 @@ export const fa: TranslationMap = {
     cronOverdue: "{count} کار cron از موعد گذشته است",
     modelAuthExpired: "احراز هویت مدل منقضی شده است: {providers}",
     modelAuthExpiring: "احراز هویت مدل در حال انقضا است: {providers}",
+    pendingApproval: "{count} تأیید در انتظار",
+    pendingApprovals: "{count} تأیید در انتظار",
+  },
+  approvalHistory: {
+    description:
+      "تأییدهای اجرای دستور در ترمینال، افزونه و عامل سیستم که توسط این Gateway ثبت شده‌اند، از جدیدترین به قدیمی‌ترین.",
+    loading: "در حال بارگیری تاریخچه تأییدها…",
+    loadingMore: "در حال بارگیری…",
+    loadMore: "بارگیری بیشتر",
+    empty: "هیچ تأیید نهایی‌شده‌ای در بازه چرخشی ۳۰روزه وجود ندارد.",
+    retention: "تاریخچه تأییدها در یک بازه چرخشی ۳۰روزه نگهداری می‌شود.",
+    offline: "برای بارگیری تاریخچه تأییدها به Gateway متصل شوید.",
+    invalidResponse: "Gateway پاسخی نامعتبر برای تاریخچه تأییدها برگرداند.",
+    unknown: "نامشخص",
+    notApplicable: "نامرتبط",
+    columns: {
+      resolved: "نهایی‌شده",
+      kind: "نوع",
+      request: "درخواست",
+      decision: "تصمیم",
+      reason: "دلیل نتیجه",
+      source: "عامل / نشست مبدأ",
+      resolver: "تصمیم‌گیرنده",
+    },
+    kinds: {
+      exec: "اجرای دستور",
+      plugin: "افزونه",
+      systemAgent: "عامل سیستم",
+    },
+    statuses: {
+      allowed: "مجاز",
+      denied: "رد شده",
+      expired: "منقضی‌شده",
+      cancelled: "لغوشده",
+    },
+    decisions: {
+      allowOnce: "یک‌بار اجازه داده شود",
+      allowAlways: "همیشه اجازه داده شود",
+      deny: "رد",
+    },
+    reasons: {
+      user: "تصمیم کاربر",
+      timeout: "مهلت به پایان رسید",
+      malformedVerdict: "نتیجه با قالب نامعتبر",
+      noRoute: "هیچ مسیری وجود ندارد",
+      runAborted: "اجرا متوقف شد",
+      gatewayRestart: "راه‌اندازی مجدد Gateway",
+      storageCorrupt: "فضای ذخیره‌سازی خراب است",
+    },
   },
   palette: {
     placeholder: "جستجوی گفتگوها و فرمان‌ها…",

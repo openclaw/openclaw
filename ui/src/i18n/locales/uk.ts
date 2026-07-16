@@ -27,6 +27,7 @@ export const uk: TranslationMap = {
     close: "Закрити",
     previous: "Попередній",
     next: "Наступний",
+    continue: "Продовжити",
     back: "Назад",
     create: "Створити",
     copy: "Копіювати",
@@ -1690,6 +1691,7 @@ export const uk: TranslationMap = {
   tabs: {
     agents: "Агенти",
     activity: "Активність",
+    approvals: "Погодження",
     workboard: "Робоча дошка",
     worktrees: "Worktrees",
     channels: "Канали",
@@ -1722,6 +1724,7 @@ export const uk: TranslationMap = {
   subtitles: {
     agents: "Робочі простори, інструменти, ідентичності.",
     activity: "Підсумки активності інструментів, локальні для браузера.",
+    approvals: "Нещодавні схвалення виконання команд, плагінів і системних агентів.",
     workboard: "Черга завдань агента та передавання сеансів.",
     worktrees: "Ізольовані копії для завдань агентів і знімки для відновлення.",
     channels: "Канали та налаштування.",
@@ -1867,6 +1870,28 @@ export const uk: TranslationMap = {
     replaceExisting: "Замінити наявні імпортовані дані",
     replaceHint:
       "Ще раз перегляньте конфлікти та збережіть резервні копії елементів перед заміною.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Перенесіть із собою пам’ять асистента",
+      body: "OpenClaw виявив пам’ять інших асистентів для програмування. Імпортувати її до робочого простору вашого агента?",
+      plannedCount: "{count} готово до імпорту",
+      alreadyImported: "Уже імпортовано: {count}",
+      sourceUnavailable: "Шлях до джерела недоступний",
+      import: "Імпортувати",
+      skip: "Пропустити",
+      reviewDetails: "Переглянути деталі",
+      importingProvider: "Імпортування…",
+      providerResult: "Перенесено: {migrated}, пропущено: {skipped}",
+      providerIncomplete:
+        "Перенесено: {migrated}, пропущено: {skipped}, помилок: {errors}, конфліктів: {conflicts}",
+      providerError: "Не вдалося імпортувати: {error}",
+      connectionChanged: "Пропущено: підключення до Gateway змінилося під час імпорту",
+      unknownError: "Не вдалося виконати запит",
+      doneTitle: "Імпорт пам’яті завершено",
+      doneBody:
+        "Перенесено: {migrated}, пропущено: {skipped}. Можна продовжити налаштування OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Керуйте серверами на сторінці Плагінів.",
@@ -2753,6 +2778,55 @@ export const uk: TranslationMap = {
     cronOverdue: "Прострочені завдання cron: {count}",
     modelAuthExpired: "Термін автентифікації моделі минув: {providers}",
     modelAuthExpiring: "Термін автентифікації моделі спливає: {providers}",
+    pendingApproval: "{count} схвалення очікує",
+    pendingApprovals: "{count} схвалень очікують",
+  },
+  approvalHistory: {
+    description:
+      "Схвалення виконання команд у терміналі, плагінів і системних агентів, зареєстровані цим Gateway, від найновіших до найстаріших.",
+    loading: "Завантаження історії схвалень…",
+    loadingMore: "Завантаження…",
+    loadMore: "Завантажити ще",
+    empty: "За останні 30 днів немає завершених схвалень.",
+    retention: "Історія схвалень зберігається за останні 30 днів.",
+    offline: "Підключіться до Gateway, щоб завантажити історію схвалень.",
+    invalidResponse: "Gateway повернув недійсну відповідь з історією схвалень.",
+    unknown: "Невідомо",
+    notApplicable: "Н/Д",
+    columns: {
+      resolved: "Завершено",
+      kind: "Тип",
+      request: "Запит",
+      decision: "Рішення",
+      reason: "Причина рішення",
+      source: "Агент-джерело / сеанс",
+      resolver: "Хто вирішив",
+    },
+    kinds: {
+      exec: "Виконання команди",
+      plugin: "Плагін",
+      systemAgent: "Системний агент",
+    },
+    statuses: {
+      allowed: "Дозволено",
+      denied: "Відхилено",
+      expired: "Застарів",
+      cancelled: "Скасовано",
+    },
+    decisions: {
+      allowOnce: "Дозволити один раз",
+      allowAlways: "Завжди дозволяти",
+      deny: "Заборонити",
+    },
+    reasons: {
+      user: "Рішення користувача",
+      timeout: "Час очікування минув",
+      malformedVerdict: "Некоректний вердикт",
+      noRoute: "Немає маршруту",
+      runAborted: "Виконання перервано",
+      gatewayRestart: "Перезапуск Gateway",
+      storageCorrupt: "Сховище пошкоджено",
+    },
   },
   palette: {
     placeholder: "Пошук чатів і команд…",

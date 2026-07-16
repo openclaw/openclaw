@@ -27,6 +27,7 @@ export const vi: TranslationMap = {
     close: "Đóng",
     previous: "Trước",
     next: "Tiếp theo",
+    continue: "Tiếp tục",
     back: "Quay lại",
     create: "Tạo",
     copy: "Sao chép",
@@ -1685,6 +1686,7 @@ export const vi: TranslationMap = {
   tabs: {
     agents: "Agent",
     activity: "Hoạt động",
+    approvals: "Phê duyệt",
     workboard: "Bảng công việc",
     worktrees: "Worktree",
     channels: "Kênh",
@@ -1717,6 +1719,7 @@ export const vi: TranslationMap = {
   subtitles: {
     agents: "Không gian làm việc, công cụ, danh tính.",
     activity: "Tóm tắt hoạt động công cụ cục bộ trên trình duyệt.",
+    approvals: "Các phê duyệt gần đây cho lệnh thực thi, plugin và tác nhân hệ thống.",
     workboard: "Hàng đợi công việc của tác nhân và bàn giao phiên.",
     worktrees: "Các bản checkout tác vụ agent được cô lập và snapshot khôi phục.",
     channels: "Kênh và cài đặt.",
@@ -1862,6 +1865,28 @@ export const vi: TranslationMap = {
     replaceExisting: "Thay thế các mục đã nhập hiện có",
     replaceHint:
       "Xem trước lại các xung đột và giữ lại bản sao lưu của từng mục trước khi thay thế.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Mang theo bộ nhớ của trợ lý",
+      body: "OpenClaw đã tìm thấy bộ nhớ từ các trợ lý lập trình khác. Nhập bộ nhớ đó vào không gian làm việc của tác nhân?",
+      plannedCount: "{count} mục sẵn sàng để nhập",
+      alreadyImported: "Đã nhập: {count}",
+      sourceUnavailable: "Đường dẫn nguồn không khả dụng",
+      import: "Nhập",
+      skip: "Bỏ qua",
+      reviewDetails: "Xem lại chi tiết",
+      importingProvider: "Đang nhập…",
+      providerResult: "Đã di chuyển {migrated}, bỏ qua {skipped}",
+      providerIncomplete:
+        "Đã di chuyển {migrated}, bỏ qua {skipped}, {errors} thất bại, {conflicts} xung đột",
+      providerError: "Nhập thất bại: {error}",
+      connectionChanged: "Đã bỏ qua: kết nối Gateway đã thay đổi trong quá trình nhập",
+      unknownError: "Yêu cầu thất bại",
+      doneTitle: "Đã hoàn tất nhập bộ nhớ",
+      doneBody:
+        "Đã di chuyển {migrated}, bỏ qua {skipped}. Bạn có thể tiếp tục thiết lập OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Quản lý máy chủ trên trang Plugins.",
@@ -2745,6 +2770,55 @@ export const vi: TranslationMap = {
     cronOverdue: "{count} tác vụ cron quá hạn",
     modelAuthExpired: "Xác thực mô hình đã hết hạn: {providers}",
     modelAuthExpiring: "Xác thực mô hình sắp hết hạn: {providers}",
+    pendingApproval: "{count} phê duyệt đang chờ xử lý",
+    pendingApprovals: "{count} phê duyệt đang chờ xử lý",
+  },
+  approvalHistory: {
+    description:
+      "Các phê duyệt cho lệnh thực thi đầu cuối, plugin và tác nhân hệ thống được Gateway này ghi lại, mới nhất trước.",
+    loading: "Đang tải lịch sử phê duyệt…",
+    loadingMore: "Đang tải…",
+    loadMore: "Tải thêm",
+    empty: "Không có phê duyệt nào đã được xử lý trong khoảng thời gian luân phiên 30 ngày.",
+    retention: "Lịch sử phê duyệt được lưu trong khoảng thời gian luân phiên 30 ngày.",
+    offline: "Kết nối với Gateway để tải lịch sử phê duyệt.",
+    invalidResponse: "Gateway đã trả về phản hồi lịch sử phê duyệt không hợp lệ.",
+    unknown: "Không xác định",
+    notApplicable: "N/A",
+    columns: {
+      resolved: "Đã xử lý",
+      kind: "Loại",
+      request: "Yêu cầu",
+      decision: "Quyết định",
+      reason: "Lý do xử lý",
+      source: "Tác nhân / phiên nguồn",
+      resolver: "Người xử lý",
+    },
+    kinds: {
+      exec: "Thực thi",
+      plugin: "Plugin",
+      systemAgent: "Tác nhân hệ thống",
+    },
+    statuses: {
+      allowed: "Đã cho phép",
+      denied: "Đã từ chối",
+      expired: "Đã hết hạn",
+      cancelled: "Đã hủy",
+    },
+    decisions: {
+      allowOnce: "Cho phép một lần",
+      allowAlways: "Luôn cho phép",
+      deny: "Từ chối",
+    },
+    reasons: {
+      user: "Quyết định của người dùng",
+      timeout: "Đã hết thời gian chờ",
+      malformedVerdict: "Kết quả xác định sai định dạng",
+      noRoute: "Không có tuyến đường",
+      runAborted: "Lượt chạy đã bị hủy",
+      gatewayRestart: "Gateway khởi động lại",
+      storageCorrupt: "Bộ nhớ bị hỏng",
+    },
   },
   palette: {
     placeholder: "Tìm kiếm cuộc trò chuyện và lệnh…",

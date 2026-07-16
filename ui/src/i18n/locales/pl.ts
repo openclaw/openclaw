@@ -27,6 +27,7 @@ export const pl: TranslationMap = {
     close: "Zamknij",
     previous: "Poprzedni",
     next: "Następne",
+    continue: "Kontynuuj",
     back: "Wstecz",
     create: "Utwórz",
     copy: "Kopiuj",
@@ -1692,6 +1693,7 @@ export const pl: TranslationMap = {
   tabs: {
     agents: "Agenci",
     activity: "Aktywność",
+    approvals: "Zatwierdzenia",
     workboard: "Tablica pracy",
     worktrees: "Worktree",
     channels: "Kanały",
@@ -1724,6 +1726,7 @@ export const pl: TranslationMap = {
   subtitles: {
     agents: "Obszary robocze, narzędzia, tożsamości.",
     activity: "Podsumowania aktywności narzędzi lokalne dla przeglądarki.",
+    approvals: "Ostatnie zatwierdzenia wykonania poleceń, wtyczek i agentów systemowych.",
     workboard: "Kolejka zadań agenta i przekazywanie sesji.",
     worktrees: "Izolowane kopie robocze zadań agentów i migawki do odzyskiwania.",
     channels: "Kanały i ustawienia.",
@@ -1870,6 +1873,28 @@ export const pl: TranslationMap = {
     replaceExisting: "Zastąp istniejące importy",
     replaceHint:
       "Ponownie wyświetl podgląd konfliktów i zachowaj kopie zapasowe elementów przed zastąpieniem.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Zabierz ze sobą pamięć swojego asystenta",
+      body: "OpenClaw znalazł pamięć z innych asystentów programowania. Zaimportować ją do obszaru roboczego agenta?",
+      plannedCount: "{count} gotowych do zaimportowania",
+      alreadyImported: "Już zaimportowano: {count}",
+      sourceUnavailable: "Ścieżka źródłowa jest niedostępna",
+      import: "Import",
+      skip: "Pomiń",
+      reviewDetails: "Przejrzyj szczegóły",
+      importingProvider: "Importowanie…",
+      providerResult: "Przeniesiono: {migrated}, pominięto: {skipped}",
+      providerIncomplete:
+        "Przeniesiono: {migrated}, pominięto: {skipped}, niepowodzenia: {errors}, konflikty: {conflicts}",
+      providerError: "Import nie powiódł się: {error}",
+      connectionChanged: "Pominięto: połączenie z Gateway zmieniło się podczas importu",
+      unknownError: "Żądanie nie powiodło się",
+      doneTitle: "Import pamięci zakończony",
+      doneBody:
+        "Przeniesiono: {migrated}, pominięto: {skipped}. Możesz kontynuować konfigurację OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Zarządzaj serwerami na stronie Wtyczek.",
@@ -2764,6 +2789,55 @@ export const pl: TranslationMap = {
     cronOverdue: "Zaległe zadania cron: {count}",
     modelAuthExpired: "Uwierzytelnienie modelu wygasło: {providers}",
     modelAuthExpiring: "Uwierzytelnienie modelu wkrótce wygaśnie: {providers}",
+    pendingApproval: "{count} oczekujące zatwierdzenie",
+    pendingApprovals: "{count} oczekujących zatwierdzeń",
+  },
+  approvalHistory: {
+    description:
+      "Zatwierdzenia wykonania poleceń terminala, wtyczek i agentów systemowych zarejestrowane przez ten Gateway, od najnowszych.",
+    loading: "Wczytywanie historii zatwierdzeń…",
+    loadingMore: "Wczytywanie…",
+    loadMore: "Wczytaj więcej",
+    empty: "Brak rozstrzygniętych zatwierdzeń w ruchomym 30-dniowym okresie.",
+    retention: "Historia zatwierdzeń obejmuje ruchomy 30-dniowy okres.",
+    offline: "Połącz się z Gateway, aby wczytać historię zatwierdzeń.",
+    invalidResponse: "Gateway zwrócił nieprawidłową odpowiedź dotyczącą historii zatwierdzeń.",
+    unknown: "Nieznany",
+    notApplicable: "Nie dotyczy",
+    columns: {
+      resolved: "Rozstrzygnięto",
+      kind: "Rodzaj",
+      request: "Żądanie",
+      decision: "Decyzja",
+      reason: "Powód rozstrzygnięcia",
+      source: "Agent źródłowy / sesja",
+      resolver: "Osoba rozstrzygająca",
+    },
+    kinds: {
+      exec: "Wykonanie",
+      plugin: "Wtyczka",
+      systemAgent: "Agent systemowy",
+    },
+    statuses: {
+      allowed: "Zezwolono",
+      denied: "Odmówiono",
+      expired: "Wygasł",
+      cancelled: "Anulowano",
+    },
+    decisions: {
+      allowOnce: "Zezwól raz",
+      allowAlways: "Zawsze zezwalaj",
+      deny: "Odmów",
+    },
+    reasons: {
+      user: "Decyzja użytkownika",
+      timeout: "Upłynął limit czasu",
+      malformedVerdict: "Nieprawidłowy format werdyktu",
+      noRoute: "Brak trasy",
+      runAborted: "Wykonanie przerwane",
+      gatewayRestart: "Ponowne uruchomienie Gateway",
+      storageCorrupt: "Uszkodzona pamięć",
+    },
   },
   palette: {
     placeholder: "Szukaj czatów i poleceń…",

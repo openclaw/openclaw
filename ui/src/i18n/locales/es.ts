@@ -27,6 +27,7 @@ export const es: TranslationMap = {
     close: "Cerrar",
     previous: "Anterior",
     next: "Siguiente",
+    continue: "Continuar",
     back: "Atrás",
     create: "Crear",
     copy: "Copiar",
@@ -1693,6 +1694,7 @@ export const es: TranslationMap = {
   tabs: {
     agents: "Agentes",
     activity: "Actividad",
+    approvals: "Aprobaciones",
     workboard: "Panel de trabajo",
     worktrees: "Worktrees",
     channels: "Canales",
@@ -1725,6 +1727,7 @@ export const es: TranslationMap = {
   subtitles: {
     agents: "Gestionar espacios de trabajo, herramientas e identidades de agentes.",
     activity: "Resúmenes de actividad de herramientas locales del navegador.",
+    approvals: "Aprobaciones recientes de ejecución, plugins y agentes del sistema.",
     workboard: "Cola de trabajo del agente y traspaso de sesión.",
     worktrees: "Checkouts aislados de tareas de agentes y snapshots de recuperación.",
     channels: "Gestionar canales y ajustes.",
@@ -1872,6 +1875,28 @@ export const es: TranslationMap = {
     replaceExisting: "Reemplazar importaciones existentes",
     replaceHint:
       "Previsualiza de nuevo los conflictos y conserva copias de seguridad de los elementos antes de reemplazarlos.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Lleva contigo la memoria de tu asistente",
+      body: "OpenClaw encontró memoria de otros asistentes de programación. ¿Quieres importarla al espacio de trabajo de tu agente?",
+      plannedCount: "{count} listos para importar",
+      alreadyImported: "Ya importados: {count}",
+      sourceUnavailable: "La ruta de origen no está disponible",
+      import: "Importar",
+      skip: "Omitir",
+      reviewDetails: "Revisar detalles",
+      importingProvider: "Importando…",
+      providerResult: "Migrados: {migrated}; omitidos: {skipped}",
+      providerIncomplete:
+        "Migrados: {migrated}; omitidos: {skipped}; con errores: {errors}; conflictos: {conflicts}",
+      providerError: "Error de importación: {error}",
+      connectionChanged: "Omitido: la conexión con el Gateway cambió durante la importación",
+      unknownError: "Error en la solicitud",
+      doneTitle: "Importación de memoria finalizada",
+      doneBody:
+        "Migrados: {migrated}; omitidos: {skipped}. Puedes continuar configurando OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Gestionar servidores en la página de Plugins.",
@@ -2768,6 +2793,55 @@ export const es: TranslationMap = {
     cronOverdue: "{count} tarea(s) cron atrasada(s)",
     modelAuthExpired: "La autenticación del modelo ha caducado: {providers}",
     modelAuthExpiring: "La autenticación del modelo está a punto de caducar: {providers}",
+    pendingApproval: "{count} aprobación pendiente",
+    pendingApprovals: "{count} aprobaciones pendientes",
+  },
+  approvalHistory: {
+    description:
+      "Aprobaciones de ejecución en terminal, plugins y agentes del sistema registradas por este gateway, de más reciente a más antigua.",
+    loading: "Cargando historial de aprobaciones…",
+    loadingMore: "Cargando…",
+    loadMore: "Cargar más",
+    empty: "No hay aprobaciones resueltas en el período móvil de 30 días.",
+    retention: "El historial de aprobaciones abarca un período móvil de 30 días.",
+    offline: "Conéctate al gateway para cargar el historial de aprobaciones.",
+    invalidResponse: "El gateway devolvió una respuesta de historial de aprobaciones no válida.",
+    unknown: "Desconocido",
+    notApplicable: "N/A",
+    columns: {
+      resolved: "Resuelta",
+      kind: "Tipo",
+      request: "Solicitud",
+      decision: "Decisión",
+      reason: "Motivo de la resolución",
+      source: "Agente de origen / sesión",
+      resolver: "Responsable de la resolución",
+    },
+    kinds: {
+      exec: "Ejecución",
+      plugin: "Plugin",
+      systemAgent: "Agente del sistema",
+    },
+    statuses: {
+      allowed: "Permitida",
+      denied: "Denegado",
+      expired: "Caducado",
+      cancelled: "Cancelado",
+    },
+    decisions: {
+      allowOnce: "Permitir una vez",
+      allowAlways: "Permitir siempre",
+      deny: "Denegar",
+    },
+    reasons: {
+      user: "Decisión del usuario",
+      timeout: "Tiempo de espera agotado",
+      malformedVerdict: "Veredicto con formato incorrecto",
+      noRoute: "Sin ruta",
+      runAborted: "Ejecución cancelada",
+      gatewayRestart: "Reinicio de Gateway",
+      storageCorrupt: "Almacenamiento dañado",
+    },
   },
   palette: {
     placeholder: "Buscar chats y comandos…",

@@ -27,6 +27,7 @@ export const ru: TranslationMap = {
     close: "Закрыть",
     previous: "Назад",
     next: "Далее",
+    continue: "Продолжить",
     back: "Назад",
     create: "Создать",
     copy: "Копировать",
@@ -1694,6 +1695,7 @@ export const ru: TranslationMap = {
   tabs: {
     agents: "Агенты",
     activity: "Активность",
+    approvals: "Одобрения",
     workboard: "Рабочая доска",
     worktrees: "Рабочие деревья",
     channels: "Каналы",
@@ -1726,6 +1728,7 @@ export const ru: TranslationMap = {
   subtitles: {
     agents: "Рабочие пространства, инструменты, идентификаторы.",
     activity: "Сводки активности инструментов в локальном браузере.",
+    approvals: "Недавние подтверждения выполнения команд, плагинов и системных агентов.",
     workboard: "Очередь задач агента и передача сеанса.",
     worktrees: "Изолированные копии для задач агентов и снимки восстановления.",
     channels: "Каналы и настройки.",
@@ -1871,6 +1874,28 @@ export const ru: TranslationMap = {
     replaceExisting: "Заменять существующие импорты",
     replaceHint:
       "Повторно просмотрите конфликты и сохраните резервные копии элементов перед заменой.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Перенесите память своего ассистента",
+      body: "OpenClaw обнаружил память других ассистентов для программирования. Импортировать её в рабочее пространство вашего агента?",
+      plannedCount: "Готово к импорту: {count}",
+      alreadyImported: "Уже импортировано: {count}",
+      sourceUnavailable: "Путь к источнику недоступен",
+      import: "Импорт",
+      skip: "Пропустить",
+      reviewDetails: "Просмотреть сведения",
+      importingProvider: "Импорт…",
+      providerResult: "Перенесено: {migrated}, пропущено: {skipped}",
+      providerIncomplete:
+        "Перенесено: {migrated}, пропущено: {skipped}, с ошибкой: {errors}, конфликтов: {conflicts}",
+      providerError: "Не удалось выполнить импорт: {error}",
+      connectionChanged: "Пропущено: подключение к Gateway изменилось во время импорта",
+      unknownError: "Не удалось выполнить запрос",
+      doneTitle: "Импорт памяти завершён",
+      doneBody:
+        "Перенесено: {migrated}, пропущено: {skipped}. Можно продолжить настройку OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Управляйте серверами на странице плагинов.",
@@ -2761,6 +2786,55 @@ export const ru: TranslationMap = {
     cronOverdue: "Просрочено заданий cron: {count}",
     modelAuthExpired: "Срок авторизации модели истёк: {providers}",
     modelAuthExpiring: "Срок авторизации модели скоро истечёт: {providers}",
+    pendingApproval: "{count} ожидающее подтверждение",
+    pendingApprovals: "{count} ожидающих подтверждения",
+  },
+  approvalHistory: {
+    description:
+      "Подтверждения выполнения команд в терминале, плагинов и системных агентов, зарегистрированные этим Gateway, начиная с самых новых.",
+    loading: "Загрузка истории подтверждений…",
+    loadingMore: "Загрузка…",
+    loadMore: "Загрузить ещё",
+    empty: "За скользящий 30-дневный период нет обработанных подтверждений.",
+    retention: "История подтверждений хранится за скользящий 30-дневный период.",
+    offline: "Подключитесь к Gateway, чтобы загрузить историю подтверждений.",
+    invalidResponse: "Gateway вернул недопустимый ответ с историей подтверждений.",
+    unknown: "Неизвестно",
+    notApplicable: "Н/Д",
+    columns: {
+      resolved: "Разрешено",
+      kind: "Тип",
+      request: "Запрос",
+      decision: "Решение",
+      reason: "Причина решения",
+      source: "Исходный агент / сеанс",
+      resolver: "Кем принято решение",
+    },
+    kinds: {
+      exec: "Exec",
+      plugin: "Плагин",
+      systemAgent: "Системный агент",
+    },
+    statuses: {
+      allowed: "Разрешено",
+      denied: "Отклонено",
+      expired: "Истек",
+      cancelled: "Отменено",
+    },
+    decisions: {
+      allowOnce: "Разрешить один раз",
+      allowAlways: "Всегда разрешать",
+      deny: "Запретить",
+    },
+    reasons: {
+      user: "Решение пользователя",
+      timeout: "Время ожидания истекло",
+      malformedVerdict: "Некорректный вердикт",
+      noRoute: "Маршрут отсутствует",
+      runAborted: "Выполнение прервано",
+      gatewayRestart: "Перезапуск Gateway",
+      storageCorrupt: "Хранилище повреждено",
+    },
   },
   palette: {
     placeholder: "Поиск чатов и команд…",

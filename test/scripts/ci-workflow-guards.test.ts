@@ -1798,7 +1798,8 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      // Concurrent Knip scans need cores and memory headroom.
+      runner: "blacksmith-16vcpu-ubuntu-2404",
     });
     expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
     expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
@@ -2340,10 +2341,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
     expect(modern.status, modern.output).toBe(0);
-    expect(modern.calls).toEqual([
+    // The scripts launch concurrently; completion order is nondeterministic.
+    expect(modern.calls.toSorted()).toEqual([
       "deadcode:dependencies",
-      "deadcode:unused-files",
       "deadcode:exports",
+      "deadcode:unused-files",
     ]);
 
     const frozenWithExports = runDependencyCheckFixture({
@@ -2351,10 +2353,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
     expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
-    expect(frozenWithExports.calls).toEqual([
+    expect(frozenWithExports.calls.toSorted()).toEqual([
       "deadcode:dependencies",
-      "deadcode:unused-files",
       "deadcode:exports",
+      "deadcode:unused-files",
     ]);
 
     const frozen = runDependencyCheckFixture({
@@ -2367,14 +2369,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ],
     });
     expect(frozen.status, frozen.output).toBe(0);
-    expect(frozen.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+    expect(frozen.calls.toSorted()).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
 
     const currentWithoutExports = runDependencyCheckFixture({
       historicalTarget: false,
       scripts: ["deadcode:dependencies", "deadcode:unused-files"],
     });
     expect(currentWithoutExports.status).toBe(1);
-    expect(currentWithoutExports.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+    // The missing-script contract violation now fails fast before launching
+    // the concurrent scans instead of wasting two Knip runs first.
+    expect(currentWithoutExports.calls).toEqual([]);
     expect(currentWithoutExports.output).toContain(
       "Current CI targets must provide the deadcode:exports package script.",
     );
@@ -2829,7 +2833,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checkShard.run).toContain('has_package_script "deadcode:dependencies"');
     expect(checkShard.run).toContain('has_package_script "deadcode:unused-files"');
     expect(checkShard.run).toContain('has_package_script "deadcode:exports"');
-    expect(checkShard.run).toContain("pnpm deadcode:exports");
+    // The concurrent launcher invokes scripts through the dc_scripts array.
+    expect(checkShard.run).toContain("dc_scripts+=(deadcode:exports)");
     expect(checkShard.run).toContain(
       "Current CI targets must provide the deadcode:exports package script.",
     );

@@ -6549,7 +6549,7 @@ class NodeRuntime private constructor(
       sanitizeGatewayLogText(message)
         .trim()
         .replace(Regex("\\s+"), " ")
-        .take(240)
+        .takeUtf16Safe(240)
         .ifEmpty { "Log entry" }
     return GatewayLogEntry(
       time = time,
