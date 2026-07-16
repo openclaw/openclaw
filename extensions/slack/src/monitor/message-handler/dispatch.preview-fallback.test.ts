@@ -563,6 +563,7 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       toolCallId?: string;
       progressText?: string;
       summary?: string;
+      explanation?: string;
       title?: string;
       name?: string;
       status?: string;

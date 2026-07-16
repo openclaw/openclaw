@@ -2,6 +2,7 @@
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -459,7 +460,7 @@ export function createMSTeamsReplyDispatcher(params: {
           if (payload?.phase !== "update") {
             return;
           }
-          await streamController.pushPlanProgress(payload.planSteps, {
+          await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.planSteps), {
             explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
           });
         },

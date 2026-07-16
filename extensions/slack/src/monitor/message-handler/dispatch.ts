@@ -1,7 +1,6 @@
 // Slack plugin module implements dispatch behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  type AgentPlanStep,
   createStatusReactionController,
   DEFAULT_TIMING,
   logAckFailure,
@@ -25,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  type AgentPlanStep,
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
@@ -1773,7 +1773,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       // Commit only after Slack accepted the chunks; a failed emit must retry
       // the same reconciliation against the previous snapshot.
       nativeTaskState = reconciled.tasks;
-      return;
     } catch (err) {
       runtime.error?.(
         danger(
