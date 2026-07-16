@@ -240,6 +240,36 @@ describe("openclaw plugin tool context", () => {
     });
   });
 
+  it("uses the current conversation target when agentTo is unavailable", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "discord",
+        currentChannelId: "discord:channel:987654321",
+        agentAccountId: "molty",
+      },
+    });
+
+    expect(result.context.deliveryContext).toStrictEqual({
+      channel: "discord",
+      to: "discord:channel:987654321",
+      accountId: "molty",
+    });
+  });
+
+  it("keeps an explicit agent target ahead of the current conversation target", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "discord",
+        agentTo: "channel:111",
+        currentChannelId: "channel:222",
+      },
+    });
+
+    expect(result.context.deliveryContext?.to).toBe("channel:111");
+  });
+
   it("does not inject ambient thread defaults into plugin tools", async () => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
