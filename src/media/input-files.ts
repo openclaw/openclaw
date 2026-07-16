@@ -238,7 +238,11 @@ async function fetchWithGuard(params: {
       );
     }
 
-    const buffer = await readResponseWithLimit(response, params.maxBytes);
+    const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      chunkTimeoutMs: params.timeoutMs,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Media fetch stalled: no data received for ${chunkTimeoutMs}ms`),
+    });
 
     const contentType = response.headers.get("content-type") || undefined;
     const parsed = parseContentType(contentType);

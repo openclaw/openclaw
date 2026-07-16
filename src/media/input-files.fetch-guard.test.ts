@@ -549,4 +549,36 @@ describe("input image base64 validation", () => {
       ...(expectedError ? { expectedError } : {}),
     });
   });
+
+  it("times out when a media URL response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([0xff, 0xd8, 0xff]));
+            },
+          }),
+          { status: 200, headers: { "content-type": "image/jpeg" } },
+        ),
+        release,
+      });
+      detectMimeMock.mockResolvedValue("image/jpeg");
+
+      const resultPromise = extractImageContentFromSource(
+        { type: "url", url: "https://example.com/photo.jpg" },
+        createImageSourceLimits(["image/jpeg"], true),
+      );
+      const settled = expect(resultPromise).rejects.toThrow(
+        "Media fetch stalled: no data received for 1000ms",
+      );
+      await vi.advanceTimersByTimeAsync(1_010);
+      await settled;
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
