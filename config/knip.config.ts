@@ -78,6 +78,10 @@ const repositoryScriptEntries = [
 
 const rootEntries = [
   ...repositoryScriptEntries,
+  // Knip loads these audit configurations directly by command-line path.
+  "config/knip.config.ts!",
+  "config/knip.all-exports.config.ts!",
+  "config/knip.scripts-exports.config.ts!",
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
@@ -339,11 +343,12 @@ const config = {
       project: [
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "config/**/*.{ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "*.config.{js,mjs,cjs,ts,mts,cts}!",
         "*.mjs!",
       ],
-      entry: [...rootEntries, "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!"],
+      entry: rootEntries,
     },
     ui: {
       entry: [
