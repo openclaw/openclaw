@@ -92,7 +92,7 @@ describe("agent DB conversation migration", () => {
         chatType: "direct",
         origin: {
           provider: "reef",
-          nativeDirectUserId: "peer-b",
+          nativeDirectUserId: "stale-peer",
           from: "reef:stale-peer",
         },
         deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-b" },

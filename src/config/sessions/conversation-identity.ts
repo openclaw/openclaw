@@ -124,10 +124,6 @@ function finalizeConversationIdentity(params: {
   };
 }
 
-function deliveryContextPeerId(context: DeliveryContext | undefined): string | undefined {
-  return normalizeText(context?.to);
-}
-
 /** Derives a transport address from the canonical route snapshot persisted on a session. */
 export function conversationIdentityFromSessionEntry(
   entry: SessionEntry,
@@ -139,23 +135,22 @@ export function conversationIdentityFromSessionEntry(
     deliveryContextFromSession(entry),
   );
   const kind = normalizeKind(entry.chatType);
-  const channel = deliveryContext?.channel ?? normalizeText(entry.channel);
-  const peerId =
-    kind === "direct"
-      ? (normalizeText(entry.origin?.nativeDirectUserId) ?? deliveryContextPeerId(deliveryContext))
-      : (normalizeText(entry.groupId) ??
-        normalizeText(entry.origin?.nativeChannelId) ??
-        deliveryContextPeerId(deliveryContext));
+  const routeTarget = normalizeText(deliveryContext?.to);
+  const deliveryTarget =
+    routeTarget ?? (kind === "direct" ? normalizeText(entry.origin?.from) : undefined);
+  const routeOwnsTarget = Boolean(routeTarget);
+  const channel = routeOwnsTarget
+    ? deliveryContext?.channel
+    : (normalizeText(entry.origin?.provider) ?? normalizeText(entry.channel));
   return finalizeConversationIdentity({
     channel,
-    accountId: deliveryContext?.accountId,
+    accountId: routeOwnsTarget ? deliveryContext?.accountId : entry.origin?.accountId,
     kind,
-    peerId,
-    deliveryTarget:
-      kind === "direct"
-        ? (deliveryContextPeerId(deliveryContext) ?? normalizeText(entry.origin?.from))
-        : deliveryContextPeerId(deliveryContext),
-    threadId: deliveryContext?.threadId,
+    // One authoritative route snapshot owns both the opaque identity and egress target.
+    // Native ids remain descriptive metadata and cannot redirect a stored conversation ref.
+    peerId: deliveryTarget,
+    deliveryTarget,
+    threadId: routeOwnsTarget ? deliveryContext?.threadId : entry.origin?.threadId,
     nativeChannelId: entry.origin?.nativeChannelId,
     nativeDirectUserId: entry.origin?.nativeDirectUserId,
     label: entry.displayName ?? entry.label,
@@ -169,47 +164,45 @@ export function conversationIdentityFromMsgContext(params: {
   groupResolution?: GroupKeyResolution | null;
 }): ConversationIdentity | null {
   const route = deriveSessionOrigin(params.ctx);
-  const deliveryContext = mergeDeliveryContext(
-    normalizeDeliveryContext(params.deliveryContext),
-    normalizeDeliveryContext({
-      channel: route?.provider,
-      to: route?.to,
-      accountId: route?.accountId,
-      threadId: route?.threadId,
-    }),
-  );
+  const explicitDeliveryContext = normalizeDeliveryContext(params.deliveryContext);
+  const routeDeliveryContext = normalizeDeliveryContext({
+    channel: route?.provider,
+    to: route?.to,
+    accountId: route?.accountId,
+    threadId: route?.threadId,
+  });
+  const deliveryContext = mergeDeliveryContext(explicitDeliveryContext, routeDeliveryContext);
   const groupResolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   const kind = groupResolution?.chatType ?? normalizeKind(params.ctx.ChatType);
-  const channel =
-    deliveryContext?.channel ??
-    groupResolution?.channel ??
-    normalizeText(route?.provider) ??
-    normalizeText(params.ctx.OriginatingChannel) ??
-    normalizeText(params.ctx.Provider);
-  const peerId =
-    kind === "direct"
-      ? (normalizeText(params.ctx.NativeDirectUserId) ??
-        deliveryContextPeerId(deliveryContext) ??
-        normalizeText(params.ctx.OriginatingTo) ??
-        normalizeText(params.ctx.To) ??
-        normalizeText(params.ctx.From))
-      : (normalizeText(groupResolution?.id) ??
-        deliveryContextPeerId(deliveryContext) ??
-        normalizeText(params.ctx.OriginatingTo) ??
-        normalizeText(params.ctx.To) ??
-        normalizeText(params.ctx.From));
+  const directIngressTarget = kind === "direct" ? normalizeText(params.ctx.From) : undefined;
+  // An explicit delivery context is already a paired route. Otherwise direct ingress
+  // addresses the sender (`From`), while OriginatingTo can describe the local endpoint.
+  const useDirectIngressTarget = Boolean(directIngressTarget && !explicitDeliveryContext?.to);
+  const deliveryTarget = useDirectIngressTarget
+    ? directIngressTarget
+    : (normalizeText(deliveryContext?.to) ??
+      normalizeText(params.ctx.OriginatingTo) ??
+      normalizeText(params.ctx.To));
+  const channel = useDirectIngressTarget
+    ? (normalizeText(route?.provider) ??
+      normalizeText(params.ctx.OriginatingChannel) ??
+      normalizeText(params.ctx.Provider))
+    : (deliveryContext?.channel ??
+      groupResolution?.channel ??
+      normalizeText(route?.provider) ??
+      normalizeText(params.ctx.OriginatingChannel) ??
+      normalizeText(params.ctx.Provider));
   return finalizeConversationIdentity({
     channel,
-    accountId: deliveryContext?.accountId ?? route?.accountId ?? params.ctx.AccountId,
+    accountId: useDirectIngressTarget
+      ? (route?.accountId ?? params.ctx.AccountId)
+      : (deliveryContext?.accountId ?? route?.accountId ?? params.ctx.AccountId),
     kind,
-    peerId,
-    deliveryTarget:
-      kind === "direct"
-        ? (normalizeText(params.ctx.From) ?? deliveryContextPeerId(deliveryContext))
-        : (deliveryContextPeerId(deliveryContext) ??
-          normalizeText(params.ctx.OriginatingTo) ??
-          normalizeText(params.ctx.To)),
-    threadId: deliveryContext?.threadId ?? params.ctx.MessageThreadId,
+    peerId: deliveryTarget,
+    deliveryTarget,
+    threadId: useDirectIngressTarget
+      ? (route?.threadId ?? params.ctx.MessageThreadId)
+      : (deliveryContext?.threadId ?? params.ctx.MessageThreadId),
     nativeChannelId: params.ctx.NativeChannelId ?? route?.nativeChannelId,
     nativeDirectUserId: params.ctx.NativeDirectUserId ?? route?.nativeDirectUserId,
     label: normalizeText(resolveConversationLabel(params.ctx)) ?? route?.label,

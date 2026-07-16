@@ -72,6 +72,75 @@ describe("conversation identity", () => {
     });
 
     expect(identity?.deliveryTarget).toBe("reef:peer-a");
+    expect(identity?.peerId).toBe("peer-a");
+    expect(identity?.conversationRef).toBe(
+      conversationIdentityFromSessionEntry(directEntry("peer-a"))?.conversationRef,
+    );
+  });
+
+  it("never lets stale native metadata label another delivery target", () => {
+    const identity = conversationIdentityFromSessionEntry({
+      ...directEntry("peer-b"),
+      origin: {
+        provider: "reef",
+        accountId: "default",
+        nativeDirectUserId: "peer-a",
+      },
+    });
+
+    expect(identity).toMatchObject({
+      deliveryTarget: "reef:peer-b",
+      nativeDirectUserId: "peer-a",
+      peerId: "peer-b",
+    });
+    expect(identity?.conversationRef).toBe(
+      conversationIdentityFromSessionEntry(directEntry("peer-b"))?.conversationRef,
+    );
+    expect(identity?.conversationRef).not.toBe(
+      conversationIdentityFromSessionEntry(directEntry("peer-a"))?.conversationRef,
+    );
+  });
+
+  it("keeps fallback origin targets paired with their origin channel", () => {
+    const identity = conversationIdentityFromSessionEntry({
+      sessionId: "session-main",
+      updatedAt: 100,
+      chatType: "direct",
+      channel: "discord",
+      origin: {
+        provider: "reef",
+        accountId: "work",
+        from: "reef:peer-b",
+      },
+    });
+
+    expect(identity).toMatchObject({
+      accountId: "work",
+      channel: "reef",
+      deliveryTarget: "reef:peer-b",
+      peerId: "peer-b",
+    });
+  });
+
+  it("derives live direct identity from the exact reply target, not native metadata", () => {
+    const identity = conversationIdentityFromMsgContext({
+      ctx: {
+        Provider: "reef",
+        ChatType: "direct",
+        From: "reef:peer-b",
+        OriginatingTo: "reef:self",
+        NativeDirectUserId: "peer-a",
+      },
+    });
+
+    expect(identity).toMatchObject({
+      deliveryTarget: "reef:peer-b",
+      nativeDirectUserId: "peer-a",
+      peerId: "peer-b",
+    });
+    expect(identity?.conversationRef).toBe(
+      conversationIdentityFromSessionEntry(directEntry("peer-b"))?.conversationRef,
+    );
   });
 
   it.each([
@@ -94,6 +163,22 @@ describe("conversation identity", () => {
 
     expect(identity?.accountId).toBe("work");
     expect(identity?.conversationRef).toBe(explicit?.conversationRef);
+  });
+
+  it("pairs a partial delivery target with the persisted session channel", () => {
+    const identity = conversationIdentityFromSessionEntry({
+      sessionId: "session-main",
+      updatedAt: 100,
+      chatType: "direct",
+      channel: "reef",
+      deliveryContext: { to: "reef:peer-a" },
+    });
+
+    expect(identity).toMatchObject({
+      channel: "reef",
+      deliveryTarget: "reef:peer-a",
+      peerId: "peer-a",
+    });
   });
 
   it("derives the same threaded address from live and persisted route facts", () => {

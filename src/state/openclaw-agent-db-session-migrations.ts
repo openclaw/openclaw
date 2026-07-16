@@ -37,40 +37,37 @@ function migratedConversation(entry: MigratedConversationEntry) {
   const delivery = migratedObject(entry, "deliveryContext");
   const origin = migratedObject(entry, "origin");
   const kind = normalizeChatType(migratedText(entry.chatType)) ?? "direct";
+  const deliveryRouteTarget = migratedText(delivery?.to);
+  const deliveryTarget =
+    deliveryRouteTarget ?? (kind === "direct" ? migratedText(origin?.from) : undefined);
+  if (!deliveryTarget) {
+    return undefined;
+  }
+  const routeOwnsTarget = Boolean(deliveryRouteTarget);
   const channel = (
-    migratedText(delivery?.channel) ??
-    migratedText(entry.channel) ??
-    migratedText(entry.lastChannel) ??
-    migratedText(origin?.provider)
+    routeOwnsTarget
+      ? (migratedText(delivery?.channel) ??
+        migratedText(entry.channel) ??
+        migratedText(entry.lastChannel) ??
+        migratedText(origin?.provider))
+      : migratedText(origin?.provider)
   )?.toLowerCase();
-  const rawPeerId =
-    kind === "direct"
-      ? (migratedText(origin?.nativeDirectUserId) ?? migratedText(delivery?.to))
-      : (migratedText(entry.groupId) ??
-        migratedText(origin?.nativeChannelId) ??
-        migratedText(delivery?.to));
-  if (!channel || !rawPeerId) {
-    return undefined;
-  }
-  const peerId = normalizeConversationPeerId(channel, rawPeerId);
-  if (!peerId) {
-    return undefined;
-  }
   const accountId = normalizeAccountId(
-    migratedText(delivery?.accountId) ??
-      migratedText(entry.lastAccountId) ??
-      migratedText(origin?.accountId),
+    routeOwnsTarget
+      ? (migratedText(delivery?.accountId) ??
+          migratedText(entry.lastAccountId) ??
+          migratedText(origin?.accountId))
+      : migratedText(origin?.accountId),
   );
-  const threadIdRaw = delivery?.threadId;
+  const threadIdRaw = routeOwnsTarget ? delivery?.threadId : origin?.threadId;
   const threadId =
     typeof threadIdRaw === "number" && Number.isFinite(threadIdRaw)
       ? String(threadIdRaw)
       : migratedText(threadIdRaw);
-  const deliveryTarget =
-    kind === "direct"
-      ? (migratedText(delivery?.to) ?? migratedText(origin?.from))
-      : migratedText(delivery?.to);
-  if (!deliveryTarget) {
+  // The routable target is authoritative for both identity and delivery. Stale
+  // native metadata must never label one peer while sending to another.
+  const peerId = channel ? normalizeConversationPeerId(channel, deliveryTarget) : undefined;
+  if (!channel || !peerId) {
     return undefined;
   }
   return {
