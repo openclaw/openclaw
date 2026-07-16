@@ -76,17 +76,17 @@ describe("formatMigrationPreview", () => {
     expect(output).toContain("• gmail");
   });
 
-  it("hides config items from display and excludes them from the count", () => {
+  it("shows config items in the preview and includes them in the count", () => {
     const output = formatMigrationPreview(plan([skillItem(1), configItem()]))
       .map(stripAnsi)
       .join("\n");
 
-    expect(output).toContain("1 item, 0 conflicts, 0 sensitive items");
-    expect(output).not.toContain("Config:");
-    expect(output).not.toContain("codex-plugins-root");
+    expect(output).toContain("2 items, 0 conflicts, 0 sensitive items");
+    expect(output).toContain("Config:");
+    expect(output).toContain("codex-plugins-root");
   });
 
-  it("counts hidden config conflicts in the preview header", () => {
+  it("shows config conflicts in the preview header and config section", () => {
     const output = formatMigrationPreview({
       ...plan([skillItem(1), { ...configItem(), status: "conflict", sensitive: true }]),
       summary: {
@@ -102,9 +102,9 @@ describe("formatMigrationPreview", () => {
       .map(stripAnsi)
       .join("\n");
 
-    expect(output).toContain("1 item, 1 conflict, 1 sensitive item");
-    expect(output).not.toContain("Config:");
-    expect(output).not.toContain("codex-plugins-root");
+    expect(output).toContain("2 items, 1 conflict, 1 sensitive item");
+    expect(output).toContain("Config:");
+    expect(output).toContain("codex-plugins-root");
   });
 
   it("renders migration warnings with a warning glyph", () => {
@@ -183,6 +183,16 @@ describe("formatMigrationResult", () => {
     expect(output).toContain(
       'google-calendar (Codex plugin "google-calendar" could not be migrated automatically)',
     );
+  });
+
+  it("renders config items in the migration result", () => {
+    const output = formatMigrationResult(plan([{ ...configItem(), status: "migrated" }]))
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).toContain("Config:");
+    expect(output).toContain("codex-plugins-root");
+    expect(output).toContain("✅");
   });
 
   it("renders warning-backed next steps with a warning glyph", () => {
