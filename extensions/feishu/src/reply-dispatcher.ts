@@ -19,8 +19,8 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
-import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
+import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import {

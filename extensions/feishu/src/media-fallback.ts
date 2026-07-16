@@ -30,11 +30,11 @@ async function resolvePublicFeishuMediaReference(
 export async function buildFeishuMediaFallbackText(params: {
   text?: string;
   mediaUrl?: string;
-  includeAttachmentIcon?: boolean;
+  mediaLinkStyle?: "attachment" | "plain";
 }): Promise<string> {
   const mediaUrl = await resolvePublicFeishuMediaReference(params.mediaUrl);
   const attachmentText = mediaUrl
-    ? `${params.includeAttachmentIcon === false ? "" : "📎 "}${mediaUrl}`
+    ? `${params.mediaLinkStyle === "plain" ? "" : "📎 "}${mediaUrl}`
     : FEISHU_MEDIA_UPLOAD_FAILURE_FALLBACK_TEXT;
   return [params.text?.trim(), attachmentText].filter(Boolean).join("\n\n");
 }

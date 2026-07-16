@@ -34,12 +34,12 @@ import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
-import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import {
   chunkFeishuMarkdown,
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
 } from "./markdown.js";
+import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import {
   sendMediaFeishu,
   shouldSuppressFeishuTextForVoiceMedia,
@@ -875,7 +875,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           ? await buildFeishuMediaFallbackText({
               text,
               mediaUrl,
-              includeAttachmentIcon: false,
+              mediaLinkStyle: "plain",
             })
           : (text?.trim() ?? "");
         return await sendOutboundText({
