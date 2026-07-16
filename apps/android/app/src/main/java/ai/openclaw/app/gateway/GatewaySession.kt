@@ -439,7 +439,7 @@ class GatewaySession(
       when (
         target.options.role
           .trim()
-          .lowercase(Locale.ROOT),
+          .lowercase(Locale.ROOT)
       ) {
         "node" -> GatewayMethod.NodePluginSurfaceRefresh
         "operator" -> GatewayMethod.PluginSurfaceRefresh
