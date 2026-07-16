@@ -33,12 +33,15 @@ describe("waitForGatewayLockReplacement", () => {
   });
 
   it("checks for a replacement after the final bounded delay", async () => {
-    readActiveGatewayLockIdentity.mockResolvedValueOnce(previousLockIdentity).mockResolvedValue({
+    const replacementLockIdentity = {
       ...previousLockIdentity,
       pid: 4300,
       ownerId: "gateway-owner-new",
       createdAt: "2026-07-16T12:00:01.000Z",
-    });
+    };
+    readActiveGatewayLockIdentity
+      .mockResolvedValueOnce(previousLockIdentity)
+      .mockResolvedValue(replacementLockIdentity);
 
     const { waitForGatewayLockReplacement } = await import("./restart-lock-replacement.js");
     await expect(
@@ -48,7 +51,11 @@ describe("waitForGatewayLockReplacement", () => {
         delayMs: 500,
         waitIndefinitelyForPreviousOwner: false,
       }),
-    ).resolves.toStrictEqual({ status: "replacement", attemptsUsed: 1 });
+    ).resolves.toStrictEqual({
+      status: "replacement",
+      attemptsUsed: 1,
+      lockIdentity: replacementLockIdentity,
+    });
     expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledTimes(1);
   });
@@ -72,15 +79,16 @@ describe("waitForGatewayLockReplacement", () => {
   });
 
   it("does not treat a transient lock read failure as owner release", async () => {
+    const replacementLockIdentity = {
+      ...previousLockIdentity,
+      pid: 4300,
+      ownerId: "gateway-owner-new",
+      createdAt: "2026-07-16T12:00:01.000Z",
+    };
     readActiveGatewayLockIdentity
       .mockRejectedValueOnce(new Error("transient lock read failure"))
       .mockResolvedValueOnce(previousLockIdentity)
-      .mockResolvedValue({
-        ...previousLockIdentity,
-        pid: 4300,
-        ownerId: "gateway-owner-new",
-        createdAt: "2026-07-16T12:00:01.000Z",
-      });
+      .mockResolvedValue(replacementLockIdentity);
 
     const { waitForGatewayLockReplacement } = await import("./restart-lock-replacement.js");
     await expect(
@@ -90,7 +98,11 @@ describe("waitForGatewayLockReplacement", () => {
         delayMs: 500,
         waitIndefinitelyForPreviousOwner: true,
       }),
-    ).resolves.toStrictEqual({ status: "replacement", attemptsUsed: 0 });
+    ).resolves.toStrictEqual({
+      status: "replacement",
+      attemptsUsed: 0,
+      lockIdentity: replacementLockIdentity,
+    });
     expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(2);
   });

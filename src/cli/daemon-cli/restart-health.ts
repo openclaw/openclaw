@@ -247,6 +247,7 @@ async function confirmGatewayReachable(params: {
   includeHealthDetails?: boolean;
   auth?: GatewayRestartProbeAuth;
   env?: NodeJS.ProcessEnv;
+  allowDeviceIdentityRequired?: boolean;
 }): Promise<GatewayReachability> {
   const token = normalizeOptionalString(params.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN);
   const password = normalizeOptionalString(
@@ -262,6 +263,9 @@ async function confirmGatewayReachable(params: {
   const reachedGateway =
     probe.ok ||
     looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
+    (params.allowDeviceIdentityRequired === true &&
+      probe.close?.code === 1008 &&
+      normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
     (probe.connectLatencyMs != null &&
       probe.server?.version != null &&
       probe.auth.capability === "connected_no_operator_scope");
@@ -298,6 +302,7 @@ async function resolveGatewayRestartProbeAuth(
 async function inspectGatewayPortHealth(params: {
   port: number;
   auth?: GatewayRestartProbeAuth;
+  expectedListenerPid?: number;
 }): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
@@ -314,12 +319,23 @@ async function inspectGatewayPortHealth(params: {
 
   let healthy = false;
   if (portUsage.status === "busy") {
+    const expectedListenerPid = params.expectedListenerPid;
+    const listenerOwnershipVerified =
+      expectedListenerPid !== undefined &&
+      portUsage.listeners.length > 0 &&
+      portUsage.listeners.every((listener) =>
+        listenerOwnedByRuntimePid({
+          listener,
+          runtimePid: expectedListenerPid,
+        }),
+      );
     try {
       healthy = (
         await confirmGatewayReachable({
           port: params.port,
           auth: params.auth,
           env: process.env,
+          allowDeviceIdentityRequired: listenerOwnershipVerified,
         })
       ).reachable;
     } catch {
@@ -662,6 +678,7 @@ export async function waitForGatewayHealthyListener(params: {
       });
 
   let attempt = 0;
+  let expectedListenerPid: number | undefined;
   if (previousLockIdentity) {
     const replacement = await waitForGatewayLockReplacement({
       previousLockIdentity,
@@ -673,9 +690,11 @@ export async function waitForGatewayHealthyListener(params: {
       return snapshot;
     }
     attempt = replacement.attemptsUsed;
+    expectedListenerPid = replacement.lockIdentity.pid;
     snapshot = await inspectGatewayPortHealth({
       port: params.port,
       auth: probeAuth,
+      expectedListenerPid,
     });
   }
 
@@ -688,6 +707,7 @@ export async function waitForGatewayHealthyListener(params: {
     snapshot = await inspectGatewayPortHealth({
       port: params.port,
       auth: probeAuth,
+      expectedListenerPid,
     });
     if (snapshot.healthy) {
       return snapshot;
