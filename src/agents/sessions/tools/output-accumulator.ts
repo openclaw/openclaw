@@ -16,7 +16,12 @@ interface OutputAccumulatorOptions {
   maxLines?: number;
   maxBytes?: number;
   tempFilePrefix?: string;
-  transformDecodedText?: (text: string) => string;
+  transformDecodedText?:
+    | ((text: string) => string)
+    | {
+        write: (text: string) => string;
+        finish?: () => string;
+      };
 }
 
 interface OutputSnapshot {
@@ -41,7 +46,7 @@ export class OutputAccumulator {
   private readonly maxBytes: number;
   private readonly maxRollingBytes: number;
   private readonly tempFilePrefix: string;
-  private readonly transformDecodedText?: (text: string) => string;
+  private readonly transformDecodedText?: OutputAccumulatorOptions["transformDecodedText"];
   private readonly decoder = new TextDecoder();
 
   private spillChunks: Buffer[] = [];
@@ -74,7 +79,7 @@ export class OutputAccumulator {
 
     this.totalRawBytes += data.length;
     const decodedText = this.decoder.decode(data, { stream: true });
-    const text = this.transformDecodedText?.(decodedText) ?? decodedText;
+    const text = this.transformDecoded(decodedText);
     this.appendDecodedText(text);
 
     // Transformed output must spill exactly what callers see so sanitization
@@ -93,7 +98,7 @@ export class OutputAccumulator {
     }
     this.finished = true;
     const decodedText = this.decoder.decode();
-    const text = this.transformDecodedText?.(decodedText) ?? decodedText;
+    const text = this.transformDecoded(decodedText) + this.finishTransform();
     this.appendDecodedText(text);
     if (this.transformDecodedText && text.length > 0) {
       this.appendSpillChunk(Buffer.from(text, "utf-8"));
@@ -190,6 +195,23 @@ export class OutputAccumulator {
       this.hasOpenLine = tail.length > 0;
     }
     this.totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
+  }
+
+  private transformDecoded(text: string): string {
+    if (!this.transformDecodedText) {
+      return text;
+    }
+    if (typeof this.transformDecodedText === "function") {
+      return this.transformDecodedText(text);
+    }
+    return this.transformDecodedText.write(text);
+  }
+
+  private finishTransform(): string {
+    if (!this.transformDecodedText || typeof this.transformDecodedText === "function") {
+      return "";
+    }
+    return this.transformDecodedText.finish?.() ?? "";
   }
 
   private trimTail(): void {

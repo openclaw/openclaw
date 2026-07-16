@@ -149,6 +149,8 @@ export function stripAnsiForStreamChunk(
   });
 }
 
+export { AnsiSequenceStripper } from "./ansi-stream.js";
+
 export function splitGraphemes(input: string): string[] {
   if (!input) {
     return [];
