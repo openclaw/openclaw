@@ -1,7 +1,12 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { VERSION } from "../version.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
-import { loggedConfigWarningFingerprints, warnedFutureTouchedVersions } from "./io.state.js";
+import {
+  loggedConfigWarningFingerprints,
+  MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS,
+  warnedFutureTouchedVersions,
+} from "./io.state.js";
 import type { OpenClawConfig } from "./types.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
@@ -40,6 +45,7 @@ export function logConfigWarningsOnce(params: {
     return;
   }
   loggedConfigWarningFingerprints.set(params.configPath, fingerprint);
+  pruneMapToMaxSize(loggedConfigWarningFingerprints, MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS);
   params.logger.warn(`Config warnings:\n${details}`);
 }
 
@@ -51,10 +57,9 @@ export function warnIfConfigFromFuture(
   if (!touched || !shouldWarnOnTouchedVersion(VERSION, touched)) {
     return;
   }
-  if (warnedFutureTouchedVersions.has(touched)) {
+  if (warnedFutureTouchedVersions.check(touched)) {
     return;
   }
-  warnedFutureTouchedVersions.add(touched);
   logger.warn(
     [
       `Your OpenClaw config was written by version ${touched}, but this command is running ${VERSION}.`,

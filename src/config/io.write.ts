@@ -2,6 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { isVerbose } from "../global-state.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
@@ -25,7 +26,10 @@ import {
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
-import { loggedConfigWarningFingerprints } from "./io.state.js";
+import {
+  loggedConfigWarningFingerprints,
+  MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS,
+} from "./io.state.js";
 import type {
   ConfigWriteOptions,
   InternalConfigWriteResult,
@@ -413,6 +417,10 @@ export async function writeConfigFileFromContext(
                 loggedConfigWarningFingerprints.delete(configPath);
               } else {
                 loggedConfigWarningFingerprints.set(configPath, previousWarningFingerprint);
+                pruneMapToMaxSize(
+                  loggedConfigWarningFingerprints,
+                  MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS,
+                );
               }
             },
           }
