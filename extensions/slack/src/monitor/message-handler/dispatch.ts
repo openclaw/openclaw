@@ -536,9 +536,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
+  // activation "work" arms the lifecycle for any eligible run; the reaction
+  // itself only appears once the run produces a work signal (reasoning/tool),
+  // mirroring the progress-draft work gate. Default "ack" keeps lifecycle
+  // updates limited to runs that sent an ack reaction.
+  const statusReactionsActivation = cfg.messages?.statusReactions?.activation ?? "ack";
   const statusReactionsEnabled =
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
-    Boolean(prepared.ackReactionPromise) &&
+    (Boolean(prepared.ackReactionPromise) || statusReactionsActivation === "work") &&
     Boolean(reactionMessageTs) &&
     cfg.messages?.statusReactions?.enabled === true;
   const slackStatusAdapter: StatusReactionAdapter = {
@@ -585,7 +590,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
 
-  if (statusReactionsEnabled) {
+  // Only ack-eligible runs show the queued reaction up front; work-activated
+  // runs stay reaction-free until their first work signal engages the
+  // controller via setThinking/setTool.
+  if (statusReactionsEnabled && Boolean(prepared.ackReactionPromise)) {
     void statusReactions.setQueued();
   }
 
@@ -2277,7 +2285,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   );
 
-  if (statusReactionsEnabled) {
+  // engaged: a work-activated run that never produced a work signal must not
+  // gain a reaction at the end (setDone/restoreInitial would add one).
+  if (statusReactionsEnabled && statusReactions.engaged) {
     if (dispatchError) {
       await statusReactions.setError();
       if (ctx.removeAckAfterReply) {

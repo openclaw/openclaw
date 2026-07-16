@@ -2078,6 +2078,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":
     "Enable lifecycle status reactions on supported channels. Discord treats unset as enabled when ack reactions are active; Slack, Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used. Slack uses native assistant thread status for progress by default.",
+  "messages.statusReactions.activation":
+    'When the lifecycle attaches to a run ("ack" default, "work"). "ack" limits lifecycle updates to runs that sent an ack reaction. "work" attaches lazily on the run\'s first work signal (reasoning or tool event) regardless of ack, so any run that starts real work shows the lifecycle; runs that never do work never gain a reaction. Currently honored by Slack.',
   "messages.statusReactions.emojis":
     "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
   "messages.statusReactions.timing":

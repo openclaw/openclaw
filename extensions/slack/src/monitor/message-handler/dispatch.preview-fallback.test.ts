@@ -114,10 +114,22 @@ let capturedReplyOptions:
     }
   | undefined;
 let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
+let statusReactionControllerEngaged = false;
 const statusReactionControllerMock = {
-  setQueued: vi.fn(async () => {}),
-  setThinking: vi.fn(async () => {}),
-  setTool: vi.fn(async () => {}),
+  // Mirrors the real controller: any requested transition marks engagement,
+  // which the dispatch terminal block checks before done/error/restore.
+  get engaged() {
+    return statusReactionControllerEngaged;
+  },
+  setQueued: vi.fn(async () => {
+    statusReactionControllerEngaged = true;
+  }),
+  setThinking: vi.fn(async () => {
+    statusReactionControllerEngaged = true;
+  }),
+  setTool: vi.fn(async () => {
+    statusReactionControllerEngaged = true;
+  }),
   setError: vi.fn(async () => {}),
   setDone: vi.fn(async () => {}),
   clear: vi.fn(async () => {}),
@@ -1342,8 +1354,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     reactSlackMessageMock.mockReset();
     removeSlackReactionMock.mockReset();
     logVerboseMock.mockReset();
+    statusReactionControllerEngaged = false;
     for (const value of Object.values(statusReactionControllerMock)) {
-      value.mockClear();
+      if (typeof value === "function") {
+        value.mockClear();
+      }
     }
     mockedNativeStreaming = false;
     mockedBlockStreamingEnabled = false;
@@ -1511,8 +1526,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
+    statusReactionControllerEngaged = false;
     for (const value of Object.values(statusReactionControllerMock)) {
-      value.mockClear();
+      if (typeof value === "function") {
+        value.mockClear();
+      }
     }
 
     await dispatchPreparedSlackMessage(

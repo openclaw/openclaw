@@ -247,6 +247,60 @@ describe("Slack status reaction lifecycle", () => {
     expect(adapter.setReaction).not.toHaveBeenCalled();
   });
 
+  it("engaged stays false until a transition is requested", async () => {
+    const { adapter } = createSlackMockAdapter();
+    const ctrl = createStatusReactionController({
+      enabled: true,
+      adapter,
+      initialEmoji: "eyes",
+      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
+    });
+
+    expect(ctrl.engaged).toBe(false);
+    void ctrl.setThinking();
+    expect(ctrl.engaged).toBe(true);
+  });
+
+  it("engaged stays false when disabled", async () => {
+    const { adapter } = createSlackMockAdapter();
+    const ctrl = createStatusReactionController({
+      enabled: false,
+      adapter,
+      initialEmoji: "eyes",
+    });
+
+    void ctrl.setQueued();
+    void ctrl.setThinking();
+    expect(ctrl.engaged).toBe(false);
+  });
+
+  it("lazy activation: first tool event starts the lifecycle without queued", async () => {
+    // Work-activated runs skip setQueued; the first work signal engages the
+    // controller directly with the tool emoji, then completes normally.
+    const { adapter, active, log } = createSlackMockAdapter();
+    const ctrl = createStatusReactionController({
+      enabled: true,
+      adapter,
+      initialEmoji: "eyes",
+      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999, doneHoldMs: 0 },
+    });
+
+    expect(ctrl.engaged).toBe(false);
+    void ctrl.setTool("exec");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(ctrl.engaged).toBe(true);
+    expect(active.has("eyes")).toBe(false);
+    expect(log[0]).toBe(`+${EXEC_TOOL_EMOJI}`);
+
+    await ctrl.setDone();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(active.has(DEFAULT_EMOJIS.done)).toBe(true);
+
+    await ctrl.clear();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(active.size).toBe(0);
+  });
+
   it("coding tool resolves to coding emoji", async () => {
     const { adapter, active } = createSlackMockAdapter();
     const ctrl = createStatusReactionController({

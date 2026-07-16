@@ -738,6 +738,59 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
+  function setWorkActivationConfig(options: { requireMention?: boolean } = {}) {
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        groupChat: { visibleReplies: "automatic" },
+        removeAckAfterReply: true,
+        statusReactions: {
+          enabled: true,
+          activation: "work",
+          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
+        },
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+          ...(options.requireMention === undefined
+            ? {}
+            : { requireMention: options.requireMention }),
+        },
+      },
+    };
+  }
+
+  it("work activation adds no reaction to an un-mentioned turn without work signals", async () => {
+    // The lifecycle is armed for the un-mentioned turn but never engages (no
+    // reasoning/tool events), so neither queued nor terminal reactions appear.
+    replyMock.mockResolvedValue({ text: "hi" });
+    setWorkActivationConfig({ requireMention: false });
+    mockGeneralChannelInfo();
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({ ts: "456", channel_type: "channel" }),
+    });
+    await flush();
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(reactionAddMock).not.toHaveBeenCalled();
+  });
+
+  it("work activation keeps the queued ack flow for mentioned turns", async () => {
+    replyMock.mockResolvedValue({ text: "hi" });
+    setWorkActivationConfig();
+    mockGeneralChannelInfo();
+    await runMentionGatedChannelMessageAndFlush();
+
+    expect(reactionAddMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "C1", timestamp: "456", name: "eyes" }),
+    );
+  });
+
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setPairingOnlyDirectMessages();
 

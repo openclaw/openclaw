@@ -93,6 +93,14 @@ export type StatusReactionsTimingConfig = {
 export type StatusReactionsConfig = {
   /** Enable lifecycle status reactions (default: false). */
   enabled?: boolean;
+  /**
+   * When the lifecycle attaches to a run (default: "ack").
+   * - "ack": only runs that sent an ack reaction get lifecycle updates.
+   * - "work": any eligible run gets lifecycle updates, attached lazily on its
+   *   first work signal (reasoning or tool event) — runs that never do work
+   *   never gain a reaction. Mirrors the progress-draft work gate.
+   */
+  activation?: "ack" | "work";
   /** Override default emojis. */
   emojis?: StatusReactionsEmojiConfig;
   /** Override default timing. */

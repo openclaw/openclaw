@@ -41,6 +41,13 @@ export type StatusReactionTiming = {
 
 /** Controller API for agent status reaction state transitions. */
 export type StatusReactionController = {
+  /**
+   * True once any state transition has been requested while enabled.
+   * Callers using lazy activation can check this before running terminal
+   * transitions (done/error/restore) so a run that never showed a reaction
+   * does not gain one at the end.
+   */
+  readonly engaged: boolean;
   setQueued: () => Promise<void> | void;
   setThinking: () => Promise<void> | void;
   setTool: (toolName?: string) => Promise<void> | void;
@@ -222,6 +229,7 @@ export function createStatusReactionController(params: {
 
   let currentEmoji = "";
   let pendingEmoji = "";
+  let engaged = false;
   let debounceTimer: NodeJS.Timeout | null = null;
   let stallSoftTimer: NodeJS.Timeout | null = null;
   let stallHardTimer: NodeJS.Timeout | null = null;
@@ -320,6 +328,7 @@ export function createStatusReactionController(params: {
     if (!enabled || finished) {
       return;
     }
+    engaged = true;
 
     // Skip duplicate sends while still refreshing stall timers for active phases.
     if (emoji === currentEmoji || emoji === pendingEmoji) {
@@ -454,6 +463,9 @@ export function createStatusReactionController(params: {
   }
 
   return {
+    get engaged() {
+      return engaged;
+    },
     setQueued,
     setThinking,
     setTool,
