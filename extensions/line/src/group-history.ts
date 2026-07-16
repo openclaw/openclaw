@@ -4,7 +4,7 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 
-export type LineGroupHistoryReservation = {
+type LineGroupHistoryReservation = {
   inboundHistory?: HistoryEntry[];
   commit: () => void;
   release: () => void;
