@@ -150,13 +150,26 @@ describe("claws lifecycle cli e2e", () => {
   });
 
   it("creates declared bootstrap and supporting files in the new workspace", async () => {
-    const result = await runOpenClaw([
+    const preview = await runOpenClaw([
       "claws",
       "add",
       "src/claws/fixtures/workspace-agent.claw.json",
-      "--yes",
+      "--dry-run",
       "--json",
     ]);
+    const plan = parseJson(preview.stdout) as { planIntegrity: string };
+    const result = await runOpenClaw(
+      [
+        "claws",
+        "add",
+        "src/claws/fixtures/workspace-agent.claw.json",
+        "--yes",
+        "--plan-integrity",
+        plan.planIntegrity,
+        "--json",
+      ],
+      { stateDir: preview.stateDir },
+    );
     const payload = parseJson(result.stdout);
     const workspace = join(result.stateDir, ".openclaw", "workspace-workspace-agent");
 

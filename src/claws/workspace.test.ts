@@ -4,17 +4,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { readClawInstallRecord } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawAddPlan, ClawSourceIdentity } from "./types.js";
-import {
-  ClawWorkspaceWriteError,
-  createClawWorkspaceFiles,
-  readClawWorkspaceFiles,
-} from "./workspace.js";
+import { ClawWorkspaceWriteError, createClawWorkspaceFiles } from "./workspace.js";
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -52,7 +50,9 @@ async function makePlan(params?: {
     version: "1.0.0",
     packageRoot: root,
     manifestPath: join(root, "openclaw.claw.json"),
+    integrityKind: "development-snapshot",
     integrity: "sha256:manifest",
+    byteLength: 0,
   };
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
@@ -71,6 +71,48 @@ function stateEnv(root: string) {
   return { OPENCLAW_STATE_DIR: join(root, "state") };
 }
 
+type WorkspaceFileRow = {
+  schema_version: string;
+  agent_id: string;
+  workspace: string;
+  target_path: string;
+  source_path: string;
+  content_digest: string;
+  status: "pending" | "complete" | "failed";
+  created_at_ms: number | bigint;
+  updated_at_ms: number | bigint;
+};
+
+function readWorkspaceFileRows(agentId: string, root: string) {
+  const rows = openOpenClawStateDatabase({ env: stateEnv(root) })
+    .db.prepare(
+      `SELECT schema_version, agent_id, workspace, target_path, source_path,
+              content_digest, status, created_at_ms, updated_at_ms
+         FROM claw_workspace_files
+        WHERE agent_id = ?
+        ORDER BY target_path`,
+    )
+    .all(agentId) as WorkspaceFileRow[];
+  return rows.map((row) => ({
+    schemaVersion: "openclaw.clawWorkspaceFileRecord.v1" as const,
+    agentId: row.agent_id,
+    workspace: row.workspace,
+    path: row.target_path,
+    sourcePath: row.source_path,
+    contentDigest: row.content_digest,
+    status: row.status,
+    createdAtMs: Number(row.created_at_ms),
+    updatedAtMs: Number(row.updated_at_ms),
+  }));
+}
+
+function readInstallStatus(agentId: string, root: string): string | undefined {
+  const row = openOpenClawStateDatabase({ env: stateEnv(root) })
+    .db.prepare(`SELECT status FROM claw_installs WHERE agent_id = ?`)
+    .get(agentId) as { status: string } | undefined;
+  return row?.status;
+}
+
 describe("createClawWorkspaceFiles", () => {
   it("creates canonical bootstrap and supporting files and records their hashes", async () => {
     const { root, workspace, plan } = await makePlan();
@@ -86,15 +128,18 @@ describe("createClawWorkspaceFiles", () => {
         schemaVersion: "openclaw.clawWorkspaceFileRecord.v1",
         agentId: "workspace-agent",
         path: "AGENTS.md",
+        sourcePath: "content/AGENTS.md",
         contentDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        status: "complete",
         createdAtMs: 10,
+        updatedAtMs: 10,
       }),
       expect.objectContaining({
         agentId: "workspace-agent",
         path: join("reference", "policy.md"),
       }),
     ]);
-    expect(readClawWorkspaceFiles("workspace-agent", { env: stateEnv(root) })).toEqual(records);
+    expect(readWorkspaceFileRows("workspace-agent", root)).toEqual(records);
   });
 
   it("never overwrites an unexpected destination", async () => {
@@ -161,7 +206,7 @@ describe("createClawWorkspaceFiles", () => {
       createdFiles: [expect.objectContaining({ path: "first.md" })],
     });
     await expect(readFile(join(workspace, "first.md"), "utf8")).resolves.toBe("# Agent\n");
-    expect(readClawWorkspaceFiles("workspace-agent", { env: stateEnv(root) })).toEqual([
+    expect(readWorkspaceFileRows("workspace-agent", root)).toEqual([
       expect.objectContaining({ path: "first.md", createdAtMs: 20 }),
     ]);
   });
@@ -186,6 +231,7 @@ describe("workspace files in the consented add lifecycle", () => {
     let config: OpenClawConfig = {};
 
     const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
       env: stateEnv(root),
       nowMs: 30,
       commitConfig: async (transform) => {
@@ -202,9 +248,7 @@ describe("workspace files in the consented add lifecycle", () => {
       installRecord: { status: "complete" },
     });
     expect(config.agents?.list?.[0]?.id).toBe("workspace-agent");
-    expect(readClawInstallRecord("workspace-agent", { env: stateEnv(root) })?.status).toBe(
-      "complete",
-    );
+    expect(readInstallStatus("workspace-agent", root)).toBe("complete");
   });
 
   it("marks the root install partial and retains earlier file refs after a later source changes", async () => {
@@ -217,6 +261,7 @@ describe("workspace files in the consented add lifecycle", () => {
     let config: OpenClawConfig = {};
 
     const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
       env: stateEnv(root),
       nowMs: 40,
       commitConfig: async (transform) => {
@@ -234,8 +279,6 @@ describe("workspace files in the consented add lifecycle", () => {
       },
     });
     expect(config.agents?.list?.[0]?.id).toBe("workspace-agent");
-    expect(readClawInstallRecord("workspace-agent", { env: stateEnv(root) })?.status).toBe(
-      "partial",
-    );
+    expect(readInstallStatus("workspace-agent", root)).toBe("partial");
   });
 });
