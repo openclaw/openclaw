@@ -16,8 +16,8 @@ import {
 import { jsonResult, type AnyAgentTool } from "../../src/agents/tools/common.js";
 import { setPluginToolMeta } from "../../src/plugins/tools.js";
 
-export type Surface = "direct" | "tool-search-code" | "tool-search-tools" | "code-mode";
-export type ProviderId = "openai" | "anthropic" | "google";
+type Surface = "direct" | "tool-search-code" | "tool-search-tools" | "code-mode";
+type ProviderId = "openai" | "anthropic" | "google";
 
 const SURFACES: Surface[] = ["direct", "tool-search-code", "tool-search-tools", "code-mode"];
 const PROVIDER_IDS: ProviderId[] = ["openai", "anthropic", "google"];
@@ -664,7 +664,7 @@ function readListArg<T extends string>(params: {
   return [...new Set(entries)] as T[];
 }
 
-export type BenchArgs = {
+type BenchArgs = {
   providers: ProviderId[];
   surfaces: Surface[];
   taskIds: string[];
@@ -726,7 +726,7 @@ function readProviderApiKey(provider: ProviderId): string | undefined {
   return process.env.GEMINI_API_KEY?.trim();
 }
 
-export async function main(argv: readonly string[] = process.argv.slice(2)) {
+async function main(argv: readonly string[] = process.argv.slice(2)) {
   const { providers, surfaces, taskIds, models } = parseBenchArgs(argv);
   const tasks = TASKS.filter((task) => taskIds.includes(task.id));
   const results: RunMetrics[] = [];
