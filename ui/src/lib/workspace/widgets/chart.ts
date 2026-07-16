@@ -68,9 +68,6 @@ function mapChart(widget: WorkspaceWidget, value: unknown): ChartModel {
   if (!data.ok) {
     return { status: "error", reason: data.reason };
   }
-  if (data.values.length === 0) {
-    return { status: "empty" };
-  }
   const configuredMin = props.min === undefined ? undefined : toFiniteNumber(props.min);
   const configuredMax = props.max === undefined ? undefined : toFiniteNumber(props.max);
   if (
@@ -79,12 +76,22 @@ function mapChart(widget: WorkspaceWidget, value: unknown): ChartModel {
   ) {
     return { status: "error", reason: "chart bounds must be finite numbers" };
   }
+  if (
+    configuredMin !== undefined &&
+    configuredMax !== undefined &&
+    configuredMin >= configuredMax
+  ) {
+    return { status: "error", reason: "chart minimum must be less than maximum" };
+  }
+  if (data.values.length === 0) {
+    return { status: "empty" };
+  }
   const dataMin = Math.min(...data.values);
   const dataMax = Math.max(...data.values);
   const includesZeroByDefault = rawType === "bar" || rawType === "gauge";
   let min = configuredMin ?? (includesZeroByDefault ? Math.min(dataMin, 0) : dataMin);
   let max = configuredMax ?? (includesZeroByDefault ? Math.max(dataMax, 0) : dataMax);
-  if (min > max || (configuredMin !== undefined && configuredMax !== undefined && min === max)) {
+  if (min > max) {
     return { status: "error", reason: "chart minimum must be less than maximum" };
   }
   if (min === max) {

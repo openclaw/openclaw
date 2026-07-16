@@ -183,6 +183,12 @@ describe("chart mapping", () => {
     expect(empty.querySelector('[data-test-id="workspace-chart-empty"]')).not.toBeNull();
     expect(empty.querySelector("svg")).toBeNull();
 
+    for (const props of [{ min: "bad" }, { min: 10, max: 2 }, { min: 4, max: 4 }]) {
+      const invalidEmpty = renderToContainer(renderChart(widget({ props }), []));
+      expect(invalidEmpty.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
+      expect(invalidEmpty.querySelector("svg")).toBeNull();
+    }
+
     const invalid = renderToContainer(renderChart(widget(), [1, "bad"]));
     expect(invalid.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
     expect(invalid.querySelector("svg")).toBeNull();
