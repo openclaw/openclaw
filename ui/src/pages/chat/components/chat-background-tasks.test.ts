@@ -140,6 +140,26 @@ describe("background tasks rail state", () => {
     expect(props.error).toBe("already finished");
     expect(props.cancellingTaskIds.has("task-1")).toBe(false);
   });
+
+  it("loads the bounded prompt when a task is opened", async () => {
+    const running = makeTask({ id: "task-1", progressSummary: "Reading files" });
+    const { host, request } = createHost({
+      request: (method) =>
+        method === "tasks.get"
+          ? Promise.resolve({ task: { ...running, prompt: "Audit the background task UI" } })
+          : Promise.resolve({ tasks: [running] }),
+    });
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+
+    createBackgroundTasksProps(host, openSession).onToggleTask(running);
+    await flushAsync();
+
+    expect(request).toHaveBeenCalledWith("tasks.get", { taskId: "task-1" });
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.selectedTaskId).toBe("task-1");
+    expect(props.taskDetails.get("task-1")?.prompt).toBe("Audit the background task UI");
+  });
 });
 
 describe("background tasks rail events", () => {
@@ -228,10 +248,15 @@ describe("background tasks rail rendering", () => {
         ],
         cancellingTaskIds: new Set(),
         finishedCollapsed: false,
+        selectedTaskId: null,
+        taskDetails: new Map(),
+        taskDetailErrors: new Map(),
+        taskDetailLoadingIds: new Set(),
         onToggleCollapsed: () => {},
         onToggleFinished: () => {},
         onRefresh: () => {},
         onCancel,
+        onToggleTask: () => {},
         onOpenSession,
       })}`,
       container,
@@ -279,10 +304,15 @@ describe("background tasks rail rendering", () => {
         ],
         cancellingTaskIds: new Set(),
         finishedCollapsed: false,
+        selectedTaskId: null,
+        taskDetails: new Map(),
+        taskDetailErrors: new Map(),
+        taskDetailLoadingIds: new Set(),
         onToggleCollapsed: () => {},
         onToggleFinished: () => {},
         onRefresh: () => {},
         onCancel: () => {},
+        onToggleTask: () => {},
         onOpenSession: () => {},
       })}`,
       container,
@@ -297,6 +327,109 @@ describe("background tasks rail rendering", () => {
     expect(finished?.textContent).toContain("1 tool use");
     expect(finished?.textContent).toContain("1m 5s");
     expect(finished?.querySelector("openclaw-elapsed-time")).toBeNull();
+  });
+
+  it("opens a task inspector with prompt and output", () => {
+    const onToggleTask = vi.fn();
+    const task = makeTask({
+      id: "task-1",
+      status: "completed",
+      terminalSummary: "Audit complete",
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksRail({
+        agentId: "main",
+        statusRowId: "chat-tasks-status-test",
+        collapsed: false,
+        narrowLayout: false,
+        connected: true,
+        canCancel: false,
+        loading: false,
+        error: null,
+        tasks: [task],
+        cancellingTaskIds: new Set(),
+        finishedCollapsed: false,
+        selectedTaskId: "task-1",
+        taskDetails: new Map([
+          [
+            "task-1",
+            { ...task, terminalSummary: "Stale running progress", prompt: "Review running tasks" },
+          ],
+        ]),
+        taskDetailErrors: new Map(),
+        taskDetailLoadingIds: new Set(),
+        onToggleCollapsed: () => {},
+        onToggleFinished: () => {},
+        onRefresh: () => {},
+        onCancel: () => {},
+        onToggleTask,
+        onOpenSession: () => {},
+      })}`,
+      container,
+    );
+
+    const inspector = container.querySelector('[data-task-inspector="task-1"]');
+    expect(inspector?.textContent).toContain("Review running tasks");
+    expect(inspector?.textContent).toContain("Audit complete");
+    expect(inspector?.textContent).not.toContain("Stale running progress");
+    inspector?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleTask).not.toHaveBeenCalled();
+    const disclosure = container.querySelector<HTMLButtonElement>(
+      ".chat-tasks-rail__task-disclosure",
+    );
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
+    disclosure?.click();
+    expect(onToggleTask).toHaveBeenCalledWith(task);
+  });
+
+  it("uses a newer lookup snapshot for output", () => {
+    const listTask = makeTask({
+      id: "task-1",
+      status: "running",
+      updatedAt: 2_000,
+      progressSummary: "Still running",
+    });
+    const lookupTask = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 3_000,
+      terminalSummary: "Finished in lookup",
+      prompt: "Review running tasks",
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksRail({
+        agentId: "main",
+        statusRowId: "chat-tasks-status-test",
+        collapsed: false,
+        narrowLayout: false,
+        connected: true,
+        canCancel: false,
+        loading: false,
+        error: null,
+        tasks: [listTask],
+        cancellingTaskIds: new Set(),
+        finishedCollapsed: false,
+        selectedTaskId: "task-1",
+        taskDetails: new Map([["task-1", lookupTask]]),
+        taskDetailErrors: new Map(),
+        taskDetailLoadingIds: new Set(),
+        onToggleCollapsed: () => {},
+        onToggleFinished: () => {},
+        onRefresh: () => {},
+        onCancel: () => {},
+        onToggleTask: () => {},
+        onOpenSession: () => {},
+      })}`,
+      container,
+    );
+
+    const inspector = container.querySelector('[data-task-inspector="task-1"]');
+    expect(inspector?.textContent).toContain("Finished in lookup");
+    expect(inspector?.textContent).not.toContain("Still running");
   });
 
   it("collapses the finished section", () => {
@@ -315,10 +448,15 @@ describe("background tasks rail rendering", () => {
         tasks: [makeTask({ id: "task-2", status: "completed" })],
         cancellingTaskIds: new Set(),
         finishedCollapsed: true,
+        selectedTaskId: null,
+        taskDetails: new Map(),
+        taskDetailErrors: new Map(),
+        taskDetailLoadingIds: new Set(),
         onToggleCollapsed: () => {},
         onToggleFinished: () => {},
         onRefresh: () => {},
         onCancel: () => {},
+        onToggleTask: () => {},
         onOpenSession: () => {},
       })}`,
       container,
@@ -345,10 +483,15 @@ describe("running-tasks status row", () => {
       tasks: null,
       cancellingTaskIds: new Set(),
       finishedCollapsed: false,
+      selectedTaskId: null,
+      taskDetails: new Map(),
+      taskDetailErrors: new Map(),
+      taskDetailLoadingIds: new Set(),
       onToggleCollapsed: () => {},
       onToggleFinished: () => {},
       onRefresh: () => {},
       onCancel: () => {},
+      onToggleTask: () => {},
       onOpenSession: () => {},
       ...overrides,
     };

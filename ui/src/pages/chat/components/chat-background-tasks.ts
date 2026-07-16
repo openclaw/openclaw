@@ -14,6 +14,7 @@ import {
   mergeTaskLists,
   normalizeTaskEventPayload,
   normalizeTasksCancelResult,
+  normalizeTasksGetResult,
   normalizeTasksListResult,
   partitionTasks,
   sortTasks,
@@ -39,12 +40,17 @@ export type BackgroundTasksProps = {
   error: string | null;
   /** null until the first load for this agent finished. */
   tasks: TaskSummary[] | null;
+  selectedTaskId: string | null;
+  taskDetails: ReadonlyMap<string, TaskSummary>;
+  taskDetailErrors: ReadonlyMap<string, string>;
+  taskDetailLoadingIds: ReadonlySet<string>;
   cancellingTaskIds: ReadonlySet<string>;
   finishedCollapsed: boolean;
   onToggleCollapsed: () => void;
   onToggleFinished: () => void;
   onRefresh: () => void;
   onCancel: (taskId: string) => void;
+  onToggleTask: (task: TaskSummary) => void;
   onOpenSession: (sessionKey: string) => void;
 };
 
@@ -64,6 +70,10 @@ type BackgroundTasksState = {
   // per pane: two panes on the same agent would otherwise cross-anchor.
   statusRowId: string;
   tasks: TaskSummary[] | null;
+  selectedTaskId: string | null;
+  taskDetails: Map<string, TaskSummary>;
+  taskDetailErrors: Map<string, string>;
+  taskDetailLoadingIds: Set<string>;
 };
 
 export type BackgroundTasksHost = {
@@ -106,6 +116,10 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     requestId: 0,
     statusRowId: `chat-tasks-status-${nextStatusRowId}`,
     tasks: null,
+    selectedTaskId: null,
+    taskDetails: new Map(),
+    taskDetailErrors: new Map(),
+    taskDetailLoadingIds: new Set(),
   };
   host.backgroundTasksState = next;
   return next;
@@ -214,6 +228,12 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
       return;
     }
     state.tasks = state.tasks.filter((task) => task.id !== event.taskId);
+    if (state.selectedTaskId === event.taskId) {
+      state.selectedTaskId = null;
+    }
+    state.taskDetails.delete(event.taskId);
+    state.taskDetailErrors.delete(event.taskId);
+    state.taskDetailLoadingIds.delete(event.taskId);
     host.requestUpdate?.();
     return;
   }
@@ -221,7 +241,74 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
     return;
   }
   state.tasks = sortTasks([event.task, ...state.tasks.filter((task) => task.id !== event.task.id)]);
+  const detail = state.taskDetails.get(event.task.id);
+  if (detail) {
+    state.taskDetails = new Map(state.taskDetails).set(event.task.id, {
+      ...event.task,
+      ...(detail.prompt ? { prompt: detail.prompt } : {}),
+    });
+  }
   host.requestUpdate?.();
+}
+
+async function loadBackgroundTaskDetail(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  task: TaskSummary,
+) {
+  const rowId = task.id;
+  const client = host.client;
+  if (
+    !client ||
+    !host.connected ||
+    state.taskDetails.has(rowId) ||
+    state.taskDetailLoadingIds.has(rowId)
+  ) {
+    return;
+  }
+  state.taskDetailLoadingIds = new Set(state.taskDetailLoadingIds).add(rowId);
+  const nextErrors = new Map(state.taskDetailErrors);
+  nextErrors.delete(rowId);
+  state.taskDetailErrors = nextErrors;
+  host.requestUpdate?.();
+  try {
+    const payload = await client.request("tasks.get", { taskId: task.taskId });
+    if (getBackgroundTasksState(host) !== state) {
+      return;
+    }
+    const detail = normalizeTasksGetResult(payload);
+    if (!detail) {
+      throw new Error(t("chat.backgroundTasks.detailFailed"));
+    }
+    state.taskDetails = new Map(state.taskDetails).set(rowId, detail);
+  } catch (error) {
+    if (getBackgroundTasksState(host) === state) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : t("chat.backgroundTasks.detailFailed");
+      state.taskDetailErrors = new Map(state.taskDetailErrors).set(rowId, message);
+    }
+  } finally {
+    if (getBackgroundTasksState(host) === state) {
+      const next = new Set(state.taskDetailLoadingIds);
+      next.delete(rowId);
+      state.taskDetailLoadingIds = next;
+    }
+    host.requestUpdate?.();
+  }
+}
+
+function toggleBackgroundTaskDetail(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  task: TaskSummary,
+) {
+  state.selectedTaskId = state.selectedTaskId === task.id ? null : task.id;
+  host.requestUpdate?.();
+  if (state.selectedTaskId === task.id) {
+    void loadBackgroundTaskDetail(host, state, task);
+  }
 }
 
 async function cancelBackgroundTask(
@@ -308,6 +395,10 @@ export function createBackgroundTasksProps(
     loading: state.loading,
     error: state.error,
     tasks: state.tasks,
+    selectedTaskId: state.selectedTaskId,
+    taskDetails: state.taskDetails,
+    taskDetailErrors: state.taskDetailErrors,
+    taskDetailLoadingIds: state.taskDetailLoadingIds,
     cancellingTaskIds: state.cancellingTaskIds,
     finishedCollapsed: state.finishedCollapsed,
     onToggleCollapsed: () => toggleBackgroundTasks(host),
@@ -317,6 +408,7 @@ export function createBackgroundTasksProps(
     },
     onRefresh: () => loadBackgroundTasks(host, state, true),
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
+    onToggleTask: (task) => toggleBackgroundTaskDetail(host, state, task),
     onOpenSession: opts.onOpenSession,
   };
 }
@@ -362,9 +454,35 @@ export const STATUS_TONES = {
   running: "warn",
   completed: "ok",
   failed: "danger",
-  cancelled: "muted",
+  cancelled: "danger",
   timed_out: "danger",
 } as const satisfies Record<TaskSummary["status"], string>;
+
+function backgroundTaskStatusLabel(task: TaskSummary): string {
+  if (isActiveTask(task)) {
+    return taskStatusLabel(task.status);
+  }
+  // Finished history intentionally has two outcomes: completed or failed.
+  // Cancellation and timeout stay grouped as unsuccessful work.
+  return task.status === "completed"
+    ? t("tasksPage.status.completed")
+    : t("tasksPage.status.failed");
+}
+
+function newestTaskSnapshot(current: TaskSummary, lookup: TaskSummary | undefined): TaskSummary {
+  if (!lookup) {
+    return current;
+  }
+  const currentAt = taskTimestampMs(current.updatedAt ?? current.endedAt ?? current.createdAt);
+  const lookupAt = taskTimestampMs(lookup.updatedAt ?? lookup.endedAt ?? lookup.createdAt);
+  if (
+    lookupAt > currentAt ||
+    (lookupAt === currentAt && isActiveTask(current) && !isActiveTask(lookup))
+  ) {
+    return lookup;
+  }
+  return current;
+}
 
 function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
   const active = isActiveTask(task);
@@ -381,15 +499,49 @@ function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): Template
   const transcriptSessionKey = task.childSessionKey ?? task.sessionKey;
   const cancelling = props.cancellingTaskIds.has(task.id);
   const tone = STATUS_TONES[task.status];
+  const expanded = props.selectedTaskId === task.id;
+  const detailedTask = props.taskDetails.get(task.id);
+  const detailLoading = props.taskDetailLoadingIds.has(task.id);
+  const detailError = props.taskDetailErrors.get(task.id);
+  // List/events and lookup can race; newest activity owns mutable output.
+  const output = taskDetail(newestTaskSnapshot(task, detailedTask));
+  const disclosureLabel = expanded
+    ? t("chat.backgroundTasks.collapseTask", { title })
+    : t("chat.backgroundTasks.expandTask", { title });
   return html`
-    <div class="chat-tasks-rail__task" role="listitem" data-task-id=${task.id}>
+    <div
+      class="chat-tasks-rail__task ${expanded ? "chat-tasks-rail__task--expanded" : ""}"
+      role="listitem"
+      data-task-id=${task.id}
+      @click=${(event: MouseEvent) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.closest("button, a, .chat-tasks-rail__task-inspector")
+        ) {
+          return;
+        }
+        props.onToggleTask(task);
+      }}
+    >
       <div class="chat-tasks-rail__task-head">
-        ${task.status === "running"
-          ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
-          : nothing}
-        <openclaw-tooltip .content=${title}>
-          <span class="chat-tasks-rail__task-title">${title}</span>
-        </openclaw-tooltip>
+        <button
+          class="chat-tasks-rail__task-disclosure"
+          type="button"
+          aria-label=${disclosureLabel}
+          aria-expanded=${String(expanded)}
+          @click=${() => props.onToggleTask(task)}
+        >
+          ${task.status === "running"
+            ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+            : nothing}
+          <openclaw-tooltip .content=${title}>
+            <span class="chat-tasks-rail__task-title">${title}</span>
+          </openclaw-tooltip>
+          <span class="chat-tasks-rail__task-chevron" aria-hidden="true">
+            ${expanded ? icons.chevronDown : icons.chevronRight}
+          </span>
+        </button>
         ${active && props.canCancel
           ? html`
               <openclaw-tooltip .content=${t("chat.backgroundTasks.stopTask", { title })}>
@@ -408,7 +560,7 @@ function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): Template
       </div>
       <div class="chat-tasks-rail__task-meta">
         <span class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${tone}"
-          >${taskStatusLabel(task.status)}</span
+          >${backgroundTaskStatusLabel(task)}</span
         >
         <span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
         <span>${taskRuntimeLabel(task)}</span>
@@ -449,6 +601,37 @@ function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): Template
           : nothing}
       </div>
       ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
+      ${expanded
+        ? html`
+            <div class="chat-tasks-rail__task-inspector" data-task-inspector=${task.id}>
+              ${detailLoading
+                ? html`<div class="chat-tasks-rail__task-inspector-state">
+                    ${t("chat.backgroundTasks.detailLoading")}
+                  </div>`
+                : detailError
+                  ? html`<div
+                      class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
+                    >
+                      ${detailError}
+                    </div>`
+                  : html`
+                      <div class="chat-tasks-rail__task-inspector-block">
+                        <div class="chat-tasks-rail__task-inspector-label">
+                          ${t("chat.backgroundTasks.prompt")}
+                        </div>
+                        <pre>
+${detailedTask?.prompt ?? t("chat.backgroundTasks.promptUnavailable")}</pre>
+                      </div>
+                      <div class="chat-tasks-rail__task-inspector-block">
+                        <div class="chat-tasks-rail__task-inspector-label">
+                          ${t("chat.backgroundTasks.output")}
+                        </div>
+                        <pre>${output ?? t("chat.backgroundTasks.outputPending")}</pre>
+                      </div>
+                    `}
+            </div>
+          `
+        : nothing}
     </div>
   `;
 }
