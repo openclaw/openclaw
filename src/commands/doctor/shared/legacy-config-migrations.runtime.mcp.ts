@@ -10,6 +10,18 @@ import {
 } from "../../../config/mcp-config-normalize.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
+const MCP_SERVER_DISABLED_RULE: LegacyConfigRule = {
+  path: ["mcp", "servers"],
+  message:
+    'mcp.servers entries use enabled (not disabled). Run "openclaw doctor --fix" to migrate.',
+  match: (value, root) =>
+    isRecord(value) &&
+    Object.entries(value).some(
+      ([name, server]) =>
+        isRecord(server) && server.disabled === true && server.enabled === undefined,
+    ),
+};
+
 const MCP_SERVER_TYPE_RULE: LegacyConfigRule = {
   path: ["mcp", "servers"],
   message:
@@ -21,6 +33,33 @@ const MCP_SERVER_TYPE_RULE: LegacyConfigRule = {
 
 /** Legacy config migration specs for MCP server config compatibility. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "mcp.servers.disabled->enabled",
+    describe: "Migrate mcp.servers.*.disabled to canonical enabled",
+    legacyRules: [MCP_SERVER_DISABLED_RULE],
+    apply: (raw, changes) => {
+      const mcp = isRecord(raw.mcp) ? raw.mcp : undefined;
+      const servers = isRecord(mcp?.servers) ? mcp?.servers : undefined;
+      if (!servers) {
+        return;
+      }
+
+      for (const [serverName, rawServer] of Object.entries(servers)) {
+        if (!isRecord(rawServer) || rawServer.disabled !== true) {
+          continue;
+        }
+        // Only migrate when the canonical field isn't already explicitly set.
+        if (rawServer.enabled !== undefined) {
+          delete rawServer.disabled;
+          changes.push(`Removed mcp.servers.${serverName}.disabled (enabled already set).`);
+          continue;
+        }
+        rawServer.enabled = false;
+        delete rawServer.disabled;
+        changes.push(`Migrated mcp.servers.${serverName}.disabled → enabled: false.`);
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "mcp.servers.type->transport",
     describe: "Move CLI-native MCP server type aliases to OpenClaw transport",

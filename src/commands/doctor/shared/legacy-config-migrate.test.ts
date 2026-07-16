@@ -1932,6 +1932,120 @@ describe("legacy migrate MCP server type aliases", () => {
   });
 });
 
+describe("legacy migrate MCP server disabled", () => {
+  it("migrates disabled: true to enabled: false", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          claude: {
+            disabled: true,
+            command: "claude",
+            args: ["mcp", "serve"],
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual(["Migrated mcp.servers.claude.disabled → enabled: false."]);
+    expect(res.config?.mcp?.servers?.claude).toEqual({
+      command: "claude",
+      args: ["mcp", "serve"],
+      enabled: false,
+    });
+    expect(res.config?.mcp?.servers?.claude).not.toHaveProperty("disabled");
+  });
+
+  it("removes disabled without enabling when enabled is already set", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          claude: {
+            enabled: true,
+            disabled: true,
+            command: "claude",
+            args: ["mcp", "serve"],
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed mcp.servers.claude.disabled (enabled already set).",
+    ]);
+    expect(res.config?.mcp?.servers?.claude).toEqual({
+      command: "claude",
+      args: ["mcp", "serve"],
+      enabled: true,
+    });
+    expect(res.config?.mcp?.servers?.claude).not.toHaveProperty("disabled");
+  });
+
+  it("ignores disabled: false", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          claude: {
+            disabled: false,
+            command: "claude",
+            args: ["mcp", "serve"],
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toBeNull();
+  });
+
+  it("leaves servers without disabled untouched", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          claude: {
+            command: "claude",
+            args: ["mcp", "serve"],
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toBeNull();
+  });
+
+  it("migrates multiple servers in a single pass", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          alpha: { disabled: true, command: "echo", args: ["alpha"] },
+          beta: { disabled: true, command: "echo", args: ["beta"] },
+          gamma: { enabled: false, command: "echo", args: ["gamma"] },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Migrated mcp.servers.alpha.disabled → enabled: false.",
+      "Migrated mcp.servers.beta.disabled → enabled: false.",
+    ]);
+    expect(res.config?.mcp?.servers?.alpha).toEqual({
+      command: "echo",
+      args: ["alpha"],
+      enabled: false,
+    });
+    expect(res.config?.mcp?.servers?.beta).toEqual({
+      command: "echo",
+      args: ["beta"],
+      enabled: false,
+    });
+    expect(res.config?.mcp?.servers?.gamma).toEqual({
+      command: "echo",
+      args: ["gamma"],
+      enabled: false,
+    });
+  });
+});
+
 describe("legacy migrate x_search auth", () => {
   it("moves only legacy x_search auth into plugin-owned xai config", () => {
     const res = migrateLegacyConfigForTest({
