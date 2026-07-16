@@ -152,10 +152,11 @@ preinstall_previous_version() {
 
 run_official_installer() (
   local installer
-  installer="$(mktemp)"
+  # time_phase disables errexit, so setup and download failures must return explicitly.
+  installer="$(mktemp)" || return
   trap 'rm -f "$installer"' EXIT
 
-  curl -fsSL --connect-timeout 10 --max-time 120 "$INSTALL_URL" -o "$installer" || return $?
+  curl -fsSL --connect-timeout 10 --max-time 120 "$INSTALL_URL" -o "$installer" || return
   if [[ "$INSTALL_TAG" == "beta" ]]; then
     OPENCLAW_BETA=1 bash "$installer"
   elif [[ "$INSTALL_TAG" != "latest" ]]; then
