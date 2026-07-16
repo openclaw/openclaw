@@ -35,6 +35,7 @@ import {
 } from "../../tts/tts.js";
 import { formatForLog } from "../ws-log.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
+import { configuredOrFalse } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 /** Gateway request handlers for TTS status, preference mutation, and synthesis. */
@@ -55,11 +56,13 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const providerStates = listSpeechProviders(cfg).map((candidate) => ({
         id: candidate.id,
         label: candidate.label,
-        configured: candidate.isConfigured({
-          cfg,
-          providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
-          timeoutMs: config.timeoutMs,
-        }),
+        configured: configuredOrFalse(() =>
+          candidate.isConfigured({
+            cfg,
+            providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
+            timeoutMs: config.timeoutMs,
+          }),
+        ),
       }));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
