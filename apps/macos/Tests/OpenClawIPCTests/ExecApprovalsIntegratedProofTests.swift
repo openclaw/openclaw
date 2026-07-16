@@ -136,8 +136,9 @@ struct ExecApprovalsIntegratedProofTests {
     }
 
     private static func scheduleAllowOnceResponse(recorder: PromptObservationRecorder) -> Timer {
-        let timer = Timer(timeInterval: 0.01, repeats: true) { timer in
+        let timer = Timer(timeInterval: 0.01, repeats: true) { _ in
             MainActor.assumeIsolated {
+                guard recorder.value == nil else { return }
                 if let alert = ExecApprovalsPromptPresenter.activeAlertForTesting,
                    NSApp.modalWindow === alert.window,
                    let button = alert.buttons.first(where: { $0.title == "Allow Once" })
@@ -146,13 +147,7 @@ struct ExecApprovalsIntegratedProofTests {
                         messageText: alert.messageText,
                         informativeText: alert.informativeText,
                         buttonTitles: alert.buttons.map(\.title))
-                    timer.invalidate()
                     button.performClick(nil)
-                    return
-                }
-                recorder.attemptsRemaining -= 1
-                if recorder.attemptsRemaining == 0 {
-                    timer.invalidate()
                 }
             }
         }
@@ -312,7 +307,6 @@ struct ExecApprovalsIntegratedProofTests {
 
     @MainActor
     private final class PromptObservationRecorder {
-        var attemptsRemaining = 500
         var value: PromptObservation?
     }
 
