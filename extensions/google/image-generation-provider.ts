@@ -11,6 +11,9 @@ import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } fr
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_OUTPUT_MIME = "image/png";
+const GEMINI_FLASH_LITE_IMAGE_MODEL = "gemini-3.1-flash-lite-image";
+const GEMINI_FLASH_LITE_STANDARD_1K_IMAGE_OUTPUT_TOKENS = 1120;
+const GEMINI_FLASH_LITE_IMAGE_OUTPUT_TOKEN_PRICE_PER_MILLION_USD = 30;
 const GOOGLE_SUPPORTED_SIZES = [
   "1024x1024",
   "1024x1536",
@@ -52,6 +55,24 @@ type GoogleGenerateImageResponse = {
 function normalizeGoogleImageModel(model: string | undefined): string {
   const trimmed = model?.trim();
   return normalizeGoogleModelId(trimmed || DEFAULT_GOOGLE_IMAGE_MODEL);
+}
+
+function estimateGeminiFlashLiteImageCost(model: string, resolution: string | undefined) {
+  if (model !== GEMINI_FLASH_LITE_IMAGE_MODEL || resolution !== "1K") {
+    return undefined;
+  }
+
+  const totalCostUsd =
+    (GEMINI_FLASH_LITE_STANDARD_1K_IMAGE_OUTPUT_TOKENS *
+      GEMINI_FLASH_LITE_IMAGE_OUTPUT_TOKEN_PRICE_PER_MILLION_USD) /
+    1_000_000;
+
+  return {
+    currency: "USD",
+    imageOutputTokens: GEMINI_FLASH_LITE_STANDARD_1K_IMAGE_OUTPUT_TOKENS,
+    outputTokenPricePerMillionUsd: GEMINI_FLASH_LITE_IMAGE_OUTPUT_TOKEN_PRICE_PER_MILLION_USD,
+    totalCostUsd,
+  };
 }
 
 function mapSizeToImageConfig(
@@ -207,9 +228,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           throw new Error("Google image generation response missing image data");
         }
 
+        const costEstimate = estimateGeminiFlashLiteImageCost(model, req.resolution);
+
         return {
           images,
           model,
+          ...(costEstimate ? { metadata: { costEstimate } } : {}),
         };
       } finally {
         await release();

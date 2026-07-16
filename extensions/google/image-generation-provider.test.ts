@@ -173,6 +173,29 @@ describe("Google image-generation provider", () => {
     });
   });
 
+  it("adds a deterministic 1K standard cost estimate for Gemini Flash Lite images", async () => {
+    mockGoogleApiKeyAuth();
+    installGoogleFetchMock();
+
+    const provider = buildGoogleImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-lite-image",
+      prompt: "draw a receipt",
+      cfg: {},
+      resolution: "1K",
+    });
+
+    expect(result.metadata).toEqual({
+      costEstimate: {
+        currency: "USD",
+        imageOutputTokens: 1120,
+        outputTokenPricePerMillionUsd: 30,
+        totalCostUsd: 0.0336,
+      },
+    });
+  });
+
   it("sends reference images and explicit resolution for edit flows", async () => {
     mockGoogleApiKeyAuth();
     const fetchMock = installGoogleFetchMock();
