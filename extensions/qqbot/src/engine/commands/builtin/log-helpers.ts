@@ -230,11 +230,22 @@ function tailFileLines(
       const readSize = Math.min(CHUNK_SIZE, position);
       position -= readSize;
       const buf = Buffer.alloc(readSize);
-      const actualRead = fs.readSync(fd, buf, 0, readSize, position);
-      // Short reads return fewer bytes than requested; keep only the
-      // bytes actually read so the tail doesn't contain NUL padding.
-      const chunk = actualRead < readSize ? buf.subarray(0, actualRead) : buf;
-      chunks.unshift(chunk);
+      let actualRead = 0;
+      while (actualRead < readSize) {
+        const justRead = fs.readSync(
+          fd,
+          buf,
+          actualRead,
+          readSize - actualRead,
+          position + actualRead,
+        );
+        if (justRead === 0) {
+          throw new Error(`Could not complete log read for ${filePath}`);
+        }
+        actualRead += justRead;
+      }
+
+      chunks.unshift(buf);
       bytesRead += actualRead;
 
       for (let i = 0; i < actualRead; i++) {
