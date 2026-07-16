@@ -36,19 +36,21 @@ function startCaptureServer() {
         return;
       }
       void (async () => {
-        const chunks = [];
-        for await (const chunk of req) {
-          chunks.push(chunk);
+        try {
+          const chunks = [];
+          for await (const chunk of req) {
+            chunks.push(chunk);
+          }
+          const body = Buffer.concat(chunks).toString("utf8");
+          await fs.appendFile(RECEIVED_PATH, `${body}\n`, "utf8");
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, receivedAt: Date.now() }));
+        } catch (err) {
+          console.error(err);
+          res.writeHead(500);
+          res.end("internal error");
         }
-        const body = Buffer.concat(chunks).toString("utf8");
-        await fs.appendFile(RECEIVED_PATH, `${body}\n`, "utf8");
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: true, receivedAt: Date.now() }));
-      })().catch((err: unknown) => {
-        console.error(err);
-        res.writeHead(500);
-        res.end("internal error");
-      });
+      })();
     });
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
@@ -216,7 +218,11 @@ async function main() {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+(async () => {
+  try {
+    await main();
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
+  }
+})();
