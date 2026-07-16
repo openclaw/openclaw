@@ -4,7 +4,6 @@ import {
   createEmptyCostUsageTotals,
 } from "./session-cost-usage-totals.js";
 import type {
-  CostUsageSummary,
   CostUsageTotals,
   SessionCostSummary,
   SessionDailyLatency,
@@ -16,7 +15,6 @@ import type {
   SessionUtcQuarterHourMessageCounts,
   SessionUtcQuarterHourTokenUsage,
   SessionToolUsage,
-  UsageDailyBucket,
 } from "./session-cost-usage.types.js";
 
 const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
@@ -60,7 +58,7 @@ export type SessionUsageRollupData = {
   untimestamped: SessionUsageUntimestampedRollup;
 };
 
-export type SessionUsageRollupContribution = {
+type SessionUsageRollupContribution = {
   timestamp?: number;
   role?: "user" | "assistant";
   durationMs?: number;
@@ -581,5 +579,3 @@ export function cloneSessionUsageRollupData(
     },
   };
 }
-
-export type { UsageDayKeyFormatter, UsageDailyBucket, CostUsageSummary };

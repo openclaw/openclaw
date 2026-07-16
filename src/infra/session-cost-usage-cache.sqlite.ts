@@ -20,7 +20,7 @@ type SessionCostUsageRefreshLock = {
   ownerNonce: string;
 };
 
-export type SessionCostUsageRollupRow = {
+type SessionCostUsageRollupRow = {
   key: string;
   updatedAt: number;
   valueJson: string;
