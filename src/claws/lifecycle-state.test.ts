@@ -263,6 +263,22 @@ describe("Claw status and remove", () => {
     });
   });
 
+  it("fails removal planning when source MCP config cannot be read", async () => {
+    const current = await addFixture({ withCron: true });
+
+    await expect(
+      buildClawRemovePlan("worker", {
+        env: current.env,
+        config: current.getConfig(),
+        listMcpServers: async () => ({
+          ok: false,
+          path: "config",
+          error: "Config file is invalid.",
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "mcp_config_unavailable" });
+  });
+
   it("delegates agent and cron teardown to the canonical agent lifecycle", async () => {
     const current = await addFixture({ withCron: true });
     const plan = await buildClawRemovePlan("worker", {
