@@ -1605,6 +1605,16 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     expect(result.stopReason).toBe("stop");
     expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "text", text: "Just text" }),
+    );
+    expect(result.content).not.toContainEqual(
+      expect.objectContaining({
+        type: "text",
+        text: "Just text",
+        textSignature: expect.any(String),
+      }),
+    );
   });
 
   it("serializes structured tool results as tool text", async () => {
