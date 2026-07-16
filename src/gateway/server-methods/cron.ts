@@ -19,6 +19,7 @@ import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronCreateDelivery,
+  assertValidCronFailureAlert,
 } from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
@@ -160,18 +161,67 @@ async function assertValidCronUpdatePatch(params: {
   ) {
     assertCronDoesNotTargetAgentHarness(nextJob);
   }
+  // Clearing a concrete channel (channel: null) while keeping a bare announce `to`
+  // intentionally falls back to "last" in multi-channel configs. Use the same
+  // adjusted delivery for both the delivery check and the inherited-alert check so
+  // an alert that inherits the route is judged identically to the delivery itself.
+  const effectiveDelivery =
+    params.patch.delivery?.channel === null &&
+    nextJob.delivery &&
+    (nextJob.delivery.mode ?? "announce") === "announce" &&
+    nextJob.delivery.channel === undefined &&
+    resolveTargetPrefixedChannel(nextJob.delivery.to) === undefined
+      ? { ...nextJob.delivery, channel: "last" as const }
+      : nextJob.delivery;
   if ("delivery" in params.patch) {
-    const delivery =
-      params.patch.delivery?.channel === null &&
-      nextJob.delivery &&
-      (nextJob.delivery.mode ?? "announce") === "announce" &&
-      nextJob.delivery.channel === undefined &&
-      resolveTargetPrefixedChannel(nextJob.delivery.to) === undefined
-        ? { ...nextJob.delivery, channel: "last" as const }
-        : nextJob.delivery;
     await assertValidCronAnnounceDelivery({
       cfg: params.cfg,
-      delivery,
+      delivery: effectiveDelivery,
+    });
+  }
+  // failureAlert is a separate field from delivery, so a failureAlert-only patch
+  // skips the delivery check above. Validate when this edit touches a field that
+  // can change the announce channel routing: the alert's own channel/target/mode,
+  // or delivery itself (an alert without its own channel/target inherits the job
+  // delivery channel, so a delivery change can invalidate it). Editing unrelated
+  // alert fields (after/cooldown/includeSkipped) must not be blocked by a channel
+  // stored before this validation existed. The merged value carries the effective
+  // mode, and the validator no-ops for alerts that only inherit delivery.
+  const failureAlertPatch = params.patch.failureAlert;
+  const failureAlertRoutingPatched =
+    failureAlertPatch &&
+    ("channel" in failureAlertPatch || "to" in failureAlertPatch || "mode" in failureAlertPatch);
+  // Enabling a previously OFF alert makes it start inheriting the job delivery
+  // route, so validate even when the enabling patch (`--failure-alert`,
+  // `--failure-alert-after`) carries no routing key of its own. An alert is
+  // already ON - so an object-only edit only changes threshold/cooldown - when it
+  // has per-job config or when global `cron.failureAlert.enabled` is true;
+  // resolveFailureAlert() treats those as active, so re-validating their inherited
+  // route would block unrelated edits on a legacy channel that already delivers.
+  const globalAlertsEnabled = params.cfg.cron?.failureAlert?.enabled === true;
+  const alertWasOff =
+    params.currentJob.failureAlert === false ||
+    (params.currentJob.failureAlert === undefined && !globalAlertsEnabled);
+  const alertNewlyEnabled = Boolean(failureAlertPatch) && alertWasOff;
+  // A delivery change only affects the alert when the alert inherits the changed
+  // delivery field (its own channel/to is unset). Gating on that avoids blocking
+  // unrelated delivery edits (bestEffort, failureDestination) on jobs that carry
+  // a stale explicit alert channel. A delivery `mode` change is included because
+  // switching to/from webhook clears the inherited channel/target in
+  // mergeCronDelivery, which can make an inheriting alert ambiguous.
+  const deliveryPatch = params.patch.delivery;
+  const mergedAlert = nextJob.failureAlert;
+  const deliveryAffectsInheritedAlert =
+    deliveryPatch &&
+    mergedAlert &&
+    (("channel" in deliveryPatch && mergedAlert.channel === undefined) ||
+      ("to" in deliveryPatch && mergedAlert.to === undefined) ||
+      ("mode" in deliveryPatch && mergedAlert.channel === undefined));
+  if (failureAlertRoutingPatched || alertNewlyEnabled || deliveryAffectsInheritedAlert) {
+    await assertValidCronFailureAlert({
+      cfg: params.cfg,
+      failureAlert: nextJob.failureAlert,
+      delivery: effectiveDelivery,
     });
   }
 }
