@@ -66,6 +66,24 @@ describe("ReefTrustStore", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("retains delivery bindings across envelope and receipt relay windows", () => {
+    const opened: OpenKeyedStoreOptions[] = [];
+    const mockRuntime = createPluginRuntimeMock();
+    mockRuntime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) => {
+      opened.push(options);
+      return createPluginStateSyncKeyedStoreForTests<T>("reef", {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+    };
+
+    openReefTrustStore(mockRuntime, config());
+
+    expect(
+      opened.find((options) => options.namespace === "outbound-deliveries")?.defaultTtlMs,
+    ).toBe(61 * 24 * 60 * 60 * 1_000);
+  });
+
   it("persists peer pins and autonomy in shared plugin-state SQLite", () => {
     const first = openReefTrustStore(runtime(), config());
     first.set("clawd", peerTrust());

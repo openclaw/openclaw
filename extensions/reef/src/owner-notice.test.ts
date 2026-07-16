@@ -342,7 +342,7 @@ describe("ReefReceiptNotifier", () => {
     expect(notices.records.get(`${pending.peer}:${pending.id}`)?.phase).toBe("consumed");
   });
 
-  it("can retry recovery after its bounded retry is exhausted", async () => {
+  it("keeps retrying recovery with bounded backoff until dispatch succeeds", async () => {
     const notices = createNoticeStore();
     const pending = rejection("alice", "01JZ0000000000000000000125");
     const reservedNotice = { lastRejectionAt: 10_000, lastResendAt: 10_000 };
@@ -351,19 +351,45 @@ describe("ReefReceiptNotifier", () => {
       .fn(consumeNotice)
       .mockRejectedValueOnce(new Error("dispatch unavailable"))
       .mockRejectedValueOnce(new Error("dispatch still unavailable"));
-    const scheduled: Array<() => Promise<void>> = [];
+    const scheduled: Array<{ task: () => Promise<void>; delayMs: number }> = [];
     const notifier = new ReefReceiptNotifier(notify, notices.store, {
-      schedule: (task) => scheduled.push(task),
+      schedule: (task, delayMs) => scheduled.push({ task, delayMs }),
     });
     const recovered = { ...pending, reservedNotice };
 
     await notifier.notifyRejections([recovered]);
-    await scheduled[0]!();
-    await notifier.notifyRejections([recovered]);
+    expect(scheduled[0]?.delayMs).toBe(1_000);
+    await scheduled[0]!.task();
+    expect(scheduled[1]?.delayMs).toBe(2_000);
+    await scheduled[1]!.task();
 
     expect(notify).toHaveBeenCalledTimes(3);
     expect(notify.mock.calls[2]![0]).toMatchObject({ allowResend: false });
     expect(notices.records.get(`${pending.peer}:${pending.id}`)?.phase).toBe("consumed");
+  });
+
+  it("caps persistent retry delay and stops the old notifier after abort", async () => {
+    const notices = createNoticeStore();
+    const notify = vi.fn(consumeNotice).mockRejectedValue(new Error("dispatch unavailable"));
+    const scheduled: Array<{ task: () => Promise<void>; delayMs: number }> = [];
+    const abort = new AbortController();
+    const notifier = new ReefReceiptNotifier(notify, notices.store, {
+      signal: abort.signal,
+      schedule: (task, delayMs) => scheduled.push({ task, delayMs }),
+    });
+
+    await notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000126")]);
+    for (let index = 0; index < 7; index += 1) {
+      await scheduled[index]!.task();
+    }
+
+    expect(scheduled.map((entry) => entry.delayMs)).toEqual([
+      1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000,
+    ]);
+    abort.abort();
+    await scheduled[7]!.task();
+    expect(notify).toHaveBeenCalledTimes(8);
+    expect(scheduled).toHaveLength(8);
   });
 
   it("retries durable completion without dispatching the agent twice", async () => {

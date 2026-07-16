@@ -358,6 +358,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         {
           onError: (error, receiptId) =>
             ctx.log?.error?.(`reef rejection notice failed for ${receiptId}: ${String(error)}`),
+          signal: ctx.abortSignal,
         },
       );
       const reconcile = async () => {

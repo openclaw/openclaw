@@ -22,12 +22,14 @@ interface ReefRejectionNotice {
 
 const MAX_REJECTION_TRACKED = 1_024;
 const REJECTION_RESEND_COOLDOWN_MS = 15 * 60 * 1_000;
-const REJECTION_NOTICE_RETRY_MS = 1_000;
+const REJECTION_NOTICE_RETRY_BASE_MS = 1_000;
+const REJECTION_NOTICE_RETRY_MAX_MS = 60_000;
 
 interface ReefReceiptNotifierOptions {
   now?: () => number;
   schedule?: (task: () => Promise<void>, delayMs: number) => void;
   onError?: (error: unknown, receiptId: string) => void;
+  signal?: AbortSignal;
 }
 
 interface ReefRejectionNoticeStore {
@@ -54,6 +56,13 @@ function scheduleNoticeRetry(task: () => Promise<void>, delayMs: number): void {
   setTimeout(() => void task(), delayMs).unref();
 }
 
+function rejectionNoticeRetryDelay(retryAttempt: number): number {
+  return Math.min(
+    REJECTION_NOTICE_RETRY_BASE_MS * 2 ** Math.min(retryAttempt, 6),
+    REJECTION_NOTICE_RETRY_MAX_MS,
+  );
+}
+
 export class ReefReceiptNotifier {
   private readonly completed = new Set<string>();
   private readonly inFlight = new Set<string>();
@@ -69,7 +78,7 @@ export class ReefReceiptNotifier {
   async notifyRejections(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
     this.seedRecoveredStates(rejections);
     for (const rejection of rejections) {
-      await this.runForPeer(rejection.peer, () => this.notifyRejection(rejection, true));
+      await this.runForPeer(rejection.peer, () => this.notifyRejection(rejection, 0));
     }
   }
 
@@ -105,7 +114,7 @@ export class ReefReceiptNotifier {
 
   private async notifyRejection(
     rejection: ReefDeliveryRejection,
-    allowRetry: boolean,
+    retryAttempt: number,
   ): Promise<void> {
     const key = this.rejectionKey(rejection);
     if (this.completed.has(key) || this.inFlight.has(key)) {
@@ -118,7 +127,7 @@ export class ReefReceiptNotifier {
       peerState = this.touchPeerState(rejection.peer);
     } catch (error) {
       this.reportError(error, rejection.id);
-      this.scheduleNotificationRetry(rejection, allowRetry);
+      this.scheduleNotificationRetry(rejection, retryAttempt);
       return;
     }
 
@@ -141,7 +150,7 @@ export class ReefReceiptNotifier {
       }
     } catch (error) {
       this.reportError(error, rejection.id);
-      this.scheduleNotificationRetry(rejection, allowRetry);
+      this.scheduleNotificationRetry(rejection, retryAttempt);
       return;
     }
 
@@ -149,12 +158,12 @@ export class ReefReceiptNotifier {
       // Dispatch may have recorded or consumed the turn before failing. Keep the
       // reservation so every retry is conservative stop-only guidance.
       this.applyState(peerState, plan.state);
-      this.scheduleNotificationRetry(rejection, allowRetry);
+      this.scheduleNotificationRetry(rejection, retryAttempt);
       return;
     }
 
     this.applyState(peerState, plan.state);
-    this.completeNotice(rejection, plan.state, allowRetry);
+    this.completeNotice(rejection, plan.state, 0);
   }
 
   private planNotice(
@@ -243,41 +252,47 @@ export class ReefReceiptNotifier {
   private completeNotice(
     rejection: ReefDeliveryRejection,
     state: ReefRejectionNoticeState,
-    allowRetry: boolean,
+    retryAttempt: number,
   ): void {
     try {
       this.store.complete(rejection, state);
       this.markCompleted(rejection);
     } catch (error) {
       this.reportError(error, rejection.id);
-      if (!allowRetry) {
-        this.inFlight.delete(this.rejectionKey(rejection));
-        return;
-      }
-      this.scheduleRetry(rejection, () => this.completeNotice(rejection, state, false));
+      this.scheduleRetry(rejection, retryAttempt, () =>
+        this.completeNotice(rejection, state, retryAttempt + 1),
+      );
     }
   }
 
-  private scheduleNotificationRetry(rejection: ReefDeliveryRejection, allowRetry: boolean): void {
-    if (!allowRetry) {
+  private scheduleNotificationRetry(rejection: ReefDeliveryRejection, retryAttempt: number): void {
+    this.scheduleRetry(rejection, retryAttempt, async () => {
       this.inFlight.delete(this.rejectionKey(rejection));
-      return;
-    }
-    this.scheduleRetry(rejection, async () => {
-      this.inFlight.delete(this.rejectionKey(rejection));
-      await this.notifyRejection(rejection, false);
+      await this.notifyRejection(rejection, retryAttempt + 1);
     });
   }
 
-  private scheduleRetry(rejection: ReefDeliveryRejection, task: () => Promise<void> | void): void {
+  private scheduleRetry(
+    rejection: ReefDeliveryRejection,
+    retryAttempt: number,
+    task: () => Promise<void> | void,
+  ): void {
+    if (this.options.signal?.aborted) {
+      this.inFlight.delete(this.rejectionKey(rejection));
+      return;
+    }
     const schedule = this.options.schedule ?? scheduleNoticeRetry;
     try {
       schedule(
         () =>
           this.runForPeer(rejection.peer, async () => {
+            if (this.options.signal?.aborted) {
+              this.inFlight.delete(this.rejectionKey(rejection));
+              return;
+            }
             await task();
           }),
-        REJECTION_NOTICE_RETRY_MS,
+        rejectionNoticeRetryDelay(retryAttempt),
       );
     } catch (error) {
       this.inFlight.delete(this.rejectionKey(rejection));

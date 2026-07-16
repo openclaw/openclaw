@@ -20,7 +20,8 @@ export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
 const REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE = "outbound-deliveries";
 const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
-const REEF_OUTBOUND_DELIVERY_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+const REEF_RELAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
@@ -106,8 +107,8 @@ function openStores(openStore: PluginRuntime["state"]["openSyncKeyedStore"]): Re
       maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     }),
-    // The relay retains undelivered envelopes for 30 days. Matching expiry
-    // prevents an older signed receipt from authorizing a fresh resend turn.
+    // The envelope and its receipt can each spend 30 days queued. Keep a
+    // boundary margin so a delayed receipt still finds its exact send binding.
     deliveries: openStore<z.infer<typeof ReefOutboundDeliverySchema>>({
       namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
       maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
