@@ -204,10 +204,10 @@ describe("mantis Slack desktop smoke runtime", () => {
       "curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x",
     );
     expect(remoteScript).toContain(
-      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors "$node_base_url/SHASUMS256.txt"',
+      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/SHASUMS256.txt"',
     );
     expect(remoteScript).toContain(
-      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors "$node_base_url/$node_archive"',
+      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/$node_archive"',
     );
     expect(remoteScript).toContain('grep "  $node_archive$" SHASUMS256.txt | sha256sum -c -');
     expect(remoteScript).toContain('export PATH="$node_root/bin:$PATH"');
@@ -216,11 +216,13 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain('console.log(match[1] + " " + match[2])');
     expect(remoteScript).toContain('active_pnpm_version="$(pnpm --version 2>/dev/null || true)"');
     expect(remoteScript).toContain(
-      "curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors",
+      "curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors",
     );
     expect(remoteScript).toContain('"https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz"');
     expect(remoteScript?.match(/--connect-timeout 10 --max-time 120/gu)?.length).toBe(4);
-    expect(remoteScript?.match(/--retry 3 --retry-all-errors/gu)?.length).toBe(3);
+    expect(remoteScript?.match(/--retry 3 --retry-max-time 120 --retry-all-errors/gu)?.length).toBe(
+      3,
+    );
     expect(remoteScript).toContain('sha512sum "$pnpm_archive"');
     expect(remoteScript).toContain('chmod +x "$pnpm_cli"');
     expect(remoteScript).toContain('ln -sfn "$pnpm_cli" "$pnpm_bin_dir/pnpm"');

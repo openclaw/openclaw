@@ -726,9 +726,11 @@ run_mantis_remote_body() {
       node_tmp="$(mktemp -d)"
       node_archive="node-v$node_version-linux-$node_arch.tar.xz"
       node_base_url="https://nodejs.org/dist/v$node_version"
-      curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors "$node_base_url/SHASUMS256.txt" \
+      # Retry quick transient failures within 120 seconds, but do not start
+      # another long transfer after an attempt consumes that full deadline.
+      curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/SHASUMS256.txt" \
         -o "$node_tmp/SHASUMS256.txt"
-      curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors "$node_base_url/$node_archive" \
+      curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/$node_archive" \
         -o "$node_tmp/$node_archive"
       (cd "$node_tmp" && grep "  $node_archive$" SHASUMS256.txt | sha256sum -c -)
       rm -rf "$node_root"
@@ -757,7 +759,9 @@ console.log(match[1] + " " + match[2]);
     pnpm_root="$out/pnpm-$pnpm_version"
     pnpm_archive="$pnpm_root/pnpm.tgz"
     mkdir -p "$pnpm_root"
-    curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+    # Retry quick transient failures within 120 seconds, but do not start
+    # another long transfer after an attempt consumes that full deadline.
+    curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors \
       "https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz" \
       -o "$pnpm_archive"
     downloaded_pnpm_sha512="$(sha512sum "$pnpm_archive" | awk '{print $1}')"
