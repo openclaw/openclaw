@@ -70,6 +70,7 @@ import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
+  resolveConfiguredSubagentStallPolicy,
   resolveSubagentModelAndThinkingPlan,
   splitModelRef,
 } from "./subagent-spawn-plan.js";
@@ -1099,6 +1100,7 @@ export async function spawnSubagentDirect(
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
+  const stallPolicy = resolveConfiguredSubagentStallPolicy({ cfg });
   let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
@@ -1640,6 +1642,7 @@ export async function spawnSubagentDirect(
       agentDir: targetAgentDir,
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
+      ...stallPolicy,
       expectsCompletionMessage: shouldAnnounceCompletion,
       spawnMode,
       attachmentsDir: attachmentAbsDir,

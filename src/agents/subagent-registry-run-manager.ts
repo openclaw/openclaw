@@ -183,6 +183,8 @@ export type RegisterSubagentRunParams = {
   agentDir?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
+  stallNudgeSeconds?: number;
+  stallTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
   attachmentsDir?: string;
@@ -768,6 +770,8 @@ export function createSubagentRunManager(params: {
       agentDir: registerParams.agentDir,
       workspaceDir: registerParams.workspaceDir,
       runTimeoutSeconds,
+      stallNudgeSeconds: registerParams.stallNudgeSeconds,
+      stallTimeoutSeconds: registerParams.stallTimeoutSeconds,
       generation,
       createdAt: now,
       startedAt: now,
