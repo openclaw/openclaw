@@ -271,7 +271,7 @@ describeLive("image generation live (provider sweep)", () => {
         }
 
         const { imageProviders } = await registerProviderPlugin({
-          plugin: loadBundledProviderPlugin(providerCase.pluginId),
+          plugin: await loadBundledProviderPlugin(providerCase.pluginId),
           id: providerCase.pluginId,
           name: providerCase.pluginName,
         });

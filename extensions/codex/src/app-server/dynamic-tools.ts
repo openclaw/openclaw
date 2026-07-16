@@ -44,6 +44,7 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
+import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveAgentContextLimitValue } from "./agent-context-limits.js";
@@ -60,6 +61,7 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = {
@@ -560,7 +562,7 @@ export function createCodexDynamicToolBridge(params: {
           toolResultHookContext.runId,
         );
         const telemetryRawResult = sanitizeToolResult(rawResult);
-        const rawIsError = isCodexToolResultError(rawResult);
+        const rawIsError = isToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
@@ -579,7 +581,7 @@ export function createCodexDynamicToolBridge(params: {
           args: structuredClone(executedArgs),
           result: middlewareResult,
         });
-        const resultIsError = rawIsError || isCodexToolResultError(result);
+        const resultIsError = rawIsError || isToolResultError(result);
         const finalResultFailureKind = resolveToolResultFailureKind(result);
         const resultFailureKind = rawResultFailureKind ?? finalResultFailureKind;
         const observerResult =
@@ -687,18 +689,16 @@ export function createCodexDynamicToolBridge(params: {
           !resultIsError &&
           (rawResult.terminate === true || result.terminate === true);
         const hasExplicitFinalControl = typeof executedArgs.final === "boolean";
-        // Omitted final on a confirmed source reply must degrade to legacy
-        // terminate-on-delivery (completed marker), never progress; otherwise
-        // stranded-reply recovery re-delivers a duplicate of that reply.
-        const sourceReplyFinal =
+        const confirmedSourceReply =
           params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
           toolName === "message" &&
-          (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply)
-            ? hasExplicitFinalControl
-              ? executedArgs.final === true
-              : true
-            : undefined;
-        collectToolTelemetry({
+          (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply);
+        const sourceReplyFinal = confirmedSourceReply
+          ? hasExplicitFinalControl
+            ? executedArgs.final === true
+            : undefined
+          : undefined;
+        const sourceReplyRecord = collectToolTelemetry({
           toolName,
           args: executedArgs,
           result,
@@ -708,20 +708,26 @@ export function createCodexDynamicToolBridge(params: {
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
         });
+        if (confirmedSourceReply && sourceReplyRecord) {
+          recordCodexSourceReplyDeliveryIntent(telemetry, {
+            record: sourceReplyRecord,
+            final: sourceReplyFinal,
+          });
+        }
         if (deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply) {
           telemetry.didDeliverSourceReplyViaMessageTool = true;
         }
+        const defersInferredSourceReplyTermination =
+          confirmedSourceReply && executedArgs.final !== true;
         withDynamicToolTermination(
           response,
           ((rawResult.terminate === true || result.terminate === true) &&
-            !(
-              params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-              toolName === "message" &&
-              executedArgs.final === false
-            )) ||
+            !defersInferredSourceReplyTermination) ||
+            // Yield is an explicit owner-level turn handoff, not termination
+            // inferred from source-reply delivery, so finality does not mask it.
             isToolResultYield(rawResult) ||
             isToolResultYield(result) ||
-            ((deliveredSourceReply || receiptConfirmedSourceReply) && executedArgs.final !== false),
+            (confirmedSourceReply && executedArgs.final === true),
         );
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
@@ -887,8 +893,8 @@ function createCodexDynamicToolSpecs(params: {
   const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
   for (const entry of params.entries) {
     const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
-    if (entry.name === "crestodian" && params.directToolNames.has(entry.name)) {
-      // Crestodian is ring-zero and its whole turn surface. Keep its canonical
+    if (entry.name === "openclaw" && params.directToolNames.has(entry.name)) {
+      // OpenClaw is ring-zero and its whole turn surface. Keep its canonical
       // root name even though generic direct-only tools use a model namespace.
       specs.push(functionSpec);
       continue;
@@ -964,8 +970,14 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
       quarantinedTools.push(descriptor.diagnostic);
       continue;
     }
+    const normalizedParameters = normalizeOpenAIToolSchemas({
+      provider: "openai",
+      modelApi: "openai-chatgpt-responses",
+      // The shared normalizer only reads parameters; do not expose unreadable plugin fields.
+      tools: [{ parameters: descriptor.parameters } as AnyAgentTool],
+    })[0]?.parameters;
     const projection = projectRuntimeToolInputSchema(
-      descriptor.parameters,
+      normalizedParameters ?? descriptor.parameters,
       `${descriptor.name}.inputSchema`,
     );
     if (projection.violations.length > 0) {
@@ -1139,9 +1151,9 @@ function collectToolTelemetry(params: {
   isError: boolean;
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
-}): void {
+}): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
   if (params.isError) {
-    return;
+    return undefined;
   }
   if (!params.isError && params.toolName === "cron" && isCronAddAction(params.args)) {
     params.telemetry.successfulCronAdds = (params.telemetry.successfulCronAdds ?? 0) + 1;
@@ -1173,11 +1185,11 @@ function collectToolTelemetry(params: {
     }
   }
   if (!isMessagingTool(params.toolName)) {
-    return;
+    return undefined;
   }
   const isMessagingSendAction = isMessagingToolSendAction(params.toolName, params.args);
   if (!isMessagingSendAction && !params.messagingTarget) {
-    return;
+    return undefined;
   }
   if (
     !isMessagingSendAction &&
@@ -1189,18 +1201,19 @@ function collectToolTelemetry(params: {
       isError: params.isError,
     })
   ) {
-    return;
+    return undefined;
   }
   params.telemetry.didSendViaMessagingTool = true;
   const sourceReplyPayload = extractInternalSourceReplyPayload(params.result?.details);
   if (sourceReplyPayload) {
-    params.telemetry.messagingToolSourceReplyPayloads.push({
+    const record = {
       ...sourceReplyPayload,
       ...(params.sourceReplyFinal !== undefined
         ? { sourceReplyFinal: params.sourceReplyFinal }
         : {}),
-    });
-    return;
+    };
+    params.telemetry.messagingToolSourceReplyPayloads.push(record);
+    return record;
   }
   const text = readFirstString(params.args, ["text", "message", "body", "content"]);
   if (text) {
@@ -1208,7 +1221,7 @@ function collectToolTelemetry(params: {
   }
   const mediaUrls = collectMediaUrls(params.args);
   params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
-  params.telemetry.messagingToolSentTargets.push({
+  const record = {
     ...(params.messagingTarget ?? {
       tool: params.toolName,
       provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
@@ -1219,7 +1232,9 @@ function collectToolTelemetry(params: {
     ...(text ? { text } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
     ...(params.sourceReplyFinal !== undefined ? { sourceReplyFinal: params.sourceReplyFinal } : {}),
-  });
+  };
+  params.telemetry.messagingToolSentTargets.push(record);
+  return record;
 }
 function extractInternalSourceReplyPayload(
   details: unknown,
@@ -1254,45 +1269,6 @@ function extractInternalSourceReplyPayload(
   return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
     ? payload
     : undefined;
-}
-function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
-  if (isToolResultError(result)) {
-    return true;
-  }
-  const details = result.details;
-  if (!isRecord(details)) {
-    return false;
-  }
-  if (details.ok === true || details.success === true) {
-    return false;
-  }
-  if (details.timedOut === true) {
-    return true;
-  }
-  if (typeof details.exitCode === "number" && details.exitCode !== 0) {
-    return true;
-  }
-  if (typeof details.status !== "string") {
-    return false;
-  }
-  const status = details.status.trim().toLowerCase();
-  return (
-    status !== "" &&
-    status !== "0" &&
-    status !== "ok" &&
-    status !== "success" &&
-    status !== "completed" &&
-    status !== "recorded" &&
-    status !== "created" &&
-    status !== "updated" &&
-    status !== "accepted" &&
-    status !== "found" &&
-    status !== "missing" &&
-    status !== "pending" &&
-    status !== "started" &&
-    status !== "running" &&
-    status !== "yielded"
-  );
 }
 function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
@@ -1514,3 +1490,4 @@ function isCronAddAction(args: Record<string, unknown>): boolean {
   const action = args.action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

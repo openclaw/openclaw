@@ -119,7 +119,6 @@ export {
   CODEX_LOCAL_SESSION_HOST_ID,
   CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
 } from "./session-catalog-parsing.js";
-export { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 
 type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;
@@ -594,6 +593,7 @@ async function readCodexSessionTranscript(params: {
       ...(params.cursor ? { cursor: params.cursor } : {}),
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+    scopes: ["operator.write"],
   });
   const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
   return {
@@ -1335,3 +1335,4 @@ export const codexSessionCatalogRuntime = {
   continueNode: continueNodeCodexSession,
   archiveLocal: archiveLocalCodexSession,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -18,7 +18,7 @@ import {
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
-export { bumpSkillsSnapshotVersion, registerSkillsChangeListener } from "./refresh-state.js";
+export { registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
   watcher: FSWatcher;
@@ -374,7 +374,7 @@ function isPathInsideAnyRoot(roots: readonly string[], child: string): boolean {
   return roots.some((root) => isPathInside(root, child));
 }
 
-export function shouldIgnoreSkillsWatchPath(
+function shouldIgnoreSkillsWatchPath(
   watchPath: string,
   stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
   options: { usePolling?: boolean } = {},
@@ -712,7 +712,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   evictIdleWorkspaceWatchStates(now);
 }
 
-export async function resetSkillsRefreshForTest(): Promise<void> {
+async function resetSkillsRefreshForTest(): Promise<void> {
   resetSkillsRefreshStateForTest();
 
   const active = Array.from(pathWatchers.values());
@@ -732,4 +732,10 @@ export async function resetSkillsRefreshForTest(): Promise<void> {
       }
     }),
   );
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillsRefreshTestApi")] = {
+    resetSkillsRefreshForTest,
+  };
 }

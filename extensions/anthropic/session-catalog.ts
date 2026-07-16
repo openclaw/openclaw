@@ -45,14 +45,6 @@ import type {
 } from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
 
-export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
-export type {
-  ClaudeSessionCatalogHost,
-  ClaudeSessionCatalogPage,
-  ClaudeSessionCatalogResult,
-  ClaudeSessionCatalogSession,
-  ClaudeSessionTranscriptPage,
-} from "./session-catalog-types.js";
 export * from "./session-catalog-shared.js";
 
 const DEFAULT_PAGE_LIMIT = 50;
@@ -447,7 +439,7 @@ async function discoverCliRecords(
   }
 }
 
-export async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
+async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
   const [indexed, desktop] = await Promise.all([
     readIndexRecords(homeDir),
     readDesktopMetadata(homeDir),
@@ -857,7 +849,7 @@ function parseGatewayQuery(value: unknown): {
   };
 }
 
-export async function listClaudeSessionCatalog(params: {
+async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
 }): Promise<ClaudeSessionCatalogResult> {
@@ -953,6 +945,7 @@ export async function listClaudeSessionCatalog(params: {
             ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
           },
           timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+          scopes: ["operator.write"],
         });
         return Object.assign(common, parseCatalogPage(unwrapNodePayload(raw)));
       } catch {
@@ -1009,6 +1002,7 @@ async function readClaudeSessionTranscript(params: {
       ...(params.cursor ? { cursor: params.cursor } : {}),
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+    scopes: ["operator.write"],
   });
   const page = unwrapNodePayload(raw);
   if (
@@ -1064,7 +1058,7 @@ async function readBoundedClaudeHistory(params: {
   return items;
 }
 
-export async function resolveNodeClaudeRecord(params: {
+async function resolveNodeClaudeRecord(params: {
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;
@@ -1080,6 +1074,7 @@ export async function resolveNodeClaudeRecord(params: {
         ...(cursor ? { cursor } : {}),
       },
       timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+      scopes: ["operator.write"],
     });
     const page = parseCatalogPage(unwrapNodePayload(raw));
     const record = page.sessions.find((candidate) => candidate.threadId === params.threadId);
@@ -1333,3 +1328,4 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   };
   api.registerSessionCatalog(provider);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,10 +13,6 @@ let cachedPythonPath: string | null | undefined;
 let gcloudBin: string | undefined;
 const MAX_OUTPUT_CHARS = 800;
 
-export function resetGmailSetupUtilsCachesForTest(): void {
-  cachedPythonPath = undefined;
-}
-
 function trimOutput(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -120,7 +116,7 @@ function ensureGcloudOnPath(): boolean {
   return false;
 }
 
-export async function resolvePythonExecutablePath(): Promise<string | undefined> {
+async function resolvePythonExecutablePath(): Promise<string | undefined> {
   if (cachedPythonPath !== undefined) {
     return cachedPythonPath ?? undefined;
   }

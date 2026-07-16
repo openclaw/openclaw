@@ -207,10 +207,10 @@ describe("promptAuthChoiceGrouped", () => {
   it("filters guided choices while keeping featured providers and grouped methods", async () => {
     const featuredOrder = new Map([
       ["openai", 0],
-      ["anthropic", 1],
+      ["openrouter", 1],
       ["xai", 2],
       ["google", 3],
-      ["openrouter", 4],
+      ["anthropic", 4],
     ]);
     compareAuthChoiceGroups.mockImplementation((a, b) => {
       const priorityA = featuredOrder.get(a.value) ?? Number.POSITIVE_INFINITY;
@@ -292,10 +292,10 @@ describe("promptAuthChoiceGrouped", () => {
 
     expect(providerOptions.map((option) => option.value)).toEqual([
       "openai",
-      "anthropic",
+      "openrouter",
       "xai",
       "google",
-      "openrouter",
+      "anthropic",
       "__more",
       "skip",
     ]);

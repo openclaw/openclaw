@@ -8,11 +8,7 @@ import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import { persistCallRecord } from "./manager/store.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import {
-  getOptionalVoiceCallStateRuntime,
-  setVoiceCallStateRuntime,
-  type VoiceCallStateRuntime,
-} from "./runtime-state.js";
+import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import { CallRecordSchema } from "./types.js";
 import type {
   GetCallStatusInput,
@@ -96,10 +92,8 @@ function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   };
 }
 
-export function installVoiceCallStateRuntimeForTests(): void {
-  if (!getOptionalVoiceCallStateRuntime()) {
-    setVoiceCallStateRuntime({ state: createVoiceCallStateRuntimeForTests() });
-  }
+function installVoiceCallStateRuntimeForTests(): void {
+  setVoiceCallStateRuntime({ state: createVoiceCallStateRuntimeForTests() });
 }
 
 export async function createManagerHarness(

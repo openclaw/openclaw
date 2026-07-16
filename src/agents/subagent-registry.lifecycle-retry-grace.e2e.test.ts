@@ -1,10 +1,10 @@
 // Lifecycle retry-grace e2e tests cover completion delivery retry behavior when
 // lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
-import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
-import * as mod from "./subagent-registry.js";
+import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
@@ -89,11 +89,6 @@ const loadConfigMock = vi.fn(() => ({
   agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
   session: { mainKey: "main", scope: "per-sender" },
 }));
-const registryStoreMocks = vi.hoisted(() => ({
-  loadRegistryMock: vi.fn(() => new Map()),
-  saveRegistryMock: vi.fn(() => {}),
-}));
-
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
@@ -114,11 +109,6 @@ vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
 
-vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromDisk: registryStoreMocks.loadRegistryMock,
-  saveSubagentRegistryToDisk: registryStoreMocks.saveRegistryMock,
-}));
-
 describe("subagent registry lifecycle error grace", () => {
   let previousFastTestEnv: string | undefined;
 
@@ -128,8 +118,6 @@ describe("subagent registry lifecycle error grace", () => {
     vi.useFakeTimers();
     callGatewayMock.mockClear();
     onAgentEventMock.mockClear();
-    registryStoreMocks.loadRegistryMock.mockClear().mockReturnValue(new Map());
-    registryStoreMocks.saveRegistryMock.mockClear();
     loadConfigMock.mockClear().mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" },

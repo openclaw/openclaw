@@ -36,7 +36,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 type ConversationCapabilityScope = "direct" | "shared" | "unknown";
 
-type ConversationCapabilityProfileParams = {
+export type ConversationCapabilityProfileParams = {
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Live conversation key when a sandbox/policy key is used for tool filtering. */

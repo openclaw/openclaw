@@ -165,6 +165,7 @@ type DispatchInboundParams = {
       phase?: string;
       explanation?: string;
       steps?: string[];
+      planSteps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }) => Promise<void> | void;
     onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
     onCommandOutput?: (payload: {
@@ -2299,7 +2300,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(getDeliveredFinalTexts()[0]).not.toContain("\n-# ");
   });
 
-  it("streams Discord tool progress by default once the initial delay elapses", async () => {
+  it("streams Discord tool progress when explicitly enabled", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -2312,7 +2313,13 @@ describe("processDiscordMessage draft streaming", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { maxLinesPerMessage: 5 },
+      discordConfig: {
+        maxLinesPerMessage: 5,
+        streaming: {
+          mode: "progress",
+          progress: { label: "Working", toolProgress: true },
+        },
+      },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -2635,6 +2642,14 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createBaseContext({
       cfg: {
+        channels: {
+          discord: {
+            streaming: {
+              mode: "progress",
+              progress: { toolProgress: true },
+            },
+          },
+        },
         tools: { profile: "coding" },
         messages: {
           groupChat: { visibleReplies: "message_tool" },
@@ -3116,12 +3131,17 @@ describe("processDiscordMessage draft streaming", () => {
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("uses the plain default progress label when Discord tool lines are disabled", async () => {
+  it("shows only the agent status in the default Discord progress draft", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReplyStart?.();
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Claiming my square footage. Tastefully, but with claws.",
+      });
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       await elapseProgressDraftStartDelay();
@@ -3132,9 +3152,6 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: {
-            toolProgress: false,
-          },
         },
       },
     });
@@ -3142,7 +3159,10 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
-    expect(draftStream.update).toHaveBeenCalledWith("Working");
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Claiming my square footage. Tastefully, but with claws.",
+    );
+    expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working|Exec|\n\n/);
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(
       requireRecord(firstDispatchParams().replyOptions, "dispatch reply options")
@@ -3184,6 +3204,37 @@ describe("processDiscordMessage draft streaming", () => {
     );
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
+  });
+
+  it("renders plan updates as an immediate Discord checklist", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Implementing the change.",
+        steps: ["Inspect", "Patch", "Test"],
+        planSteps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+          { step: "Test", status: "pending" },
+        ],
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: false } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test",
+    );
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
   });
 
   it("keeps opt-in commentary receipts independent from hidden tool progress", async () => {
@@ -4545,3 +4596,4 @@ describe("processDiscordMessage reply session init conflict retry", () => {
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1493,3 +1493,4 @@ export function noteWorkspaceBackupTip(workspaceDir: string) {
     note(tip, "Workspace");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

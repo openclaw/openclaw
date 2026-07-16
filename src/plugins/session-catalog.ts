@@ -7,6 +7,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 
 export type SessionCatalogListProviderParams = {
+  /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
   search?: string;
   limitPerHost?: number;
   hostIds?: string[];
@@ -23,7 +24,14 @@ export type SessionCatalogContinueProviderParams = Omit<
 export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchiveParams, "catalogId">;
 
 export type SessionCatalogTerminalPlan =
-  | { kind: "local"; argv: string[]; cwd?: string; title?: string }
+  | {
+      kind: "local";
+      argv: string[];
+      cwd?: string;
+      title?: string;
+      /** PATH that resolved argv[0], needed by env-based script interpreters. */
+      pathEnv?: string;
+    }
   | {
       kind: "node";
       nodeId: string;
@@ -60,13 +68,16 @@ export type SessionUpstreamProbe = {
   ownRecentUserTexts: string[];
 };
 
-export type SessionUpstreamActivity = {
-  sessionKey: string;
-  humanTurns: number;
-  nextMarker: SessionUpstreamJsonValue;
-  occurredAt?: number;
-  dedupeId?: string;
-};
+export type SessionUpstreamActivity =
+  | {
+      kind: "activity";
+      sessionKey: string;
+      humanTurns: number;
+      nextMarker: SessionUpstreamJsonValue;
+      occurredAt?: number;
+      dedupeId?: string;
+    }
+  | { kind: "missing"; sessionKey: string };
 
 export type SessionCatalogContinueProviderResult = {
   sessionKey: string;
