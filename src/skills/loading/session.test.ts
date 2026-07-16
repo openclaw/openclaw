@@ -114,7 +114,7 @@ description: Valid sibling
       "utf-8",
     );
 
-    const result = loadSkillsFromDir({ dir: tempDir, source: "test" });
+    const result = loadSkillsFromPath(tempDir);
 
     expect(result.skills.map((skill) => skill.name)).toEqual(["valid"]);
     expect(result.diagnostics).toEqual([
