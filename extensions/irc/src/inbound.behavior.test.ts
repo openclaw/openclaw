@@ -256,7 +256,9 @@ describe("irc inbound behavior", () => {
     },
   ])("sanitizes $name on the inbound reply path", async ({ reply, expected }) => {
     const coreRuntime = createPluginRuntimeMock();
-    const sendReply = vi.fn(async () => {});
+    const sendReply = vi.fn<(target: string, text: string, replyToId?: string) => Promise<void>>(
+      async () => {},
+    );
     const dispatchReply = coreRuntime.channel.inbound.dispatchReply as unknown as ReturnType<
       typeof vi.fn<
         (params: {
