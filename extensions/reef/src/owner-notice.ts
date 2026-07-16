@@ -117,7 +117,7 @@ export class ReefReceiptNotifier {
       peerState = this.touchPeerState(rejection.peer);
     } catch (error) {
       this.reportError(error, rejection.id);
-      this.inFlight.delete(key);
+      this.scheduleNotificationRetry(rejection, allowRetry);
       return;
     }
 

@@ -288,7 +288,7 @@ describe("ReefReceiptNotifier", () => {
     expect(notify.mock.calls[1]![0]).toMatchObject({ allowResend: false });
   });
 
-  it("can retry the same rejection after durable state loading fails", async () => {
+  it("retries a fresh rejection after durable state loading fails", async () => {
     const notices = createNoticeStore();
     const loadError = new Error("state unavailable");
     vi.spyOn(notices.store, "loadState").mockImplementationOnce(() => {
@@ -296,11 +296,16 @@ describe("ReefReceiptNotifier", () => {
     });
     const notify = vi.fn(consumeNotice);
     const onError = vi.fn();
-    const notifier = new ReefReceiptNotifier(notify, notices.store, { onError });
+    const scheduled: Array<() => Promise<void>> = [];
+    const notifier = new ReefReceiptNotifier(notify, notices.store, {
+      onError,
+      schedule: (task) => scheduled.push(task),
+    });
     const pending = rejection("alice", "01JZ0000000000000000000124");
 
     await notifier.notifyRejections([pending]);
-    await notifier.notifyRejections([pending]);
+    expect(scheduled).toHaveLength(1);
+    await scheduled[0]!();
 
     expect(onError).toHaveBeenCalledWith(loadError, pending.id);
     expect(notify).toHaveBeenCalledOnce();
