@@ -16,11 +16,7 @@ import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
-import {
-  cleanupTempDirs,
-  makeTempDir,
-  useAutoCleanupTempDirTracker,
-} from "../helpers/temp-dir.js";
+import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/plugins/assertions.mjs";
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
