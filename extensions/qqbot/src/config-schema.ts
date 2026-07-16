@@ -1,7 +1,6 @@
 // Qqbot helper module supports config schema behavior.
 import {
   AllowFromListSchema,
-  DmPolicySchema,
   GroupPolicySchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
@@ -52,7 +51,7 @@ const QQBotExecApprovalsSchema = z
   .strict()
   .optional();
 
-const QQBotDmPolicySchema = DmPolicySchema.optional();
+const QQBotDmPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
 const QQBotGroupPolicySchema = GroupPolicySchema.optional();
 const QQBotGroupCommandLevelSchema = z.enum(["all", "safety", "strict"]).optional();
 

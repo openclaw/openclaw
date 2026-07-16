@@ -32,13 +32,13 @@ function requireQQBotSetup() {
 }
 
 describe("qqbot config", () => {
-  it("accepts the canonical pairing DM policy", () => {
+  it("rejects pairing because QQBot has no pairing flow", () => {
     expect(requireRuntimeSchema().safeParse({ dmPolicy: "pairing" })).toMatchObject({
-      success: true,
+      success: false,
     });
     expect(
       requireRuntimeSchema().safeParse({ accounts: { work: { dmPolicy: "pairing" } } }),
-    ).toMatchObject({ success: true });
+    ).toMatchObject({ success: false });
   });
 
   it("accepts top-level speech overrides in the manifest schema", () => {
