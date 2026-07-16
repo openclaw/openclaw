@@ -448,6 +448,8 @@ async function runFallbackAttempt<T>(params: {
   deferSessionSuspension?: boolean;
   onDeferredSessionSuspension?: (params: SessionSuspensionParams) => void;
   classifyResult?: ModelFallbackResultClassifier<T>;
+  /** Guards classifier false positives: when true, short-circuits fallback even if classifyResult says fallback. */
+  isSuccessfulResult?: (result: T) => boolean;
   attempt: number;
   total: number;
   attribution?: FailoverAttribution;
@@ -484,6 +486,22 @@ async function runFallbackAttempt<T>(params: {
       attribution: params.attribution,
     });
     if (classifiedError) {
+      // Guard against classifier false positives: when the result has clear
+      // evidence of a successful output (e.g. delivered messages, visible
+      // assistant text), short-circuit the fallback chain. The classifier
+      // should already return null for these cases, but the safety check
+      // prevents redundant model invocations if classification heuristics
+      // return a false positive (see #108262).
+      if (params.isSuccessfulResult?.(runResult.result) === true) {
+        return {
+          success: buildFallbackSuccess({
+            result: runResult.result,
+            provider: params.provider,
+            model: params.model,
+            attempts: params.attempts,
+          }),
+        };
+      }
       if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
         throw toErrorObject(classifiedError, "Non-Error thrown");
       }
@@ -1361,6 +1379,15 @@ type RunWithModelFallbackParams<T> = {
   onError?: ModelFallbackErrorHandler;
   onFallbackStep?: ModelFallbackStepHandler;
   classifyResult?: ModelFallbackResultClassifier<T>;
+  /**
+   * Optional evidence callback that guards against classifier false positives.
+   * When the classifier returns a non-null value but this callback returns
+   * true (the result has evidence of successful output), the fallback chain
+   * short-circuits and treats the result as a success. This prevents
+   * redundant model invocations when a model.completed produced user-visible
+   * output that the classifier conservatively flagged.
+   */
+  isSuccessfulResult?: (result: T) => boolean;
   /** Return false when a thrown attempt committed work that must not be replayed. */
   canFallbackAfterError?: (params: {
     provider: string;
@@ -1777,6 +1804,7 @@ async function runWithModelFallbackInternal<T>(
         deferredSuspension.pending = suspension;
       },
       classifyResult: params.classifyResult,
+      isSuccessfulResult: params.isSuccessfulResult,
       attempt: i + 1,
       total: candidates.length,
       attribution: { sessionId: params.sessionId, lane: params.lane },

@@ -1890,6 +1890,106 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.code).toBe("empty_result");
   });
 
+  it("short-circuits fallback when isSuccessfulResult overrides classifyResult false positive", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    // Simulate classifier false positive: returns non-null even for a
+    // successful result with delivery evidence.
+    const classifyResult = vi.fn(() => ({
+      message: "false positive",
+      reason: "format" as const,
+      code: "empty_result",
+    }));
+    const isSuccessfulResult = vi.fn(
+      (result: { didSendViaMessagingTool?: boolean }) => result.didSendViaMessagingTool === true,
+    );
+    const run = vi.fn().mockResolvedValue({
+      didSendViaMessagingTool: true,
+      payloads: [{ text: "successful reply" }],
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      run,
+      classifyResult,
+      isSuccessfulResult,
+    });
+
+    // The fallback chain should stop at the primary despite the classifier
+    // returning a non-null value, because isSuccessfulResult guards it.
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.result).toEqual({
+      didSendViaMessagingTool: true,
+      payloads: [{ text: "successful reply" }],
+    });
+    expect(result.outcome).toBe("completed");
+    expect(classifyResult).toHaveBeenCalledTimes(1);
+    expect(isSuccessfulResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("still falls back when isSuccessfulResult returns false for a classified result", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        didSendViaMessagingTool: false,
+        payloads: [],
+      })
+      .mockResolvedValueOnce({
+        didSendViaMessagingTool: true,
+        payloads: [{ text: "fallback ok" }],
+      });
+    const classifyResult = vi.fn(({ result }) =>
+      Array.isArray(result.payloads) && result.payloads.length === 0
+        ? {
+            message: "empty result",
+            reason: "format" as const,
+            code: "empty_result",
+          }
+        : null,
+    );
+    const isSuccessfulResult = vi.fn(
+      (result: { didSendViaMessagingTool?: boolean }) => result.didSendViaMessagingTool === true,
+    );
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      run,
+      classifyResult,
+      isSuccessfulResult,
+    });
+
+    // First attempt has no delivery evidence, so isSuccessfulResult returns
+    // false and the classified error triggers fallback.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.result).toEqual({
+      didSendViaMessagingTool: true,
+      payloads: [{ text: "fallback ok" }],
+    });
+    expect(isSuccessfulResult).toHaveBeenCalledTimes(1);
+  });
+
   it("continues fallback after embedded provider business-denial payloads", async () => {
     const cfg = makeCfg({
       agents: {
