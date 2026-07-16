@@ -6,17 +6,21 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    private func withLocalGatewayConfig<T>(
+        _ body: () async throws -> T) async throws -> T
+    {
+        let configPath = TestIsolation.tempConfigPath()
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8)
+            .write(to: URL(fileURLWithPath: configPath))
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        return try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath], body)
+    }
+
     @Test func `coalesces concurrent launch agent enable requests`() async throws {
         let port = 19081
-        let configPath = TestIsolation.tempConfigPath()
-        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
-        defer { try? FileManager.default.removeItem(atPath: configPath) }
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        await TestIsolation.withEnvValues([
-            "OPENCLAW_CONFIG_PATH": configPath,
-            "OPENCLAW_GATEWAY_PORT": "\(port)",
-        ]) {
+        try await self.withLocalGatewayConfig {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
@@ -29,8 +33,13 @@ struct GatewayProcessManagerTests {
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             }
 
-            async let first: Void = GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
-            async let second: Void = GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
+            let manager = GatewayProcessManager.shared
+            async let first: String? = manager._testEnableLaunchAgentIfNeeded(
+                bundlePath: "/Applications/OpenClaw.app",
+                port: port)
+            async let second: String? = manager._testEnableLaunchAgentIfNeeded(
+                bundlePath: "/Applications/OpenClaw.app",
+                port: port)
             _ = await (first, second)
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -42,12 +51,9 @@ struct GatewayProcessManagerTests {
     @Test func `queues a changed launch agent request behind an in-flight request`() async throws {
         let firstPort = 19091
         let secondPort = 19092
-        let configPath = TestIsolation.tempConfigPath()
-        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
-        defer { try? FileManager.default.removeItem(atPath: configPath) }
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+        try await self.withLocalGatewayConfig {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
@@ -141,15 +147,9 @@ struct GatewayProcessManagerTests {
 
     @Test func `keeps a reusable launch agent running`() async throws {
         let port = 19082
-        let configPath = TestIsolation.tempConfigPath()
-        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
-        defer { try? FileManager.default.removeItem(atPath: configPath) }
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        await TestIsolation.withEnvValues([
-            "OPENCLAW_CONFIG_PATH": configPath,
-            "OPENCLAW_GATEWAY_PORT": "\(port)",
-        ]) {
+        try await self.withLocalGatewayConfig {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
@@ -169,7 +169,9 @@ struct GatewayProcessManagerTests {
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             }
 
-            await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
+            _ = await GatewayProcessManager.shared._testEnableLaunchAgentIfNeeded(
+                bundlePath: "/Applications/OpenClaw.app",
+                port: port)
 
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -179,15 +181,9 @@ struct GatewayProcessManagerTests {
 
     @Test func `repairs loaded launch agents that are not reusable`() async throws {
         let port = 19083
-        let configPath = TestIsolation.tempConfigPath()
-        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
-        defer { try? FileManager.default.removeItem(atPath: configPath) }
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        await TestIsolation.withEnvValues([
-            "OPENCLAW_CONFIG_PATH": configPath,
-            "OPENCLAW_GATEWAY_PORT": "\(port)",
-        ]) {
+        try await self.withLocalGatewayConfig {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             defer {
@@ -228,7 +224,9 @@ struct GatewayProcessManagerTests {
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(status)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
-                await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
+                _ = await GatewayProcessManager.shared._testEnableLaunchAgentIfNeeded(
+                    bundlePath: "/Applications/OpenClaw.app",
+                    port: port)
 
                 let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
                 #expect(calls.filter { $0.first == "status" }.count == 1)
@@ -269,7 +267,7 @@ struct GatewayProcessManagerTests {
 
     @Test func `attaches to existing gateway without spawning launchd`() async throws {
         let port = 19097
-        try await TestIsolation.withEnvValues(["OPENCLAW_GATEWAY_PORT": "\(port)"]) {
+        do {
             let healthData = Data(
                 """
                 {
@@ -337,7 +335,7 @@ struct GatewayProcessManagerTests {
             }
 
             do {
-                let attached = await manager._testAttachExistingGatewayIfAvailable()
+                let attached = await manager._testAttachExistingGatewayIfAvailable(port: port)
                 #expect(attached)
                 #expect(manager.lastFailureReason == nil)
                 guard case let .attachedExisting(statusDetails) = manager.status else {

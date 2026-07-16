@@ -245,8 +245,8 @@ final class GatewayProcessManager {
 
     /// Attempt to connect to an already-running gateway on the configured port.
     /// If successful, mark status as attached and skip spawning a new process.
-    private func attachExistingGatewayIfAvailable() async -> Bool {
-        let port = GatewayEnvironment.gatewayPort()
+    private func attachExistingGatewayIfAvailable(port requestedPort: Int? = nil) async -> Bool {
+        let port = requestedPort ?? GatewayEnvironment.gatewayPort()
         let instance = await PortGuardian.shared.describe(port: port)
         let instanceText = instance.map { self.describe(instance: $0) }
         let hasListener = instance != nil
@@ -492,8 +492,8 @@ extension GatewayProcessManager {
         self.lastFailureReason = reason
     }
 
-    func _testAttachExistingGatewayIfAvailable() async -> Bool {
-        await self.attachExistingGatewayIfAvailable()
+    func _testAttachExistingGatewayIfAvailable(port: Int) async -> Bool {
+        await self.attachExistingGatewayIfAvailable(port: port)
     }
 
     func _testEnableLaunchAgentIfNeeded(bundlePath: String, port: Int) async -> String? {
