@@ -3446,9 +3446,6 @@ describe("ci workflow guards", () => {
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
     const smokeProfileJob = workflow.jobs["qa-smoke-ci-profile"];
-    const smokeSetupNodeStep = smokeProfileJob.steps.find(
-      (step: WorkflowStep) => step.name === "Setup Node environment",
-    );
     const smokeBuildStep = smokeProfileJob.steps.find(
       (step: WorkflowStep) => step.name === "Build QA smoke runtime",
     );
@@ -3502,20 +3499,6 @@ describe("ci workflow guards", () => {
       }),
     ]);
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
-    for (const inputName of ["sticky-disk", "use-actions-cache"]) {
-      expect(smokeSetupNodeStep.with[inputName]).toContain("matrix.docker_cache == true");
-      expect(smokeSetupNodeStep.with[inputName]).toContain(
-        "github.event_name != 'workflow_dispatch'",
-      );
-      expect(smokeSetupNodeStep.with[inputName]).toContain(
-        "github.repository == 'openclaw/openclaw'",
-      );
-      expect(smokeSetupNodeStep.with[inputName]).toContain(
-        "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
-      );
-    }
-    expect(smokeSetupNodeStep.with["sticky-disk"]).toContain("'true' || 'false'");
-    expect(smokeSetupNodeStep.with["use-actions-cache"]).toContain("'false' || 'true'");
     expect(smokeDockerCacheStep.uses).toBe(
       "useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba",
     );
