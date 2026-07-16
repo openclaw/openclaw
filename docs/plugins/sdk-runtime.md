@@ -141,6 +141,13 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
+    `sessionId` identifies the physical embedded run/transcript target. `sessionKey` is optional
+    and identifies a stable logical owner that can survive physical session rotation. Use a stable
+    `sessionKey` when sequential isolated runs should keep the same Codex app-server binding while
+    each call receives a fresh `sessionId`; omit `sessionKey` when every run must be fully
+    independent. OpenClaw still fences retired generations and concurrent stale owners, so a delayed
+    old run cannot clear or replace a newer generation.
+
     `runEmbeddedPiAgent(...)` remains as a deprecated compatibility alias for existing plugins. New code should use `runEmbeddedAgent(...)`.
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.

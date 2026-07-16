@@ -566,18 +566,26 @@ describe("Codex app-server binding store", () => {
       kind: "set",
       binding: { threadId: "thread-1", cwd: "/repo" },
     });
+    await expect(store.mutate(first, { kind: "clear", threadId: "thread-1" })).resolves.toBe(true);
     await expect(store.read(second)).resolves.toBeUndefined();
-    await store.withLease(second, async () => undefined);
+    await store.withLease(second, async () => {
+      await expect(
+        store.mutate(second, {
+          kind: "set",
+          binding: { threadId: "thread-2", cwd: "/repo" },
+          if: { kind: "absent" },
+        }),
+      ).resolves.toBe(true);
+    });
 
     expect(bindingStoreKey(first)).toBe(bindingStoreKey(second));
     expect(values.size).toBe(1);
-    expect(values.get(bindingStoreKey(second))).toMatchObject({ sessionId: "session-1" });
-    await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("adopted");
     expect(values.get(bindingStoreKey(second))).toMatchObject({
       state: "active",
       sessionId: "session-2",
-      binding: { threadId: "thread-1" },
+      binding: { threadId: "thread-2" },
     });
+    await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("current");
     await expect(
       store.mutate(first, {
         kind: "patch",
@@ -586,8 +594,37 @@ describe("Codex app-server binding store", () => {
       }),
     ).resolves.toBe(false);
     await expect(store.mutate(first, { kind: "clear" })).resolves.toBe(false);
-    await expect(store.read(second)).resolves.toMatchObject({ threadId: "thread-1" });
+    await expect(store.read(second)).resolves.toMatchObject({ threadId: "thread-2" });
     await expect(store.mutate(second, { kind: "clear" })).resolves.toBe(true);
+  });
+
+  it("does not let a delayed stable-key owner reacquire and clear its successor", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const first = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:chat-1",
+    };
+    const second = { ...first, sessionId: "session-2" };
+
+    await store.mutate(first, {
+      kind: "set",
+      binding: { threadId: "thread-1", cwd: "/repo" },
+    });
+    await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("adopted");
+    await expect(store.read(second)).resolves.toMatchObject({ threadId: "thread-1" });
+
+    await store.withLease(first, async () => undefined);
+
+    expect(values.get(bindingStoreKey(second))).toMatchObject({
+      state: "active",
+      sessionId: "session-2",
+      binding: { threadId: "thread-1" },
+    });
+    await expect(store.mutate(first, { kind: "clear", threadId: "thread-1" })).resolves.toBe(false);
+    await expect(store.read(second)).resolves.toMatchObject({ threadId: "thread-1" });
   });
 
   it("rejects a delayed adoption after a newer session generation wins", async () => {

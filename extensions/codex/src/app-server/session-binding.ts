@@ -1000,7 +1000,7 @@ export function createCodexAppServerBindingStore(
         if (current?.state === "active") {
           return {
             result: true,
-            next: { ...current, ...preservedSessionGeneration(identity, current), lease },
+            next: { ...current, ...leasedSessionGeneration(identity, current), lease },
           };
         }
         if (current?.state === "cleared" && current.retired === true) {
@@ -1011,7 +1011,7 @@ export function createCodexAppServerBindingStore(
           next: {
             version: 1,
             state: "cleared",
-            ...preservedSessionGeneration(identity, current),
+            ...leasedSessionGeneration(identity, current),
             lease,
           },
         };
@@ -1182,6 +1182,21 @@ function preservedSessionGeneration(
     return { sessionId: current.sessionId };
   }
   return storedSessionGeneration(identity, current);
+}
+
+function leasedSessionGeneration(
+  identity: CodexAppServerBindingIdentity,
+  current: StoredCodexAppServerBinding | undefined,
+): { sessionId?: string } {
+  if (
+    identity.kind === "session" &&
+    identity.sessionKey?.trim() &&
+    current?.state === "cleared" &&
+    current.retired !== true
+  ) {
+    return { sessionId: identity.sessionId };
+  }
+  return preservedSessionGeneration(identity, current);
 }
 
 function ownsStoredSessionGeneration(
