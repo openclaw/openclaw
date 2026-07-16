@@ -1627,7 +1627,7 @@ describe("Codex app-server approval bridge", () => {
     findApprovalEvent(params, {
       status: "denied",
       message:
-        "OpenClaw native hook relay unavailable for Codex app-server approval: native hook relay handler failed",
+        "OpenClaw native hook relay failed for Codex app-server approval: native hook relay handler failed",
     });
   });
 
