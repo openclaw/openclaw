@@ -1,8 +1,8 @@
 import Foundation
 
 final class ExecHostReplayGuard: @unchecked Sendable {
-    // Requests are accepted within a ±10 second timestamp window. Retain
-    // consumed nonces for twice that span so every otherwise-fresh replay fails.
+    /// Requests are accepted within a ±10 second timestamp window. Retain
+    /// consumed nonces for twice that span so every otherwise-fresh replay fails.
     private static let retentionMs = 20000
 
     private let lock = NSLock()
