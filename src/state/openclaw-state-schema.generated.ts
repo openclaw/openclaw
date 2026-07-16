@@ -828,6 +828,27 @@ CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
 CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
   ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
 
+CREATE TABLE IF NOT EXISTS publisher_feed_states (
+  source_origin TEXT NOT NULL,
+  publisher_id TEXT NOT NULL,
+  feed_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  generated_at TEXT NOT NULL,
+  handle TEXT,
+  display_name TEXT NOT NULL,
+  entries_json TEXT NOT NULL,
+  signed_by TEXT NOT NULL,
+  signed_by_key_ids_json TEXT NOT NULL,
+  signature_count INTEGER NOT NULL,
+  threshold INTEGER NOT NULL,
+  verified_at TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (source_origin, publisher_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_publisher_feed_states_updated
+  ON publisher_feed_states(updated_at_ms DESC, source_origin, publisher_id);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
