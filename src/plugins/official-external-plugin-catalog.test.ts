@@ -699,6 +699,49 @@ describe("official external plugin catalog", () => {
       expect(oversized.error).toContain("exceeds 4 bytes");
     }
 
+    const repeatedLengthBody = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:01.000Z",
+      sequence: 1,
+      entries: [],
+    });
+    const repeatedLengthHeaders = new Headers();
+    const repeatedLengthValue = String(Buffer.byteLength(repeatedLengthBody));
+    repeatedLengthHeaders.append("content-length", repeatedLengthValue);
+    repeatedLengthHeaders.append("content-length", repeatedLengthValue.padStart(4, "0"));
+    const repeatedLengthResult = await loadHostedCatalog({
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(repeatedLengthBody, {
+            status: 200,
+            headers: repeatedLengthHeaders,
+          }),
+      ),
+      snapshotStore: null,
+    });
+
+    expect(repeatedLengthResult.source).toBe("hosted");
+
+    const mismatchedRepeatedLengthHeaders = new Headers();
+    mismatchedRepeatedLengthHeaders.append("content-length", "2");
+    mismatchedRepeatedLengthHeaders.append("content-length", "3");
+    const mismatchedRepeatedLength = await loadHostedCatalog({
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(repeatedLengthBody, {
+            status: 200,
+            headers: mismatchedRepeatedLengthHeaders,
+          }),
+      ),
+      snapshotStore: null,
+    });
+
+    expect(mismatchedRepeatedLength.source).toBe("bundled-fallback");
+    if (mismatchedRepeatedLength.source === "bundled-fallback") {
+      expect(mismatchedRepeatedLength.error).toContain("invalid content-length");
+    }
+
     const response = new Response("x".repeat(8192), {
       status: 200,
       headers: { "content-length": "1" },

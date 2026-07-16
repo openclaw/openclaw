@@ -540,10 +540,15 @@ function parseHostedCatalogContentLength(raw: string | null, maxBytes: number): 
   if (!normalized) {
     return;
   }
-  if (!/^\d+$/.test(normalized)) {
+  const values = normalized.split(",").map((value) => value.trim());
+  if (values.length === 0 || values.some((value) => !/^\d+$/.test(value))) {
     throw new Error("hosted catalog feed has invalid content-length");
   }
-  const size = Number(normalized);
+  const sizes = values.map((value) => Number(value));
+  const size = sizes[0];
+  if (size === undefined || sizes.some((value) => !Number.isSafeInteger(value) || value !== size)) {
+    throw new Error("hosted catalog feed has invalid content-length");
+  }
   if (!Number.isSafeInteger(size) || size > maxBytes) {
     throw new Error(`hosted catalog feed exceeds ${maxBytes} bytes`);
   }
