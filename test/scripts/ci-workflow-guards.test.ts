@@ -1986,17 +1986,29 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("bounds the workflow sanity ShellCheck download", () => {
+  it("bounds the workflow sanity tool downloads", () => {
     const workflow = readWorkflowSanityWorkflow();
-    const installStep = expectDefined(
+    const shellcheckStep = expectDefined(
       workflow.jobs.actionlint.steps.find(
         (step: WorkflowStep) => step.name === "Install ShellCheck",
       ),
       "ShellCheck install step",
     );
+    const actionlintStep = expectDefined(
+      workflow.jobs.actionlint.steps.find(
+        (step: WorkflowStep) => step.name === "Install actionlint",
+      ),
+      "actionlint install step",
+    );
 
-    expect(installStep.run).toContain("curl --connect-timeout 10 --max-time 120");
-    expect(installStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+    expect(shellcheckStep.run).toContain("curl --connect-timeout 10 --max-time 120");
+    expect(shellcheckStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+    expect(actionlintStep.run).toContain("--connect-timeout 10");
+    expect(actionlintStep.run).toContain("--max-time 120");
+    expect(actionlintStep.run).toContain("--retry 5");
+    expect(actionlintStep.run).toContain("--retry-delay 2");
+    expect(actionlintStep.run).toContain("--retry-all-errors");
+    expect(actionlintStep.run.match(/curl "\$\{curl_args\[@\]\}"/gu)).toHaveLength(2);
   });
 
   it("runs generated baseline drift checks in workflow sanity", () => {
