@@ -130,7 +130,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
 function deferRequesterSettleWakeBatch(params: {
   batchRunIds: readonly string[];
   state: RequesterSettleWakeBatchState;
-  transitionBatch(runIds: readonly string[], state: RequesterSettleWakeBatchState): void;
+  transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
 }): void {
   params.transitionBatch(params.batchRunIds, {
     status: params.state.status,
@@ -154,7 +154,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   settledEntry: SubagentRunRecord;
-  transitionBatch(runIds: readonly string[], state: RequesterSettleWakeBatchState): void;
+  transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
   completeBatch(runIds: readonly string[]): void;
   signal?: AbortSignal;
 }): Promise<boolean> {
