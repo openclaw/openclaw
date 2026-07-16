@@ -493,10 +493,7 @@ describe("telegram state migrations", () => {
     const boundaryAt = Date.now() - 24 * 60 * 60 * 1000;
     try {
       await mkdir(path.dirname(sentMessagePath), { recursive: true });
-      await writeFile(
-        sentMessagePath,
-        JSON.stringify({ 7: { 42: expiredAt, 43: boundaryAt } }),
-      );
+      await writeFile(sentMessagePath, JSON.stringify({ 7: { 42: expiredAt, 43: boundaryAt } }));
       await writeFile(
         dispatchPath,
         JSON.stringify({ [JSON.stringify(["message", "7", 42])]: expiredAt }),
