@@ -1,9 +1,6 @@
 import { listRouteBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  hasAgentChannelDefaultBinding,
-  isAccountAuthorizedForAgentChannel,
-} from "../../cron/isolated-agent/delivery-target.runtime.js";
+import { isAccountAuthorizedForAgentChannel } from "../../cron/isolated-agent/delivery-target.runtime.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import {
   normalizeRouteBindingChannelId,

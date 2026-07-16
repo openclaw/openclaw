@@ -171,7 +171,6 @@ export function isAccountAuthorizedForAgentChannel(params: {
   accountId: string;
   channelId: string;
 }): boolean {
-  const normalizedAgent = normalizeAgentId(params.agentId);
   const normalizedAccount = normalizeAccountId(params.accountId);
   const normalizedChannel = normalizeRouteBindingChannelId(params.channelId);
   if (!normalizedChannel) {
