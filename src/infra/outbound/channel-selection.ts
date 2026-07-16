@@ -219,6 +219,7 @@ export async function resolveMessageChannelSelection(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   fallbackChannel?: string | null;
+  requireExplicitChannelAvailable?: boolean;
 }): Promise<{
   channel: MessageChannelId;
   configured: MessageChannelId[];
@@ -226,21 +227,26 @@ export async function resolveMessageChannelSelection(params: {
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
+    if (params.requireExplicitChannelAvailable && !isKnownChannel(normalized)) {
+      throw new Error(`Unknown channel: ${normalized}`);
+    }
     const availableExplicit = resolveAvailableKnownChannel({
       cfg: params.cfg,
       value: normalized,
     });
     if (!availableExplicit) {
-      const fallback = resolveAvailableKnownChannel({
-        cfg: params.cfg,
-        value: params.fallbackChannel,
-      });
-      if (fallback) {
-        return {
-          channel: fallback,
-          configured: [],
-          source: "tool-context-fallback",
-        };
+      if (!params.requireExplicitChannelAvailable) {
+        const fallback = resolveAvailableKnownChannel({
+          cfg: params.cfg,
+          value: params.fallbackChannel,
+        });
+        if (fallback) {
+          return {
+            channel: fallback,
+            configured: [],
+            source: "tool-context-fallback",
+          };
+        }
       }
       if (!isKnownChannel(normalized)) {
         throw new Error(`Unknown channel: ${normalized}`);

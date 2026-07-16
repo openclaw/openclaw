@@ -8080,9 +8080,26 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let agentid: String
     public let name: String?
     public let workspace: String?
-    public let model: String?
+    public let modelvalue: AnyCodable?
+    public var model: String? { modelvalue?.value as? String }
     public let emoji: String?
     public let avatar: String?
+
+    public init(
+        agentid: String,
+        name: String? = nil,
+        workspace: String? = nil,
+        modelvalue: AnyCodable?,
+        emoji: String? = nil,
+        avatar: String? = nil)
+    {
+        self.agentid = agentid
+        self.name = name
+        self.workspace = workspace
+        self.modelvalue = modelvalue
+        self.emoji = emoji
+        self.avatar = avatar
+    }
 
     public init(
         agentid: String,
@@ -8092,21 +8109,44 @@ public struct AgentsUpdateParams: Codable, Sendable {
         emoji: String? = nil,
         avatar: String? = nil)
     {
-        self.agentid = agentid
-        self.name = name
-        self.workspace = workspace
-        self.model = model
-        self.emoji = emoji
-        self.avatar = avatar
+        self.init(
+            agentid: agentid,
+            name: name,
+            workspace: workspace,
+            modelvalue: model.map { AnyCodable($0) },
+            emoji: emoji,
+            avatar: avatar)
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case name
         case workspace
-        case model
+        case modelvalue = "model"
         case emoji
         case avatar
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.agentid = try container.decode(String.self, forKey: .agentid)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
+        self.modelvalue = container.contains(.modelvalue)
+            ? try container.decode(AnyCodable.self, forKey: .modelvalue)
+            : nil
+        self.emoji = try container.decodeIfPresent(String.self, forKey: .emoji)
+        self.avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(agentid, forKey: .agentid)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(workspace, forKey: .workspace)
+        try container.encodeIfPresent(modelvalue, forKey: .modelvalue)
+        try container.encodeIfPresent(emoji, forKey: .emoji)
+        try container.encodeIfPresent(avatar, forKey: .avatar)
     }
 }
 
