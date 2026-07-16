@@ -115,7 +115,9 @@ async function loadBackground() {
   vi.stubGlobal("navigator", { userAgent: "Chromium/125.0.0.0" });
   vi.stubGlobal("WebSocket", FakeWebSocket);
 
-  await import("./background.js");
+  // The shipped MV3 worker is plain JS, so keep this a runtime-resolved import.
+  const backgroundModulePath = "./background.js";
+  await import(backgroundModulePath);
   await Promise.resolve();
   await Promise.resolve();
 
