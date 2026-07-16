@@ -6,7 +6,12 @@ import type { PortUsage } from "../../infra/ports.js";
 type PortListenerKind = ReturnType<typeof import("../../infra/ports.js").classifyPortListener>;
 
 const inspectPortUsage = vi.hoisted(() => vi.fn<(port: number) => Promise<PortUsage>>());
-const sleep = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
+const monotonicClock = vi.hoisted(() => ({ nowMs: 0 }));
+const sleep = vi.hoisted(() =>
+  vi.fn(async (ms: number) => {
+    monotonicClock.nowMs += ms;
+  }),
+);
 const classifyPortListener = vi.hoisted(() =>
   vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
 );
@@ -146,6 +151,8 @@ async function waitForStoppedFreeGatewayRestart() {
 
 describe("inspectGatewayRestart", () => {
   beforeEach(() => {
+    monotonicClock.nowMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
     inspectPortUsage.mockReset();
     readBestEffortConfig.mockReset();
     readBestEffortConfig.mockResolvedValue({});
@@ -162,6 +169,9 @@ describe("inspectGatewayRestart", () => {
       hints: [],
     });
     sleep.mockReset();
+    sleep.mockImplementation(async (ms: number) => {
+      monotonicClock.nowMs += ms;
+    });
     classifyPortListener.mockReset();
     classifyPortListener.mockReturnValue("gateway");
     probeGateway.mockReset();
@@ -174,6 +184,7 @@ describe("inspectGatewayRestart", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
@@ -595,6 +606,32 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.waitOutcome).toBe("timeout");
     expect(snapshot.elapsedMs).toBe(300_000);
     expect(sleep).toHaveBeenCalledTimes(5);
+  });
+
+  it("includes slow health inspections in the migration watchdog", async () => {
+    inspectPortUsage.mockImplementation(async () => {
+      monotonicClock.nowMs += 90_000;
+      return {
+        port: 18789,
+        status: "free",
+        listeners: [],
+        hints: [],
+      };
+    });
+    const isStartupMigrationActive = vi.fn(() => true);
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      attempts: 1,
+      delayMs: 10_000,
+      isStartupMigrationActive,
+    });
+
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(snapshot.elapsedMs).toBe(390_000);
+    expect(sleep).toHaveBeenCalledTimes(3);
   });
 
   it("accepts matching-version restart liveness when the probe lacks operator scope", async () => {

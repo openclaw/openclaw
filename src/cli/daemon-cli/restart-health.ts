@@ -530,6 +530,7 @@ export async function waitForGatewayHealthyRestart(params: {
   requireRunningService?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
 }): Promise<GatewayRestartSnapshot> {
+  const startedAtMs = performance.now();
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const standardDeadlineMs = attempts * delayMs;
@@ -556,7 +557,9 @@ export async function waitForGatewayHealthyRestart(params: {
   let nextMigrationActivityPollMs = 0;
 
   for (let attempt = 0; ; attempt += 1) {
-    const elapsedMs = attempt * delayMs;
+    // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
+    // keeps both the normal deadline and migration watchdog bounded when those operations stall.
+    const elapsedMs = Math.max(0, performance.now() - startedAtMs);
     const healthy =
       snapshot.healthy && (!params.requireRunningService || snapshot.runtime.status === "running");
     if (healthy) {
