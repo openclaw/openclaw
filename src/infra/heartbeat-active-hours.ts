@@ -61,7 +61,8 @@ function resolveMinutesInTimeZone(nowMs: number, formatter: Intl.DateTimeFormat)
       return null;
     }
     return hour * 60 + minute;
-  } catch {
+  } catch (err) {
+    console.warn("Failed to parse active-hours time:", err);
     return null;
   }
 }
