@@ -19,6 +19,8 @@ const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
+// Filesystem classification runs during database open, so never let the fallback probe stall it.
+const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
@@ -30,6 +32,7 @@ type IntervalHandle = ReturnType<typeof setInterval> & {
 type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
 type MountEntry = { mountPoint: string; fsType: string; source?: string };
+type MountEntryReadResult = { kind: "entries"; entries: MountEntry[] } | { kind: "timeout" };
 
 export type SqliteWalMaintenance = {
   checkpoint: () => boolean;
@@ -164,17 +167,36 @@ function parseMountCommandEntries(contents: string): MountEntry[] {
   return entries;
 }
 
-function readMountEntries(): MountEntry[] {
+function isMountCommandTimeout(error: unknown): boolean {
+  return (
+    error !== null && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT"
+  );
+}
+
+function readMountEntries(): MountEntryReadResult {
   try {
-    return parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8"));
+    return {
+      kind: "entries",
+      entries: parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8")),
+    };
   } catch {
     // macOS/BSD expose filesystem type names in `mount` output instead of
     // Linux superblock magic, so keep this fallback for named filesystem types.
   }
   try {
-    return parseMountCommandEntries(String(childProcess.execFileSync("mount", [])));
-  } catch {
-    return [];
+    return {
+      kind: "entries",
+      entries: parseMountCommandEntries(
+        String(
+          childProcess.execFileSync("mount", [], {
+            killSignal: "SIGKILL",
+            timeout: MOUNT_COMMAND_TIMEOUT_MS,
+          }),
+        ),
+      ),
+    };
+  } catch (error) {
+    return isMountCommandTimeout(error) ? { kind: "timeout" } : { kind: "entries", entries: [] };
   }
 }
 
@@ -228,9 +250,14 @@ function resolveMountEntryJournalPolicy(
 function combineMountEntryJournalPolicies(
   targetPaths: readonly string[],
 ): SqliteFilesystemJournalPolicy {
-  const mountEntries = readMountEntries();
+  const mountResult = readMountEntries();
+  if (mountResult.kind === "timeout") {
+    return "rollback";
+  }
   const policies = new Set(
-    targetPaths.map((targetPath) => resolveMountEntryJournalPolicy(targetPath, mountEntries)),
+    targetPaths.map((targetPath) =>
+      resolveMountEntryJournalPolicy(targetPath, mountResult.entries),
+    ),
   );
   if (policies.has("unsupported")) {
     return "unsupported";
