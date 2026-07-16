@@ -210,6 +210,23 @@ async function refreshOAuthCredential(
   if (!oauthProvider || typeof getOAuthApiKey !== "function") {
     return null;
   }
+
+  // When the credential is inside the manager's refresh-margin window but
+  // not yet technically expired, call refreshToken directly so preemptive
+  // refresh actually takes effect. getOAuthApiKey only refreshes fully
+  // expired tokens to preserve its documented contract for direct callers.
+  // (#103846)
+  if (typeof credential.expires === "number" && Date.now() < credential.expires) {
+    try {
+      const refreshed = await oauthProvider.refreshToken(credential);
+      return refreshed ? { ...credential, ...refreshed } : null;
+    } catch (error) {
+      throw new Error(`Failed to refresh OAuth token for ${credential.provider}`, {
+        cause: error,
+      });
+    }
+  }
+
   const result = await getOAuthApiKey(oauthProvider, {
     [credential.provider]: credential,
   });
