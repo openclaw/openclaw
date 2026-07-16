@@ -6,12 +6,13 @@ import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -554,6 +555,7 @@ describe("native hook relay registry", () => {
       provider: "codex",
       sessionId: "session-1",
       runId: "run-1",
+      preToolUseLoopDetection: false,
       command: {
         executable: "/opt/Open Claw/openclaw.mjs",
         nodeExecutable: "/usr/local/bin/node",
@@ -595,6 +597,19 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-1",
       runId: "run-1",
       config: { tools: { loopDetection: { enabled: false } } } as never,
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
+  });
+
+  it("omits loop-detection-only pre-tool relays when the harness capability is disabled", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      config: { tools: { loopDetection: { enabled: true } } } as never,
+      preToolUseLoopDetection: false,
     });
 
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
@@ -1018,6 +1033,13 @@ describe("native hook relay registry", () => {
   });
 
   it("prunes expired foreign direct bridge registry files even when their pid is alive", async () => {
+    const unrelatedLivePath = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-unrelated-live-foreign-bridge"),
+      {
+        pid: 9_999_994,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    );
     const stalePath = await writeForeignNativeHookRelayBridgeRecordForTests(
       uniqueNativeHookRelayIdForTests("codex-expired-foreign-bridge"),
       {
@@ -1026,7 +1048,7 @@ describe("native hook relay registry", () => {
       },
     );
     const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
-      if (pid !== 9_999_992) {
+      if (pid !== 9_999_992 && pid !== 9_999_994) {
         throw Object.assign(new Error("unexpected process"), { code: "ESRCH" });
       }
       return true;
@@ -1040,8 +1062,10 @@ describe("native hook relay registry", () => {
       allowedEvents: ["pre_tool_use"],
     });
 
-    expect(kill).not.toHaveBeenCalled();
+    expect(kill).toHaveBeenCalledWith(9_999_994, 0);
+    expect(kill).not.toHaveBeenCalledWith(9_999_992, 0);
     await expect(fs.stat(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(unrelatedLivePath)).resolves.toBeDefined();
   });
 
   it("preserves live unexpired foreign direct bridge registry files during registration", async () => {
@@ -2331,12 +2355,10 @@ describe("native hook relay registry", () => {
     ];
     setActivePluginRegistry(registry);
     try {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:session-1"] = {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        } as SessionEntry;
-      });
+      await replaceSessionEntry({ sessionKey: "agent:main:session-1", storePath }, {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+      } as SessionEntry);
       const patchResult = await patchPluginSessionExtension({
         cfg: config as never,
         sessionKey: "agent:main:session-1",
@@ -2354,7 +2376,10 @@ describe("native hook relay registry", () => {
         config: config as never,
         runId: "run-1",
         allowedEvents: ["pre_tool_use"],
+        preToolUseLoopDetection: false,
       });
+
+      expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
 
       const response = await invokeNativeHookRelay({
         provider: "codex",
@@ -3513,3 +3538,4 @@ describe("native hook relay command builder", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

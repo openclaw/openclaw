@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { execPlainGh } from "./lib/plain-gh.mjs";
+import { execGhApiRead } from "./lib/plain-gh.mjs";
 
 export const SCHEDULED_HOSTED_WORKFLOWS = [
   "Blacksmith Testbox",
@@ -19,7 +19,8 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
 ];
 const WORKFLOW_RUNS_PAGE_SIZE = 100;
 const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
-export const HOSTED_GATE_MAX_AGE_HOURS = 12;
+const COMPARE_COMMITS_PAGE_SIZE = 100;
+export const HOSTED_GATE_MAX_AGE_HOURS = 24;
 const HOSTED_GATE_MAX_AGE_MS = HOSTED_GATE_MAX_AGE_HOURS * 60 * 60 * 1_000;
 const HOSTED_GATE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 
@@ -143,65 +144,94 @@ function isRecentRun(run, nowMs) {
   );
 }
 
-function preferredCiRun(runs) {
+function isSuccessfulRecentRun(run, nowMs) {
+  return run?.status === "completed" && run.conclusion === "success" && isRecentRun(run, nowMs);
+}
+
+function preferredCiRun(runs, nowMs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
   const latestScheduledRun = latestRun(scheduledRuns);
-  const failedScheduledRun = latestRun(
-    scheduledRuns.filter(
-      (run) =>
-        run.status === "completed" && !["success", "cancelled", "skipped"].includes(run.conclusion),
-    ),
+  const latestCompletedScheduledRun = latestRun(
+    scheduledRuns.filter((run) => run.status === "completed"),
   );
-  if (failedScheduledRun && latestScheduledRun?.status !== "completed") {
-    return failedScheduledRun;
+  const latestManualRun = latestRun(runs.filter((run) => run.event === "workflow_dispatch"));
+
+  // Manual proof may replace stale scheduled success or a pending run,
+  // never an unresolved terminal non-success.
+  if (latestCompletedScheduledRun && latestCompletedScheduledRun.conclusion !== "success") {
+    return latestCompletedScheduledRun;
   }
-  if (latestScheduledRun?.status === "completed") {
+  if (latestScheduledRun?.status === "completed" && isRecentRun(latestScheduledRun, nowMs)) {
     return latestScheduledRun;
   }
-  return latestRun(runs.filter((run) => run.event === "workflow_dispatch")) ?? latestScheduledRun;
+  return latestManualRun ?? latestScheduledRun;
 }
 
 function successfulRunOrThrow(
   runs,
   workflowName,
   sha,
-  { allowManual = true, requireRecent = false, nowMs = Date.now() } = {},
+  { allowManual = true, nowMs = Date.now() } = {},
 ) {
-  const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual).filter(
-    (run) => !requireRecent || (run?.event === "pull_request" && isRecentRun(run, nowMs)),
-  );
-  const run = workflowName === "CI" ? preferredCiRun(matchingRuns) : latestRun(matchingRuns);
-  if (!run || run.status !== "completed" || run.conclusion !== "success") {
+  const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual);
+  const run = workflowName === "CI" ? preferredCiRun(matchingRuns, nowMs) : latestRun(matchingRuns);
+  if (!isSuccessfulRecentRun(run, nowMs)) {
     throw new Error(
-      `Missing successful ${requireRecent ? "recent " : ""}${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
+      `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
     );
   }
   return run;
 }
 
-function successfulReleaseGateFallback(workflowRuns, sha) {
-  const fallback = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
-  if (fallback?.status !== "completed" || fallback.conclusion !== "success") {
-    return null;
-  }
-  return fallback;
+function hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs) {
+  const releaseGate = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
+  return isSuccessfulRecentRun(releaseGate, nowMs);
 }
 
-function canCoverQueuedBuildArtifacts(workflowRuns, sha) {
-  if (!successfulReleaseGateFallback(workflowRuns, sha)) {
+function runBelongsToPullRequest(
+  run,
+  pr,
+  pullRequestCommitShas,
+  pullRequestHeadBranch,
+  pullRequestHeadRepository,
+) {
+  if (run?.pull_requests?.some((pullRequest) => pullRequest?.number === pr)) {
+    return true;
+  }
+  if (Array.isArray(run?.pull_requests) && run.pull_requests.length > 0) {
+    return false;
+  }
+  // Fork pull_request runs currently arrive with pull_requests: []. Require
+  // the immutable commit plus its PR head identity; branch identity alone is
+  // mutable, while ancestry alone can include commits from merged branches.
+  return (
+    pullRequestCommitShas.has(run?.head_sha) &&
+    run?.head_branch === pullRequestHeadBranch &&
+    run?.head_repository?.full_name?.toLowerCase() === pullRequestHeadRepository.toLowerCase()
+  );
+}
+
+function canCoverQueuedBuildArtifacts(workflowRuns, sha, nowMs) {
+  if (!hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs)) {
     return false;
   }
   const supportingGatesPassed = ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS.every((workflowName) => {
-    const run = latestRun(matchingAuthoritativeRuns(workflowRuns, workflowName, sha));
-    return run?.status === "completed" && run.conclusion === "success";
+    const run = latestRun(matchingAuthoritativeRuns(workflowRuns, workflowName, sha, false));
+    return isSuccessfulRecentRun(run, nowMs);
   });
   if (!supportingGatesPassed) {
     return false;
   }
-  const buildArtifactRuns = matchingAuthoritativeRuns(workflowRuns, BUILD_ARTIFACTS_WORKFLOW, sha);
+  const buildArtifactRuns = matchingAuthoritativeRuns(
+    workflowRuns,
+    BUILD_ARTIFACTS_WORKFLOW,
+    sha,
+    false,
+  );
   const latestBuildArtifactRun = latestRun(buildArtifactRuns);
   return (
     latestBuildArtifactRun?.status === "queued" &&
+    isRecentRun(latestBuildArtifactRun, nowMs) &&
     buildArtifactRuns.every(
       (run) =>
         run.status === "queued" || (run.status === "completed" && run.conclusion === "success"),
@@ -233,6 +263,9 @@ export function collectHostedGateEvidence({
   sha,
   pr,
   recentSha,
+  pullRequestCommitShas = [],
+  pullRequestHeadBranch = "",
+  pullRequestHeadRepository = "",
   workflowRuns,
   changelogOnly = false,
   nowMs = Date.now(),
@@ -240,16 +273,15 @@ export function collectHostedGateEvidence({
   if (!Array.isArray(workflowRuns)) {
     throw new Error("workflowRuns must be an array.");
   }
+  const pullRequestCommitShaSet = new Set(pullRequestCommitShas);
 
-  const collectForSha = (evidenceSha, requireRecent, requiredScheduledWorkflows = new Set()) => {
-    const allowManual = !requireRecent;
+  const collectForSha = (evidenceSha, { allowManual, requiredScheduledWorkflows = new Set() }) => {
     const workflows = [];
     const fallbackCoveredWorkflows = [];
     if (!changelogOnly) {
       workflows.push(
         successfulRunOrThrow(workflowRuns, "CI", evidenceSha, {
           allowManual,
-          requireRecent,
           nowMs,
         }),
       );
@@ -267,7 +299,7 @@ export function collectHostedGateEvidence({
       if (
         allowManual &&
         workflowName === BUILD_ARTIFACTS_WORKFLOW &&
-        canCoverQueuedBuildArtifacts(workflowRuns, evidenceSha)
+        canCoverQueuedBuildArtifacts(workflowRuns, evidenceSha, nowMs)
       ) {
         fallbackCoveredWorkflows.push({
           name: workflowName,
@@ -279,7 +311,6 @@ export function collectHostedGateEvidence({
       workflows.push(
         successfulRunOrThrow(workflowRuns, workflowName, evidenceSha, {
           allowManual,
-          requireRecent,
           nowMs,
         }),
       );
@@ -290,29 +321,11 @@ export function collectHostedGateEvidence({
   let evidenceSha = sha;
   let selected;
   try {
-    selected = collectForSha(sha, false);
+    selected = collectForSha(sha, { allowManual: true });
   } catch (exactError) {
-    const currentWorkflowNames = ["CI", ...SCHEDULED_HOSTED_WORKFLOWS];
-    const currentHeadHasTerminalNonSuccess = currentWorkflowNames.some((workflowName) => {
-      const latestScheduled = latestRun(
-        matchingAuthoritativeRuns(workflowRuns, workflowName, sha, false).filter(
-          (run) => run?.status === "completed",
-        ),
-      );
-      if (latestScheduled && latestScheduled.conclusion !== "success") {
-        return true;
-      }
-      if (workflowName !== "CI") {
-        return false;
-      }
-      const latestManual = latestRun(
-        workflowRuns.filter((run) => isReleaseGateCiRun(run, sha) && run?.status === "completed"),
-      );
-      return latestManual && latestManual.conclusion !== "success";
-    });
-    if (currentHeadHasTerminalNonSuccess) {
-      throw exactError;
-    }
+    // Hosted CI proves the PR cohort, not ancestry freshness. A newer head's
+    // failure must not discard a complete same-PR green cohort from the last
+    // 24 hours; review and focused gates own the newer delta.
     const targetScheduledWorkflows = new Set(
       SCHEDULED_HOSTED_WORKFLOWS.filter(
         (workflowName) =>
@@ -326,7 +339,13 @@ export function collectHostedGateEvidence({
           (run) =>
             run?.event === "pull_request" &&
             run?.head_sha !== sha &&
-            run?.pull_requests?.some((pullRequest) => pullRequest?.number === pr) &&
+            runBelongsToPullRequest(
+              run,
+              pr,
+              pullRequestCommitShaSet,
+              pullRequestHeadBranch,
+              pullRequestHeadRepository,
+            ) &&
             isRecentRun(run, nowMs),
         )
         .toSorted((left, right) =>
@@ -337,7 +356,10 @@ export function collectHostedGateEvidence({
     let fallbackError;
     for (const fallbackSha of new Set(fallbackShas)) {
       try {
-        selected = collectForSha(fallbackSha, true, targetScheduledWorkflows);
+        selected = collectForSha(fallbackSha, {
+          allowManual: false,
+          requiredScheduledWorkflows: targetScheduledWorkflows,
+        });
         evidenceSha = fallbackSha;
         break;
       } catch (error) {
@@ -390,7 +412,7 @@ export function workflowRunQueryPaths(repo, { sha, recentSha, headBranch }, page
 function loadWorkflowRunsForQuery(queryForPage) {
   const loadPage = (page) =>
     parseWorkflowRunPage(
-      execPlainGh(["api", queryForPage(page)], {
+      execGhApiRead(queryForPage(page), {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }),
@@ -414,19 +436,71 @@ function loadWorkflowRuns(repo, sha, recentSha, headBranch) {
   return [...new Map(workflowRuns.map((run) => [run.id, run])).values()];
 }
 
+export function compareCommitPageCount(totalCommits) {
+  if (!Number.isSafeInteger(totalCommits) || totalCommits < 0) {
+    throw new Error("Expected comparison total_commits to be a non-negative integer.");
+  }
+  return Math.max(1, Math.ceil(totalCommits / COMPARE_COMMITS_PAGE_SIZE));
+}
+
+function loadPullRequestCommitShas(repo, { baseSha, headSha }) {
+  const loadPage = (page) =>
+    JSON.parse(
+      execGhApiRead(
+        `repos/${repo}/compare/${baseSha}...${headSha}?per_page=${COMPARE_COMMITS_PAGE_SIZE}&page=${page}`,
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ),
+    );
+
+  // The PR commits endpoint stops at 250. GitHub's paginated comparison is
+  // equivalent to git log BASE..HEAD and keeps the membership proof complete.
+  const firstPage = loadPage(1);
+  const pages = [firstPage];
+  for (let page = 2; page <= compareCommitPageCount(firstPage?.total_commits); page += 1) {
+    pages.push(loadPage(page));
+  }
+  const shas = pages.flatMap((comparison, index) => {
+    if (!Array.isArray(comparison?.commits)) {
+      throw new Error(`Expected comparison commit page ${index + 1} to be an array.`);
+    }
+    return comparison.commits.map((commit) => commit?.sha).filter(Boolean);
+  });
+  if (shas.length !== firstPage.total_commits) {
+    throw new Error(
+      `Expected ${firstPage.total_commits} comparison commits, received ${shas.length}.`,
+    );
+  }
+  return shas;
+}
+
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
-  const headBranch = execPlainGh(
-    ["api", `repos/${args.repo}/pulls/${args.pr}`, "--jq", ".head.ref"],
-    {
+  const pullRequest = JSON.parse(
+    execGhApiRead(`repos/${args.repo}/pulls/${args.pr}`, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-    },
-  ).trim();
+    }),
+  );
+  const headBranch = pullRequest?.head?.ref;
+  const headRepository = pullRequest?.head?.repo?.full_name;
+  const baseSha = pullRequest?.base?.sha;
+  const headSha = pullRequest?.head?.sha;
+  if (!headBranch || !headRepository || !baseSha || !headSha) {
+    throw new Error(`PR #${args.pr} is missing head or base metadata.`);
+  }
+  if (headSha !== args.sha) {
+    throw new Error(`PR #${args.pr} head changed from ${args.sha} to ${headSha}.`);
+  }
   const evidence = collectHostedGateEvidence({
     sha: args.sha,
     pr: args.pr,
     recentSha: args.recentSha,
+    pullRequestCommitShas: loadPullRequestCommitShas(args.repo, { baseSha, headSha }),
+    pullRequestHeadBranch: headBranch,
+    pullRequestHeadRepository: headRepository,
     workflowRuns: loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch),
     changelogOnly: args.changelogOnly,
   });

@@ -18,8 +18,8 @@ scenario:
     channel: whatsapp
     suiteIsolation: isolated
     summary: Verify WhatsApp dmPolicy disabled behavior through the canonical adapter.
+    driver: live
     config:
-      requiredChannelDriver: live
       policyKey: dmPolicy
       policyValue: disabled
       conversationKind: direct

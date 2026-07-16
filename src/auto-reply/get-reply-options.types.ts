@@ -1,10 +1,14 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
+import type { AgentPlanStep } from "../channels/streaming.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
+import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+
+export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
@@ -33,8 +37,6 @@ export type ReplyThreadingPolicy = {
   /** Override implicit reply-to-current behavior for the current turn. */
   implicitCurrentMessage?: "default" | "allow" | "deny";
 };
-
-export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
 /** Action sink available for model-proposed follow-up tasks during this turn. */
 export type TaskSuggestionDeliveryMode = "gateway";
@@ -99,6 +101,8 @@ export type GetReplyOptions = {
   onTurnAdopted?: () => void | Promise<void>;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Current user turn is already durable; replay it without appending another copy. */
+  suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
@@ -192,9 +196,17 @@ export type GetReplyOptions = {
    * Providing this callback opts the channel into progress narration; core
    * only generates narration when a utility model resolves (explicit
    * config or the provider-declared default; utilityModel: "" disables).
-   * An empty text means narration stopped: fall back to raw tool progress.
+   * An empty text clears narration; a retained model preamble still wins before
+   * the channel falls back to raw tool progress.
    */
   onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
+  /** Channel-owned final and queued-turn boundaries for the current narrator. */
+  onProgressNarratorLifecycle?: (lifecycle: {
+    beginTurn: () => void;
+    stopTurn: () => void;
+  }) => void;
+  /** False while utility-model narration has no visible progress draft. */
+  isProgressDraftVisible?: () => boolean;
   /**
    * Omit exec/bash command text from narration model input, mirroring the
    * channel's `streaming.progress.commandText: "status"` display policy so
@@ -203,6 +215,8 @@ export type GetReplyOptions = {
   narrationHideCommandText?: boolean;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
+  /** Bridge typed preambles to a channel-owned progress headline without commentary. */
+  progressPreambleEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
   reasoningPayloadsEnabled?: boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
@@ -212,7 +226,14 @@ export type GetReplyOptions = {
     phase?: string;
     title?: string;
     explanation?: string;
+    /**
+     * @deprecated Shipped pre-2026.8 shape: plain step text without statuses.
+     * Still populated for existing consumers; migrate to `planSteps` and
+     * remove with the deprecation window.
+     */
     steps?: string[];
+    /** Canonical typed checklist snapshot; replaces `steps`. */
+    planSteps?: AgentPlanStep[];
     source?: string;
   }) => Promise<void> | void;
   /** Called when an approval becomes pending or resolves. */
@@ -276,6 +297,8 @@ export type GetReplyOptions = {
   queuedDeliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Tracks ownership transfer when this turn later drains as a queued followup. */
   queuedFollowupLifecycle?: QueuedReplyLifecycle;
+  /** Called after a queued followup owns the reply lane, before its model run starts. */
+  onQueuedFollowupAdmitted?: () => Promise<void> | void;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   /** Called when a suppressed source reply mode observes visible delivery through another path. */

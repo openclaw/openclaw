@@ -7,6 +7,7 @@ import {
   listCoreGatewayMethodNames,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-descriptors.js";
+import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
@@ -16,11 +17,36 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).not.toContain("talk.realtime.relay");
     expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
+
+  it("advertises node presence activity updates", () => {
+    expect(GATEWAY_EVENTS).toContain("node.presence");
+  });
 });
 
 describe("listGatewayMethods", () => {
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
+  });
+
+  it("advertises node plugin tool catalog updates", () => {
+    expect(listGatewayMethods()).toContain("node.pluginTools.update");
+  });
+
+  it("advertises node skill catalog updates", () => {
+    expect(listGatewayMethods()).toContain("node.skills.update");
+  });
+
+  it("advertises unified approval lookup and resolution", () => {
+    expect(listGatewayMethods()).toContain("approval.get");
+    expect(listGatewayMethods()).toContain("approval.resolve");
+  });
+
+  it("appends memory migration after model probing without shifting older method indices", () => {
+    expect(listGatewayMethods().slice(-3)).toEqual([
+      "models.probe",
+      "migrations.memory.plan",
+      "migrations.memory.apply",
+    ]);
   });
 
   it("advertises ClawHub skill trust methods", () => {
@@ -37,6 +63,11 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
   });
 
+  it("advertises the versioned activity audit method", () => {
+    expect(listGatewayMethods()).toContain("audit.activity.list");
+    expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");
@@ -47,6 +78,7 @@ describe("listGatewayMethods", () => {
 
   it("preserves the legacy advertised method order", () => {
     const methods = listGatewayMethods();
+    const coreMethods = listCoreGatewayMethodNames();
     expect(methods.slice(0, 5)).toEqual([
       "health",
       "diagnostics.stability",
@@ -62,6 +94,20 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
+    expect(coreMethods.slice(-10)).toEqual([
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+      "approval.get",
+      "approval.resolve",
+      "sessions.search",
+      "sessions.dispatch",
+      "sessions.reclaim",
+      "models.probe",
+      "migrations.memory.plan",
+      "migrations.memory.apply",
+    ]);
+    expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
+    expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {
@@ -76,6 +122,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.endTurn");
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
+    expect(methods).toContain("talk.session.acknowledgeMark");
     expect(methods).toContain("talk.session.submitToolResult");
     expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
@@ -99,13 +146,15 @@ describe("listGatewayMethods", () => {
     }
   });
 
-  it("wires a dispatchable handler for every terminal.* descriptor", () => {
+  it("wires a dispatchable handler for every core descriptor", () => {
     // A descriptor without a matching entry in the lazy handler routing table
     // advertises a method that then dispatches as "unknown method" — exactly
-    // how terminal.attach/list/text first shipped broken. (Approval methods
-    // are excluded: they are injected per-request via extraHandlers.)
+    // how terminal.attach/list/text and later sessions.dispatch first shipped
+    // broken. Aux methods are injected at server construction; assistant media
+    // is served by the control-ui handler.
+    const injectedElsewhere = new Set<string>([...GATEWAY_AUX_METHODS, "assistant.media.get"]);
     const missing = listCoreGatewayMethodNames()
-      .filter((method) => method.startsWith("terminal."))
+      .filter((method) => !injectedElsewhere.has(method))
       .filter((method) => typeof coreGatewayHandlers[method] !== "function");
     expect(missing).toEqual([]);
   });

@@ -462,7 +462,7 @@ async function uploadImageFeishu(params: {
  * NOT decode percent-encoding — so encoded filenames appeared as garbled text
  * in chat (regression in v2026.3.2).
  */
-export function sanitizeFileNameForUpload(fileName: string): string {
+function sanitizeFileNameForUpload(fileName: string): string {
   return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 
@@ -981,3 +981,4 @@ export async function sendMediaFeishu(params: {
     ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

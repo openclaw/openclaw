@@ -119,7 +119,7 @@ export function buildPluginNodeCapabilityScopedHostUrl(
 }
 
 /** Replace the capability segment in an already scoped host URL. */
-export function replacePluginNodeCapabilityInScopedHostUrl(
+function replacePluginNodeCapabilityInScopedHostUrl(
   scopedUrl: string,
   capability: string,
 ): string | undefined {
@@ -192,9 +192,9 @@ export function normalizePluginNodeCapabilityScopedUrl(
         malformedScopedPath = true;
       } else {
         url.pathname = canonicalPath;
-        if (!url.searchParams.has(PLUGIN_NODE_CAPABILITY_QUERY_PARAM)) {
-          url.searchParams.set(PLUGIN_NODE_CAPABILITY_QUERY_PARAM, capabilityFromPath);
-        }
+        // The path is the minted node URL. A copied stale query must never
+        // override the capability the current scoped path authorizes.
+        url.searchParams.set(PLUGIN_NODE_CAPABILITY_QUERY_PARAM, capabilityFromPath);
         rewrittenUrl = `${url.pathname}${url.search}`;
       }
     }

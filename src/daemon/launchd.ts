@@ -1286,7 +1286,7 @@ export async function restartLaunchAgent({
       waitForPid: process.pid,
     });
     if (!handoff.ok) {
-      throw new Error(`launchd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
+      throw new Error(`launchd restart handoff failed: ${handoff.error}`);
     }
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
@@ -1353,3 +1353,4 @@ export async function restartLaunchAgent({
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

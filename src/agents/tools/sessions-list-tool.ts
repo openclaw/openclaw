@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import pMap from "p-map";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -22,6 +23,7 @@ import { callGateway } from "../../gateway/call.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { normalizeFastModeAutoOnSeconds, normalizeFastModeSource } from "../../shared/fast-mode.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
@@ -149,6 +151,21 @@ export function createSessionsListTool(opts?: {
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+      const stateVersions = getSessionStateVersions(
+        sessions.flatMap((entry) =>
+          entry && typeof entry === "object" && typeof entry.key === "string"
+            ? [
+                {
+                  sessionKey: entry.key,
+                  agentId:
+                    typeof entry.agentId === "string" && entry.agentId
+                      ? entry.agentId
+                      : resolveAgentIdFromSessionKey(entry.key),
+                },
+              ]
+            : [],
+        ),
+      );
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
@@ -272,6 +289,11 @@ export function createSessionsListTool(opts?: {
         const effectiveFastMode = normalizeFastMode(entry.effectiveFastMode);
         const effectiveFastModeSource = normalizeFastModeSource(entry.effectiveFastModeSource);
         const fastAutoOnSeconds = normalizeFastModeAutoOnSeconds(entry.fastAutoOnSeconds);
+        // Version lookup keys on the store-owning agent (gateway row agentId), not the
+        // key-derived agent: bare "global" keys parse to the default agent id.
+        const stateVersionAgentId =
+          typeof entry.agentId === "string" && entry.agentId ? entry.agentId : resolvedAgentId;
+        const stateVersion = stateVersions[stateVersionAgentId]?.[key];
         const row: SessionListRow = {
           key: displayKey,
           agentId: resolvedAgentId,
@@ -320,6 +342,7 @@ export function createSessionsListTool(opts?: {
           pinned: entry.pinned === true,
           pinnedAt: typeof entry.pinnedAt === "number" ? entry.pinnedAt : undefined,
           sessionId,
+          ...(stateVersion ? { stateVersion } : {}),
           model: readStringValue(entry.model),
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
@@ -397,16 +420,9 @@ export function createSessionsListTool(opts?: {
       }
 
       if (titleTargets.length > 0) {
-        const maxConcurrent = Math.min(4, titleTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= titleTargets.length) {
-              return;
-            }
-            const target = titleTargets[next];
+        await pMap(
+          titleTargets,
+          async (target) => {
             const fields = await readSessionTitleFieldsFromTranscriptAsync({
               agentId: target.agentId,
               sessionEntry: target.sessionEntry,
@@ -423,22 +439,15 @@ export function createSessionsListTool(opts?: {
             if (includeLastMessage && fields.lastMessagePreview) {
               target.row.lastMessagePreview = fields.lastMessagePreview;
             }
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+          },
+          { concurrency: 4, stopOnError: true },
+        );
       }
 
       if (messageLimit > 0 && historyTargets.length > 0) {
-        const maxConcurrent = Math.min(4, historyTargets.length);
-        let index = 0;
-        const worker = async () => {
-          while (true) {
-            const next = index;
-            index += 1;
-            if (next >= historyTargets.length) {
-              return;
-            }
-            const target = historyTargets[next];
+        await pMap(
+          historyTargets,
+          async (target) => {
             const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
@@ -447,9 +456,9 @@ export function createSessionsListTool(opts?: {
             const filtered = stripToolMessages(rawMessages);
             target.row.messages =
               filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
-          }
-        };
-        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
+          },
+          { concurrency: 4, stopOnError: true },
+        );
       }
 
       const visibilityMetadata =

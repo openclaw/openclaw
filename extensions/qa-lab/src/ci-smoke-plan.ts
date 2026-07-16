@@ -2,15 +2,15 @@
 import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
+import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
-import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 
 const QA_SMOKE_PROFILE = "smoke-ci";
 const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2"] as const;
 const QA_SMOKE_CI_CHANNELS = ["matrix", OPENCLAW_CRABLINE_DEFAULT_CHANNEL] as const;
 const QA_SMOKE_CI_SCENARIO_IDS = new Set([
   "control-ui-chat-flow-playwright",
-  "crestodian-ring-zero-setup",
+  "system-agent-ring-zero-setup",
   "dreaming-shadow-trial-report",
   "gateway-smoke",
   "luna-thinking-visibility-switch",
@@ -73,6 +73,7 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
         providerMode,
         primaryModel,
         channelDriver: profile.channelDriver,
+        channel: scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
       }),
   );
   if (scenarios.length === 0) {
@@ -102,7 +103,13 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
       (left, right) =>
         estimateScenarioCost(right) - estimateScenarioCost(left) || left.id.localeCompare(right.id),
     );
-  const partitions = QA_SMOKE_CI_PARTS.map(() => ({ cost: 0, scenarios: [] as typeof scenarios }));
+  const partitions: [
+    { cost: number; scenarios: typeof scenarios },
+    { cost: number; scenarios: typeof scenarios },
+  ] = [
+    { cost: 0, scenarios: [] },
+    { cost: 0, scenarios: [] },
+  ];
   for (const scenario of defaultChannelScenarios) {
     const partition = partitions[0].cost <= partitions[1].cost ? partitions[0] : partitions[1];
     partition.scenarios.push(scenario);
@@ -111,11 +118,12 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
 
   const matrixPartIndex = 1;
   const partIndex = QA_SMOKE_CI_PARTS.indexOf(partId);
+  const selectedPartition = partId === QA_SMOKE_CI_PARTS[0] ? partitions[0] : partitions[1];
   const runs: QaSmokeCiRun[] = [
     {
       channel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
       slug: "primary",
-      scenario_ids: partitions[partIndex].scenarios.map((scenario) => scenario.id).toSorted(),
+      scenario_ids: selectedPartition.scenarios.map((scenario) => scenario.id).toSorted(),
     },
   ];
   if (partIndex === matrixPartIndex) {

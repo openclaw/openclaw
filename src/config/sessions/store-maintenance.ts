@@ -23,6 +23,10 @@ const DEFAULT_MODEL_RUN_PRUNE_AFTER_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
+// Archived transcripts are the user's conversation history: retention keeps
+// them until the disk budget evicts oldest-first, never on a wall-clock timer.
+// The budget default below is what makes "keep archives" still bounded.
+const DEFAULT_SESSION_MAX_DISK_BYTES = 2 * 1024 * 1024 * 1024;
 const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
 const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
 const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
@@ -68,32 +72,40 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
 
 function resolveResetArchiveRetentionMs(
   maintenance: SessionMaintenanceConfig | undefined,
-  pruneAfterMs: number,
 ): number | null {
+  // null = keep archived transcripts indefinitely (disk budget still evicts
+  // oldest-first under pressure). An explicit duration opts back into
+  // wall-clock deletion; parse failures stay on the keep side because losing
+  // history is the worse failure mode.
   const raw = maintenance?.resetArchiveRetention;
   if (raw === false) {
     return null;
   }
   const normalized = normalizeStringifiedOptionalString(raw);
   if (!normalized) {
-    return pruneAfterMs;
+    return null;
   }
   try {
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
-    return pruneAfterMs;
+    return null;
   }
 }
 
 function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | null {
   const raw = maintenance?.maxDiskBytes;
+  if (raw === false) {
+    return null;
+  }
   const normalized = normalizeStringifiedOptionalString(raw);
   if (!normalized) {
-    return null;
+    return DEFAULT_SESSION_MAX_DISK_BYTES;
   }
   try {
     return parseByteSize(normalized, { defaultUnit: "b" });
   } catch {
+    // A malformed explicit value must not opt the user into destructive
+    // budget cleanup they never chose; disable the budget instead.
     return null;
   }
 }
@@ -147,7 +159,7 @@ export function resolveMaintenanceConfigFromInput(
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
     modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
-    resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
+    resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
@@ -162,7 +174,7 @@ export function normalizeResolvedMaintenanceConfigInput(
   };
 }
 
-export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
+function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
   if (!Number.isSafeInteger(maxEntries) || maxEntries <= 0) {
     return 1;
   }
@@ -210,7 +222,7 @@ export function shouldRunModelRunPrune(params: {
   });
 }
 
-export function isGatewayModelRunSessionKey(sessionKey: string): boolean {
+function isGatewayModelRunSessionKey(sessionKey: string): boolean {
   const match =
     /^agent:([^:\s]+):explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(
       sessionKey,
@@ -309,7 +321,7 @@ export function pruneStaleModelRunEntries(
 const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
 
-export type QuotaSuspensionEntryMaintenanceResult = {
+type QuotaSuspensionEntryMaintenanceResult = {
   /** Patch to apply to the entry, or null when no TTL transition is due. */
   patch: Partial<SessionEntry> | null;
   /** Present when the entry transitioned from suspended to resuming. */
@@ -382,7 +394,7 @@ function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
   return /^[^:]+:(?:group|channel):.+$/.test(rest);
 }
 
-export function isProtectedSessionMaintenanceEntry(
+function isProtectedSessionMaintenanceEntry(
   sessionKey: string,
   entry: SessionEntry | undefined,
 ): boolean {

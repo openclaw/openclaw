@@ -369,9 +369,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Rich message formatting">
-    Outbound text uses standard Telegram HTML messages by default, readable across current clients: bold, italic, links, code, spoilers, quotes — not Bot API 10.1 rich-only blocks (native tables, details, rich media, formulas).
+    Outbound text uses standard Telegram HTML messages by default, readable across current clients: bold, italic, links, code, spoilers, quotes — not Bot API 10.2 rich-only blocks (native tables, details, rich media, formulas).
 
-    Opt into Bot API 10.1 rich messages:
+    Opt into Bot API 10.2 rich messages:
 
 ```json5
 {
@@ -383,7 +383,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    When enabled: the agent is told rich messages are available for this bot/account; Markdown text renders through OpenClaw's Markdown IR as Telegram rich HTML; explicit rich HTML payloads preserve supported Bot API 10.1 tags (headings, tables, details, rich media, formulas); media captions still use Telegram HTML captions (rich messages do not replace captions, and captions cap at 1024 characters).
+    When enabled: the agent is told rich messages are available for this bot/account (with the supported Markdown + HTML-island authoring contract); Markdown text renders through OpenClaw's Markdown IR as typed Bot API 10.2 rich blocks (headings, tables, details, checklists, rich media, formulas, maps, collages); media captions still use Telegram HTML captions (rich messages do not replace captions, and captions cap at 1024 characters).
 
     This keeps model text away from Telegram's rich-Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text splits automatically across Telegram's limits. Tables over the 20-column limit fall back to a code block.
 
@@ -614,6 +614,25 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    ### Locations and venues
+
+    Use the existing `send` action with one standalone `location` object. Coordinates send a native pin; adding both `name` and `address` sends a native venue card. Location sends cannot be combined with message text or media.
+
+```json5
+{
+  action: "send",
+  channel: "telegram",
+  to: "123456789",
+  location: {
+    latitude: 48.858844,
+    longitude: 2.294351,
+    accuracy: 12,
+    name: "Eiffel Tower",
+    address: "Champ de Mars, Paris",
+  },
+}
+```
+
     ### Stickers
 
     Inbound: static WEBP is downloaded and processed (placeholder `<media:sticker>`); animated TGS and video WEBM are skipped.
@@ -725,7 +744,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Limits, retry, and CLI targets">
-    - `channels.telegram.textChunkLimit` default 4000; `chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
+    - `channels.telegram.textChunkLimit` default 4000; `streaming.chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound media size.
     - `channels.telegram.mediaGroupFlushMs` (default 500, range 10-60000) controls how long albums/media groups are buffered before OpenClaw dispatches them as one inbound message. Increase it if album parts arrive late; decrease it to reduce album reply latency.
     - `channels.telegram.timeoutSeconds` overrides the API client timeout (grammY default applies if unset). Bot clients clamp configured values below the 60-second outbound text/typing request guard so grammY does not abort visible reply delivery before OpenClaw's transport guard and fallback can run. Long polling still uses a 45-second `getUpdates` request guard so idle polls are not abandoned indefinitely.
@@ -916,7 +935,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`, `threadBindings`
 - streaming: `streaming` (modes `off | partial | block | progress`), `streaming.preview.toolProgress`
-- formatting/delivery: `textChunkLimit`, `chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
+- formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`), `trustedLocalFileRoots` (self-hosted Bot API absolute `file_path` roots)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`, `webhookPort`, `webhookCertPath`

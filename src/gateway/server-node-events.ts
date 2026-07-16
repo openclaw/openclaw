@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -15,9 +16,11 @@ import {
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
+  NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
@@ -62,7 +65,7 @@ const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
-export type NodeEventHandleResult = {
+type NodeEventHandleResult = {
   ok: true;
   event: string;
   handled: boolean;
@@ -80,7 +83,11 @@ function dispatchNodeAgentCommand(
   nodeId: string,
   input: NodeAgentCommandInput,
 ): void {
-  void agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
+  // The node RPC can finish before the agent starts its own session admission.
+  // Reserve a root now so suspension cannot acknowledge and then strand the turn.
+  void runWithGatewayIndependentRootWorkContinuation(() =>
+    agentCommandFromIngress(input, defaultRuntime, ctx.deps),
+  ).catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
   });
 }
@@ -219,16 +226,6 @@ function pruneBoundedTimestampMap(
   }
 }
 
-export function resetNodeEventDeduplicationForTests() {
-  recentVoiceTranscripts.clear();
-  recentExecFinishedRuns.clear();
-  recentNodePresencePersistAt.clear();
-}
-
-export function getRecentNodePresencePersistCountForTests() {
-  return recentNodePresencePersistAt.size;
-}
-
 function compactExecEventOutput(raw: string) {
   const normalized = raw.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -300,14 +297,18 @@ function queueSessionStoreTouch(params: {
   sessionId: string;
   now: number;
 }) {
-  void touchSessionStore({
-    storePath: params.storePath,
-    canonicalKey: params.canonicalKey,
-    storeKeys: params.storeKeys,
-    entry: params.entry,
-    sessionId: params.sessionId,
-    now: params.now,
-  }).catch((err: unknown) => {
+  // Voice dispatch intentionally does not wait for persistence, but a host
+  // snapshot must not race the accepted write after its node RPC returns.
+  void runWithGatewayIndependentRootWorkContinuation(() =>
+    touchSessionStore({
+      storePath: params.storePath,
+      canonicalKey: params.canonicalKey,
+      storeKeys: params.storeKeys,
+      entry: params.entry,
+      sessionId: params.sessionId,
+      now: params.now,
+    }),
+  ).catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
 }
@@ -382,7 +383,7 @@ export const handleNodeEvent = async (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: { connId?: string; deviceId?: string },
+  opts?: { connId?: string; deviceId?: string; presenceAllowed?: boolean },
 ): Promise<NodeEventHandleResult | undefined> => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -591,14 +592,18 @@ export const handleNodeEvent = async (
       }
 
       if (wantsReceipt && deliveryChannel && deliveryTo) {
-        void sendReceiptAck({
-          cfg,
-          deps: ctx.deps,
-          sessionKey: canonicalKey,
-          channel: deliveryChannel,
-          to: deliveryTo,
-          text: receiptText,
-        }).catch((err: unknown) => {
+        // Delivery stays detached from agent startup, but remains part of the
+        // accepted node request until the durable send settles.
+        void runWithGatewayIndependentRootWorkContinuation(() =>
+          sendReceiptAck({
+            cfg,
+            deps: ctx.deps,
+            sessionKey: canonicalKey,
+            channel: deliveryChannel,
+            to: deliveryTo,
+            text: receiptText,
+          }),
+        ).catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -877,6 +882,26 @@ export const handleNodeEvent = async (
       }
       return undefined;
     }
+    case NODE_PRESENCE_ACTIVITY_EVENT: {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj || !validateNodePresenceActivityPayload(obj)) {
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      if (opts?.presenceAllowed !== true) {
+        return { ok: true, event: evt.event, handled: false, reason: "permission_required" };
+      }
+      const updated = ctx.updateNodePresenceActivity?.({
+        nodeId,
+        connId: opts.connId,
+        idleSeconds: obj.idleSeconds,
+        ...(obj.saturated === true ? { saturated: true } : {}),
+      });
+      if (!updated) {
+        return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+      }
+      ctx.broadcast("node.presence", { nodeId, ...updated }, { dropIfSlow: true });
+      return { ok: true, event: evt.event, handled: true, reason: "updated" };
+    }
     case NODE_PRESENCE_ALIVE_EVENT: {
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj) {
@@ -919,3 +944,4 @@ export const handleNodeEvent = async (
       return undefined;
   }
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

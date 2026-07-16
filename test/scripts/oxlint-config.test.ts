@@ -1,10 +1,15 @@
 // Oxlint Config tests cover oxlint config script behavior.
 import fs from "node:fs";
+import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 
 type OxlintConfig = {
   ignorePatterns?: string[];
-  overrides?: Array<{ files?: string[]; rules?: Record<string, unknown> }>;
+  overrides?: Array<{
+    excludeFiles?: string[];
+    files?: string[];
+    rules?: Record<string, unknown>;
+  }>;
   rules?: Record<string, unknown>;
 };
 
@@ -95,7 +100,7 @@ const ZERO_BASELINE_RULES = [
 ];
 
 function readJson(path: string): unknown {
-  return JSON.parse(fs.readFileSync(path, "utf8")) as unknown;
+  return JSON5.parse(fs.readFileSync(path, "utf8"));
 }
 
 describe("oxlint config", () => {
@@ -159,10 +164,40 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps lint overrides limited to the explicit test-file carve-out", () => {
+  it("preserves the indexed-access and test-file policies", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
-    expect(config.overrides).toEqual([
+    expect(config.overrides?.slice(0, 3)).toEqual([
+      {
+        files: ["extensions/browser/src/browser/routes/*.ts"],
+        rules: {
+          "oxc/no-async-endpoint-handlers": "off",
+        },
+      },
+      {
+        files: [
+          "packages/markdown-core/**/*.ts",
+          "packages/net-policy/**/*.ts",
+          "packages/media-understanding-common/**/*.ts",
+          "packages/terminal-core/**/*.ts",
+          "packages/normalization-core/**/*.ts",
+          "packages/model-catalog-core/**/*.ts",
+          "packages/web-content-core/**/*.ts",
+          "packages/agent-core/**/*.ts",
+          "packages/acp-core/**/*.ts",
+          "packages/ai/**/*.ts",
+          "packages/gateway-client/**/*.ts",
+          "packages/gateway-protocol/**/*.ts",
+          "packages/llm-core/**/*.ts",
+          "packages/media-core/**/*.ts",
+          "packages/media-generation-core/**/*.ts",
+          "packages/plugin-package-contract/**/*.ts",
+          "packages/sdk/**/*.ts",
+        ],
+        rules: {
+          "typescript/no-non-null-assertion": "error",
+        },
+      },
       {
         files: [
           "**/*.test.ts",
@@ -178,6 +213,27 @@ describe("oxlint config", () => {
         },
       },
     ]);
+  });
+
+  it("enforces scoped max-lines budgets while excluding generated output", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+    const maxLinesOverrides = (config.overrides ?? []).filter(
+      (override) => override.rules?.["max-lines"],
+    );
+
+    expect(maxLinesOverrides).toHaveLength(4);
+    expect(maxLinesOverrides.map((override) => override.rules?.["max-lines"])).toEqual([
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 700, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 800, skipBlankLines: true, skipComments: true }],
+      ["error", { max: 1000, skipBlankLines: true, skipComments: true }],
+    ]);
+    for (const override of maxLinesOverrides) {
+      expect(override.excludeFiles).toContain("**/protocol-gen/**");
+      expect(override.excludeFiles).toContain("**/*.generated.*");
+      expect(override.excludeFiles).toContain("ui/src/i18n/locales/**");
+      expect(override.excludeFiles).toContain("src/wizard/i18n/locales/**");
+    }
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

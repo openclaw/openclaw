@@ -130,6 +130,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
 });
 
 const OpenAIResponsesCompatSchema = Type.Object({
+  supportsTemperature: Type.Optional(Type.Boolean()),
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
@@ -952,3 +953,4 @@ export interface ProviderConfigInput {
     compat?: Model["compat"];
   }>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,6 +7,7 @@ import {
   pluginStateClear,
   pluginStateConsume,
   pluginStateDelete,
+  pluginStateDeleteIf,
   pluginStateEntries,
   pluginStateLookup,
   pluginStateRegister,
@@ -25,25 +26,20 @@ import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 // Public plugin-state facade over the sqlite-backed store. It validates plugin
 // ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
+// Public plugin-state facade over the sqlite-backed store. It validates plugin
+// ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
 export type {
   OpenKeyedStoreOptions,
   PluginStateEntry,
   PluginStateKeyedStore,
-  PluginStateOverflowPolicy,
   PluginStateSyncKeyedStore,
-  PluginStateStoreErrorCode,
-  PluginStateStoreOperation,
-  PluginStateStoreProbeResult,
-  PluginStateStoreProbeStep,
 } from "./plugin-state-store.types.js";
-export { PluginStateStoreError } from "./plugin-state-store.types.js";
+
 export {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
-  probePluginStateStore,
-  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
@@ -325,6 +321,16 @@ function createKeyedStoreForPluginId<T>(
         ...(env ? { env } : {}),
       });
     },
+    async deleteIf(key, predicate) {
+      const normalizedKey = validateKey(key, "delete");
+      return pluginStateDeleteIf({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        predicate: (current) => predicate(current as T),
+        ...(env ? { env } : {}),
+      });
+    },
     async lookup(key) {
       const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({
@@ -425,6 +431,16 @@ function createSyncKeyedStoreForPluginId<T>(
         ...(env ? { env } : {}),
       });
     },
+    deleteIf(key, predicate) {
+      const normalizedKey = validateKey(key, "delete");
+      return pluginStateDeleteIf({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        predicate: (current) => predicate(current as T),
+        ...(env ? { env } : {}),
+      });
+    },
     lookup(key) {
       const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({
@@ -495,7 +511,7 @@ export function createCorePluginStateSyncKeyedStore<T>(
 }
 
 /** Clears plugin-state rows and option signatures for tests. */
-export function clearPluginStateStoreForTests(): void {
+function clearPluginStateStoreForTests(): void {
   clearPluginStateDatabaseForTests();
   namespaceOptionSignatures.clear();
 }
@@ -507,4 +523,10 @@ export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean
     closeOpenClawStateDatabaseForTest();
   }
   namespaceOptionSignatures.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.pluginStateStoreTestApi")] = {
+    clearPluginStateStoreForTests,
+  };
 }

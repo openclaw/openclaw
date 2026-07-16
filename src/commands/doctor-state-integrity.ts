@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -434,9 +435,9 @@ function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
     }
 
     entries.push({
-      mountPoint: decodeMountInfoPath(leftFields[4]),
-      fsType: rightFields[0],
-      source: decodeMountInfoPath(rightFields[1]),
+      mountPoint: decodeMountInfoPath(expectDefined(leftFields[4], "left fields entry at 4")),
+      fsType: expectDefined(rightFields[0], "right fields entry at 0"),
+      source: decodeMountInfoPath(expectDefined(rightFields[1], "right fields entry at 1")),
     });
   }
   return entries;
@@ -1482,11 +1483,7 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (fs.existsSync(gitMarker)) {
     return null;
   }
-  return [
-    "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-    "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-    "- Details: /concepts/agent-workspace#git-backup-recommended",
-  ].join("\n");
+  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
 }
 
 /** Emits the workspace backup tip when applicable. */
@@ -1496,3 +1493,4 @@ export function noteWorkspaceBackupTip(workspaceDir: string) {
     note(tip, "Workspace");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

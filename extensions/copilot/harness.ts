@@ -31,8 +31,6 @@ import type {
   PoolKey,
 } from "./src/runtime.js";
 
-export type { CopilotClientPool, CopilotClientPoolOptions };
-
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
 interface CreateCopilotAgentHarnessOptions {
@@ -1132,3 +1130,4 @@ export function createCopilotAgentHarness(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
