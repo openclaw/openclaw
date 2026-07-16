@@ -2024,6 +2024,8 @@ describe("ci workflow guards", () => {
       expect(installStep.run).toContain(
         "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip",
       );
+      expect(installStep.run).toContain("--connect-timeout 10 --max-time 120");
+      expect(installStep.run).toContain("--retry 3 --retry-max-time 120");
       expect(installStep.run).toContain(
         'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
       );
