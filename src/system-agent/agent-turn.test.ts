@@ -222,7 +222,6 @@ describe("runSystemAgentTurn", () => {
         {
           ...authDeps,
           runEmbeddedAgent: runEmbeddedAgent as never,
-          resolveAssistantTimeoutMs: () => 30_000,
           readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
         },
       );
@@ -234,7 +233,7 @@ describe("runSystemAgentTurn", () => {
         authProfileIdSource: "user",
         config: binding.execution.runConfig,
         thinkLevel: "off",
-        timeoutMs: 30_000,
+        timeoutMs: 120_000,
       }),
     );
 
