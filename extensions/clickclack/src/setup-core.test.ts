@@ -62,7 +62,7 @@ describe("ClickClack setup adapter", () => {
 
   it("claims a full setup URL and prepares the token, workspace, and defaults", async () => {
     claimClickClackSetupCode.mockResolvedValue({
-      token: "ccb_claimed",
+      token: "test-token",
       bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
       workspace: {
         id: "wsp_1",
@@ -85,7 +85,7 @@ describe("ClickClack setup adapter", () => {
     ).resolves.toEqual({
       name: "Primary",
       baseUrl: "https://clickclack.example",
-      token: "ccb_claimed",
+      token: "test-token",
       workspace: "wsp_1",
       defaultTo: "channel:general",
       allowFrom: ["*"],
@@ -99,7 +99,7 @@ describe("ClickClack setup adapter", () => {
 
   it("claims a bare setup code with an explicit HTTPS base URL", async () => {
     claimClickClackSetupCode.mockResolvedValue({
-      token: "ccb_claimed",
+      token: "test-token",
       bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
       workspace: {
         id: "wsp_1",
@@ -117,7 +117,7 @@ describe("ClickClack setup adapter", () => {
       }),
     ).resolves.toMatchObject({
       baseUrl: "https://clickclack.example",
-      token: "ccb_claimed",
+      token: "test-token",
       workspace: "wsp_1",
     });
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({

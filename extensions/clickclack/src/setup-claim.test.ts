@@ -13,7 +13,7 @@ describe("ClickClack setup-code claim", () => {
   it("claims over guarded HTTPS without bearer authentication", async () => {
     const fetchMock = vi.fn(async () =>
       Response.json({
-        token: "ccb_claimed",
+        token: "test-token",
         bot: {
           id: "usr_bot",
           handle: "openclaw",
@@ -40,7 +40,7 @@ describe("ClickClack setup-code claim", () => {
         fetch: fetchMock as unknown as typeof fetch,
       }),
     ).resolves.toEqual({
-      token: "ccb_claimed",
+      token: "test-token",
       bot: {
         id: "usr_bot",
         handle: "openclaw",
@@ -88,7 +88,7 @@ describe("ClickClack setup-code claim", () => {
   it("rejects malformed claim responses", async () => {
     const fetchMock = vi.fn(async () =>
       Response.json({
-        token: "ccb_claimed",
+        token: "test-token",
         bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
         workspace: { id: "wsp_1", route_id: "clickclack", slug: "default" },
         defaults: {},
