@@ -111,7 +111,6 @@ describe("buildApprovalPresentation", () => {
       }),
     ).toBeNull();
   });
-
 });
 
 describe("buildApprovalPresentation (system-agent)", () => {
