@@ -85,30 +85,42 @@ export function resolveDiscordEmbedText(
 
 /**
  * Resolve Discord user-visible body text for ingress.
- * Strip OpenClaw internal runtime-context envelopes after assembling text and
- * resolving mentions so wrapper-only events become empty and never look user-authored.
+ * Sanitize each textual candidate before fallback precedence so wrapper-only
+ * content cannot displace attachment/embed/component/fallback text, then resolve
+ * mentions on the selected body.
  */
 export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const embedText = resolveDiscordEmbedText(
-    (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
-      null,
+  // Strip wrappers before precedence: non-empty wrapper content must not win the
+  // candidate chain and later become empty, suppressing legitimate media/rich text.
+  const contentText = stripDiscordInternalRuntimeContext(
+    normalizeOptionalString(message.content) ?? "",
   );
-  const componentText = extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message));
+  const embedText = stripDiscordInternalRuntimeContext(
+    resolveDiscordEmbedText(
+      (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
+        null,
+    ),
+  );
+  const componentText = stripDiscordInternalRuntimeContext(
+    extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message)),
+  );
+  const fallbackText = stripDiscordInternalRuntimeContext(
+    normalizeOptionalString(options?.fallbackText) ?? "",
+  );
   const rawText =
-    normalizeOptionalString(message.content) ||
+    normalizeOptionalString(contentText) ||
     buildDiscordMediaPlaceholder({
       attachments: message.attachments ?? undefined,
       stickers: resolveDiscordMessageStickers(message),
     }) ||
-    embedText ||
-    componentText ||
-    normalizeOptionalString(options?.fallbackText) ||
+    normalizeOptionalString(embedText) ||
+    normalizeOptionalString(componentText) ||
+    normalizeOptionalString(fallbackText) ||
     "";
-  // Mentions first so labels stay human-readable, then strip internal envelopes.
-  const baseText = stripDiscordInternalRuntimeContext(resolveDiscordMentions(rawText, message));
+  const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
     return baseText;
   }
@@ -117,10 +129,9 @@ export function resolveDiscordMessageText(
     return baseText;
   }
   if (!baseText) {
-    // Snapshot/forward helpers strip their own bodies; keep a final pass for safety.
-    return stripDiscordInternalRuntimeContext(forwardedText);
+    return forwardedText;
   }
-  return stripDiscordInternalRuntimeContext(`${baseText}\n${forwardedText}`);
+  return `${baseText}\n${forwardedText}`;
 }
 
 function resolveDiscordMentions(text: string, message: Message): string {
@@ -227,15 +238,26 @@ function buildDiscordForwardedMessageBlock(
 }
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
-  const content = normalizeOptionalString(snapshot.content) ?? "";
+  // Same pre-precedence strip as resolveDiscordMessageText so wrapper-only snapshot
+  // content does not suppress attachment/embed/component fallbacks.
+  const content = stripDiscordInternalRuntimeContext(
+    normalizeOptionalString(snapshot.content) ?? "",
+  );
   const attachmentText = buildDiscordMediaPlaceholder({
     attachments: snapshot.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(snapshot),
   });
-  const embedText = resolveDiscordEmbedText(snapshot.embeds?.[0]);
-  const componentText = extractDiscordComponentsV2Text(snapshot.components);
-  // Same ingress invariant as resolveDiscordMessageText: strip internal wrappers.
-  return stripDiscordInternalRuntimeContext(
-    content || attachmentText || embedText || componentText || "",
+  const embedText = stripDiscordInternalRuntimeContext(
+    resolveDiscordEmbedText(snapshot.embeds?.[0]),
+  );
+  const componentText = stripDiscordInternalRuntimeContext(
+    extractDiscordComponentsV2Text(snapshot.components),
+  );
+  return (
+    normalizeOptionalString(content) ||
+    attachmentText ||
+    normalizeOptionalString(embedText) ||
+    normalizeOptionalString(componentText) ||
+    ""
   );
 }

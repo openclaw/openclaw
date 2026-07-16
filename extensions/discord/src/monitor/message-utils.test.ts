@@ -1260,6 +1260,91 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toContain("forwarded hello");
     expect(text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
   });
+
+  it("falls back to attachment media when content is only an internal runtime-context wrapper", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"message_id":"m-media"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        attachments: [
+          {
+            id: "a1",
+            filename: "photo.png",
+            url: "https://cdn.discordapp.com/attachments/1/2/photo.png",
+            content_type: "image/png",
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe("<media:image> (1 image)");
+    expect(text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+  });
+
+  it("falls back to embed text when content is only an internal runtime-context wrapper", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"message_id":"m-embed"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        embeds: [{ title: "Breaking", description: "Details" }],
+      }),
+    );
+
+    expect(text).toBe("Breaking\nDetails");
+    expect(text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+  });
+
+  it("falls back to sticker media when content is only an internal runtime-context wrapper", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"message_id":"m-sticker"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        stickers: [
+          {
+            id: "sticker-wrapper",
+            name: "party",
+            format_type: StickerFormatType.PNG,
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe("<media:sticker> (1 sticker)");
+    expect(text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+  });
+
+  it("keeps visible user text when mixed with a wrapper and an attachment", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: [
+          "caption with photo",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"message_id":"m-mixed-media"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        attachments: [
+          {
+            id: "a2",
+            filename: "photo.png",
+            url: "https://cdn.discordapp.com/attachments/1/2/photo.png",
+            content_type: "image/png",
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe("caption with photo");
+    expect(text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+  });
 });
 
 describe("resolveDiscordChannelInfo", () => {
