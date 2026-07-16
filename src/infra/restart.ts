@@ -452,7 +452,11 @@ function updatePendingRestartEmitHooks(
 async function rejectPreparedRestartHook(hooks: RestartEmitHooks | undefined): Promise<void> {
   try {
     await hooks?.afterEmitRejected?.();
-  } catch {}
+  } catch (err) {
+    restartLog.warn("restart hook afterEmitRejected failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function rejectPreparedRestartHooks(hooksList: readonly RestartEmitHooks[]): Promise<void> {
@@ -584,7 +588,11 @@ async function emitPreparedGatewayRestartUnderAdmission(
     for (const prepared of preparedHooksList) {
       try {
         await prepared.afterEmitFailed?.();
-      } catch {}
+      } catch (err) {
+        restartLog.warn("restart hook afterEmitFailed failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
   return emitResult;
