@@ -280,22 +280,22 @@ export async function runEmbeddedAgentAttempt(params: {
           });
           return classification && currentAttemptCommittedCronMedia() ? undefined : classification;
         },
-        isSuccessfulResult: (result) => {
+        isSuccessfulResult: (runResult) => {
           // Safety net: when the model.completed result carries clear evidence
           // of a successful output, short-circuit the fallback chain even if
           // the classifier heuristics conservatively flag it. This prevents
           // redundant model invocations on false-positive classifications
           // (see #108262).
-          if (result.didSendViaMessagingTool || result.didDeliverSourceReplyViaMessageTool) {
+          if (runResult.didSendViaMessagingTool || runResult.didDeliverSourceReplyViaMessageTool) {
             return true;
           }
           if (
-            typeof result.meta.finalAssistantVisibleText === "string" &&
-            result.meta.finalAssistantVisibleText.trim().length > 0
+            typeof runResult.meta.finalAssistantVisibleText === "string" &&
+            runResult.meta.finalAssistantVisibleText.trim().length > 0
           ) {
             return true;
           }
-          const payloads = result.payloads ?? [];
+          const payloads = runResult.payloads ?? [];
           return payloads.some(
             (payload) =>
               !payload.isError &&
