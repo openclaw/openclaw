@@ -7524,6 +7524,21 @@
       "translated": "OpenClaw prépare une réponse."
     },
     {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "Réduire la liste de contrôle du plan"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "Développer la liste de contrôle du plan"
+    },
+    {
       "id": "native.android.f3806d79e43f568f",
       "source": "Dismiss shared-image warning",
       "translated": "Ignorer l'avertissement d'image partagée"
@@ -22522,6 +22537,16 @@
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "Exécution des outils…"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "Réduire le plan"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "Développer le plan"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
