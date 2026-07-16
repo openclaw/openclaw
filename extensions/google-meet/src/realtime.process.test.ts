@@ -32,6 +32,24 @@ function writeBridgeCommand(): string {
   return scriptPath;
 }
 
+function writeSigtermResistantBridgeCommand(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-bridge-resistant-"));
+  tempDirs.push(dir);
+  const scriptPath = path.join(dir, "bridge-command.mjs");
+  writeFileSync(
+    scriptPath,
+    [
+      "process.on('SIGTERM', () => {});",
+      "setTimeout(() => process.stderr.write('ready\\n'), 100);",
+      "process.stdin.resume();",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return scriptPath;
+}
+
 function makeRecordingSpawn(): NonNullable<
   Parameters<typeof startCommandAgentAudioBridge>[0]["spawn"]
 > {
@@ -128,6 +146,62 @@ describe("startCommandAgentAudioBridge real process stream errors", () => {
         inputProcess.pid ?? "unknown"
       } outputPid=${outputProcess.pid ?? "unknown"}`,
     );
+  });
+
+  it("waits for SIGTERM-resistant bridge processes to exit before stop resolves", async () => {
+    const bridgeScript = writeSigtermResistantBridgeCommand();
+    const sttSession = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeTranscriptionProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      defaultModel: "gpt-4o-transcribe",
+      autoSelectOrder: 1,
+      resolveConfig: ({ rawConfig }) => rawConfig,
+      isConfigured: () => true,
+      createSession: () => sttSession,
+    };
+    const handle = await startCommandAgentAudioBridge({
+      config: resolveGoogleMeetConfig({
+        chrome: { audioFormat: "pcm16-24khz" },
+        realtime: { provider: "openai", agentId: "jay", introMessage: "" },
+      }),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      meetingSessionId: "meet-resistant",
+      inputCommand: [process.execPath, bridgeScript, "capture"],
+      outputCommand: [process.execPath, bridgeScript, "play"],
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() } as never,
+      providers: [provider],
+      spawn: makeRecordingSpawn(),
+    });
+    const [outputProcess, inputProcess] = spawnedChildren;
+    if (!inputProcess || !outputProcess) {
+      throw new Error("Expected Google Meet bridge to spawn input and output child processes");
+    }
+    const inputKillSpy = vi.spyOn(inputProcess, "kill");
+    const outputKillSpy = vi.spyOn(outputProcess, "kill");
+    await Promise.all([once(inputProcess.stderr!, "data"), once(outputProcess.stderr!, "data")]);
+
+    const startedAt = Date.now();
+    const firstStop = handle.stop();
+    const secondStop = handle.stop();
+    expect(secondStop).toBe(firstStop);
+    await firstStop;
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(inputProcess.signalCode).toBe("SIGKILL");
+    expect(outputProcess.signalCode).toBe("SIGKILL");
+    expect(inputKillSpy.mock.calls.filter(([signal]) => signal === "SIGTERM")).toHaveLength(1);
+    expect(outputKillSpy.mock.calls.filter(([signal]) => signal === "SIGTERM")).toHaveLength(1);
+    expect(inputKillSpy.mock.calls.filter(([signal]) => signal === "SIGKILL")).toHaveLength(1);
+    expect(outputKillSpy.mock.calls.filter(([signal]) => signal === "SIGKILL")).toHaveLength(1);
+    expect(elapsedMs).toBeGreaterThanOrEqual(900);
+    expect(elapsedMs).toBeLessThan(5_000);
   });
 });
 

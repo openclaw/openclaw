@@ -1,6 +1,5 @@
 // Google Meet plugin module implements realtime behavior.
-import { spawn } from "node:child_process";
-import type { Writable } from "node:stream";
+import { spawn, type ChildProcess } from "node:child_process";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -46,62 +45,17 @@ import {
   handleGoogleMeetRealtimeConsultToolCall,
   resolveGoogleMeetRealtimeTools,
 } from "./agent-consult.js";
+import { terminateGoogleMeetBridgeProcess } from "./bridge-process.js";
 import type { GoogleMeetConfig } from "./config.js";
 import type { GoogleMeetChromeHealth } from "./transports/types.js";
 
-type BridgeProcess = {
-  pid?: number;
-  killed?: boolean;
-  stdin?: Writable | null;
-  stdout?: {
-    on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
-    on(event: "error", listener: (error: Error) => void): unknown;
-  } | null;
-  stderr?: {
-    on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
-    on(event: "error", listener: (error: Error) => void): unknown;
-  } | null;
-  kill(signal?: NodeJS.Signals): boolean;
-  on(
-    event: "exit",
-    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
-  ): unknown;
-  on(event: "error", listener: (error: Error) => void): unknown;
-};
+const LOCAL_BRIDGE_TERMINATION_GRACE_MS = 1_000;
 
 type SpawnFn = (
   command: string,
   args: string[],
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
-) => BridgeProcess;
-
-function terminateBridgeProcess(proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM"): void {
-  if (proc.killed && signal !== "SIGKILL") {
-    return;
-  }
-  let exited = false;
-  proc.on("exit", () => {
-    exited = true;
-  });
-  try {
-    proc.kill(signal);
-  } catch {
-    return;
-  }
-  if (signal === "SIGKILL") {
-    return;
-  }
-  const timer = setTimeout(() => {
-    if (!exited) {
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        // Process may have exited after the grace check.
-      }
-    }
-  }, 1000);
-  timer.unref?.();
-}
+) => ChildProcess;
 
 export type ChromeRealtimeAudioBridgeHandle = {
   providerId: string;
@@ -519,8 +473,7 @@ export async function startCommandAgentAudioBridge(params: {
   const input = splitCommand(params.inputCommand);
   const output = splitCommand(params.outputCommand);
   const spawnFn: SpawnFn =
-    params.spawn ??
-    ((command, args, options) => spawn(command, args, options) as unknown as BridgeProcess);
+    params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const outputProcess = spawnFn(output.command, output.args, {
     stdio: ["pipe", "ignore", "pipe"],
   });
@@ -528,6 +481,7 @@ export async function startCommandAgentAudioBridge(params: {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stopped = false;
+  let stopPromise: Promise<void> | undefined;
   let sttSession: RealtimeTranscriptionSession | null = null;
   let realtimeReady = false;
   let lastInputAt: string | undefined;
@@ -584,26 +538,32 @@ export async function startCommandAgentAudioBridge(params: {
     }),
   );
 
-  const stop = async () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    agentTalkback?.close();
-    try {
-      sttSession?.close();
-    } catch (error) {
-      params.logger.debug?.(
-        `[google-meet] agent transcription bridge close ignored: ${formatErrorMessage(error)}`,
-      );
-    }
-    emitTalkEvent({
-      type: "session.closed",
-      final: true,
-      payload: { meetingSessionId: params.meetingSessionId },
-    });
-    terminateBridgeProcess(inputProcess);
-    terminateBridgeProcess(outputProcess);
+  const stop = () => {
+    stopPromise ??= (async () => {
+      stopped = true;
+      agentTalkback?.close();
+      try {
+        sttSession?.close();
+      } catch (error) {
+        params.logger.debug?.(
+          `[google-meet] agent transcription bridge close ignored: ${formatErrorMessage(error)}`,
+        );
+      }
+      emitTalkEvent({
+        type: "session.closed",
+        final: true,
+        payload: { meetingSessionId: params.meetingSessionId },
+      });
+      await Promise.all([
+        terminateGoogleMeetBridgeProcess(inputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateGoogleMeetBridgeProcess(outputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+      ]);
+    })();
+    return stopPromise;
   };
 
   const fail = (label: string) => (error: Error) => {
@@ -848,8 +808,7 @@ export async function startCommandRealtimeAudioBridge(params: {
   const input = splitCommand(params.inputCommand);
   const output = splitCommand(params.outputCommand);
   const spawnFn: SpawnFn =
-    params.spawn ??
-    ((command, args, options) => spawn(command, args, options) as unknown as BridgeProcess);
+    params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const spawnOutputProcess = () =>
     spawnFn(output.command, output.args, {
       stdio: ["pipe", "ignore", "pipe"],
@@ -859,6 +818,7 @@ export async function startCommandRealtimeAudioBridge(params: {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stopped = false;
+  let stopPromise: Promise<void> | undefined;
   let bridge: RealtimeVoiceBridgeSession | null = null;
   let realtimeReady = false;
   let lastInputAt: string | undefined;
@@ -871,7 +831,8 @@ export async function startCommandRealtimeAudioBridge(params: {
   let lastSuppressedInputAt: string | undefined;
   let suppressInputUntil = 0;
   let lastOutputPlayableUntilMs = 0;
-  let bargeInInputProcess: BridgeProcess | undefined;
+  let bargeInInputProcess: ChildProcess | undefined;
+  const retiredOutputStops = new Set<Promise<void>>();
 
   const suppressInputForOutput = (audio: Buffer) => {
     const suppression = recordGoogleMeetOutputActivity({
@@ -886,31 +847,38 @@ export async function startCommandRealtimeAudioBridge(params: {
     lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
   };
 
-  const stop = async () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    agentTalkback?.close();
-    try {
-      bridge?.close();
-    } catch (error) {
-      params.logger.debug?.(
-        `[google-meet] realtime voice bridge close ignored: ${formatErrorMessage(error)}`,
-      );
-    }
-    terminateBridgeProcess(inputProcess);
-    terminateBridgeProcess(outputProcess);
-    if (bargeInInputProcess) {
-      terminateBridgeProcess(bargeInInputProcess);
-    }
+  const stop = () => {
+    stopPromise ??= (async () => {
+      stopped = true;
+      agentTalkback?.close();
+      try {
+        bridge?.close();
+      } catch (error) {
+        params.logger.debug?.(
+          `[google-meet] realtime voice bridge close ignored: ${formatErrorMessage(error)}`,
+        );
+      }
+      await Promise.all([
+        terminateGoogleMeetBridgeProcess(inputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateGoogleMeetBridgeProcess(outputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        terminateGoogleMeetBridgeProcess(bargeInInputProcess, {
+          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+        }),
+        ...retiredOutputStops,
+      ]);
+    })();
+    return stopPromise;
   };
 
   const fail = (label: string) => (error: Error) => {
     params.logger.warn(`[google-meet] ${label} failed: ${formatErrorMessage(error)}`);
     void stop();
   };
-  const attachOutputProcessHandlers = (proc: BridgeProcess) => {
+  const attachOutputProcessHandlers = (proc: ChildProcess) => {
     proc.on("error", (error) => {
       if (proc !== outputProcess) {
         return;
@@ -958,7 +926,14 @@ export async function startCommandRealtimeAudioBridge(params: {
     params.logger.debug?.(
       `[google-meet] cleared realtime audio output buffer by restarting playback command`,
     );
-    terminateBridgeProcess(previousOutput, "SIGKILL");
+    const retiredOutputStop = terminateGoogleMeetBridgeProcess(previousOutput, {
+      graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+      initialSignal: "SIGKILL",
+    });
+    retiredOutputStops.add(retiredOutputStop);
+    void retiredOutputStop.finally(() => {
+      retiredOutputStops.delete(retiredOutputStop);
+    });
   };
   const writeOutputAudio = (audio: Buffer) => {
     try {

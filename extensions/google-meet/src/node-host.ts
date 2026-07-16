@@ -2,6 +2,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { terminateGoogleMeetBridgeProcess } from "./bridge-process.js";
 import {
   DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
   DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
@@ -30,9 +31,12 @@ type NodeBridgeSession = {
   lastOutputBytes: number;
   closedAt?: string;
   clearCount: number;
+  stopPromise?: Promise<void>;
+  retiredOutputStops: Set<Promise<void>>;
 };
 
 const sessions = new Map<string, NodeBridgeSession>();
+const NODE_BRIDGE_TERMINATION_GRACE_MS = 2_000;
 
 function readStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
@@ -107,23 +111,41 @@ function wake(session: NodeBridgeSession) {
   }
 }
 
-function stopSession(session: NodeBridgeSession) {
+function retireOutputProcess(session: NodeBridgeSession, outputProcess: ChildProcess | undefined) {
+  const stopPromise = terminateGoogleMeetBridgeProcess(outputProcess, {
+    graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
+  });
+  session.retiredOutputStops.add(stopPromise);
+  void stopPromise.finally(() => {
+    session.retiredOutputStops.delete(stopPromise);
+  });
+}
+
+function stopSession(session: NodeBridgeSession): Promise<void> {
   // Process and stream errors can arrive together during teardown. Close once
-  // so the same children do not get duplicate termination timers.
-  if (session.closed) {
-    return;
+  // so every caller shares the same bounded process-termination promise.
+  if (session.stopPromise) {
+    return session.stopPromise;
   }
   session.closed = true;
   session.closedAt = new Date().toISOString();
-  terminateChild(session.input);
-  terminateChild(session.output);
   wake(session);
+  session.stopPromise = Promise.all([
+    terminateGoogleMeetBridgeProcess(session.input, {
+      graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
+    }),
+    terminateGoogleMeetBridgeProcess(session.output, {
+      graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
+    }),
+    ...session.retiredOutputStops,
+  ]).then(() => undefined);
+  return session.stopPromise;
 }
 
 function attachOutputProcessHandlers(session: NodeBridgeSession, outputProcess: ChildProcess) {
   const stopIfCurrent = () => {
     if (session.output === outputProcess) {
-      stopSession(session);
+      void stopSession(session);
     }
   };
   outputProcess.on("exit", stopIfCurrent);
@@ -158,6 +180,7 @@ function startCommandPair(params: {
     lastInputBytes: 0,
     lastOutputBytes: 0,
     clearCount: 0,
+    retiredOutputStops: new Set(),
   };
   const outputProcess = startOutputProcess(output);
   const inputProcess = spawn(input.command, input.args, {
@@ -175,7 +198,9 @@ function startCommandPair(params: {
     }
     wake(session);
   });
-  const stop = () => stopSession(session);
+  const stop = () => {
+    void stopSession(session);
+  };
   inputProcess.on("exit", stop);
   inputProcess.on("error", stop);
   inputProcess.stdout?.on("error", stop);
@@ -183,32 +208,6 @@ function startCommandPair(params: {
   attachOutputProcessHandlers(session, outputProcess);
   sessions.set(session.id, session);
   return session;
-}
-
-function terminateChild(child?: ChildProcess) {
-  if (!child) {
-    return;
-  }
-  let exited = child.exitCode !== null || child.signalCode !== null;
-  child.once?.("exit", () => {
-    exited = true;
-  });
-  try {
-    child.kill("SIGTERM");
-  } catch {
-    // Best-effort cleanup for node-host child processes.
-  }
-  const timer = setTimeout(() => {
-    if (exited) {
-      return;
-    }
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      // Process may have exited after the grace check.
-    }
-  }, 2_000);
-  timer.unref?.();
 }
 
 async function pullAudio(params: Record<string, unknown>) {
@@ -253,7 +252,7 @@ function pushAudio(params: Record<string, unknown>) {
   try {
     session.output?.stdin?.write(audio);
   } catch {
-    stopSession(session);
+    void stopSession(session);
     throw new Error(`bridge is not open: ${bridgeId}`);
   }
   return { bridgeId, ok: true };
@@ -274,7 +273,7 @@ function clearAudio(params: Record<string, unknown>) {
   attachOutputProcessHandlers(session, outputProcess);
   session.clearCount += 1;
   session.lastClearAt = new Date().toISOString();
-  terminateChild(previousOutput);
+  retireOutputProcess(session, previousOutput);
   return { bridgeId, ok: true, clearCount: session.clearCount };
 }
 
@@ -339,7 +338,7 @@ function startChrome(params: Record<string, unknown>) {
       if (bridgeId) {
         const session = sessions.get(bridgeId);
         if (session) {
-          stopSession(session);
+          void stopSession(session);
         }
       }
       throw new Error(
@@ -430,7 +429,7 @@ function listSessions(params: Record<string, unknown>) {
   return { bridges };
 }
 
-function stopSessionsByUrl(params: Record<string, unknown>) {
+async function stopSessionsByUrl(params: Record<string, unknown>) {
   const urlKey = normalizeMeetKey(readString(params.url));
   if (!urlKey) {
     throw new Error("url required");
@@ -438,6 +437,11 @@ function stopSessionsByUrl(params: Record<string, unknown>) {
   const mode = readString(params.mode);
   const exceptBridgeId = readString(params.exceptBridgeId);
   let stopped = 0;
+  const stopping: Array<{
+    bridgeId: string;
+    session: NodeBridgeSession;
+    stopPromise: Promise<void>;
+  }> = [];
   for (const [bridgeId, session] of sessions) {
     if (exceptBridgeId && bridgeId === exceptBridgeId) {
       continue;
@@ -449,16 +453,21 @@ function stopSessionsByUrl(params: Record<string, unknown>) {
       continue;
     }
     const wasClosed = session.closed;
-    stopSession(session);
-    sessions.delete(bridgeId);
+    stopping.push({ bridgeId, session, stopPromise: stopSession(session) });
     if (!wasClosed) {
       stopped += 1;
+    }
+  }
+  await Promise.all(stopping.map(({ stopPromise }) => stopPromise));
+  for (const { bridgeId, session } of stopping) {
+    if (sessions.get(bridgeId) === session) {
+      sessions.delete(bridgeId);
     }
   }
   return { ok: true, stopped };
 }
 
-function stopChrome(params: Record<string, unknown>) {
+async function stopChrome(params: Record<string, unknown>) {
   const bridgeId = readString(params.bridgeId);
   if (!bridgeId) {
     return { ok: true, stopped: false };
@@ -467,7 +476,7 @@ function stopChrome(params: Record<string, unknown>) {
   if (!session) {
     return { ok: true, stopped: false };
   }
-  stopSession(session);
+  await stopSession(session);
   sessions.delete(bridgeId);
   return { ok: true, stopped: true };
 }
@@ -499,7 +508,7 @@ export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null
       result = listSessions(params);
       break;
     case "stopByUrl":
-      result = stopSessionsByUrl(params);
+      result = await stopSessionsByUrl(params);
       break;
     case "pullAudio":
       result = await pullAudio(params);
@@ -511,7 +520,7 @@ export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null
       result = clearAudio(params);
       break;
     case "stop":
-      result = stopChrome(params);
+      result = await stopChrome(params);
       break;
     default:
       throw new Error("unsupported googlemeet.chrome action");

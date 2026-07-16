@@ -622,6 +622,7 @@ type TestBridgeProcess = {
   stdout?: PassThrough | null;
   stderr: PassThrough;
   killed: boolean;
+  signalCode: NodeJS.Signals | null;
   kill: ReturnType<typeof vi.fn>;
   on: EventEmitter["on"];
   emit: EventEmitter["emit"];
@@ -6669,8 +6670,10 @@ describe("google-meet plugin", () => {
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
       proc.killed = false;
-      proc.kill = vi.fn(() => {
+      proc.signalCode = null;
+      proc.kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
         proc.killed = true;
+        proc.signalCode = signal;
         return true;
       });
       return proc;
@@ -6799,8 +6802,10 @@ describe("google-meet plugin", () => {
       proc.stdout = stdio.stdout;
       proc.stderr = stdio.stderr;
       proc.killed = false;
-      proc.kill = vi.fn(() => {
+      proc.signalCode = null;
+      proc.kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
         proc.killed = true;
+        proc.signalCode = signal;
         return true;
       });
       return proc;
@@ -6915,8 +6920,10 @@ describe("google-meet plugin", () => {
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
       proc.killed = false;
-      proc.kill = vi.fn(() => {
+      proc.signalCode = null;
+      proc.kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
         proc.killed = true;
+        proc.signalCode = signal;
         return true;
       });
       return proc;
@@ -6936,6 +6943,7 @@ describe("google-meet plugin", () => {
     const inputProcess = makeProcess({ stdout: inputStdout, stdin: null });
     const outputProcess = makeProcess({ stdin: outputStdin, stdout: null });
     const replacementOutputProcess = makeProcess({ stdin: replacementOutputStdin, stdout: null });
+    outputProcess.kill.mockImplementation(() => true);
     const spawnMock = vi
       .fn()
       .mockReturnValueOnce(outputProcess)
@@ -7101,7 +7109,17 @@ describe("google-meet plugin", () => {
     ]);
     expect(sessionStore).toHaveProperty("agent:jay:subagent:google-meet:meet-1");
 
-    await handle.stop();
+    let stopSettled = false;
+    const stopPromise = handle.stop().finally(() => {
+      stopSettled = true;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(stopSettled).toBe(false);
+    outputProcess.signalCode = "SIGKILL";
+    outputProcess.emit("exit", null, "SIGKILL");
+    await stopPromise;
     expect(bridge.close).toHaveBeenCalled();
     expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
     expect(replacementOutputProcess.kill).toHaveBeenCalledWith("SIGTERM");
@@ -7137,8 +7155,10 @@ describe("google-meet plugin", () => {
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
       proc.killed = false;
-      proc.kill = vi.fn(() => {
+      proc.signalCode = null;
+      proc.kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
         proc.killed = true;
+        proc.signalCode = signal;
         return true;
       });
       return proc;
@@ -7216,8 +7236,10 @@ describe("google-meet plugin", () => {
         proc.stdout = stdio.stdout;
         proc.stderr = new PassThrough();
         proc.killed = false;
-        proc.kill = vi.fn(() => {
+        proc.signalCode = null;
+        proc.kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
           proc.killed = true;
+          proc.signalCode = signal;
           return true;
         });
         return proc;
@@ -7417,8 +7439,10 @@ describe("google-meet plugin", () => {
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
       proc.killed = false;
-      proc.kill = vi.fn(() => {
+      proc.signalCode = null;
+      proc.kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
         proc.killed = true;
+        proc.signalCode = signal;
         return true;
       });
       return proc;

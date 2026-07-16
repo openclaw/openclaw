@@ -175,6 +175,7 @@ export async function startNodeAgentAudioBridge(params: {
   providers?: RealtimeTranscriptionProviderPlugin[];
 }): Promise<ChromeNodeRealtimeAudioBridgeHandle> {
   let stopped = false;
+  let stopPromise: Promise<void> | undefined;
   let sttSession: RealtimeTranscriptionSession | null = null;
   let realtimeReady = false;
   let lastOutputAt: string | undefined;
@@ -196,31 +197,31 @@ export async function startNodeAgentAudioBridge(params: {
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   let ttsQueue = Promise.resolve();
 
-  const stop = async () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    agentTalkback?.close();
-    try {
-      sttSession?.close();
-    } catch (error) {
-      params.logger.debug?.(
-        `[google-meet] node agent transcription bridge close ignored: ${formatErrorMessage(error)}`,
-      );
-    }
-    try {
-      await params.runtime.nodes.invoke({
-        nodeId: params.nodeId,
-        command: "googlemeet.chrome",
-        params: { action: "stop", bridgeId: params.bridgeId },
-        timeoutMs: 5_000,
-      });
-    } catch (error) {
-      params.logger.debug?.(
-        `[google-meet] node audio bridge stop ignored: ${formatErrorMessage(error)}`,
-      );
-    }
+  const stop = () => {
+    stopPromise ??= (async () => {
+      stopped = true;
+      agentTalkback?.close();
+      try {
+        sttSession?.close();
+      } catch (error) {
+        params.logger.debug?.(
+          `[google-meet] node agent transcription bridge close ignored: ${formatErrorMessage(error)}`,
+        );
+      }
+      try {
+        await params.runtime.nodes.invoke({
+          nodeId: params.nodeId,
+          command: "googlemeet.chrome",
+          params: { action: "stop", bridgeId: params.bridgeId },
+          timeoutMs: 5_000,
+        });
+      } catch (error) {
+        params.logger.debug?.(
+          `[google-meet] node audio bridge stop ignored: ${formatErrorMessage(error)}`,
+        );
+      }
+    })();
+    return stopPromise;
   };
 
   const pushOutputAudio = async (audio: Buffer) => {
@@ -382,6 +383,7 @@ export async function startNodeRealtimeAudioBridge(params: {
   providers?: RealtimeVoiceProviderPlugin[];
 }): Promise<ChromeNodeRealtimeAudioBridgeHandle> {
   let stopped = false;
+  let stopPromise: Promise<void> | undefined;
   let bridge: RealtimeVoiceBridgeSession | null = null;
   let realtimeReady = false;
   let lastOutputAt: string | undefined;
@@ -482,31 +484,31 @@ export async function startNodeRealtimeAudioBridge(params: {
       },
     });
 
-  const stop = async () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    agentTalkback?.close();
-    try {
-      bridge?.close();
-    } catch (error) {
-      params.logger.debug?.(
-        `[google-meet] node realtime bridge close ignored: ${formatErrorMessage(error)}`,
-      );
-    }
-    try {
-      await params.runtime.nodes.invoke({
-        nodeId: params.nodeId,
-        command: "googlemeet.chrome",
-        params: { action: "stop", bridgeId: params.bridgeId },
-        timeoutMs: 5_000,
-      });
-    } catch (error) {
-      params.logger.debug?.(
-        `[google-meet] node audio bridge stop ignored: ${formatErrorMessage(error)}`,
-      );
-    }
+  const stop = () => {
+    stopPromise ??= (async () => {
+      stopped = true;
+      agentTalkback?.close();
+      try {
+        bridge?.close();
+      } catch (error) {
+        params.logger.debug?.(
+          `[google-meet] node realtime bridge close ignored: ${formatErrorMessage(error)}`,
+        );
+      }
+      try {
+        await params.runtime.nodes.invoke({
+          nodeId: params.nodeId,
+          command: "googlemeet.chrome",
+          params: { action: "stop", bridgeId: params.bridgeId },
+          timeoutMs: 5_000,
+        });
+      } catch (error) {
+        params.logger.debug?.(
+          `[google-meet] node audio bridge stop ignored: ${formatErrorMessage(error)}`,
+        );
+      }
+    })();
+    return stopPromise;
   };
 
   bridge = createRealtimeVoiceBridgeSession({
