@@ -167,6 +167,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     }),
   );
   const refresh = vi.fn(() => Promise.resolve());
+  const refreshReplacement = vi.fn(() => Promise.resolve());
   const sessions = {
     get state() {
       return state;
@@ -188,6 +189,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     delete: deleteSession,
     deleteMany,
     refresh,
+    refreshReplacement,
   } as unknown as SessionCapability;
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -205,6 +207,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     deleteSession,
     deleteMany,
     refresh,
+    refreshReplacement,
     publish,
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;
@@ -2127,6 +2130,65 @@ describe("AppSidebar session source lifecycle", () => {
   });
 });
 
+describe("AppSidebar session accessibility", () => {
+  it("exposes a derived title through native list and link semantics", async () => {
+    const key = "agent:main:dashboard:opaque-id";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", [key]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    sidebar.sessionKey = key;
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key,
+            kind: "direct",
+            label: key,
+            displayName: key,
+            derivedTitle: "Quarterly launch plan",
+            updatedAt: Date.now(),
+            unread: true,
+          },
+        ],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    const list = sidebar.querySelector('[data-session-section="ungrouped"] [role="list"]');
+    const row = sidebar.querySelector(`[data-session-key="${key}"]`);
+    const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
+    expect(list?.getAttribute("aria-label")).toBe("Chats");
+    expect(row?.getAttribute("role")).toBe("listitem");
+    expect(row?.hasAttribute("aria-label")).toBe(false);
+    expect(link?.hasAttribute("aria-label")).toBe(false);
+    expect(link?.getAttribute("aria-current")).toBe("page");
+    expect(link?.firstElementChild?.classList.contains("sidebar-recent-session__text")).toBe(true);
+    expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
+      "Quarterly launch plan",
+    );
+    const descriptionId = link?.getAttribute("aria-describedby");
+    expect(descriptionId).toBeTruthy();
+    expect(descriptionId ? document.getElementById(descriptionId)?.textContent : "").toBe("now");
+  });
+
+  it("keeps the empty-chat fallback as a current link inside a list item", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", []));
+    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+    await sidebar.updateComplete;
+
+    const fallback = sidebar.querySelector(".sidebar-recent-session--active");
+    expect(fallback?.getAttribute("role")).toBe("listitem");
+    expect(fallback?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+  });
+});
+
 describe("AppSidebar session mutation feedback", () => {
   async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
     const gateway = createGatewayHarness(client);
@@ -2207,9 +2269,7 @@ describe("AppSidebar session mutation feedback", () => {
       { key: "agent:main:a", agentId: "main" },
       { timeoutMs: 10 * 60_000 },
     );
-    await vi.waitFor(() =>
-      expect(harness.refresh).toHaveBeenCalledWith({ agentId: "main", force: true }),
-    );
+    await vi.waitFor(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
   });
 
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
@@ -2927,6 +2987,9 @@ describe("AppSidebar catalog session rows", () => {
       expect(active[0]?.getAttribute("data-session-key")).toBe(
         "catalog:codex:gateway%3Alocal:thread-1",
       );
+      expect(active[0]?.getAttribute("role")).toBe("listitem");
+      expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");
+      expect(active[0]?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
       // The raw catalog key must not surface as a synthesized chat row.
       const chatRows = [
         ...sidebar.querySelectorAll(

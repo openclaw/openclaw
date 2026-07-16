@@ -2631,6 +2631,30 @@ describe("google transport stream", () => {
     });
   });
 
+  it("does not emit inline data or media placeholders for payload-less tool images", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash", input: ["text", "image"] }),
+      {
+        messages: [
+          googleToolCallAssistantTurn(),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as never,
+    );
+
+    const serialized = JSON.stringify(params.contents);
+    expect(serialized).toContain('"output":""');
+    expect(serialized).not.toContain("inlineData");
+    expect(serialized).not.toContain("see attached image");
+  });
+
   it.each([
     ["bare Gemini 2.5 image first", "gemini-2.5-flash", ["screenshot", "weather"]],
     ["bare Gemini 2.5 image last", "gemini-2.5-flash", ["weather", "screenshot"]],

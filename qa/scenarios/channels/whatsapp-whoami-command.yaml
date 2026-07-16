@@ -17,7 +17,6 @@ scenario:
     profiles: { "whatsapp:mock-default": 35 }
     kind: flow
     channel: whatsapp
-    driver: live
     config:
       requiredProviderMode: mock-openai
       expectedAny: [Identity, "Channel: whatsapp", "AllowFrom:"]

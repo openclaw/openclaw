@@ -31,11 +31,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import {
-  createInjectedClientDiscoverySdk,
-  loadBedrockDiscoverySdk,
-  sendBedrockDiscoveryCommand,
-  type BedrockDiscoverySdk,
-} from "./discovery-sdk.js";
+  loadBedrockControlPlaneSdk,
+  runBedrockControlPlaneRequest,
+  type BedrockControlPlaneSdk,
+} from "./control-plane.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { resolveBedrockNativeThinkingLevelMap } from "./thinking-policy.js";
 
@@ -393,17 +392,17 @@ function resolveBaseModelId(profile: InferenceProfileSummary): string | undefine
  */
 async function fetchInferenceProfileSummaries(
   client: BedrockClient,
-  createListInferenceProfilesCommand: BedrockDiscoverySdk["createListInferenceProfilesCommand"],
+  createListInferenceProfilesCommand: BedrockControlPlaneSdk["createListInferenceProfilesCommand"],
 ): Promise<InferenceProfileSummary[]> {
   try {
     const profiles: InferenceProfileSummary[] = [];
     let nextToken: string | undefined;
     do {
-      const response = await sendBedrockDiscoveryCommand<ListInferenceProfilesCommandOutput>(
-        client,
-        createListInferenceProfilesCommand({ nextToken }) as never,
-        "Bedrock ListInferenceProfiles",
-      );
+      const command = createListInferenceProfilesCommand({ nextToken });
+      const response = await runBedrockControlPlaneRequest({
+        operation: "Bedrock ListInferenceProfiles",
+        send: (options) => client.send(command, options),
+      });
       for (const summary of response.inferenceProfileSummaries ?? []) {
         profiles.push(summary);
       }
@@ -548,9 +547,7 @@ export async function discoverBedrockModels(params: {
     }
   }
 
-  const sdk = params.clientFactory
-    ? createInjectedClientDiscoverySdk()
-    : await loadBedrockDiscoverySdk();
+  const sdk = await loadBedrockControlPlaneSdk();
   const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
   if (!params.clientFactory) {
     await refreshAwsSharedConfigCacheForBedrock();
@@ -558,66 +555,71 @@ export async function discoverBedrockModels(params: {
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
-    // Discover foundation models and inference profiles in parallel.
-    // Both API calls are independent, but we need the foundation model data
-    // to resolve inference profile capabilities — so we fetch in parallel,
-    // then build the lookup map before processing profiles.
-    const [foundationResponse, profileSummaries] = await Promise.all([
-      sendBedrockDiscoveryCommand<ListFoundationModelsCommandOutput>(
-        client,
-        sdk.createListFoundationModelsCommand() as never,
-        "Bedrock ListFoundationModels",
-      ),
-      fetchInferenceProfileSummaries(client, (input) =>
-        sdk.createListInferenceProfilesCommand(input),
-      ),
-    ]);
+    try {
+      // Discover foundation models and inference profiles in parallel.
+      // Both API calls are independent, but we need the foundation model data
+      // to resolve inference profile capabilities — so we fetch in parallel,
+      // then build the lookup map before processing profiles.
+      const foundationCommand = sdk.createListFoundationModelsCommand();
+      const [foundationResponse, profileSummaries] = await Promise.all([
+        runBedrockControlPlaneRequest({
+          operation: "Bedrock ListFoundationModels",
+          send: (options) => client.send(foundationCommand, options),
+        }),
+        fetchInferenceProfileSummaries(client, (input) =>
+          sdk.createListInferenceProfilesCommand(input),
+        ),
+      ]);
 
-    const discovered: ModelDefinitionConfig[] = [];
-    const seenIds = new Set<string>();
-    const foundationModels = new Map<string, ModelDefinitionConfig>();
+      const discovered: ModelDefinitionConfig[] = [];
+      const seenIds = new Set<string>();
+      const foundationModels = new Map<string, ModelDefinitionConfig>();
 
-    // Foundation models first — build both the results list and the lookup map.
-    for (const summary of foundationResponse.modelSummaries ?? []) {
-      if (!shouldIncludeSummary(summary, providerFilter)) {
-        continue;
-      }
-      const def = toModelDefinition(summary, {
-        contextWindow: defaultContextWindow,
-        maxTokens: defaultMaxTokens,
-      });
-      discovered.push(def);
-      const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
-      seenIds.add(normalizedId);
-      foundationModels.set(normalizedId, def);
-    }
-
-    // Merge inference profiles — inherit capabilities from foundation models.
-    const inferenceProfiles = resolveInferenceProfiles(
-      profileSummaries,
-      { contextWindow: defaultContextWindow, maxTokens: defaultMaxTokens },
-      providerFilter,
-      foundationModels,
-    );
-    for (const profile of inferenceProfiles) {
-      const normalizedId = normalizeLowercaseStringOrEmpty(profile.id);
-      if (!seenIds.has(normalizedId)) {
-        discovered.push(profile);
+      // Foundation models first — build both the results list and the lookup map.
+      for (const summary of foundationResponse.modelSummaries ?? []) {
+        if (!shouldIncludeSummary(summary, providerFilter)) {
+          continue;
+        }
+        const def = toModelDefinition(summary, {
+          contextWindow: defaultContextWindow,
+          maxTokens: defaultMaxTokens,
+        });
+        discovered.push(def);
+        const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
         seenIds.add(normalizedId);
+        foundationModels.set(normalizedId, def);
       }
-    }
 
-    // Sort: global cross-region profiles first (recommended for most users —
-    // better capacity, automatic failover, no data sovereignty constraints),
-    // then remaining profiles/models alphabetically.
-    return discovered.toSorted((a, b) => {
-      const aGlobal = a.id.startsWith("global.") ? 0 : 1;
-      const bGlobal = b.id.startsWith("global.") ? 0 : 1;
-      if (aGlobal !== bGlobal) {
-        return aGlobal - bGlobal;
+      // Merge inference profiles — inherit capabilities from foundation models.
+      const inferenceProfiles = resolveInferenceProfiles(
+        profileSummaries,
+        { contextWindow: defaultContextWindow, maxTokens: defaultMaxTokens },
+        providerFilter,
+        foundationModels,
+      );
+      for (const profile of inferenceProfiles) {
+        const normalizedId = normalizeLowercaseStringOrEmpty(profile.id);
+        if (!seenIds.has(normalizedId)) {
+          discovered.push(profile);
+          seenIds.add(normalizedId);
+        }
       }
-      return a.name.localeCompare(b.name);
-    });
+
+      // Sort: global cross-region profiles first (recommended for most users —
+      // better capacity, automatic failover, no data sovereignty constraints),
+      // then remaining profiles/models alphabetically.
+      return discovered.toSorted((a, b) => {
+        const aGlobal = a.id.startsWith("global.") ? 0 : 1;
+        const bGlobal = b.id.startsWith("global.") ? 0 : 1;
+        if (aGlobal !== bGlobal) {
+          return aGlobal - bGlobal;
+        }
+        return a.name.localeCompare(b.name);
+      });
+    } finally {
+      // Discovery owns the short-lived control-plane client and its socket agents.
+      client.destroy();
+    }
   })();
 
   if (refreshIntervalSeconds > 0) {

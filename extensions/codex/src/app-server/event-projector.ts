@@ -430,6 +430,7 @@ export class CodexAppServerEventProjector {
     callId: string;
     tool: string;
     asyncStarted?: boolean;
+    terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;

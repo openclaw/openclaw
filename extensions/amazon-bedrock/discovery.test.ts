@@ -10,7 +10,8 @@ import {
 } from "./api.js";
 
 const sendMock = vi.fn();
-const clientFactory = () => ({ send: sendMock }) as unknown as BedrockClient;
+const destroyMock = vi.fn();
+const clientFactory = () => ({ send: sendMock, destroy: destroyMock }) as unknown as BedrockClient;
 
 const baseActiveAnthropicSummary = {
   modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -44,6 +45,7 @@ function expectModelFields(model: unknown, expected: Record<string, unknown>): v
 describe("bedrock discovery", () => {
   beforeEach(() => {
     sendMock.mockClear();
+    destroyMock.mockClear();
     resetBedrockDiscoveryCacheForTest();
   });
 
@@ -105,6 +107,7 @@ describe("bedrock discovery", () => {
       contextWindow: 200000,
       maxTokens: 4096,
     });
+    expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 
   it("applies provider filter", async () => {
@@ -486,6 +489,7 @@ describe("bedrock discovery", () => {
       expect(sendMock).toHaveBeenCalledTimes(2);
       expect(abortSignals).toHaveLength(2);
       expect(abortSignals.every((signal) => signal.aborted)).toBe(true);
+      expect(destroyMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
