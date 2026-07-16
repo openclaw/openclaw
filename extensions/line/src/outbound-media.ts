@@ -2,7 +2,7 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { LineChannelDataWithMedia } from "./types.js";
+import type { LineChannelData } from "./types.js";
 
 type LineOutboundMediaKind = "image" | "video" | "audio";
 
@@ -108,7 +108,7 @@ export async function resolveLineOutboundMedia(
   throw new Error("LINE outbound media currently requires a public HTTPS URL");
 }
 
-export function isLineUserTarget(target: string): boolean {
+function isLineUserTarget(target: string): boolean {
   const normalized = target
     .trim()
     .replace(/^line:(group|room|user):/i, "")
@@ -116,19 +116,19 @@ export function isLineUserTarget(target: string): boolean {
   return /^U/i.test(normalized);
 }
 
-export function hasLineSpecificMediaOptions(lineData: LineChannelDataWithMedia): boolean {
-  return Boolean(
-    lineData.mediaKind ??
-    lineData.previewImageUrl?.trim() ??
-    (typeof lineData.durationMs === "number" ? lineData.durationMs : undefined) ??
-    lineData.trackingId?.trim(),
+export function hasLineSpecificMediaOptions(lineData: LineChannelData): boolean {
+  return (
+    lineData.mediaKind !== undefined ||
+    Boolean(lineData.previewImageUrl?.trim()) ||
+    typeof lineData.durationMs === "number" ||
+    Boolean(lineData.trackingId?.trim())
   );
 }
 
-export function buildLineMediaMessageObject(
+function buildLineMediaMessageObject(
   resolved: LineOutboundMediaResolved,
   opts?: { allowTrackingId?: boolean },
-): Record<string, unknown> {
+): messagingApi.Message {
   switch (resolved.mediaKind) {
     case "video": {
       const previewImageUrl = resolved.previewImageUrl?.trim();
@@ -159,10 +159,9 @@ export function buildLineMediaMessageObject(
   }
 }
 
-// Reply-token delivery entry point: resolve the LINE media kind for a URL and
-// build the matching video/audio/image message, gating trackingId on user
-// targets — the same resolution the push path uses, in one call.
-export async function buildLineReplyMediaMessage(
+// Resolve and build through one leaf so reply-token and inline push delivery
+// cannot drift on media kind, preview, duration, or tracking-id policy.
+export async function buildLineMediaMessage(
   mediaUrl: string,
   opts: ResolveLineOutboundMediaOpts,
   target: string,
@@ -170,5 +169,5 @@ export async function buildLineReplyMediaMessage(
   const resolved = await resolveLineOutboundMedia(mediaUrl, opts);
   return buildLineMediaMessageObject(resolved, {
     allowTrackingId: isLineUserTarget(target),
-  }) as messagingApi.Message;
+  });
 }

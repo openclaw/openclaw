@@ -1,28 +1,11 @@
 // Line tests cover auto reply delivery plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
 type LineAutoReplyDeps = Parameters<typeof deliverLineAutoReply>[0]["deps"];
-
-// The LINE-specific media path runs the real resolveLineOutboundMedia, which
-// validates the URL through the SSRF guard. Stub the guard so the resolver
-// builds the video/audio/image message offline.
-const ssrfMock = vi.hoisted(() => ({ resolvePinnedHostnameWithPolicy: vi.fn() }));
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  resolvePinnedHostnameWithPolicy: ssrfMock.resolvePinnedHostnameWithPolicy,
-}));
-ssrfMock.resolvePinnedHostnameWithPolicy.mockResolvedValue({
-  hostname: "example.com",
-  addresses: ["93.184.216.34"],
-});
-
-afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-  vi.resetModules();
-});
 
 const createFlexMessage = (altText: string, contents: unknown) => ({
   type: "flex" as const,
@@ -66,6 +49,31 @@ describe("deliverLineAutoReply", () => {
       text,
     }));
     const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
+    const buildMediaMessage: LineAutoReplyDeps["buildMediaMessage"] = vi.fn(
+      async (mediaUrl, options) => {
+        switch (options.mediaKind) {
+          case "video":
+            if (!options.previewImageUrl) {
+              throw new Error(
+                "LINE video messages require previewImageUrl to reference an image URL",
+              );
+            }
+            return {
+              type: "video" as const,
+              originalContentUrl: mediaUrl,
+              previewImageUrl: options.previewImageUrl,
+            };
+          case "audio":
+            return {
+              type: "audio" as const,
+              originalContentUrl: mediaUrl,
+              duration: options.durationMs ?? 60_000,
+            };
+          default:
+            return createImageMessage(mediaUrl);
+        }
+      },
+    );
     const pushMessagesLine = vi.fn(async () => ({
       messageId: "push",
       chatId: "u1",
@@ -84,6 +92,7 @@ describe("deliverLineAutoReply", () => {
       pushMessagesLine,
       createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
       createImageMessage,
+      buildMediaMessage,
       createLocationMessage,
       ...overrides,
     };
@@ -95,6 +104,7 @@ describe("deliverLineAutoReply", () => {
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
       createQuickReplyItems,
+      buildMediaMessage,
       pushMessagesLine,
     };
   }
@@ -516,7 +526,7 @@ describe("deliverLineAutoReply", () => {
       mediaKind: "video" as const,
       previewImageUrl: "https://example.com/preview.jpg",
     };
-    const { deps, replyMessageLine } = createDeps({
+    const { deps, replyMessageLine, buildMediaMessage } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
     });
@@ -532,6 +542,11 @@ describe("deliverLineAutoReply", () => {
     });
 
     expect(result.status).toBe("delivered");
+    expect(buildMediaMessage).toHaveBeenCalledWith(
+      "https://example.com/clip.mp4",
+      expect.objectContaining(lineData),
+      "line:user:1",
+    );
     expect(replyMessageLine).toHaveBeenCalledWith(
       "token",
       [
@@ -550,7 +565,7 @@ describe("deliverLineAutoReply", () => {
     // LINE media options stays on the image route and does not attempt resolution.
     // A .mp4 proves it: if the generic path wrongly resolved by kind it would infer
     // "video" (missing preview → build failure), so an image bubble means image route.
-    const { deps, replyMessageLine } = createDeps({
+    const { deps, replyMessageLine, buildMediaMessage } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
     });
@@ -566,6 +581,7 @@ describe("deliverLineAutoReply", () => {
     });
 
     expect(result.status).toBe("delivered");
+    expect(buildMediaMessage).not.toHaveBeenCalled();
     expect(replyMessageLine).toHaveBeenCalledWith(
       "token",
       [createImageMessage("https://example.com/clip.mp4")],
@@ -600,5 +616,28 @@ describe("deliverLineAutoReply", () => {
       [{ type: "text", text: "here is your clip" }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
+  });
+
+  it("rejects a media-only build failure instead of reporting an empty delivery", async () => {
+    const lineData = { mediaKind: "video" as const };
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      chunkMarkdownText: () => [],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: {
+          mediaUrls: ["https://example.com/clip.mp4"],
+          channelData: { line: lineData },
+        },
+        lineData,
+        deps,
+      }),
+    ).rejects.toThrow(/require previewImageUrl/i);
+
+    expect(replyMessageLine).not.toHaveBeenCalled();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
   });
 });

@@ -7,14 +7,10 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
-import {
-  buildLineReplyMediaMessage,
-  hasLineSpecificMediaOptions,
-  type ResolveLineOutboundMediaOpts,
-} from "./outbound-media.js";
+import { hasLineSpecificMediaOptions } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
-import type { LineChannelDataWithMedia, LineTemplateMessagePayload } from "./types.js";
+import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 
 type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
@@ -34,6 +30,11 @@ type LineAutoReplyDeps = {
     originalContentUrl: string,
     previewImageUrl?: string,
   ) => messagingApi.ImageMessage;
+  buildMediaMessage: (
+    mediaUrl: string,
+    opts: Pick<LineChannelData, "mediaKind" | "previewImageUrl" | "durationMs" | "trackingId">,
+    target: string,
+  ) => Promise<messagingApi.Message>;
   createLocationMessage: (location: {
     title: string;
     address: string;
@@ -65,7 +66,7 @@ function markLineVisibleDeliveryError(error: unknown): Error {
 
 export async function deliverLineAutoReply(params: {
   payload: ReplyPayload;
-  lineData: LineChannelDataWithMedia;
+  lineData: LineChannelData;
   to: string;
   replyToken?: string | null;
   replyTokenUsed: boolean;
@@ -181,11 +182,11 @@ export async function deliverLineAutoReply(params: {
   // Match the push path (outbound.ts): honor channelData.line.mediaKind and the
   // other LINE media options so a reply-token video/audio is not silently
   // downgraded to an image. Generic media sends without LINE-specific options
-  // keep the image route. A media that cannot be built (e.g. a video missing its
-  // preview image) surfaces as a visible partial delivery instead of dropping.
+  // keep the image route. A media build failure is partial only after another
+  // visible part lands; media-only failures remain full failures.
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
   const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
-  const mediaOpts: ResolveLineOutboundMediaOpts = {
+  const mediaOpts = {
     mediaKind: lineData.mediaKind,
     previewImageUrl: lineData.previewImageUrl,
     durationMs: lineData.durationMs,
@@ -203,7 +204,7 @@ export async function deliverLineAutoReply(params: {
       continue;
     }
     try {
-      mediaMessages.push(await buildLineReplyMediaMessage(url, mediaOpts, to));
+      mediaMessages.push(await deps.buildMediaMessage(url, mediaOpts, to));
     } catch (err) {
       richMediaError ??= err;
     }
@@ -280,11 +281,15 @@ export async function deliverLineAutoReply(params: {
     }
   }
 
-  if (richMediaError !== undefined && visibleReplySent) {
-    // A rich/media bubble was lost — either it failed to build (e.g. a video
-    // missing its preview image) or failed to send. Other visible content still
-    // reached the user, so surface a partial delivery instead of retrying the
-    // text they already saw.
+  if (richMediaError !== undefined) {
+    if (!visibleReplySent) {
+      // No user-visible content landed, so this is a full delivery failure.
+      // Throwing lets the caller surface or replace it instead of recording a
+      // successful empty reply.
+      throw richMediaError;
+    }
+    // Other visible content landed; preserve that evidence so downstream
+    // recovery does not replay text the user already saw.
     return {
       status: "partial",
       replyTokenUsed,

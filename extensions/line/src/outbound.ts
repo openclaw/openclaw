@@ -14,15 +14,14 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import {
-  buildLineMediaMessageObject,
+  buildLineMediaMessage,
   hasLineSpecificMediaOptions,
-  isLineUserTarget,
   resolveLineOutboundMedia,
 } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import type { LineChannelDataWithMedia, LineSendResult } from "./types.js";
+import type { LineChannelData, LineSendResult } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
 
@@ -34,7 +33,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   sendPayload: async ({ to, payload, accountId, cfg, onDeliveryResult }) => {
     const runtime = getLineRuntime();
     const outboundRuntime = await loadLineOutboundRuntime();
-    const lineData = (payload.channelData?.line as LineChannelDataWithMedia | undefined) ?? {};
+    const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
     const lineRuntime = runtime.channel.line;
     const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
     const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
@@ -250,14 +249,17 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           });
           continue;
         }
-        const resolved = await resolveLineOutboundMedia(trimmed, {
-          mediaKind: lineData.mediaKind,
-          previewImageUrl: lineData.previewImageUrl,
-          durationMs: lineData.durationMs,
-          trackingId: lineData.trackingId,
-        });
         quickReplyMessages.push(
-          buildLineMediaMessageObject(resolved, { allowTrackingId: isLineUserTarget(to) }),
+          await buildLineMediaMessage(
+            trimmed,
+            {
+              mediaKind: lineData.mediaKind,
+              previewImageUrl: lineData.previewImageUrl,
+              durationMs: lineData.durationMs,
+              trackingId: lineData.trackingId,
+            },
+            to,
+          ),
         );
       }
       if (quickReplyMessages.length > 0 && quickReply) {

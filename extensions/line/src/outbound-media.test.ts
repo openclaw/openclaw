@@ -15,9 +15,8 @@ afterAll(() => {
 });
 
 import {
-  buildLineMediaMessageObject,
+  buildLineMediaMessage,
   hasLineSpecificMediaOptions,
-  isLineUserTarget,
   resolveLineOutboundMedia,
   validateLineMediaUrl,
 } from "./outbound-media.js";
@@ -184,86 +183,68 @@ describe("hasLineSpecificMediaOptions", () => {
   it("is true when any LINE media option is set", () => {
     expect(hasLineSpecificMediaOptions({ mediaKind: "video" })).toBe(true);
     expect(hasLineSpecificMediaOptions({ previewImageUrl: "https://x/p.jpg" })).toBe(true);
+    expect(hasLineSpecificMediaOptions({ durationMs: 0 })).toBe(true);
     expect(hasLineSpecificMediaOptions({ durationMs: 1000 })).toBe(true);
     expect(hasLineSpecificMediaOptions({ trackingId: "t" })).toBe(true);
   });
 });
 
-describe("isLineUserTarget", () => {
-  it("detects user targets across prefixes", () => {
-    expect(isLineUserTarget("Uabc")).toBe(true);
-    expect(isLineUserTarget("line:user:Uabc")).toBe(true);
-    expect(isLineUserTarget("line:Uabc")).toBe(true);
-    expect(isLineUserTarget("line:group:Cabc")).toBe(false);
-    expect(isLineUserTarget("Cabc")).toBe(false);
-  });
-});
-
-describe("buildLineMediaMessageObject", () => {
-  it("builds a video message and gates trackingId on user targets", () => {
-    expect(
-      buildLineMediaMessageObject(
-        {
-          mediaUrl: "https://example.com/clip.mp4",
-          mediaKind: "video",
-          previewImageUrl: "https://example.com/preview.jpg",
-          trackingId: "track-1",
-        },
-        { allowTrackingId: true },
-      ),
-    ).toEqual({
+describe("buildLineMediaMessage", () => {
+  it("builds a video message and gates trackingId on user targets", async () => {
+    const options = {
+      mediaKind: "video" as const,
+      previewImageUrl: "https://example.com/preview.jpg",
+      trackingId: "track-1",
+    };
+    await expect(
+      buildLineMediaMessage("https://example.com/clip.mp4", options, "line:user:Uabc"),
+    ).resolves.toEqual({
       type: "video",
       originalContentUrl: "https://example.com/clip.mp4",
       previewImageUrl: "https://example.com/preview.jpg",
       trackingId: "track-1",
     });
-
-    expect(
-      buildLineMediaMessageObject(
-        {
-          mediaUrl: "https://example.com/clip.mp4",
-          mediaKind: "video",
-          previewImageUrl: "https://example.com/preview.jpg",
-          trackingId: "track-1",
-        },
-        { allowTrackingId: false },
-      ),
-    ).toEqual({
+    await expect(
+      buildLineMediaMessage("https://example.com/clip.mp4", options, "line:group:Cabc"),
+    ).resolves.toEqual({
       type: "video",
       originalContentUrl: "https://example.com/clip.mp4",
       previewImageUrl: "https://example.com/preview.jpg",
     });
   });
 
-  it("throws when a video is missing its preview image", () => {
-    expect(() =>
-      buildLineMediaMessageObject({
-        mediaUrl: "https://example.com/clip.mp4",
-        mediaKind: "video",
-      }),
-    ).toThrow(/require previewImageUrl/i);
+  it("rejects a video missing its preview image", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/clip.mp4",
+        { mediaKind: "video" },
+        "line:user:Uabc",
+      ),
+    ).rejects.toThrow(/require previewImageUrl/i);
   });
 
-  it("builds an audio message with a default duration", () => {
-    expect(
-      buildLineMediaMessageObject({
-        mediaUrl: "https://example.com/voice.m4a",
-        mediaKind: "audio",
-      }),
-    ).toEqual({
+  it("builds an audio message with a default duration", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/voice.m4a",
+        { mediaKind: "audio" },
+        "line:user:Uabc",
+      ),
+    ).resolves.toEqual({
       type: "audio",
       originalContentUrl: "https://example.com/voice.m4a",
       duration: 60000,
     });
   });
 
-  it("defaults an image preview to the media URL", () => {
-    expect(
-      buildLineMediaMessageObject({
-        mediaUrl: "https://example.com/photo.png",
-        mediaKind: "image",
-      }),
-    ).toEqual({
+  it("defaults an image preview to the media URL", async () => {
+    await expect(
+      buildLineMediaMessage(
+        "https://example.com/photo.png",
+        { mediaKind: "image" },
+        "line:user:Uabc",
+      ),
+    ).resolves.toEqual({
       type: "image",
       originalContentUrl: "https://example.com/photo.png",
       previewImageUrl: "https://example.com/photo.png",
