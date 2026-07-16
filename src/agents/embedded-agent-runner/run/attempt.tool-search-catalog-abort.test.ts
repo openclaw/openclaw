@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as toolSearchTesting } from "../../tool-search.js";
+import { testing as toolSearchTesting } from "../../tool-search.test-support.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
