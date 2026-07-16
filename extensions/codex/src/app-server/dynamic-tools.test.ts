@@ -3441,7 +3441,12 @@ describe("createCodexDynamicToolBridge", () => {
     const execute = vi.fn(
       async (_callId: string, _args: unknown, signal?: AbortSignal) =>
         await new Promise<never>((_resolve, reject) => {
-          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal?.addEventListener(
+            "abort",
+            () =>
+              reject(signal.reason instanceof Error ? signal.reason : new Error("tool aborted")),
+            { once: true },
+          );
         }),
     );
     const bridge = createCodexDynamicToolBridge({

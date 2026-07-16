@@ -1,5 +1,8 @@
 // Codex tests cover dynamic tool execution plugin behavior.
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handleDynamicToolCallWithTimeout,
@@ -389,15 +392,19 @@ describe("dynamic tool execution helpers", () => {
 
   it("delegates an unpublished abort boundary to the terminal observer", async () => {
     vi.useFakeTimers();
-    const observeToolTerminal = vi.fn(() => ({
-      executionStarted: false,
-      executedArguments: {
-        action: "send",
-        target: "channel:adjusted",
-        text: "hello",
-      },
-      sideEffectEvidence: false,
-    }));
+    const observeToolTerminal = vi.fn(
+      (
+        _observation: Parameters<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>[0],
+      ) => ({
+        executionStarted: false,
+        executedArguments: {
+          action: "send",
+          target: "channel:adjusted",
+          text: "hello",
+        },
+        sideEffectEvidence: false,
+      }),
+    );
     const response = handleDynamicToolCallWithTimeout({
       call: {
         threadId: "thread-1",
@@ -414,7 +421,8 @@ describe("dynamic tool execution helpers", () => {
             options?.signal?.addEventListener(
               "abort",
               () => {
-                reject(options.signal?.reason);
+                const reason = options.signal?.reason;
+                reject(reason instanceof Error ? reason : new Error("tool call aborted"));
               },
               { once: true },
             );
