@@ -1668,6 +1668,29 @@ describe("sendMessageTelegram", () => {
     expect(cursor.nextPartIndex).toBe(1);
   });
 
+  it("preserves markdown link targets when Telegram rejects HTML", async () => {
+    botApi.sendMessage
+      .mockRejectedValueOnce(createHtmlParseError())
+      .mockResolvedValueOnce({ message_id: 157, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "Read [docs](https://example.com/guide)", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botApi.sendMessage).toHaveBeenNthCalledWith(
+      1,
+      "123",
+      'Read <a href="https://example.com/guide">docs</a>',
+      { parse_mode: "HTML" },
+    );
+    expect(botApi.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      "123",
+      "Read docs (https://example.com/guide)",
+    );
+  });
+
   it("reports the first Telegram chunk before a later chunk fails", async () => {
     const storePath = `/tmp/openclaw-telegram-projection-partial-${process.pid}-${Date.now()}.json`;
     const cursor = createTelegramPromptContextProjectionCursor({

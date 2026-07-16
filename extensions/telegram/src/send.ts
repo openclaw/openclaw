@@ -1100,7 +1100,7 @@ async function sendMessageTelegramWithContext(
       // second mid-word split. Caller-authored HTML keeps its safe splitter below.
       return markdownToTelegramChunks(rawText, 4000, { tableMode }).map((chunk) => ({
         htmlText: chunk.html,
-        plainText: chunk.text,
+        plainText: telegramHtmlToPlainTextFallback(chunk.html),
       }));
     }
     const htmlText = renderHtmlText(rawText);
