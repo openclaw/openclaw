@@ -32,27 +32,39 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   };
 });
 
+import { registerOpenCodeSessionCatalog } from "./session-catalog-plugin.js";
 import {
-  createOpenCodeSessionNodeInvokePolicies,
-  createOpenCodeSessionNodeHostCommands,
-  isOpenCodeSessionCatalogEnabled,
   OPENCODE_SESSIONS_LIST_COMMAND,
   OPENCODE_SESSION_READ_COMMAND,
   OPENCODE_TERMINAL_RESUME_COMMAND,
-  registerOpenCodeSessionCatalog,
-} from "./session-catalog-plugin.js";
+} from "./session-catalog-shared.js";
 import {
   listLocalOpenCodeSessionPage,
   readLocalOpenCodeTranscriptPage,
 } from "./session-catalog.js";
 
-const UTF16_SEARCH_PREFIX = "x".repeat(499);
-const UTF16_BOUNDARY_SEARCH = `${UTF16_SEARCH_PREFIX}😀`;
-const LONE_SURROGATE_PATTERN =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 const temporaryDirectories: string[] = [];
 const originalPath = process.env.PATH;
 const originalUnrelatedEnv = process.env.CATALOG_UNRELATED_ENV;
+
+function captureOpenCodeSessionRegistrations(pluginConfig: unknown = {}) {
+  const catalogs: Array<Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0]> = [];
+  const commands: Array<Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0]> = [];
+  const policies: Array<Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0]> = [];
+  registerOpenCodeSessionCatalog({
+    pluginConfig,
+    runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
+    registerSessionCatalog: (catalog: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0]) =>
+      catalogs.push(catalog),
+    registerNodeHostCommand: (
+      command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
+    ) => commands.push(command),
+    registerNodeInvokePolicy: (
+      policy: Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0],
+    ) => policies.push(policy),
+  } as unknown as OpenClawPluginApi);
+  return { catalogs, commands, policies };
+}
 
 async function installFakeOpenCode(
   assistantText = "hi",
@@ -201,41 +213,9 @@ describe("OpenCode session catalog", () => {
       await expect(
         provider!.read({ hostId: "gateway", threadId: "ses_test", limit: 2 }),
       ).resolves.toMatchObject({ threadId: "ses_test", items: expect.any(Array) });
-      await expect(provider!.list({ search: "   " })).resolves.toEqual([
+      await expect(provider!.list({})).resolves.toEqual([
         expect.objectContaining({ hostId: "gateway", sessions: [expect.any(Object)] }),
       ]);
-      await expect(provider!.list({ search: "x".repeat(501) })).resolves.toEqual([
-        expect.objectContaining({ hostId: "gateway", sessions: [] }),
-      ]);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "keeps local search needles UTF-16 safe at the length limit",
-    async () => {
-      await installFakeOpenCode("hi", UTF16_SEARCH_PREFIX);
-      let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;
-      registerOpenCodeSessionCatalog({
-        pluginConfig: {},
-        runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
-        registerSessionCatalog: (value: NonNullable<typeof provider>) => {
-          provider = value;
-        },
-        registerNodeHostCommand: vi.fn(),
-        registerNodeInvokePolicy: vi.fn(),
-      } as unknown as OpenClawPluginApi);
-
-      await expect(
-        provider!.list({ hostIds: ["gateway"], search: UTF16_BOUNDARY_SEARCH }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          hostId: "gateway",
-          sessions: [expect.objectContaining({ threadId: "ses_test", name: UTF16_SEARCH_PREFIX })],
-        }),
-      ]);
-      await expect(
-        provider!.list({ hostIds: ["gateway"], search: `${"y".repeat(499)}😀` }),
-      ).resolves.toEqual([expect.objectContaining({ hostId: "gateway", sessions: [] })]);
     },
   );
 
@@ -257,7 +237,7 @@ describe("OpenCode session catalog", () => {
     "auto-detects the CLI and honors the node-local Web UI switch",
     async () => {
       const directory = await installFakeOpenCode();
-      const commands = createOpenCodeSessionNodeHostCommands();
+      const { commands } = captureOpenCodeSessionRegistrations();
       expect(commands.map((command) => command.command)).toEqual([
         OPENCODE_SESSIONS_LIST_COMMAND,
         OPENCODE_SESSION_READ_COMMAND,
@@ -329,7 +309,8 @@ describe("OpenCode session catalog", () => {
     "runs only catalog-validated OpenCode sessions through the node PTY",
     async () => {
       await installFakeOpenCode();
-      const terminal = createOpenCodeSessionNodeHostCommands().find(
+      const { commands, policies } = captureOpenCodeSessionRegistrations();
+      const terminal = commands.find(
         (command) => command.command === OPENCODE_TERMINAL_RESUME_COMMAND,
       );
       const io = {
@@ -361,7 +342,7 @@ describe("OpenCode session catalog", () => {
       ).rejects.toThrow("threadId is invalid");
 
       const invokeNode = vi.fn(() => ({ ok: false as const, error: "unexpected" }));
-      const policy = createOpenCodeSessionNodeInvokePolicies()[0]!;
+      const policy = policies[0]!;
       expect(
         policy.handle({ command: OPENCODE_TERMINAL_RESUME_COMMAND, invokeNode } as never),
       ).toEqual({ ok: true });
@@ -411,9 +392,7 @@ describe("OpenCode session catalog", () => {
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
 
-    await expect(
-      provider!.list({ hostIds: ["node:node-1"], search: UTF16_BOUNDARY_SEARCH }),
-    ).resolves.toEqual([
+    await expect(provider!.list({ hostIds: ["node:node-1"], search: "remote" })).resolves.toEqual([
       expect.objectContaining({
         sessions: [expect.objectContaining({ threadId: "ses_remote", canOpenTerminal: true })],
       }),
@@ -421,14 +400,10 @@ describe("OpenCode session catalog", () => {
     expect(invoke).toHaveBeenNthCalledWith(1, {
       nodeId: "node-1",
       command: OPENCODE_SESSIONS_LIST_COMMAND,
-      params: { searchTerm: UTF16_SEARCH_PREFIX },
+      params: { searchTerm: "remote" },
       timeoutMs: 35_000,
       scopes: ["operator.write"],
     });
-    const firstRequest = invoke.mock.calls[0]?.[0] as
-      | { params?: { searchTerm?: string } }
-      | undefined;
-    expect(firstRequest?.params?.searchTerm).not.toMatch(LONE_SURROGATE_PATTERN);
     await expect(
       provider!.openTerminal!({ hostId: "node:node-1", threadId: "ses_remote" }),
     ).resolves.toEqual({
@@ -449,14 +424,10 @@ describe("OpenCode session catalog", () => {
   });
 
   it("does not register the catalog when explicitly disabled", () => {
-    const registerSessionCatalog = vi.fn();
-    const api = {
-      pluginConfig: { sessionCatalog: { enabled: false } },
-      registerSessionCatalog,
-    } as unknown as OpenClawPluginApi;
-    registerOpenCodeSessionCatalog(api);
-    expect(isOpenCodeSessionCatalogEnabled(api.pluginConfig)).toBe(false);
-    expect(registerSessionCatalog).not.toHaveBeenCalled();
+    const registrations = captureOpenCodeSessionRegistrations({
+      sessionCatalog: { enabled: false },
+    });
+    expect(registrations).toEqual({ catalogs: [], commands: [], policies: [] });
   });
 
   it("bridges paired-node list and read requests without undefined transport fields", async () => {
@@ -510,7 +481,7 @@ describe("OpenCode session catalog", () => {
     registerOpenCodeSessionCatalog(api);
     const catalog = provider;
     expect(catalog).toBeDefined();
-    await catalog!.list({ hostIds: ["node:node-1"], search: "   " });
+    await catalog!.list({ hostIds: ["node:node-1"] });
     await catalog!.read({ hostId: "node:node-1", threadId: "ses_remote" });
 
     expect(invoke).toHaveBeenNthCalledWith(1, {

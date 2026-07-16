@@ -272,7 +272,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
  * output failures are typed so callers may try another inference path without
  * mistaking the failure for deterministic setup authority.
  */
-export async function runSystemAgentTurnWithDeps(
+async function runSystemAgentTurnWithDeps(
   params: SystemAgentTurnParams,
   deps: SystemAgentTurnDeps = {},
 ): Promise<SystemAgentTurnReply | null> {
@@ -435,3 +435,9 @@ export async function runSystemAgentTurnWithDeps(
 
 export const runSystemAgentTurn: SystemAgentTurnRunner = (params) =>
   runSystemAgentTurnWithDeps(params);
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.systemAgentTurnTestApi")] = {
+    runSystemAgentTurnWithDeps,
+  };
+}

@@ -1,4 +1,7 @@
-import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
+import type {
+  createTerminalDefaultColorQueryResponder,
+  GhosttyTerminalController,
+} from "@openclaw/libterminal/browser";
 // Dockable operator terminal panel for the Control UI shell.
 //
 // Renders a VS Code-style shell dock (bottom by default, or right) with session
@@ -10,12 +13,12 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import { createTerminalDefaultColorQueryResponder } from "./terminal-color-queries.ts";
 import {
   TerminalConnection,
   type TerminalGatewayClient,
@@ -529,10 +532,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       connection,
       () => tabRef.current?.gatewaySessionId,
     );
-    const defaultColorQueries = createTerminalDefaultColorQueryResponder(
-      () => terminalDynamicColors(this.themeMode),
-      (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
-    );
+    const { createTerminalDefaultColorQueryResponder } =
+      await import("@openclaw/libterminal/browser");
+    const defaultColorQueries = createTerminalDefaultColorQueryResponder({
+      getColors: () => terminalDynamicColors(this.themeMode),
+      reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
+    });
     let controller: GhosttyTerminalController;
     try {
       controller = await this.createTerminal({
@@ -592,9 +597,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       // connection.open/attach from writing to an already-disposed terminal.
       onData: (data: string) => {
         if (!tab.cancelled) {
-          // ghostty-web 0.4.0's WASM handler ignores all OSC color operations,
-          // including setters. Report the configured renderer colors here so
-          // palette-aware TUIs receive the same defaults as native Ghostty.
           tab.defaultColorQueries.observe(data);
           tab.controller.write(TERMINAL_OUTPUT_ENCODER.encode(data));
           if (data.length > 0) {
@@ -1059,7 +1061,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  static override styles = [terminalPanelStyles, terminalPanelUploadStyles];
+  static override styles = [panelTabStripStyles, terminalPanelStyles, terminalPanelUploadStyles];
 }
 
 declare global {

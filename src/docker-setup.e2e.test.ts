@@ -179,6 +179,10 @@ const prestartContainerEnvFlags = [
   "-e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace",
 ].join(" ");
 
+const noFollowOwnershipRepair = (root: string) =>
+  `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h node:node {} +`;
+const prestartSafePath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 function createEnv(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
@@ -847,11 +851,24 @@ describe("scripts/docker/setup.sh", () => {
     // Verify that a root-user chown step runs before setup.
     const log = await readDockerLog(activeSandbox);
     const chownIdx = log.indexOf("--user root");
+    const safePathIdx = log.indexOf(`${prestartSafePath}; export PATH`);
+    const stateRepairIdx = log.indexOf(noFollowOwnershipRepair("/home/node/.openclaw"));
     const onboardIdx = log.indexOf("onboard");
     expect(chownIdx).toBeGreaterThanOrEqual(0);
+    expect(safePathIdx).toBeGreaterThan(chownIdx);
+    expect(stateRepairIdx).toBeGreaterThan(safePathIdx);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
-    expect(log).toContain("chown node:node /home/node/.config");
+    expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw"));
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
+    expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw/workspace/.openclaw"));
+    expect(log).toContain("fi || true");
+    expect(log).not.toContain("-type d -o -type f");
+    expect(log).not.toContain("-exec chown");
+    expect(log).not.toContain(" chown node:node");
+    expect(log).not.toContain("chown -R node:node /home/node/.openclaw/workspace/.openclaw");
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {
@@ -872,7 +889,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(secretDir.startsWith(`${configDir}/`)).toBe(false);
 
     const log = await readDockerLog(activeSandbox);
-    expect(log).toContain("find /home/node/.config/openclaw -xdev");
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {

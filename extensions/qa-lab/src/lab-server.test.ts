@@ -14,7 +14,7 @@ const qaChannelMock = vi.hoisted(() => ({
   startAccount: vi.fn(),
 }));
 
-vi.mock("./runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/qa-channel", () => ({
   qaChannelPlugin: {
     config: {
       resolveAccount: qaChannelMock.resolveAccount,

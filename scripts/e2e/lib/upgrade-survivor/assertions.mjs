@@ -691,7 +691,9 @@ function assertStatusJson([file]) {
   assert(/running|connected|ok|ready/u.test(text), "gateway status did not report a healthy state");
 }
 
-if (command === "seed") {
+if (command === "list-scenarios") {
+  process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
+} else if (command === "seed") {
   seedState();
 } else if (command === "assert-config") {
   assertConfigSurvived();
