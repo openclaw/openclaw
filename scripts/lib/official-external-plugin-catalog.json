@@ -213,7 +213,7 @@
     },
     {
       "name": "@openclaw/firecrawl-plugin",
-      "description": "Search the web and scrape clean, structured page content with FireCrawl.",
+      "description": "Search the live web for fresh results, scrape pages into LLM-ready Markdown, and interact with dynamic sites to extract hard-to-reach data.",
       "source": "official",
       "kind": "plugin",
       "openclaw": {

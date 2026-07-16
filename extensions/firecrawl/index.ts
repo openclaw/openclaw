@@ -9,7 +9,8 @@ import { createFirecrawlSearchTool } from "./src/firecrawl-search-tool.js";
 export default definePluginEntry({
   id: "firecrawl",
   name: "FireCrawl",
-  description: "Search the web and scrape clean, structured page content with FireCrawl.",
+  description:
+    "Search the live web for fresh results, scrape pages into LLM-ready Markdown, and interact with dynamic sites to extract hard-to-reach data.",
   register(api) {
     api.registerWebFetchProvider(createFirecrawlWebFetchProvider());
     api.registerWebSearchProvider(createFirecrawlWebSearchProvider());

@@ -1,6 +1,6 @@
 # FireCrawl
 
-Search the web and scrape clean, structured page content with FireCrawl.
+Search the live web for fresh results, scrape pages into LLM-ready Markdown, and interact with dynamic sites to extract hard-to-reach data.
 
 Install from OpenClaw:
 

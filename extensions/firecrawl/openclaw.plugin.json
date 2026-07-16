@@ -1,7 +1,7 @@
 {
   "id": "firecrawl",
   "name": "FireCrawl",
-  "description": "Search the web and scrape clean, structured page content with FireCrawl.",
+  "description": "Search the live web for fresh results, scrape pages into LLM-ready Markdown, and interact with dynamic sites to extract hard-to-reach data.",
   "icon": "https://www.firecrawl.dev/brand/firecrawl-logo.png",
   "activation": {
     "onStartup": false
