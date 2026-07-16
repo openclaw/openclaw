@@ -386,7 +386,17 @@ describe("containerCheck", () => {
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 1000 }]);
+  });
+
+  it("derives handshakeTimeout from caller timeoutMs, not a fixed cap", async () => {
+    wsMockState.behavior = "open";
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    // A caller requesting 60s must not be truncated to the 30s library default.
+    await containerCheck("http://localhost:8080", 60_000, "+14259798283");
+
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 60_000 }]);
   });
 
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
