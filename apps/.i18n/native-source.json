@@ -31667,7 +31667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 320,
+      "line": 392,
       "path": "apps/macos/Sources/OpenClaw/OnboardingMemoryImport.swift",
       "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
       "surface": "apple",
@@ -31675,7 +31675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 462,
+      "line": 499,
       "path": "apps/macos/Sources/OpenClaw/OnboardingMemoryImport.swift",
       "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
       "surface": "apple",
@@ -31683,7 +31683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 465,
+      "line": 502,
       "path": "apps/macos/Sources/OpenClaw/OnboardingMemoryImport.swift",
       "source": "The Gateway did not return a usable import plan. Try planning again.",
       "surface": "apple",
@@ -31691,7 +31691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 468,
+      "line": 505,
       "path": "apps/macos/Sources/OpenClaw/OnboardingMemoryImport.swift",
       "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
       "surface": "apple",
