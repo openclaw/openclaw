@@ -82,7 +82,9 @@ export function prepareEmbeddedAttemptStream(input: {
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
   abortState: Pick<
     EmbeddedAttemptAbortStatePort,
-    "markIdleTimedOut" | "markTimedOutDuringToolExecution"
+    | "markIdleTimedOut"
+    | "markTimedOutDuringCompaction"
+    | "markTimedOutDuringToolExecution"
   >;
   isModelCallActive: () => boolean;
   markExternalAbort: () => void;
