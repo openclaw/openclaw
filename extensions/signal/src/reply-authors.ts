@@ -32,6 +32,11 @@ type SignalPersistedReplyContext =
 const memoryReplyContexts = new Map<string, MemoryReplyContextRecord>();
 let persistentStoreDisabled = false;
 
+export function resetSignalReplyAuthorsForTests(): void {
+  memoryReplyContexts.clear();
+  persistentStoreDisabled = false;
+}
+
 function openSignalReplyAuthorStore() {
   if (persistentStoreDisabled) {
     return undefined;

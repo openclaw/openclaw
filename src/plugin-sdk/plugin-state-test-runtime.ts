@@ -6,6 +6,7 @@ export {
   createPluginStateSyncKeyedStore as createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+export { clearPluginStateStoreForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 export { createChannelIngressQueue as createChannelIngressQueueForTests } from "../channels/message/ingress-queue.js";
 export { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 export type { DB as OpenClawStateKyselyDatabaseForTests } from "../state/openclaw-state-db.generated.js";

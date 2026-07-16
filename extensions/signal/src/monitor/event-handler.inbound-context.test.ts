@@ -2,13 +2,14 @@
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalReactionMessage } from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
 let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
 let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
 let resolveSignalReplyContextWithPersistence: typeof import("../reply-authors.js").resolveSignalReplyContextWithPersistence;
+let resetSignalReplyAuthorsForTests: typeof import("../reply-authors.js").resetSignalReplyAuthorsForTests;
 
 type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
@@ -124,18 +125,21 @@ function nextTimerTick(): Promise<void> {
 }
 
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     [
       { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
       { createSignalEventHandler },
-      { resolveSignalReplyContextWithPersistence },
+      { resetSignalReplyAuthorsForTests, resolveSignalReplyContextWithPersistence },
     ] = await Promise.all([
       import("./event-handler.test-harness.js"),
       import("./event-handler.js"),
       import("../reply-authors.js"),
     ]);
+  });
+
+  beforeEach(() => {
     vi.useRealTimers();
+    resetSignalReplyAuthorsForTests();
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);

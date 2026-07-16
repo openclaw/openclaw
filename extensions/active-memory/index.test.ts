@@ -6,13 +6,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  clearPluginStateStoreForTests,
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 
@@ -474,11 +475,15 @@ describe("active-memory plugin", () => {
     return call;
   };
 
+  beforeAll(async () => {
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
+  });
+
   beforeEach(async () => {
     vi.clearAllMocks();
-    resetPluginStateStoreForTests();
+    await fs.rm(path.join(stateDir, "plugins"), { recursive: true, force: true });
+    clearPluginStateStoreForTests();
     runEmbeddedAgent.mockReset();
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
     configFile = {
       plugins: {
         entries: {
@@ -581,14 +586,16 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     testing.resetActiveRecallCacheForTests();
-    if (stateDir) {
-      await fs.rm(stateDir, { recursive: true, force: true });
-      stateDir = "";
-    }
+  });
+
+  afterAll(async () => {
+    resetPluginStateStoreForTests();
+    await fs.rm(stateDir, { recursive: true, force: true });
+    stateDir = "";
   });
 
   it("registers a before_prompt_build hook", () => {
