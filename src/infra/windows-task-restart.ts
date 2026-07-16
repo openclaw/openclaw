@@ -5,13 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
-import { encodeWindowsLauncherScript } from "../daemon/launcher-encoding.js";
 import { renderCmdRestartLogSetup } from "../daemon/restart-logs.js";
 import { resolveTaskScriptPath } from "../daemon/schtasks.js";
 import { formatErrorMessage } from "./errors.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
+import { encodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 
 const TASK_RESTART_RETRY_LIMIT = 12;
 const TASK_RESTART_RETRY_DELAY_SEC = 1;

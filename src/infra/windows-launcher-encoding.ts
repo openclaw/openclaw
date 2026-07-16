@@ -1,6 +1,6 @@
-/** Encodes and decodes generated Windows launcher scripts (gateway.cmd / gateway.vbs). */
+/** Encodes and decodes generated Windows launcher scripts (`.cmd` / `.vbs`). */
 import iconv from "iconv-lite";
-import { resolveWindowsSystemEncoding } from "../infra/windows-encoding.js";
+import { resolveWindowsSystemEncoding } from "./windows-encoding.js";
 
 type WindowsLauncherScriptFormat = "cmd" | "vbs";
 
@@ -10,7 +10,7 @@ const UTF16LE_BOM = Buffer.from([0xff, 0xfe]);
 // ANSI code page only on these locales. windows-125x hosts pair ANSI with a
 // separate OEM page (437/850/852/866/...) that WHATWG decoders cannot model, so
 // non-ASCII cmd content stays UTF-8 there instead of guessing wrong bytes.
-const CMD_CONSOLE_SAFE_ENCODINGS = new Set([
+const CMD_ANSI_EQUALS_OEM_ENCODINGS = new Set([
   "gbk",
   "big5",
   "shift_jis",
@@ -56,7 +56,11 @@ export function encodeWindowsLauncherScript(params: {
   }
   const encoding =
     params.windowsEncoding !== undefined ? params.windowsEncoding : resolveWindowsSystemEncoding();
-  if (!encoding || !CMD_CONSOLE_SAFE_ENCODINGS.has(encoding) || !iconv.encodingExists(encoding)) {
+  if (
+    !encoding ||
+    !CMD_ANSI_EQUALS_OEM_ENCODINGS.has(encoding) ||
+    !iconv.encodingExists(encoding)
+  ) {
     return Buffer.from(params.content, "utf8");
   }
   // Generated launcher scripts are CRLF-terminated throughout; the marker is
@@ -88,7 +92,7 @@ export function decodeWindowsLauncherScript(params: { buffer: Buffer }): string 
   if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
     return buffer.subarray(2).toString("utf16le");
   }
-  // The marker line is pure ASCII and no CMD_CONSOLE_SAFE_ENCODINGS multibyte
+  // The marker line is pure ASCII and no CMD_ANSI_EQUALS_OEM_ENCODINGS multibyte
   // sequence contains 0x0A, so the first newline in a marked file is exactly
   // the marker terminator. latin1 (not "ascii", which masks the high bit and
   // could alias garbage bytes into the prefix) keeps the byte-level read exact.

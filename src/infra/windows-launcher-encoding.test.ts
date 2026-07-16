@@ -1,13 +1,16 @@
 // Covers Windows launcher script encoding for wscript/cmd code page contracts (#107416).
 import iconv from "iconv-lite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { decodeWindowsLauncherScript, encodeWindowsLauncherScript } from "./launcher-encoding.js";
+import {
+  decodeWindowsLauncherScript,
+  encodeWindowsLauncherScript,
+} from "./windows-launcher-encoding.js";
 
 const resolveWindowsSystemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
-vi.mock("../infra/windows-encoding.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/windows-encoding.js")>(
-    "../infra/windows-encoding.js",
+vi.mock("./windows-encoding.js", async () => {
+  const actual = await vi.importActual<typeof import("./windows-encoding.js")>(
+    "./windows-encoding.js",
   );
   return {
     ...actual,

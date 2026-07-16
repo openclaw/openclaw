@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { decodeWindowsLauncherScript } from "./launcher-encoding.js";
+import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
   installScheduledTask,
   readScheduledTaskCommand,

@@ -8,8 +8,8 @@ import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
+import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import "./test-helpers/schtasks-base-mocks.js";
-import { decodeWindowsLauncherScript } from "./launcher-encoding.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
   inspectPortUsage,

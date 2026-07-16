@@ -15,6 +15,10 @@ import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
+import {
+  decodeWindowsLauncherScript,
+  encodeWindowsLauncherScript,
+} from "../infra/windows-launcher-encoding.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -24,7 +28,6 @@ import {
   resolveGatewayServiceDescription,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
-import { decodeWindowsLauncherScript, encodeWindowsLauncherScript } from "./launcher-encoding.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";

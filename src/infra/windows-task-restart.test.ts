@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { decodeWindowsLauncherScript } from "../daemon/launcher-encoding.js";
 import { captureFullEnv } from "../test-utils/env.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
+import { decodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => os.tmpdir()));

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { encodeWindowsLauncherScript } from "./launcher-encoding.js";
+import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
