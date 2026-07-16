@@ -2,7 +2,7 @@
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
+import { resolveTelegramApiBase, resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 
@@ -13,6 +13,8 @@ type TelegramGetChatResponse = {
   result?: { id?: number | string };
 };
 
+// Shipped runtime API. Internal one-shot callers use resolveTelegramTransport
+// directly so they can close the dispatcher after the response body settles.
 export function resolveTelegramChatLookupFetch(params?: {
   proxyUrl?: string;
   network?: TelegramNetworkConfig;
@@ -31,17 +33,21 @@ export async function lookupTelegramChatId(params: {
   network?: TelegramNetworkConfig;
   timeoutSeconds?: unknown;
 }): Promise<string | null> {
-  return fetchTelegramChatId({
-    token: params.token,
-    chatId: params.chatId,
-    signal: params.signal,
-    apiRoot: params.apiRoot,
-    timeoutSeconds: params.timeoutSeconds,
-    fetchImpl: resolveTelegramChatLookupFetch({
-      proxyUrl: params.proxyUrl,
-      network: params.network,
-    }),
-  });
+  const proxyUrl = params.proxyUrl?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const transport = resolveTelegramTransport(proxyFetch, { network: params.network });
+  try {
+    return await fetchTelegramChatId({
+      token: params.token,
+      chatId: params.chatId,
+      signal: params.signal,
+      apiRoot: params.apiRoot,
+      timeoutSeconds: params.timeoutSeconds,
+      fetchImpl: transport.fetch,
+    });
+  } finally {
+    await transport.close();
+  }
 }
 
 export async function fetchTelegramChatId(params: {

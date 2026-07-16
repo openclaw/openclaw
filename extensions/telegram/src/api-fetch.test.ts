@@ -1,7 +1,7 @@
 // Telegram tests cover api fetch plugin behavior.
 import { createRequire } from "node:module";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchTelegramChatId } from "./api-fetch.js";
+import { fetchTelegramChatId, lookupTelegramChatId } from "./api-fetch.js";
 
 const TELEGRAM_GETCHAT_JSON_CAP_BYTES = 4 * 1024 * 1024;
 
@@ -291,6 +291,37 @@ describe("fetchTelegramChatId", () => {
     expect(abortReason).toBeInstanceOf(Error);
     expect((abortReason as Error).name).toBe("TimeoutError");
     expect((abortReason as Error).message).toBe("request timed out");
+  });
+});
+
+describe("lookupTelegramChatId", () => {
+  it.each([
+    {
+      name: "success",
+      setup: () => proxyMocks.undiciFetch.mockResolvedValueOnce(getChatOkResponse(12345)),
+      expected: "12345",
+    },
+    {
+      name: "transport failure",
+      setup: () => proxyMocks.undiciFetch.mockRejectedValueOnce(new Error("network failed")),
+      expected: null,
+    },
+  ])("closes its owned transport after $name", async ({ setup, expected }) => {
+    proxyMocks.undiciFetch.mockReset();
+    setup();
+
+    await expect(
+      lookupTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        network: { autoSelectFamily: false },
+      }),
+    ).resolves.toBe(expected);
+
+    const init = proxyMocks.undiciFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: { destroyed?: boolean } })
+      | undefined;
+    expect(init?.dispatcher?.destroyed).toBe(true);
   });
 });
 
