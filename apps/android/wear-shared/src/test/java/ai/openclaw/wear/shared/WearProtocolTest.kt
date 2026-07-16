@@ -44,16 +44,33 @@ class WearProtocolTest {
 
   @Test
   fun usesStableWireNamesAndPaths() {
-    val request =
-      WearMessage.Request(
-        requestId = "req-1",
-        method = WearRpcMethod.ChatSend,
+    val methodNames =
+      mapOf(
+        WearRpcMethod.ProxyStatus to "proxy.status",
+        WearRpcMethod.SessionsList to "sessions.list",
+        WearRpcMethod.ChatHistory to "chat.history",
+        WearRpcMethod.ChatSend to "chat.send",
+        WearRpcMethod.ChatAbort to "chat.abort",
       )
-    val encoded = WearProtocolCodec.encode(request).decodeToString()
-    val root = Json.parseToJsonElement(encoded).jsonObject
+    methodNames.forEach { (method, wireName) ->
+      val request = WearMessage.Request(requestId = "req-1", method = method)
+      val root = Json.parseToJsonElement(WearProtocolCodec.encode(request).decodeToString()).jsonObject
+      assertEquals("request", root.getValue("type").jsonPrimitive.content)
+      assertEquals(wireName, root.getValue("method").jsonPrimitive.content)
+    }
 
-    assertEquals("request", root.getValue("type").jsonPrimitive.content)
-    assertEquals("chat.send", root.getValue("method").jsonPrimitive.content)
+    val eventNames =
+      mapOf(
+        WearEventType.Chat to "chat",
+        WearEventType.Connection to "connection",
+      )
+    eventNames.forEach { (event, wireName) ->
+      val message = WearMessage.Event(sequence = 1, event = event)
+      val root = Json.parseToJsonElement(WearProtocolCodec.encode(message).decodeToString()).jsonObject
+      assertEquals("event", root.getValue("type").jsonPrimitive.content)
+      assertEquals(wireName, root.getValue("event").jsonPrimitive.content)
+    }
+
     assertEquals("/openclaw/wear/v1/request", WearProtocol.REQUEST_PATH)
     assertEquals("/openclaw/wear/v1/response", WearProtocol.RESPONSE_PATH)
     assertEquals("/openclaw/wear/v1/event", WearProtocol.EVENT_PATH)
