@@ -43,6 +43,15 @@ export function isSqliteWalResetSafeVersion(value: string): boolean {
   if (compareSqliteVersions(version, SQLITE_WAL_RESET_FIXED_VERSION) >= 0) {
     return true;
   }
+  if (
+    version.major === 3 &&
+    version.minor >= 45 &&
+    compareSqliteVersions(version, { major: 3, minor: 50, patch: 0 }) < 0
+  ) {
+    // Versions 3.45.x through 3.49.x were released after the upstream fix
+    // landed in 3.44.0 and are therefore safe.
+    return true;
+  }
   return SQLITE_WAL_RESET_BACKPORTS.some(
     (backport) =>
       version.major === backport.major &&

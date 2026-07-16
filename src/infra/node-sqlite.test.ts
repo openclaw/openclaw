@@ -61,7 +61,7 @@ describe("node SQLite safety", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["3.51.3", "3.51.4", "3.52.0", "4.0.0", "3.50.7", "3.50.8", "3.44.6"])(
+  it.each(["3.51.3", "3.51.4", "3.52.0", "4.0.0", "3.50.7", "3.50.8", "3.49.1", "3.46.1", "3.45.0", "3.44.6"])(
     "accepts patched SQLite %s",
     async (version) => {
       const { requireNodeSqlite } = await loadNodeSqliteWithVersion(version);
@@ -69,7 +69,7 @@ describe("node SQLite safety", () => {
     },
   );
 
-  it.each(["3.51.2", "3.51.0", "3.50.6", "3.49.1", "3.44.5", "invalid", "3.51"])(
+  it.each(["3.51.2", "3.51.0", "3.50.6", "3.44.5", "invalid", "3.51"])(
     "rejects vulnerable or unknown SQLite %s",
     async (version) => {
       const { requireNodeSqlite } = await loadNodeSqliteWithVersion(version);
