@@ -61,6 +61,20 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "please retry your request",
 ]);
 
+const PROVIDER_WRAPPED_STATUS_RE = /^[A-Z][\w\s]+ API error \((\d{3})\)/i;
+
+function _extractProviderWrappedHttpStatus(errorMessage: string): number | undefined {
+  const match = PROVIDER_WRAPPED_STATUS_RE.exec(errorMessage);
+  if (!match) {
+    return undefined;
+  }
+  const code = parseInt(match[1], 10);
+  if (!Number.isFinite(code) || code < 100 || code > 599) {
+    return undefined;
+  }
+  return code;
+}
+
 /** Classify transient provider/transport failures for outer retry policy. */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (message.stopReason !== "error" || !message.errorMessage) {
@@ -74,6 +88,14 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
     extractLeadingHttpStatus(errorMessage)?.code ??
     extractProviderWrappedHttpStatus(errorMessage)?.code;
   if (status && status !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
+    return true;
+  }
+  // Provider adapters format transient HTTP errors with a leading label:
+  // "OpenAI API error (500): …", "Azure OpenAI API error (502): …",
+  // "Mistral API error (503): …". Extract the wrapped status so these
+  // transient responses still reach the session retry policy.
+  const wrappedStatus = _extractProviderWrappedHttpStatus(errorMessage);
+  if (wrappedStatus && wrappedStatus !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(wrappedStatus)) {
     return true;
   }
   const hasRateLimitContext = status === 429 || RATE_LIMIT_CONTEXT_PATTERN.test(errorMessage);
