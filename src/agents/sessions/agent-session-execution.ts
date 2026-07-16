@@ -8,6 +8,8 @@ import type { BashExecutionMessage } from "./messages.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { createLocalBashOperations } from "./tools/bash.js";
 
+const MAX_SERVER_RETRY_DELAY_MS = 60_000;
+
 export abstract class AgentSessionExecution extends AgentSessionExtensions {
   // =========================================================================
   // Auto-Retry
@@ -41,6 +43,15 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
+    const serverDelayMs = Number.isFinite(message.retryAfterSeconds)
+      ? Math.ceil(Math.max(0, message.retryAfterSeconds ?? 0) * 1000)
+      : 0;
+    if (serverDelayMs > MAX_SERVER_RETRY_DELAY_MS) {
+      // A capped wait would violate the provider's cooldown. Leave long delays
+      // to the caller's final-error/failover path instead of retrying early.
+      return false;
+    }
+
     this.retryCount++;
 
     if (this.retryCount > settings.maxRetries) {
@@ -49,7 +60,9 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
-    const delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    const backoffMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    // Provider cooldown is a lower bound; local backoff still applies when it is longer.
+    const delayMs = Math.max(backoffMs, serverDelayMs);
 
     this.emit({
       type: "auto_retry_start",

@@ -725,7 +725,7 @@ describe("createAgentSession thinking level defaults", () => {
 });
 
 describe("AgentSession retry behavior", () => {
-  async function createRetrySession() {
+  async function createRetrySession(baseDelayMs = 0) {
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     return await createAgentSession({
@@ -733,7 +733,7 @@ describe("AgentSession retry behavior", () => {
       resourceLoader: createEmptyResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({
-        retry: { baseDelayMs: 0, maxRetries: 1 },
+        retry: { baseDelayMs, maxRetries: 1 },
       }),
       modelRegistry: ModelRegistry.inMemory(authStorage),
     });
@@ -775,5 +775,83 @@ describe("AgentSession retry behavior", () => {
     expect(streamMocks.streamSimple.mock.calls.length).toBeGreaterThan(1);
     expect(transientEvents).toContain("auto_retry_start");
     expect(transientEvents).toContain("auto_retry_end");
+  });
+
+  it("uses bounded provider retry timing as the backoff lower bound", async () => {
+    streamMocks.streamSimple.mockReset();
+    streamMocks.streamSimple
+      .mockImplementationOnce(() =>
+        createAssistantResultStream({
+          ...createAssistantError("HTTP 429 temporary provider response"),
+          retryAfterSeconds: 0.01,
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createAssistantResultStream({
+          ...createAssistantError(""),
+          content: [{ type: "text", text: "recovered" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+        }),
+      );
+    const { session } = await createRetrySession();
+    const retryDelays: number[] = [];
+    session.subscribe((event) => {
+      if (event.type === "auto_retry_start") {
+        retryDelays.push(event.delayMs);
+      }
+    });
+
+    await session.prompt("test provider retry timing");
+
+    expect(retryDelays).toEqual([10]);
+  });
+
+  it("does not retry before provider cooldowns longer than the session limit", async () => {
+    streamMocks.streamSimple.mockReset();
+    streamMocks.streamSimple.mockImplementation(() =>
+      createAssistantResultStream({
+        ...createAssistantError("HTTP 429 temporary provider response"),
+        retryAfterSeconds: 61,
+      }),
+    );
+    const { session } = await createRetrySession();
+    const retryEvents: string[] = [];
+    session.subscribe((event) => retryEvents.push(event.type));
+
+    await session.prompt("test long provider cooldown");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(retryEvents).not.toContain("auto_retry_start");
+  });
+
+  it("preserves exponential backoff when it exceeds provider retry timing", async () => {
+    streamMocks.streamSimple.mockReset();
+    streamMocks.streamSimple
+      .mockImplementationOnce(() =>
+        createAssistantResultStream({
+          ...createAssistantError("HTTP 429 temporary provider response"),
+          retryAfterSeconds: 0.01,
+        }),
+      )
+      .mockImplementationOnce(() =>
+        createAssistantResultStream({
+          ...createAssistantError(""),
+          content: [{ type: "text", text: "recovered" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+        }),
+      );
+    const { session } = await createRetrySession(20);
+    const retryDelays: number[] = [];
+    session.subscribe((event) => {
+      if (event.type === "auto_retry_start") {
+        retryDelays.push(event.delayMs);
+      }
+    });
+
+    await session.prompt("test longer exponential backoff");
+
+    expect(retryDelays).toEqual([20]);
   });
 });

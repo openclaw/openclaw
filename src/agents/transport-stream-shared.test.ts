@@ -114,4 +114,23 @@ describe("transport stream shared helpers", () => {
       expect(output.errorMessage).toBeTruthy();
     }
   });
+
+  it("preserves structured HTTP retry metadata", () => {
+    const output: {
+      stopReason: string;
+      httpStatus?: number;
+      retryAfterSeconds?: number;
+    } = { stopReason: "stop" };
+
+    assignTransportErrorDetails(
+      output,
+      Object.assign(new Error("rate limited"), { httpStatus: 429, retryAfterSeconds: 30 }),
+    );
+
+    expect(output).toMatchObject({
+      stopReason: "error",
+      httpStatus: 429,
+      retryAfterSeconds: 30,
+    });
+  });
 });

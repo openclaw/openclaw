@@ -319,6 +319,8 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number;
+  retryAfterSeconds?: number;
   timestamp: number; // Unix timestamp in milliseconds
 }
 

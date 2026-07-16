@@ -15,6 +15,10 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
 
 vi.mock("./provider-transport-fetch.js", () => ({
   buildGuardedModelFetch: buildGuardedModelFetchMock,
+  parseRetryAfterSeconds: (headers: Headers) => {
+    const value = headers.get("retry-after");
+    return value && /^\d+$/.test(value) ? Number(value) : undefined;
+  },
 }));
 
 let createAnthropicMessagesTransportStreamFn: typeof import("./anthropic-transport-stream.js").createAnthropicMessagesTransportStreamFn;
@@ -4101,6 +4105,28 @@ describe("anthropic transport stream", () => {
     // surfaces the SSE error as an explicit "error" event or silently ends the
     // stream (a timing artefact of synchronous mock SSE delivery).
     expect(eventTypes).not.toContain("start");
+  });
+
+  it("preserves status and retry-after metadata from HTTP failures", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response('{"type":"error","error":{"type":"rate_limit_error"}}', {
+        status: 429,
+        headers: { "retry-after": "30" },
+      }),
+    );
+    const stream = await createAnthropicMessagesTransportStreamFn()(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hi" }] } as AnthropicStreamContext,
+      { apiKey: "x" } as AnthropicStreamOptions,
+    );
+
+    const result = await stream.result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      httpStatus: 429,
+      retryAfterSeconds: 30,
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
