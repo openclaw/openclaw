@@ -1,5 +1,5 @@
 // Config schema tests cover channel plugin config schema validation and defaults.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 import {
   ChannelGroupEntrySchema,
@@ -12,6 +12,7 @@ import {
 
 describe("channel config composition", () => {
   it("builds canonical and channel-extended group entries", () => {
+    const extended = buildGroupEntrySchema({ topic: z.boolean().optional() });
     expect(
       ChannelGroupEntrySchema.safeParse({
         requireMention: true,
@@ -23,9 +24,11 @@ describe("channel config composition", () => {
         systemPrompt: "Be concise",
       }).success,
     ).toBe(true);
-    expect(
-      buildGroupEntrySchema({ topic: z.boolean().optional() }).safeParse({ topic: true }).success,
-    ).toBe(true);
+    expect(extended.safeParse({ topic: true }).success).toBe(true);
+    expectTypeOf<z.infer<typeof extended>["tools"]>().toEqualTypeOf<
+      z.infer<typeof ChannelGroupEntrySchema>["tools"]
+    >();
+    expectTypeOf<z.infer<typeof extended>["topic"]>().toEqualTypeOf<boolean | undefined>();
     expect(ChannelGroupEntrySchema.safeParse({ unknown: true }).success).toBe(false);
   });
 
@@ -48,6 +51,7 @@ describe("channel config composition", () => {
     expect(
       schema.safeParse({ policy: "open", allow: true, accounts: { work: undefined } }).success,
     ).toBe(true);
+    expectTypeOf<z.infer<typeof schema>["policy"]>().toEqualTypeOf<"closed" | "open" | undefined>();
   });
 
   it("awaits an asynchronous shared refinement for root and account entries", async () => {
@@ -68,6 +72,21 @@ describe("channel config composition", () => {
     await expect(
       schema.safeParseAsync({ accounts: { work: { enabled: true } } }),
     ).resolves.toMatchObject({ success: false });
+  });
+
+  it("preserves distinct account input and output types", () => {
+    const account = z.object({ port: z.string().transform((value) => Number(value)) });
+    const schema = buildMultiAccountChannelSchema(account);
+
+    expectTypeOf<z.input<typeof schema>["accounts"]>().toEqualTypeOf<
+      Record<string, { port: string }> | undefined
+    >();
+    expectTypeOf<z.output<typeof schema>["accounts"]>().toEqualTypeOf<
+      Record<string, { port: number }> | undefined
+    >();
+    expect(
+      schema.parse({ port: "80", accounts: { work: { port: "443" } } }).accounts?.work?.port,
+    ).toBe(443);
   });
 });
 

@@ -43,8 +43,10 @@ export const ChannelGroupEntrySchema = z
   .strict();
 
 /** Extend the canonical group/room policy shape with channel-owned fields. */
-export function buildGroupEntrySchema(extraShape: ZodRawShape = {}) {
-  return ChannelGroupEntrySchema.extend(extraShape);
+export function buildGroupEntrySchema<T extends ZodRawShape = Record<never, never>>(
+  extraShape?: T,
+) {
+  return ChannelGroupEntrySchema.extend(extraShape ?? ({} as T));
 }
 
 /** Build the common nested DM config block used by channel account schemas. */
@@ -66,10 +68,10 @@ export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodOb
   }) as unknown as T;
 }
 
-type MultiAccountSchemaBaseOptions<TAccount extends ZodTypeAny> = {
+type MultiAccountSchemaBaseOptions<TAccount extends ZodTypeAny, TOptional extends boolean> = {
   accountSchema?: TAccount;
   accountsMode?: "record" | "catchall";
-  optionalAccount?: boolean;
+  optionalAccount?: TOptional;
 };
 
 type MultiAccountRefinement<T extends z.ZodObject> = (
@@ -77,23 +79,41 @@ type MultiAccountRefinement<T extends z.ZodObject> = (
   ctx: z.RefinementCtx,
 ) => void | Promise<void>;
 
-type MultiAccountSchemaOptions<T extends z.ZodObject, TAccount extends ZodTypeAny> =
-  | (MultiAccountSchemaBaseOptions<TAccount> & { refine?: undefined })
-  | (MultiAccountSchemaBaseOptions<T> & { refine: MultiAccountRefinement<T> });
+type MultiAccountSchemaOptions<
+  T extends z.ZodObject,
+  TAccount extends ZodTypeAny,
+  TOptional extends boolean,
+> =
+  | (MultiAccountSchemaBaseOptions<TAccount, TOptional> & { refine?: undefined })
+  | (MultiAccountSchemaBaseOptions<T, TOptional> & { refine: MultiAccountRefinement<T> });
 
-type MultiAccountEnvelopeShape<TAccount extends ZodTypeAny> = {
-  accounts: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<TAccount>>>;
+type OptionalAccountValue<T, TOptional extends boolean> = TOptional extends true
+  ? T | undefined
+  : T;
+
+type MultiAccountEnvelopeShape<TAccount extends ZodTypeAny, TOptional extends boolean> = {
+  accounts: z.ZodType<
+    Record<string, OptionalAccountValue<z.output<TAccount>, TOptional>> | undefined,
+    Record<string, OptionalAccountValue<z.input<TAccount>, TOptional>> | undefined
+  >;
   defaultAccount: z.ZodOptional<z.ZodString>;
 };
+
+type MultiAccountChannelSchema<
+  T extends z.ZodObject,
+  TAccount extends ZodTypeAny,
+  TOptional extends boolean,
+> = z.ZodObject<z.util.Extend<T["shape"], MultiAccountEnvelopeShape<TAccount, TOptional>>>;
 
 /** Add the standard accounts/defaultAccount envelope and optional shared account/root refinement. */
 export function buildMultiAccountChannelSchema<
   T extends z.ZodObject,
   TAccount extends ZodTypeAny = T,
+  TOptional extends boolean = false,
 >(
   baseSchema: T,
-  options: MultiAccountSchemaOptions<T, TAccount> = {},
-): z.ZodObject<T["shape"] & MultiAccountEnvelopeShape<TAccount>> {
+  options: MultiAccountSchemaOptions<T, TAccount, TOptional> = {},
+): MultiAccountChannelSchema<T, TAccount, TOptional> {
   const refine = options.refine;
   const rawAccountSchema = options.accountSchema ?? baseSchema;
   const accountSchema = refine
@@ -110,14 +130,12 @@ export function buildMultiAccountChannelSchema<
     accounts: accountsSchema,
     defaultAccount: z.string().optional(),
   });
-  return (
-    refine
-      ? channelSchema.superRefine((value, ctx) => {
-          // Generic Zod extension widens the callback value; the runtime value and context stay intact.
-          return refine(value as z.output<T>, ctx as z.RefinementCtx);
-        })
-      : channelSchema
-  ) as z.ZodObject<T["shape"] & MultiAccountEnvelopeShape<TAccount>>;
+  return (refine
+    ? channelSchema.superRefine((value, ctx) => {
+        // Generic Zod extension widens the callback value; the runtime value and context stay intact.
+        return refine(value as z.output<T>, ctx as z.RefinementCtx);
+      })
+    : channelSchema) as unknown as MultiAccountChannelSchema<T, TAccount, TOptional>;
 }
 
 type BuildChannelConfigSchemaOptions = {
