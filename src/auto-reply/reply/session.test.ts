@@ -3231,6 +3231,63 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 
+  it("does not overwrite contextTokens when no fresh context snapshot is available", async () => {
+    const storePath = await createStorePath("openclaw-usage-context-window-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        contextTokens: 42_000,
+        totalTokens: 42_000,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 50_000, output: 5_000, total: 55_000 },
+      contextTokensUsed: 1_000_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].contextTokens).toBe(42_000);
+    expect(stored[sessionKey].totalTokens).toBe(42_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+  });
+
+  it("does not persist contextTokens from model-only updates without fresh usage", async () => {
+    const storePath = await createStorePath("openclaw-usage-context-window-model-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        contextTokens: 42_000,
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      providerUsed: "openai-codex",
+      modelUsed: "gpt-5.4",
+      contextTokensUsed: 1_000_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].contextTokens).toBe(42_000);
+    expect(stored[sessionKey].modelProvider).toBe("openai-codex");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+  });
+
   it("uses promptTokens when available without lastCallUsage", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";

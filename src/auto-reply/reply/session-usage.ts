@@ -148,9 +148,13 @@ export async function persistSessionUsageUpdate(params: {
           const preserveSessionModelState =
             params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
           const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+          const shouldRefreshContextTokens =
+            !preserveUserFacingRunState && (hasFreshContextSnapshot || hasCompactionSnapshot);
           const resolvedContextTokens = preserveUserFacingRunState
             ? entry.contextTokens
-            : (params.contextTokensUsed ?? entry.contextTokens);
+            : shouldRefreshContextTokens
+              ? (params.contextTokensUsed ?? entry.contextTokens)
+              : entry.contextTokens;
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
@@ -254,9 +258,7 @@ export async function persistSessionUsageUpdate(params: {
           const preserveSessionModelState =
             params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
           const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
-          const contextTokens = preserveUserFacingRunState
-            ? entry.contextTokens
-            : (params.contextTokensUsed ?? entry.contextTokens);
+          const contextTokens = entry.contextTokens;
           const patch: Partial<SessionEntry> = {
             modelProvider: preserveSessionModelState
               ? entry.modelProvider
