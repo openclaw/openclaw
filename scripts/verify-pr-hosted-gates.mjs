@@ -164,15 +164,16 @@ function hasSuccessfulCiGateJob(run, ciGateJobs, nowMs) {
   if (!run?.id || !Array.isArray(ciGateJobs)) {
     return false;
   }
+  const runAttempt = run.run_attempt ?? 1;
   return ciGateJobs.some((job) => {
     if (job?.name !== CI_GATE_CHECK_NAME) {
       return false;
     }
-    // The job list is fetched per run with filter=latest, which already scopes
-    // to the current attempt (the REST jobs payload does not expose
-    // run_attempt), so a run_id match plus filter=latest binds the gate to the
-    // attempt in progress — a prior attempt's gate cannot appear here.
-    if (job?.run_id !== run.id) {
+    // Workflow attempts share a run id and filter=latest keeps a not-yet-rerun
+    // job's prior-attempt execution, so bind to the attempt explicitly: the
+    // REST job payload exposes run_attempt, and jobs are fetched from the
+    // attempt-specific endpoint. Both must agree with the run's attempt.
+    if (job?.run_id !== run.id || (job?.run_attempt ?? runAttempt) !== runAttempt) {
       return false;
     }
     if (job?.status !== "completed" || job?.conclusion !== "success") {
@@ -540,8 +541,9 @@ function loadCiGateJobs(repo, workflowRuns, sha, nowMs = Date.now()) {
       isRecentRun(run, nowMs),
   );
   return candidates.flatMap((run) => {
+    const attempt = run.run_attempt ?? 1;
     const payload = JSON.parse(
-      execGhApiRead(`repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`, {
+      execGhApiRead(`repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }),
