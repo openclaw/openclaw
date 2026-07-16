@@ -75,7 +75,7 @@ vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
   isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
 }));
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 

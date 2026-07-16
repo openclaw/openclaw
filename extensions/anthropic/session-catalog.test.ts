@@ -192,6 +192,15 @@ function message(
   };
 }
 
+function sdkCliMessage(sessionId: string, text: string): Record<string, unknown> {
+  return {
+    ...message(sessionId, "user", text, 1),
+    entrypoint: "sdk-cli",
+    cwd: `/work/${sessionId}`,
+    version: "2.1.204",
+  };
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   nodeHostMocks.runNodePtyCommand.mockClear();
@@ -944,6 +953,118 @@ describe("Claude session catalog", () => {
         "Claude session is unavailable",
       );
     }
+  });
+
+  it("reuses cached metadata for unchanged discovered transcripts", async () => {
+    const home = await createHome();
+    const sessionIds = ["cached-session-a", "cached-session-b"];
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: Object.fromEntries(
+        sessionIds.map((sessionId) => [sessionId, [sdkCliMessage(sessionId, sessionId)]]),
+      ),
+    });
+    const openSpy = vi.spyOn(fs, "open");
+
+    const first = await listLocalClaudeSessionPage({}, home);
+    expect(openSpy).toHaveBeenCalledTimes(2);
+    openSpy.mockClear();
+
+    const second = await listLocalClaudeSessionPage({}, home);
+    expect(second).toEqual(first);
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("rescans only a changed transcript and refreshes a negative result", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const changedPath = path.join(projectDir, "changed-session.jsonl");
+    const unchangedPath = path.join(projectDir, "unchanged-session.jsonl");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: {
+        "changed-session": [],
+        "unchanged-session": [sdkCliMessage("unchanged-session", "Unchanged")],
+      },
+    });
+    const openSpy = vi.spyOn(fs, "open");
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toHaveLength(1);
+    await fs.appendFile(
+      changedPath,
+      `${JSON.stringify(sdkCliMessage("changed-session", "Now discovered"))}\n`,
+    );
+    const changedTime = new Date(Date.now() + 2_000);
+    await fs.utimes(changedPath, changedTime, changedTime);
+    const resolvedChangedPath = await fs.realpath(changedPath);
+    const resolvedUnchangedPath = await fs.realpath(unchangedPath);
+    openSpy.mockClear();
+
+    const refreshed = await listLocalClaudeSessionPage({}, home);
+    expect(refreshed.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ threadId: "changed-session", name: "Now discovered" }),
+        expect.objectContaining({ threadId: "unchanged-session", name: "Unchanged" }),
+      ]),
+    );
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).toEqual([resolvedChangedPath]);
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).not.toContain(resolvedUnchangedPath);
+  });
+
+  it("discovers a new transcript without rereading cached siblings", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const newPath = path.join(projectDir, "new-session.jsonl");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { "existing-session": [sdkCliMessage("existing-session", "Existing")] },
+    });
+    const openSpy = vi.spyOn(fs, "open");
+    await listLocalClaudeSessionPage({}, home);
+    await fs.writeFile(newPath, `${JSON.stringify(sdkCliMessage("new-session", "New"))}\n`);
+    const resolvedNewPath = await fs.realpath(newPath);
+    openSpy.mockClear();
+
+    const refreshed = await listLocalClaudeSessionPage({}, home);
+    expect(refreshed.sessions.map((record) => record.threadId).toSorted()).toEqual([
+      "existing-session",
+      "new-session",
+    ]);
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).toEqual([resolvedNewPath]);
+  });
+
+  it("evicts a deleted transcript after a complete scan", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const sessionId = "deleted-session";
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const fixedTime = new Date("2026-07-10T12:00:00.000Z");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Alpha")] },
+    });
+    await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    const originalStat = await fs.stat(transcriptPath);
+    await listLocalClaudeSessionPage({}, home);
+
+    await fs.rm(transcriptPath);
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([]);
+    await fs.writeFile(transcriptPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
+    await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    const recreatedStat = await fs.stat(transcriptPath);
+    expect({ mtimeMs: recreatedStat.mtimeMs, size: recreatedStat.size }).toEqual({
+      mtimeMs: originalStat.mtimeMs,
+      size: originalStat.size,
+    });
+    const openSpy = vi.spyOn(fs, "open");
+
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([
+      expect.objectContaining({ threadId: sessionId, name: "Bravo" }),
+    ]);
+    expect(openSpy).toHaveBeenCalledTimes(1);
   });
 
   it("reads newest transcript messages first by page while returning each page chronologically", async () => {

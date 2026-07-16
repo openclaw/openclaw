@@ -40,6 +40,14 @@ function shapeMemoryOnlyPlan(plan: MigrationPlan): MigrationPlan {
       `memory import found ${items.length} items; the maximum is ${MAX_MEMORY_MIGRATION_ITEMS}. Narrow or split the source memory before importing.`,
     );
   }
+  // Selection is id-based; duplicates would make one reviewed id execute multiple items.
+  const itemIds = new Set<string>();
+  for (const item of items) {
+    if (itemIds.has(item.id)) {
+      throw new Error(`duplicate memory migration item id "${item.id}"`);
+    }
+    itemIds.add(item.id);
+  }
   const unsupported = items.find(
     (item) => (item.status === "planned" || item.status === "conflict") && item.action !== "copy",
   );

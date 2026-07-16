@@ -5,11 +5,8 @@ import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
-import {
-  buildKimiCodingProvider,
-  isKimiK3ModelId,
-  normalizeKimiCodingModelId,
-} from "./provider-catalog.js";
+import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
+import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
 import { wrapKimiProviderStream } from "./stream.js";
 
@@ -105,20 +102,7 @@ export default definePluginEntry({
         const normalizedId = normalizeKimiCodingModelId(model.id);
         return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
       },
-      resolveThinkingProfile: ({ modelId }) =>
-        isKimiK3ModelId(modelId)
-          ? {
-              levels: [{ id: "max", label: "max" }],
-              defaultLevel: "max",
-              preserveWhenCatalogReasoningFalse: true,
-            }
-          : {
-              levels: [
-                { id: "off", label: "off" },
-                { id: "low", label: "on" },
-              ],
-              defaultLevel: "off",
-            },
+      resolveThinkingProfile,
       wrapSimpleCompletionStreamFn: (ctx) =>
         isKimiK3ModelId(ctx.modelId) ? wrapKimiProviderStream(ctx) : ctx.streamFn,
       wrapStreamFn: wrapKimiProviderStream,

@@ -16,6 +16,7 @@ import {
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
+  getReplyPayloadTtsSupplement,
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
@@ -512,6 +513,62 @@ async function sendFeishuFallbackPayload(params: {
   return lastResult!;
 }
 
+async function sendFeishuTtsSupplementPayload(params: {
+  ctx: FeishuSendPayloadContext;
+  payload: FeishuOutboundPayload;
+  supplement: NonNullable<ReturnType<typeof getReplyPayloadTtsSupplement>>;
+  sendVisiblePayload?: (
+    replyToId: string | undefined,
+  ) => ReturnType<NonNullable<ChannelOutboundAdapter["sendText"]>>;
+}) {
+  const sendMedia = feishuOutbound.sendMedia;
+  const sendText = feishuOutbound.sendText;
+  if (!sendMedia || !sendText) {
+    throw new Error("Feishu TTS supplement delivery is not available.");
+  }
+
+  const { normalizedReplyToId } = resolveFeishuReplyMode({
+    replyToId: params.ctx.replyToId,
+    threadId: params.ctx.threadId,
+  });
+  const nextReplyToId = createReplyToFanout({
+    replyToId: normalizedReplyToId,
+    replyToIdSource: params.ctx.replyToIdSource,
+    replyToMode: params.ctx.replyToMode,
+  });
+  const ctx = { ...params.ctx, payload: params.payload };
+  let lastResult: Awaited<ReturnType<typeof sendText>> | undefined;
+
+  // Structured payloads still need their actions. Plain text follows the TTS
+  // visibility marker so an existing streamed reply is not duplicated.
+  if (params.sendVisiblePayload) {
+    lastResult = await params.sendVisiblePayload(nextReplyToId());
+    await ctx.onDeliveryResult?.(lastResult);
+  } else if (params.supplement.visibleTextAlreadyDelivered !== true) {
+    const text = params.payload.text?.trim() ? params.payload.text : params.supplement.spokenText;
+    for (const chunk of chunkFeishuMarkdown(text, FEISHU_TEXT_CHUNK_LIMIT)) {
+      lastResult = await sendText({
+        ...ctx,
+        text: chunk,
+        replyToId: nextReplyToId(),
+        onDeliveryResult: undefined,
+      });
+      await ctx.onDeliveryResult?.(lastResult);
+    }
+  }
+
+  for (const mediaUrl of normalizeStringEntries(resolvePayloadMediaUrls(params.payload))) {
+    lastResult = await sendMedia({
+      ...ctx,
+      text: "",
+      mediaUrl,
+      replyToId: nextReplyToId(),
+      audioAsVoice: params.payload.audioAsVoice ?? ctx.audioAsVoice,
+    });
+  }
+  return lastResult ?? { channel: "feishu", messageId: "" };
+}
+
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkFeishuMarkdown,
@@ -540,6 +597,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {
     const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);
+    const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     if (parseFeishuCommentTarget(ctx.to)) {
       const interactive = normalizeInteractiveReply(payload.interactive);
       const normalizedPresentation =
@@ -584,13 +642,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         separateMediaAndText: true,
       });
     }
-
     const card = buildFeishuPayloadCard({
       payload,
       text: ctx.text,
       identity: ctx.identity,
     });
     if (!card) {
+      if (ttsSupplement) {
+        return await sendFeishuTtsSupplementPayload({ ctx, payload, supplement: ttsSupplement });
+      }
       const interactive = normalizeInteractiveReply(payload.interactive);
       const presentation =
         normalizeMessagePresentation(payload.presentation) ??
@@ -610,6 +670,31 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         ctx,
         payload: fallbackPayload,
         separateMediaAndText: presentationFallback || presentation !== undefined,
+      });
+    }
+
+    if (ttsSupplement) {
+      return await sendFeishuTtsSupplementPayload({
+        ctx,
+        payload,
+        supplement: ttsSupplement,
+        sendVisiblePayload: async (replyToId) => {
+          const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
+            replyToId,
+            threadId: ctx.threadId,
+          });
+          return attachChannelToResult(
+            "feishu",
+            await sendCardFeishu({
+              cfg: ctx.cfg,
+              to: ctx.to,
+              card,
+              replyToMessageId,
+              replyInThread,
+              accountId: ctx.accountId ?? undefined,
+            }),
+          );
+        },
       });
     }
 

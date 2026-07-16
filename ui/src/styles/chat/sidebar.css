@@ -757,6 +757,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 62%, transparent);
+  cursor: pointer;
 }
 
 .chat-tasks-rail__task:hover,
@@ -764,11 +765,48 @@
   border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
 }
 
+.chat-tasks-rail__task--expanded {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+}
+
 .chat-tasks-rail__task-head {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.chat-tasks-rail__task-disclosure {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-tasks-rail__task-chevron {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--muted);
+}
+
+.chat-tasks-rail__task-chevron svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
 }
 
 /* openclaw-tooltip is display:contents, so the title span itself is the flex
@@ -891,6 +929,56 @@
   font-size: var(--control-ui-text-xs);
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__task-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 5px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
+  cursor: default;
+}
+
+.chat-tasks-rail__task-inspector-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-tasks-rail__task-inspector-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-tasks-rail__task-inspector pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-tasks-rail__task-inspector-state {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.chat-tasks-rail__task-inspector-state--error {
+  color: var(--danger, #ef4444);
 }
 
 /* Quiet by default so a column of rows is not a column of accent links;

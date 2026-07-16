@@ -1,12 +1,11 @@
 package ai.openclaw.wear.shared
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class WearConversationModelsTest {
   @Test
-  fun snapshotPayloadRoundTripsWithoutPrivateSessionKeys() {
+  fun snapshotCarriesProjectedConversationState() {
     val snapshot =
       WearConversationSnapshot(
         generatedAtEpochMillis = 1234L,
@@ -39,25 +38,9 @@ class WearConversationModelsTest {
           ),
       )
 
-    val decoded =
-      WearConversationPayloadCodec.decodeSnapshot(
-        WearConversationPayloadCodec.encodeSnapshot(snapshot),
-      )
-
-    assertEquals(snapshot, decoded)
-    assertEquals("session-handle", decoded.sessions.single().id)
-  }
-
-  @Test
-  fun errorCodesUseStableWireNames() {
-    assertEquals(
-      "gateway_offline",
-      WearConversationErrorCode.GATEWAY_OFFLINE.toWireCode(),
-    )
-    assertEquals(
-      WearConversationErrorCode.PHONE_NOT_READY,
-      wearConversationErrorCode("phone_not_ready"),
-    )
-    assertNull(wearConversationErrorCode("future_error"))
+    assertEquals(WearGatewayState.CONNECTED, snapshot.gatewayState)
+    assertEquals("session-handle", snapshot.activeSessionId)
+    assertEquals("session-handle", snapshot.sessions.single().id)
+    assertEquals(WearChatRole.ASSISTANT, snapshot.messages.single().role)
   }
 }

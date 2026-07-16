@@ -234,6 +234,7 @@ internal fun OpenClawWearApp(
 
   DisposableEffect(speaker) {
     onDispose {
+      client.close()
       speaker.shutdown()
     }
   }
