@@ -256,6 +256,12 @@ async function agentCommandInternal(
           opts,
           sessionEntry: entry,
         });
+        const generatedMediaSourceRunId =
+          opts.internalDeliveryMediaUrls !== undefined &&
+          opts.inputProvenance?.kind === "inter_session" &&
+          isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
+            ? runId
+            : undefined;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const next: SessionEntry = {
           ...entry,
@@ -270,12 +276,8 @@ async function agentCommandInternal(
             entry,
             forceRestartSafeTools: opts.forceRestartSafeTools,
             runId,
-            sourceRunId:
-              opts.internalDeliveryMediaUrls !== undefined &&
-              opts.inputProvenance?.kind === "inter_session" &&
-              isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
-                ? runId
-                : undefined,
+            sourceIngress: generatedMediaSourceRunId ? "internal" : undefined,
+            sourceRunId: generatedMediaSourceRunId,
             sourceReplyDeliveryMode: opts.sourceReplyDeliveryMode,
             suppressTextDelivery: opts.internalDeliverySuppressText,
           }),

@@ -42,7 +42,7 @@ scenario:
   execution:
     kind: flow
     summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.
-    driver: qa-channel
+    channel: qa-channel
     config:
       baselineConversationId: qa-active-memory-off
       activeConversationId: qa-active-memory-on

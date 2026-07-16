@@ -25,7 +25,7 @@ scenario:
   execution:
     kind: flow
     summary: Force one cron run and assert qa-channel does not receive a duplicate delivery for the same marker.
-    driver: qa-channel
+    channel: qa-channel
     config:
       channelId: qa-room
       channelTitle: QA Room

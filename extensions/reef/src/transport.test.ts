@@ -1,7 +1,7 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
-import { ReefTransportClient } from "./transport.js";
+import { ReefRelayError, ReefTransportClient } from "./transport.js";
 import type { ReefKeys, RelayFriend } from "./types.js";
 
 const ts = 1_752_300_000;
@@ -162,5 +162,159 @@ describe("ReefTransportClient device authentication", () => {
 
     expect(seenTs).toEqual([String(ts), String(ts + 1), String(ts + 2)]);
     expect(new Set(seenTs).size).toBe(3);
+  });
+});
+
+const SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const ERROR_RESPONSE_MAX_BYTES = 64 * 1024;
+
+function jsonObjectBodyAtSize(bytes: number, field: "pad" | "error"): string {
+  const prefix = `{"${field}":"`;
+  const suffix = `"}`;
+  return `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
+}
+
+function createTrackedResponse(params: { status: number; chunks: Uint8Array[] }): {
+  response: Response;
+  state: { emittedBytes: number; cancelled: boolean };
+} {
+  const state = { emittedBytes: 0, cancelled: false };
+  let index = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = params.chunks[index++];
+      if (!chunk) {
+        controller.close();
+        return;
+      }
+      state.emittedBytes += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      state.cancelled = true;
+    },
+  });
+  return {
+    response: new Response(body, {
+      status: params.status,
+      headers: { "content-type": "application/json" },
+    }),
+    state,
+  };
+}
+
+describe("ReefTransportClient response body bounds", () => {
+  it("accepts success JSON exactly at the byte limit", async () => {
+    const body = jsonObjectBodyAtSize(SUCCESS_RESPONSE_MAX_BYTES, "pad");
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(body));
+          controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => response,
+      () => ts,
+    );
+
+    const result = await client.pull(0);
+    const pad = (result as unknown as { pad: string }).pad;
+    expect(pad).toHaveLength(SUCCESS_RESPONSE_MAX_BYTES - 10);
+    expect(pad[0]).toBe("x");
+    expect(pad.at(-1)).toBe("x");
+    expect(Buffer.byteLength(body)).toBe(SUCCESS_RESPONSE_MAX_BYTES);
+    expect(cancelled).toBe(false);
+  });
+
+  it("cancels success JSON when a chunk crosses the byte limit", async () => {
+    const offered = createTrackedResponse({
+      status: 200,
+      chunks: [
+        new Uint8Array(SUCCESS_RESPONSE_MAX_BYTES - 1).fill(0x78),
+        new Uint8Array(2).fill(0x78),
+        new Uint8Array(1024).fill(0x78),
+        new Uint8Array(1024).fill(0x78),
+      ],
+    });
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => offered.response,
+      () => ts,
+    );
+
+    await expect(client.pull(0)).rejects.toThrow(
+      /reef\.relay: JSON response exceeds 16777216 bytes/,
+    );
+    expect(offered.state.cancelled).toBe(true);
+    expect(offered.state.emittedBytes).toBeGreaterThan(SUCCESS_RESPONSE_MAX_BYTES);
+    expect(offered.state.emittedBytes).toBeLessThan(SUCCESS_RESPONSE_MAX_BYTES + 1 + 2048);
+  });
+
+  it("surfaces relay error JSON exactly at the error byte limit", async () => {
+    const body = jsonObjectBodyAtSize(ERROR_RESPONSE_MAX_BYTES, "error");
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => new Response(body, { status: 400 }),
+      () => ts,
+    );
+
+    const error = await client.requestFriend("bob", "code").catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(ReefRelayError);
+    expect(error).toMatchObject({ status: 400 });
+    expect((error as Error).message).toHaveLength(ERROR_RESPONSE_MAX_BYTES - 12);
+    expect(Buffer.byteLength(body)).toBe(ERROR_RESPONSE_MAX_BYTES);
+  });
+
+  it("keeps status fallback and cancels oversized error bodies", async () => {
+    const offered = createTrackedResponse({
+      status: 503,
+      chunks: Array.from({ length: 16 }, () => new Uint8Array(8 * 1024).fill(0x78)),
+    });
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => offered.response,
+      () => ts,
+    );
+
+    await expect(client.listFriends()).rejects.toMatchObject({
+      name: "ReefRelayError",
+      status: 503,
+      message: "relay HTTP 503",
+    });
+    expect(offered.state.cancelled).toBe(true);
+    expect(offered.state.emittedBytes).toBeGreaterThan(64 * 1024);
+    expect(offered.state.emittedBytes).toBeLessThan(128 * 1024);
+  });
+
+  it("keeps the typed status fallback for malformed error JSON", async () => {
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => new Response("{", { status: 502 }),
+      () => ts,
+    );
+
+    await expect(client.requestFriend("bob", "code")).rejects.toMatchObject({
+      name: "ReefRelayError",
+      status: 502,
+      message: "relay HTTP 502",
+    });
   });
 });

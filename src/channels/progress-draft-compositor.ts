@@ -32,13 +32,9 @@ export const PROGRESS_STATUS_PREAMBLE_FRESH_MS = 20_000;
 
 // Composes transient channel progress drafts from tool, reasoning, and
 // commentary updates. It owns draft lifecycle state before the final reply wins.
-export type ChannelProgressDraftMode = StreamingMode;
-
-export type ChannelProgressDraftCompositor = ReturnType<
-  typeof createChannelProgressDraftCompositor
->;
+type ChannelProgressDraftMode = StreamingMode;
 export type ChannelProgressDraftCompositorLine = string | ChannelProgressDraftLine;
-export type ChannelProgressDraftUpdateOptions = {
+type ChannelProgressDraftUpdateOptions = {
   flush?: boolean;
   lines?: readonly ChannelProgressDraftCompositorLine[];
 };

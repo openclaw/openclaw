@@ -485,6 +485,7 @@ export type GatewaySessionRow = {
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   displayName?: string;
+  derivedTitle?: string;
   channel?: string;
   surface?: string;
   subject?: string;

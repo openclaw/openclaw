@@ -128,6 +128,36 @@ export function collectDiscordVoiceParticipants(params: {
   return buildParticipantRoster({ selectedUserIds, totalCount, states: params.states });
 }
 
+export function countDiscordVoiceHumanParticipants(params: {
+  states: APIVoiceState[];
+  botUserId?: string;
+  additionalUserIds?: Iterable<string>;
+}): number {
+  const knownUserIds = new Set<string>();
+  let count = 0;
+  for (const state of params.states) {
+    const userId = state.user_id?.trim();
+    if (!userId || userId === params.botUserId || knownUserIds.has(userId)) {
+      continue;
+    }
+    knownUserIds.add(userId);
+    if (state.member?.user?.bot !== true) {
+      count += 1;
+    }
+  }
+  for (const rawUserId of params.additionalUserIds ?? []) {
+    const userId = rawUserId.trim();
+    if (!userId || userId === params.botUserId || knownUserIds.has(userId)) {
+      continue;
+    }
+    // A speaking event proves presence. Missing member metadata is treated as
+    // human so an uncertain group room cannot accidentally become always-on.
+    knownUserIds.add(userId);
+    count += 1;
+  }
+  return count;
+}
+
 async function resolveDiscordVoiceParticipantLine(params: {
   participant: DiscordVoiceParticipantState;
   guildId: string;

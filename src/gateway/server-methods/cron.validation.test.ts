@@ -1163,6 +1163,30 @@ describe("cron method validation", () => {
     }
   });
 
+  it.each(["add", "update"] as const)(
+    "rejects cron.%s when one command env value is non-string",
+    async (method) => {
+      const payload = {
+        kind: "command",
+        argv: ["sh", "-lc", "echo ok"],
+        env: { PATH: "/bin", DEBUG: true },
+      };
+      const result =
+        method === "add"
+          ? await invokeCronAdd(agentTurnCronParams({ payload }))
+          : await invokeCronUpdate(
+              { id: "cron-1", patch: { payload } },
+              createCronJob({ payload: { kind: "command", argv: ["echo", "before"] } }),
+            );
+
+      expect(result.context.cron[method]).not.toHaveBeenCalled();
+      expectResponseError(result.respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "command env must be an object with non-blank keys and string values",
+      });
+    },
+  );
+
   it("defaults session-target declarations to announce delivery", async () => {
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
