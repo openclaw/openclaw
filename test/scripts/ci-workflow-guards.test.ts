@@ -3503,6 +3503,7 @@ describe("ci workflow guards", () => {
     ]);
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     for (const inputName of ["sticky-disk", "use-actions-cache"]) {
+      expect(smokeSetupNodeStep.with[inputName]).toContain("matrix.docker_cache == true");
       expect(smokeSetupNodeStep.with[inputName]).toContain(
         "github.event_name != 'workflow_dispatch'",
       );
