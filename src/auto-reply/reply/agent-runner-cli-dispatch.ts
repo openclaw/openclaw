@@ -18,6 +18,7 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { buildPlanUpdateStepFields } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
@@ -427,6 +428,32 @@ function createCommentaryEventBridge(params: {
   });
 }
 
+function createPlanUpdateBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: GetReplyOptions["onPlanUpdate"];
+  startOrder?: AgentEventDeliveryStartOrder;
+}) {
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    deliver: params.deliver,
+    startOrder: params.startOrder,
+    read: (evt) => {
+      if (evt.stream !== "plan") {
+        return undefined;
+      }
+      return {
+        phase: normalizeOptionalString(evt.data.phase),
+        title: normalizeOptionalString(evt.data.title),
+        explanation: normalizeOptionalString(evt.data.explanation),
+        ...buildPlanUpdateStepFields(evt.data.steps),
+        source: normalizeOptionalString(evt.data.source),
+      };
+    },
+  });
+}
+
 function createToolBoundaryBridge(params: {
   runId: string;
   suppressed?: boolean;
@@ -469,6 +496,7 @@ type RunCliAgentWithLifecycleParams = {
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
   onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
+  onPlanUpdate?: GetReplyOptions["onPlanUpdate"];
   onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
@@ -619,6 +647,12 @@ async function runCliAgentWithLifecycleInternal(
     deliver: params.onCommentaryText,
     startOrder: progressStartOrder,
   });
+  const planBridge = createPlanUpdateBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: params.onPlanUpdate,
+    startOrder: progressStartOrder,
+  });
   const toolBoundaryBridge = createToolBoundaryBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
@@ -631,6 +665,7 @@ async function runCliAgentWithLifecycleInternal(
     reasoningProgressBridge,
     toolBridge,
     commentaryBridge,
+    planBridge,
     toolBoundaryBridge,
   ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
   let lifecycleTerminalEmitted = false;

@@ -43,6 +43,7 @@ import {
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import { buildPlanUpdateStepFields } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -195,12 +196,6 @@ function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined 
   return value === "turn" || value === "session" ? value : undefined;
 }
 
-function filterStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
-}
-
 function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
   const commandOutput = buildCommandOutputFromToolResultEvent(evt);
   if (commandOutput) {
@@ -295,7 +290,7 @@ async function forwardFollowupProgressEvent(params: {
       phase: readStringValue(evt.data.phase),
       title: readStringValue(evt.data.title),
       explanation: readStringValue(evt.data.explanation),
-      steps: filterStringArray(evt.data.steps),
+      ...buildPlanUpdateStepFields(evt.data.steps),
       source: readStringValue(evt.data.source),
     });
   }
@@ -1186,6 +1181,7 @@ export function createFollowupRunner(params: {
                       onReasoningText: createCliReasoningStreamBridge(
                         progressOpts?.onReasoningStream,
                       ),
+                      onPlanUpdate: progressOpts?.onPlanUpdate,
                       onReasoningProgress: async (payload) => {
                         await progressOpts?.onReasoningProgress?.(payload);
                       },
