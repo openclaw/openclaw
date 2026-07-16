@@ -24,8 +24,15 @@ const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: 
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
 const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
-  () => (params: { mediaUrl?: string; audioAsVoice?: boolean }) =>
-    params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
+  () =>
+    (params: {
+      mediaUrl?: string;
+      audioAsVoice?: boolean;
+      ttsSupplement?: { visibleTextAlreadyDelivered?: boolean };
+    }) =>
+      params.ttsSupplement
+        ? params.ttsSupplement.visibleTextAlreadyDelivered === true
+        : params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
 );
 
 function mergeStreamingText(
@@ -129,6 +136,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         mediaUrl?: string;
         mediaUrls?: string[];
         audioAsVoice?: boolean;
+        ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
         isError?: boolean;
       },
       meta: { kind: string },
@@ -1314,6 +1322,31 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       mediaUrl: "https://example.com/reply.mp3",
       audioAsVoice: true,
     });
+  });
+
+  it("sends TTS text before voice media when it is not already visible", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+    await options.deliver(
+      {
+        text: "Readable answer",
+        mediaUrl: "https://example.com/reply.ogg",
+        audioAsVoice: true,
+        ttsSupplement: { spokenText: "Readable answer" },
+      },
+      { kind: "final" },
+    );
+
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: "Readable answer",
+    });
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      mediaUrl: "https://example.com/reply.ogg",
+      audioAsVoice: true,
+    });
+    expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("discards partial streaming text when final replies send voice media", async () => {
