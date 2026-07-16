@@ -77,7 +77,11 @@ describe("streamContainerEvents handshake timeoutMs", () => {
 
   it("still opens against a real upgrading peer when timeoutMs is set", async () => {
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.once("listening", () => {
+        resolve();
+      });
+    });
     const address = wss.address();
     if (!address || typeof address === "string") {
       throw new Error("expected TCP listen address");
@@ -94,7 +98,11 @@ describe("streamContainerEvents handshake timeoutMs", () => {
       logger: { log: () => {}, error: () => {} },
     });
     // Give the client time to open, then abort so the stream promise settles.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        resolve();
+      }, 50);
+    });
     abort.abort();
     await streamPromise;
     expect(Date.now() - started).toBeLessThan(500);
