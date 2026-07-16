@@ -63,7 +63,7 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
 }));
 
 const agentDeleteSafetyMocks = vi.hoisted(() => ({
-  shouldRemoveEmptyAgentParentDir: vi.fn(() => true),
+  removeEmptyAgentParentDir: vi.fn(async () => {}),
 }));
 
 vi.mock("../agents/agent-delete-safety.js", async () => {
@@ -72,7 +72,7 @@ vi.mock("../agents/agent-delete-safety.js", async () => {
   );
   return {
     ...actual,
-    shouldRemoveEmptyAgentParentDir: agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir,
+    removeEmptyAgentParentDir: agentDeleteSafetyMocks.removeEmptyAgentParentDir,
   };
 });
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
@@ -165,8 +165,8 @@ describe("agents delete command", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
-    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReset();
-    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReturnValue(true);
+    agentDeleteSafetyMocks.removeEmptyAgentParentDir.mockReset();
+    agentDeleteSafetyMocks.removeEmptyAgentParentDir.mockResolvedValue(undefined);
   });
 
   it("routes deletion through the Gateway when reachable", async () => {
@@ -384,7 +384,7 @@ describe("agents delete command", () => {
     });
   });
 
-  it("trashes the parent agent state directory after removing subdirectories", async () => {
+  it("removes the parent agent state directory after removing subdirectories", async () => {
     await withStateDirEnv("openclaw-agents-delete-parent-", async ({ stateDir }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -403,12 +403,9 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
-      const expectedParentDir = path.join(stateDir, "agents", "ops");
-      expect(trashedPaths).toContain(expectedParentDir);
-      // The canonical parent is only eligible when containment and emptiness
-      // checks pass.
-      expect(agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir).toHaveBeenCalledWith({
+      // The canonical parent is only removed when containment and emptiness
+      // checks pass (atomic rmdir).
+      expect(agentDeleteSafetyMocks.removeEmptyAgentParentDir).toHaveBeenCalledWith({
         agentDir: path.join(stateDir, "agents", "ops", "agent"),
         agentId: "ops",
         stateDir,
@@ -417,7 +414,6 @@ describe("agents delete command", () => {
   });
 
   it("preserves a custom agentDir parent on agent delete", async () => {
-    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReturnValue(false);
     await withStateDirEnv("openclaw-agents-delete-custom-agentdir-", async ({ stateDir }) => {
       const customAgentDir = "/custom/path/ops";
       const cfg: OpenClawConfig = {
@@ -441,13 +437,14 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
+      // The canonical parent dirname should not appear in trash — the helper
+      // guards against non-canonical agentDir paths.
       const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
-      // The parent of a custom agentDir must never be trashed.
       expect(trashedPaths).not.toContain("/custom/path");
       const canonicalParent = path.join(stateDir, "agents", "ops");
       expect(trashedPaths).not.toContain(canonicalParent);
       // Helper must have been consulted with the custom agentDir.
-      expect(agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir).toHaveBeenCalledWith({
+      expect(agentDeleteSafetyMocks.removeEmptyAgentParentDir).toHaveBeenCalledWith({
         agentDir: customAgentDir,
         agentId: "ops",
         stateDir,

@@ -30,31 +30,37 @@ function workspacePathsOverlap(left: string, right: string): boolean {
 }
 
 /**
- * Returns true when the canonical per-agent state parent directory should be
- * removed after deleting the agent/ and sessions/ subdirectories.
+ * Best-effort removal of the canonical per-agent state parent directory after
+ * agent/ and sessions/ subdirectories have been cleaned up.
  *
  * Only the default {@code <stateDir>/agents/<agentId>} root is eligible.
  * Custom agentDir values that resolve outside this root are preserved to
- * avoid removing unrelated user files. The directory must also be empty after
- * subdirectories have been trashed; a non-empty parent is left in place.
+ * avoid removing unrelated user files.
+ *
+ * Uses {@code fs.promises.rmdir} so the removal is atomic: the OS refuses
+ * with ENOTEMPTY when the directory has been repopulated between the
+ * subdirectory cleanup and the parent removal (e.g. a same-id agent
+ * recreation), which prevents accidental deletion of new session state.
  */
-export function shouldRemoveEmptyAgentParentDir(params: {
+export async function removeEmptyAgentParentDir(params: {
   agentDir: string;
   agentId: string;
   stateDir: string;
-}): boolean {
+}): Promise<void> {
   const canonicalRoot = path.resolve(params.stateDir, "agents", params.agentId);
   const actualParent = path.dirname(params.agentDir);
   // Only the canonical per-agent root may be removed; custom or configured
   // agentDir paths may have a parent containing unrelated user files.
   if (canonicalRoot !== actualParent) {
-    return false;
+    return;
   }
-  // Guard against deleting a directory with unexpected remaining content.
+  // rmdir is atomic and fails with ENOTEMPTY when the directory has content,
+  // avoiding the check-to-use race of readdirSync + later recursive trash.
   try {
-    return fs.readdirSync(canonicalRoot).length === 0;
+    await fs.promises.rmdir(canonicalRoot);
   } catch {
-    return false;
+    // Best-effort: keep the directory if it is non-empty, missing, or the
+    // filesystem rejects the operation.
   }
 }
 

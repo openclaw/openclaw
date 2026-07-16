@@ -665,23 +665,18 @@ export const agentsHandlers: GatewayRequestHandlers = {
       );
       stateOutcomes.forEach(recordOutcome);
 
-      // After removing agent/ and sessions/ subdirectories, clean up the
-      // now-empty canonical parent directory so no stale agent folder
+      // After removing agent/ and sessions/ subdirectories, atomically remove
+      // the now-empty canonical parent directory so no stale agent folder
       // remains on disk. Only the default <stateDir>/agents/<agentId> root
       // is eligible; custom agentDir paths are preserved to avoid data loss.
-      if (
-        removeEmptyAgentParentDir({
-          agentDir: deleteResult.agentDir,
-          agentId,
-          stateDir: resolveStateDir(),
-        })
-      ) {
-        try {
-          await movePathToTrash(path.dirname(deleteResult.agentDir));
-        } catch {
-          // Best-effort: parent may have leftover files from other tooling.
-        }
-      }
+      // rmdir is atomic — a same-id recreation that populates the directory
+      // between subdirectory cleanup and parent removal causes ENOTEMPTY and
+      // the directory is kept.
+      await removeEmptyAgentParentDir({
+        agentDir: deleteResult.agentDir,
+        agentId,
+        stateDir: resolveStateDir(),
+      });
     }
 
     respond(

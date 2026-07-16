@@ -176,7 +176,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
 }));
 
 const agentDeleteSafetyMocks = vi.hoisted(() => ({
-  shouldRemoveEmptyAgentParentDir: vi.fn(() => true),
+  removeEmptyAgentParentDir: vi.fn(async () => {}),
 }));
 
 vi.mock("../../agents/agent-delete-safety.js", async () => {
@@ -185,7 +185,7 @@ vi.mock("../../agents/agent-delete-safety.js", async () => {
   );
   return {
     ...actual,
-    shouldRemoveEmptyAgentParentDir: agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir,
+    removeEmptyAgentParentDir: agentDeleteSafetyMocks.removeEmptyAgentParentDir,
   };
 });
 
@@ -1140,8 +1140,8 @@ describe("agents.delete", () => {
     mocks.loadConfigReturn = {};
     mocks.findAgentEntryIndex.mockReturnValue(0);
     mocks.pruneAgentConfig.mockReturnValue({ config: {}, removedBindings: 2 });
-    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReset();
-    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReturnValue(true);
+    agentDeleteSafetyMocks.removeEmptyAgentParentDir.mockReset();
+    agentDeleteSafetyMocks.removeEmptyAgentParentDir.mockResolvedValue(undefined);
   });
 
   it("deletes an existing agent and trashes files by default", async () => {
@@ -1188,8 +1188,10 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith("/agents");
-    expect(agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir).toHaveBeenCalledWith({
+    // The canonical parent directory should be removed atomically after
+    // agent/ and sessions/ subdirectories to avoid leaving an empty folder.
+    // The helper uses rmdir which refuses non-empty directories.
+    expect(agentDeleteSafetyMocks.removeEmptyAgentParentDir).toHaveBeenCalledWith({
       agentDir: "/agents/test-agent",
       agentId: "test-agent",
       stateDir: expect.any(String) as string,
@@ -1197,7 +1199,6 @@ describe("agents.delete", () => {
   });
 
   it("preserves a custom agentDir parent on agent delete", async () => {
-    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReturnValue(false);
     mocks.resolveAgentDir.mockReturnValue("/custom/path/test-agent");
 
     const { promise } = makeCall("agents.delete", {
@@ -1205,9 +1206,11 @@ describe("agents.delete", () => {
     });
     await promise;
 
+    // The parent of a custom agentDir must never be trashed (the helper
+    // guards against non-canonical paths).
     const trashCalls = mocks.movePathToTrash.mock.calls.map(([p]) => p as string);
     expect(trashCalls).not.toContain("/custom/path");
-    expect(agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir).toHaveBeenCalledWith({
+    expect(agentDeleteSafetyMocks.removeEmptyAgentParentDir).toHaveBeenCalledWith({
       agentDir: "/custom/path/test-agent",
       agentId: "test-agent",
       stateDir: expect.any(String) as string,
