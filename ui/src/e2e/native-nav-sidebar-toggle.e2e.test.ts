@@ -285,11 +285,33 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
   });
 
-  it("keeps the drawer hamburger at narrow widths in web titlebar chrome", async () => {
-    const page = await openPage({ webChrome: true, width: 700 });
-    // The web toolbar hides below the drawer breakpoint, so the hamburger is
-    // the only remaining sidebar toggle there.
+  it("keeps the sidebar rail beside a half-width native link browser", async () => {
+    const page = await openPage({ webChrome: true, width: 620 });
+    await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".sidebar-resizer").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(false);
+
+    await page.setViewportSize({ width: 560, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--mobile-nav");
+    await page.setViewportSize({ width: 620, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+  });
+
+  it("uses the drawer below the native minimum main-pane width", async () => {
+    const page = await openPage({ webChrome: true, width: 560 });
     await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--mobile-nav");
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
     // The native traffic-light cluster ends around x=78. Keep the brand aligned
     // with the desktop titlebar controls' 92px inset so the groups stay distinct.

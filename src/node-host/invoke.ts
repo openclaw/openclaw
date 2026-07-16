@@ -1075,10 +1075,15 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
   }
 }
 
-export const testing = {
+const testing = {
   MCP_TEXT_CONTENT_MAX_BYTES,
   MCP_INVOKE_PAYLOAD_MAX_BYTES,
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostInvokeTestApi")] =
+    testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -139,6 +139,7 @@ describe("uploadFile memex upload hardening", () => {
     expect(firstCall?.auditContext).toBe("tlon-memex-upload-url");
     expect(firstCall?.capture).toBe(false);
     expect(firstCall?.maxRedirects).toBe(0);
+    expect(firstCall?.timeoutMs).toBe(30_000);
     const firstBodyRaw = firstCall?.init?.body;
     expect(typeof firstBodyRaw).toBe("string");
     const firstBody = JSON.parse(firstBodyRaw as string) as Record<string, unknown>;
@@ -156,6 +157,7 @@ describe("uploadFile memex upload hardening", () => {
     expect(secondCall?.auditContext).toBe("tlon-memex-upload");
     expect(secondCall?.capture).toBe(false);
     expect(secondCall?.maxRedirects).toBe(0);
+    expect(secondCall?.timeoutMs).toBe(300_000);
     expect(secondCall?.init?.body).toBeInstanceOf(Blob);
     expect(mockRelease).toHaveBeenCalledTimes(2);
   });
@@ -509,6 +511,7 @@ describe("uploadFile custom S3 upload hardening", () => {
     expect(uploadCall?.auditContext).toBe("tlon-custom-s3-upload");
     expect(uploadCall?.capture).toBe(false);
     expect(uploadCall?.maxRedirects).toBe(0);
+    expect(uploadCall?.timeoutMs).toBe(300_000);
     expect(uploadCall?.policy).toBeUndefined();
     expect(mockRelease).toHaveBeenCalledTimes(1);
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();

@@ -1317,6 +1317,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
                   thinkingLevelOverride: p.thinking,
                   fastModeOverride: p.fastMode,
+                  queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
                   ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,

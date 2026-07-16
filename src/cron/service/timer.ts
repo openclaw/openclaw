@@ -499,14 +499,16 @@ function resolveTransientCronRetryDecision(params: {
   cronConfig?: CronConfig;
   error: string | undefined;
   lastErrorReason?: string;
+  executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
   const retryConfig = resolveRetryConfig(params.cronConfig);
-  const retryHint = resolveCronExecutionRetryHint(
-    params.error,
-    retryConfig.retryOn,
-    params.lastErrorReason,
-  );
+  const retryHint = resolveCronExecutionRetryHint({
+    error: params.error,
+    retryOn: retryConfig.retryOn,
+    classifiedReason: params.lastErrorReason,
+    executionStarted: params.executionStarted,
+  });
   const consecutiveErrors = params.consecutiveErrors ?? 0;
   if (!retryHint.retryable) {
     return {
@@ -710,6 +712,7 @@ export function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    executionStarted?: boolean;
     deliveryError?: string;
     diagnostics?: CronRunOutcome["diagnostics"];
     delivered?: boolean;
@@ -869,6 +872,7 @@ export function applyJobResult(
           cronConfig: state.deps.cronConfig,
           error: result.error,
           lastErrorReason: job.state.lastErrorReason,
+          executionStarted: result.executionStarted,
           consecutiveErrors: job.state.consecutiveErrors,
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
@@ -910,6 +914,7 @@ export function applyJobResult(
         cronConfig: state.deps.cronConfig,
         error: result.error,
         lastErrorReason: job.state.lastErrorReason,
+        executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
       });
       let normalNext: number | undefined;
@@ -1139,6 +1144,7 @@ function applyOutcomeToStoredJob(
       applyJobResult(state, result.job, {
         status: result.status,
         error: result.error,
+        executionStarted: result.executionStarted,
         deliveryError: result.deliveryError,
         diagnostics: result.diagnostics,
         delivered: result.delivered,
@@ -1176,6 +1182,7 @@ function applyOutcomeToStoredJob(
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
+    executionStarted: result.executionStarted,
     deliveryError: result.deliveryError,
     diagnostics: result.diagnostics,
     delivered: result.delivered,
@@ -1277,7 +1284,7 @@ function armRunningRecheckTimer(state: CronServiceState) {
 }
 
 /** Handles one cron timer tick under the process-wide root work admission. */
-export async function onTimer(state: CronServiceState) {
+async function onTimer(state: CronServiceState) {
   let admission;
   try {
     // A restart signal can be rejected after temporarily closing admission.
@@ -1924,6 +1931,7 @@ async function runStartupCatchupCandidate(
       activeJobMarker,
       status: result.status,
       error: result.error,
+      executionStarted: result.executionStarted,
       summary: result.summary,
       diagnostics: result.diagnostics,
       delivered: result.delivered,
@@ -2051,7 +2059,7 @@ async function applyStartupCatchupOutcomes(
 }
 
 /** Executes a cron job without mutating persisted job state. */
-export async function executeJobCore(
+async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
@@ -2394,6 +2402,7 @@ async function executeDetachedCronJob(
   return {
     status: res.status,
     error: res.error,
+    executionStarted: res.executionStarted,
     // Forward the post-run delivery failure recorded on an otherwise
     // successful run so the service can persist it as `lastDeliveryError` and
     // emit it on the finished event for CLI/UI/API run logs (#95419).
@@ -2455,5 +2464,12 @@ export function stopTimer(state: CronServiceState) {
     clearTimeout(state.timer);
   }
   state.timer = null;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronTimerTestApi")] = {
+    executeJobCore,
+    onTimer,
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

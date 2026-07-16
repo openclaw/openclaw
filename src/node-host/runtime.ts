@@ -34,7 +34,7 @@ import { scanNodeHostedSkills } from "./skills.js";
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-export type NodeHostManifest = {
+type NodeHostManifest = {
   caps: string[];
   commands: string[];
   pathEnv: string;

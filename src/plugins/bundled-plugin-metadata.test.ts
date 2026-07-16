@@ -27,7 +27,7 @@ import {
   loadPluginManifest,
   type PackageManifest,
 } from "./manifest.js";
-import { collectBundledRuntimeSidecarPaths } from "./runtime-sidecar-paths-baseline.js";
+import { writeBundledRuntimeSidecarPathBaseline } from "./runtime-sidecar-paths-baseline.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
@@ -45,6 +45,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "diffs-language-pack",
   "file-transfer",
   "google-meet",
+  "linux-canvas",
   "linux-node",
   "llm-task",
   "lobster",
@@ -70,6 +71,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "canvas",
   "device-pair",
   "file-transfer",
+  "linux-canvas",
   "linux-node",
   "memory-core",
   "ollama",
@@ -377,10 +379,10 @@ describe("bundled plugin metadata", () => {
   it(
     "matches the checked-in runtime sidecar path baseline",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
-    () => {
-      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).toEqual(
-        collectBundledRuntimeSidecarPaths({ rootDir: repoRoot }),
-      );
+    async () => {
+      await expect(
+        writeBundledRuntimeSidecarPathBaseline({ repoRoot, check: true }),
+      ).resolves.toMatchObject({ changed: false });
     },
   );
 
@@ -389,7 +391,6 @@ describe("bundled plugin metadata", () => {
       "dist/extensions/qa-channel/runtime-api.js",
     );
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
-    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
   });
 
   it("excludes root-package-excluded plugin sidecars from the packaged runtime sidecar baseline", () => {

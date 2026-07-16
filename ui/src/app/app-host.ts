@@ -180,7 +180,8 @@ function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapsh
 }
 
 function isMobileNavLayout(): boolean {
-  return globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false;
+  const maxWidth = isNativeWebChromeHost() ? 600 : 1100;
+  return globalThis.matchMedia?.(`(max-width: ${maxWidth}px)`).matches ?? false;
 }
 
 class OpenClawApp extends OpenClawLightDomElement {
@@ -1167,9 +1168,11 @@ class OpenClawShell extends OpenClawLightDomElement {
       <div
         class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
-          : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
-          ? "shell--onboarding"
-          : ""} ${settingsTakeover ? "shell--settings" : ""}"
+          : ""} ${mobileNavLayout ? "shell--mobile-nav" : ""} ${navDrawerOpen
+          ? "shell--nav-drawer-open"
+          : ""} ${this.onboarding ? "shell--onboarding" : ""} ${settingsTakeover
+          ? "shell--settings"
+          : ""}"
         style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
         @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}

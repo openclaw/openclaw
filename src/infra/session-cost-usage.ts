@@ -104,7 +104,7 @@ export type {
 
 // Bump when the durable cache schema or the meaning of cached totals changes, so
 // older builds are rebuilt instead of served stale.
-const USAGE_COST_CACHE_VERSION = 7;
+const USAGE_COST_CACHE_VERSION = 9;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 // Checkpoint policy for refreshCostUsageCache: bound the cost of full cache
 // serialization when scanning thousands of session files. Smaller of the two
@@ -158,6 +158,7 @@ type UsageCostCacheFileEntry = {
   countedRecords: number;
   usageEntries: UsageCostCachedUsageEntry[];
   transcriptEntries?: UsageCostCachedTranscriptEntry[];
+  hasUntimestampedTranscriptEntry: boolean;
   totals: CostUsageTotals;
   sessionSummary?: SessionCostSummary;
 };
@@ -523,9 +524,40 @@ function isSessionSummaryContainedInRange(
   startMs: number,
   endMs: number,
 ): boolean {
+  if (summary.firstActivity === undefined || summary.lastActivity === undefined) {
+    return false;
+  }
+  return summary.firstActivity >= startMs && summary.lastActivity <= endMs;
+}
+
+function hasUntimestampedCachedTranscriptEntry(
+  entry: UsageCostCacheFileEntry | undefined,
+): boolean {
+  return entry?.hasUntimestampedTranscriptEntry === true;
+}
+
+function rangeRequiresTimestampedTranscriptEntries(params: {
+  startMs?: number;
+  endMs?: number;
+  includeUntimestamped?: boolean;
+}): boolean {
   return (
-    (summary.firstActivity === undefined || summary.firstActivity >= startMs) &&
-    (summary.lastActivity === undefined || summary.lastActivity <= endMs)
+    params.includeUntimestamped !== true &&
+    (Number.isFinite(params.startMs) || Number.isFinite(params.endMs))
+  );
+}
+
+function shouldDeriveCachedSessionSummaryForRange(params: {
+  summary: SessionCostSummary;
+  entry: UsageCostCacheFileEntry | undefined;
+  startMs: number;
+  endMs: number;
+  includeUntimestamped?: boolean;
+}): boolean {
+  return (
+    !isSessionSummaryContainedInRange(params.summary, params.startMs, params.endMs) ||
+    (rangeRequiresTimestampedTranscriptEntries(params) &&
+      hasUntimestampedCachedTranscriptEntry(params.entry))
   );
 }
 
@@ -535,6 +567,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   sessionFile: string;
   startMs: number;
   endMs: number;
+  includeUntimestamped?: boolean;
   formatDayKey: UsageDayKeyFormatter;
 }): SessionCostSummary | null {
   if (!params.entry.transcriptEntries) {
@@ -565,9 +598,13 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   let lastActivity: number | undefined;
   let lastUserTimestamp: number | undefined;
   const maxLatencyMs = 12 * 60 * 60 * 1000;
+  const requiresTimestamp = rangeRequiresTimestampedTranscriptEntries(params);
 
   for (const entry of params.entry.transcriptEntries) {
     const ts = entry.timestamp;
+    if (ts === undefined && requiresTimestamp) {
+      continue;
+    }
     if (ts !== undefined && ts < params.startMs) {
       continue;
     }
@@ -1115,9 +1152,17 @@ const applyCostBreakdown = (totals: CostUsageTotals, costBreakdown: CostBreakdow
 };
 
 // Legacy function for backwards compatibility (no cost breakdown available)
-const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) => {
+const applyCostTotal = (
+  totals: CostUsageTotals,
+  costTotal: number | undefined,
+  provider?: string,
+  model?: string,
+) => {
   if (costTotal === undefined) {
     totals.missingCostEntries += 1;
+    const modelKey = `${normalizeOptionalString(provider) ?? "unknown"}/${normalizeOptionalString(model) ?? "unknown"}`;
+    totals.missingCostByModel ??= {};
+    totals.missingCostByModel[modelKey] = (totals.missingCostByModel[modelKey] ?? 0) + 1;
     return;
   }
   totals.totalCost += costTotal;
@@ -1501,7 +1546,7 @@ export async function loadCostUsageSummary(params?: {
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(bucket, entry.costBreakdown);
         } else {
-          applyCostTotal(bucket, entry.costTotal);
+          applyCostTotal(bucket, entry.costTotal, entry.provider, entry.model);
         }
         dailyMap.set(dayKey, bucket);
 
@@ -1509,7 +1554,7 @@ export async function loadCostUsageSummary(params?: {
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(totals, entry.costBreakdown);
         } else {
-          applyCostTotal(totals, entry.costTotal);
+          applyCostTotal(totals, entry.costTotal, entry.provider, entry.model);
         }
       },
     });
@@ -1559,6 +1604,7 @@ async function scanUsageFileForCache(params: {
     shouldTrackTranscriptEntries ? [] : undefined;
   let parsedRecords = 0;
   let countedRecords = 0;
+  let scannedUntimestampedTranscriptEntry = false;
   const startOffset =
     appendOnlyPrevious &&
     (await canReadJsonlFromOffset(params.file.filePath, appendOnlyPrevious.size))
@@ -1581,7 +1627,7 @@ async function scanUsageFileForCache(params: {
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(entryTotals, entry.costBreakdown);
         } else {
-          applyCostTotal(entryTotals, entry.costTotal);
+          applyCostTotal(entryTotals, entry.costTotal, entry.provider, entry.model);
         }
         addTotals(totals, entryTotals);
         if (ts !== undefined) {
@@ -1606,6 +1652,9 @@ async function scanUsageFileForCache(params: {
         toolResultCounts: entry.toolResultCounts,
         usageTotals: entryTotals ? cloneTotals(entryTotals) : undefined,
       });
+      if (transcriptEntries && ts === undefined) {
+        scannedUntimestampedTranscriptEntry = true;
+      }
     },
   });
 
@@ -1621,6 +1670,13 @@ async function scanUsageFileForCache(params: {
         ...(transcriptEntries ?? []),
       ]
     : undefined;
+  const hasUntimestampedTranscriptEntry =
+    scannedUntimestampedTranscriptEntry ||
+    Boolean(
+      appendOnlyPrevious &&
+      startOffset !== undefined &&
+      appendOnlyPrevious.hasUntimestampedTranscriptEntry,
+    );
   const sessionSummary =
     combinedTranscriptEntries &&
     (params.includeSessionSummary || appendOnlyPrevious?.sessionSummary)
@@ -1633,12 +1689,14 @@ async function scanUsageFileForCache(params: {
             countedRecords,
             usageEntries,
             transcriptEntries: combinedTranscriptEntries,
+            hasUntimestampedTranscriptEntry,
             totals,
           },
           sessionId,
           sessionFile: params.file.filePath,
           startMs: Number.NEGATIVE_INFINITY,
           endMs: Number.POSITIVE_INFINITY,
+          includeUntimestamped: true,
           formatDayKey: createUsageDayKeyFormatter(),
         }) ?? undefined)
       : undefined;
@@ -1655,6 +1713,7 @@ async function scanUsageFileForCache(params: {
       countedRecords: appendOnlyPrevious.countedRecords + countedRecords,
       usageEntries: [...appendOnlyPrevious.usageEntries, ...usageEntries],
       transcriptEntries: combinedTranscriptEntries,
+      hasUntimestampedTranscriptEntry,
       totals: previousTotals,
       sessionSummary,
     };
@@ -1668,6 +1727,7 @@ async function scanUsageFileForCache(params: {
     countedRecords,
     usageEntries,
     transcriptEntries: combinedTranscriptEntries,
+    hasUntimestampedTranscriptEntry,
     totals,
     sessionSummary,
   };
@@ -1842,6 +1902,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
   requestRefresh?: boolean;
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
@@ -1860,6 +1921,9 @@ export async function loadSessionCostSummariesFromCache(params: {
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
   const requiresDailyRebucket = params.dayBucket !== undefined;
+  const hasExplicitRange = params.startMs !== undefined || params.endMs !== undefined;
+  const rangeStartMs = params.startMs ?? Number.NEGATIVE_INFINITY;
+  const rangeEndMs = params.endMs ?? Number.POSITIVE_INFINITY;
   let sharedFormatDayKey: UsageDayKeyFormatter | undefined;
   // IANA formatter construction is expensive; lazily share it across every
   // session rebuilt from this cache snapshot.
@@ -1883,18 +1947,24 @@ export async function loadSessionCostSummariesFromCache(params: {
     const summary = entry?.sessionSummary ?? null;
     if (
       summary &&
-      params.startMs !== undefined &&
-      params.endMs !== undefined &&
+      hasExplicitRange &&
       (requiresDailyRebucket ||
-        !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
+        shouldDeriveCachedSessionSummaryForRange({
+          summary,
+          entry,
+          startMs: rangeStartMs,
+          endMs: rangeEndMs,
+          includeUntimestamped: params.includeUntimestamped,
+        }))
     ) {
       return entry
         ? buildSessionCostSummaryFromCacheEntry({
             entry,
             sessionId: session.sessionId,
             sessionFile: session.sessionFile,
-            startMs: params.startMs,
-            endMs: params.endMs,
+            startMs: rangeStartMs,
+            endMs: rangeEndMs,
+            includeUntimestamped: params.includeUntimestamped,
             formatDayKey: getFormatDayKey(),
           })
         : null;
@@ -2142,6 +2212,7 @@ export async function loadSessionCostSummary(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
 }): Promise<SessionCostSummary | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);
@@ -2178,6 +2249,7 @@ export async function loadSessionCostSummary(params: {
   let lastUserTimestamp: number | undefined;
   const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
   const resolveCost = createUsageCostResolver(params.config);
+  const requiresTimestamp = rangeRequiresTimestampedTranscriptEntries(params);
 
   await scanTranscriptFile({
     filePath: sessionFile,
@@ -2186,6 +2258,9 @@ export async function loadSessionCostSummary(params: {
     onEntry: (entry) => {
       const timestamp = entry.timestamp;
       const ts = timestamp?.getTime();
+      if (ts === undefined && requiresTimestamp) {
+        return;
+      }
 
       // Filter by date range if specified
       if (params.startMs !== undefined && ts !== undefined && ts < params.startMs) {
@@ -2287,7 +2362,7 @@ export async function loadSessionCostSummary(params: {
       if (entry.costBreakdown?.total !== undefined) {
         applyCostBreakdown(totals, entry.costBreakdown);
       } else {
-        applyCostTotal(totals, entry.costTotal);
+        applyCostTotal(totals, entry.costTotal, entry.provider, entry.model);
       }
 
       if (dayKey !== undefined && quarterBucket) {
@@ -2363,7 +2438,7 @@ export async function loadSessionCostSummary(params: {
         if (entry.costBreakdown?.total !== undefined) {
           applyCostBreakdown(existing.totals, entry.costBreakdown);
         } else {
-          applyCostTotal(existing.totals, entry.costTotal);
+          applyCostTotal(existing.totals, entry.costTotal, entry.provider, entry.model);
         }
         modelUsageMap.set(key, existing);
       }

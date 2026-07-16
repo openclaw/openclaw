@@ -127,6 +127,24 @@ function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
     : nothing;
 }
 
+function catalogErrorMessages(catalog: SessionCatalog): string[] {
+  const messages = new Set<string>();
+  const add = (error: SessionCatalog["error"]) => {
+    if (error) {
+      messages.add(`[${error.code}] ${error.message}`);
+    }
+  };
+  add(catalog.error);
+  for (const host of catalog.hosts) {
+    // A disconnected empty host is normal fleet state, not a provider failure.
+    // Cached rows still expose the host-level offline badge when the host is visible.
+    if (host.error?.code !== "NODE_OFFLINE") {
+      add(host.error);
+    }
+  }
+  return [...messages];
+}
+
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows reuse the live session row so activity, unread state, and
   // the session menu behave exactly like the regular list.
@@ -140,7 +158,10 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionId = `catalog:${catalog.id}`;
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
-    const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
+    const visibleHosts = hosts.filter((host) => host.sessions.length > 0);
+    const rows = visibleHosts.flatMap((host) =>
+      host.sessions.map((session) => ({ host, session })),
+    );
     const liveRows = rows.flatMap(({ session }) => {
       const row = session.openClawSessionKey
         ? liveRowsByKey.get(session.openClawSessionKey)
@@ -152,12 +173,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
     const hasMore = hosts.some((host) => Boolean(host.nextCursor));
     const canCreateSession = catalog.capabilities.createSession !== undefined;
-    const errorMessages = [
-      ...(catalog.error ? [`[${catalog.error.code}] ${catalog.error.message}`] : []),
-      ...hosts.flatMap((host) =>
-        host.error ? [`[${host.error.code}] ${host.error.message}`] : [],
-      ),
-    ];
+    const errorMessages = catalogErrorMessages(catalog);
     const hasError = errorMessages.length > 0;
     // Keep provider failures distinguishable from successful empty results.
     // Hiding both states would silently mask unavailable session sources.
@@ -210,8 +226,8 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
         ${collapsed
           ? nothing
           : html`<div class="sidebar-recent-sessions__list">
-                ${rows.map(({ host, session }) =>
-                  renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+                ${visibleHosts.map((host) =>
+                  renderCatalogHostGroup(catalog, host, liveRowsByKey, params),
                 )}
               </div>
               ${hasMore
@@ -231,6 +247,38 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   });
 }
 
+function renderCatalogHostGroup(
+  catalog: SessionCatalog,
+  host: SessionCatalogHost,
+  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
+  params: SessionCatalogGroupsParams,
+) {
+  const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
+  return html`
+    <section class="sidebar-session-catalog-host" data-session-catalog-host=${host.hostId}>
+      <div
+        class="sidebar-session-catalog-host__head"
+        aria-label=${errorHelp ? `${host.label}: ${errorHelp}` : host.label}
+        title=${errorHelp ?? host.label}
+      >
+        <span class="sidebar-session-catalog-host__label">${host.label}</span>
+        <span
+          class="sidebar-session-catalog-host__count ${host.error
+            ? "sidebar-session-catalog-host__count--error"
+            : ""}"
+          aria-hidden="true"
+          >${host.error ? icons.alertTriangle : host.sessions.length}</span
+        >
+      </div>
+      <div class="sidebar-session-catalog-host__sessions">
+        ${host.sessions.map((session) =>
+          renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+        )}
+      </div>
+    </section>
+  `;
+}
+
 function renderCatalogSessionRow(
   catalog: SessionCatalog,
   host: SessionCatalogHost,
@@ -238,20 +286,18 @@ function renderCatalogSessionRow(
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   params: SessionCatalogGroupsParams,
 ) {
+  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
+  const timestamp =
+    typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
+      ? rawTimestamp * 1000
+      : rawTimestamp;
   const adoptedRow = session.openClawSessionKey
     ? liveRowsByKey.get(session.openClawSessionKey)
     : undefined;
   if (adoptedRow) {
-    const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-    const timestamp =
-      typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-        ? rawTimestamp * 1000
-        : rawTimestamp;
     const label = session.name || session.threadId;
-    const hostSubtitle = catalog.hosts.length > 1 || host.kind === "node" ? host.label : undefined;
     return params.renderLiveRow(adoptedRow, {
       label,
-      ...(hostSubtitle ? { subtitle: hostSubtitle } : {}),
       meta: formatSidebarTimestamp(timestamp),
       title: `${label} · ${host.label}`,
     });
@@ -264,15 +310,7 @@ function renderCatalogSessionRow(
   const key = session.openClawSessionKey ?? buildCatalogSessionKey(catalogKey);
   const search = searchForSession(key);
   const href = `${pathForRoute("chat", params.basePath)}${search}`;
-  // The catalog header already names the source; only a paired node's
-  // machine name adds signal on the row itself.
-  const hostSubtitle = host.kind === "node" ? host.label : undefined;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
-  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-  const timestamp =
-    typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-      ? rawTimestamp * 1000
-      : rawTimestamp;
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
   const openTerminal = () => params.onOpenTerminal(catalogKey);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
@@ -296,9 +334,7 @@ function renderCatalogSessionRow(
       <a
         href=${href}
         class="sidebar-recent-session__link"
-        title=${hostSubtitle
-          ? `${session.name || session.threadId} · ${hostSubtitle}`
-          : session.name || session.threadId}
+        title=${`${session.name || session.threadId} · ${host.label}`}
         @click=${(event: MouseEvent) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
@@ -315,9 +351,6 @@ function renderCatalogSessionRow(
           <span class="sidebar-recent-session__name hover-marquee"
             >${session.name || session.threadId}</span
           >
-          ${hostSubtitle
-            ? html`<span class="sidebar-recent-session__subtitle">${hostSubtitle}</span>`
-            : nothing}
         </span>
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">

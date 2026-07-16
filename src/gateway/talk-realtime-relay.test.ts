@@ -2,10 +2,8 @@
  * Tests talk realtime relay event forwarding and connection cleanup.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  setActiveEmbeddedRun,
-  testing as embeddedRunTesting,
-} from "../agents/embedded-agent-runner/runs.js";
+import { setActiveEmbeddedRun } from "../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
