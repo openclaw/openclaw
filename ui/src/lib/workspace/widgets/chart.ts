@@ -25,6 +25,20 @@ const VIEW_WIDTH = 100;
 const VIEW_HEIGHT = 40;
 const PADDING = 2;
 
+function greaterFiniteBound(value: number): number | undefined {
+  if (value === Number.MAX_VALUE) {
+    return undefined;
+  }
+  return value >= 0 ? Math.min(value * 2 || 1, Number.MAX_VALUE) : value / 2;
+}
+
+function lesserFiniteBound(value: number): number | undefined {
+  if (value === -Number.MAX_VALUE) {
+    return undefined;
+  }
+  return value <= 0 ? Math.max(value * 2 || -1, -Number.MAX_VALUE) : value / 2;
+}
+
 function pointValue(value: unknown): number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
@@ -91,24 +105,23 @@ function mapChart(widget: WorkspaceWidget, value: unknown): ChartModel {
   const includesZeroByDefault = rawType === "bar" || rawType === "gauge";
   let min = configuredMin ?? (includesZeroByDefault ? Math.min(dataMin, 0) : dataMin);
   let max = configuredMax ?? (includesZeroByDefault ? Math.max(dataMax, 0) : dataMax);
-  if (min > max) {
-    return { status: "error", reason: "chart minimum must be less than maximum" };
-  }
-  if (min === max) {
+  if (min >= max) {
     if (configuredMin !== undefined) {
-      if (min === Number.MAX_VALUE) {
+      const expanded = greaterFiniteBound(min);
+      if (expanded === undefined) {
         return { status: "error", reason: "chart bounds cannot form a finite range" };
       }
-      max = min >= 0 ? Math.min(min * 2 || 1, Number.MAX_VALUE) : min / 2;
+      max = expanded;
     } else if (configuredMax !== undefined) {
-      if (max === -Number.MAX_VALUE) {
+      const expanded = lesserFiniteBound(max);
+      if (expanded === undefined) {
         return { status: "error", reason: "chart bounds cannot form a finite range" };
       }
-      min = max <= 0 ? Math.max(max * 2 || -1, -Number.MAX_VALUE) : max / 2;
+      min = expanded;
     } else if (min > 0) {
-      min /= 2;
+      min = lesserFiniteBound(min) ?? min;
     } else if (max < 0) {
-      max /= 2;
+      max = greaterFiniteBound(max) ?? max;
     } else {
       min = -1;
       max = 1;
@@ -179,7 +192,7 @@ function drawBars(model: Extract<ChartModel, { status: "ready" }>): SVGTemplateR
       return svg`<rect
         x=${PADDING + index * slot + gap / 2}
         y=${Math.min(y, baseline)}
-        width=${Math.max(slot - gap, 0.5)}
+        width=${slot - gap}
         height=${Math.max(Math.abs(baseline - y), 0.5)}
       />`;
     })}

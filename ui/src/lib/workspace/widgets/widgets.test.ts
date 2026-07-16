@@ -164,6 +164,15 @@ describe("chart mapping", () => {
       renderChart(widget({ props: { max: -Number.MIN_VALUE } }), [-Number.MIN_VALUE]),
     );
     expect(subnormalMax.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    for (const [props, values] of [
+      [{ min: 10 }, [1, 2]],
+      [{ max: -10 }, [-2, -1]],
+    ] as const) {
+      const oneSided = renderToContainer(renderChart(widget({ props }), values));
+      expect(oneSided.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+      expect(oneSided.querySelector('[data-test-id="workspace-chart-error"]')).toBeNull();
+    }
   });
 
   it("announces data extrema rather than configured axis bounds", () => {
@@ -229,6 +238,19 @@ describe("chart mapping", () => {
       ),
     );
     expect(capped.querySelector('[data-test-id="workspace-chart"]')).not.toBeNull();
+
+    const denseBars = renderToContainer(
+      renderChart(
+        widget({ props: { type: "bar" } }),
+        Array.from({ length: 500 }, (_, index) => index % 2),
+      ),
+    );
+    const slotWidth = (100 - 2 * 2) / 500;
+    expect(
+      [...denseBars.querySelectorAll("rect")].every(
+        (bar) => Number(bar.getAttribute("width")) <= slotWidth,
+      ),
+    ).toBe(true);
   });
 });
 
