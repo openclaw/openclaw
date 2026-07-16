@@ -730,11 +730,51 @@ describe("openclaw state database", () => {
         )
         .all(),
     ).toEqual([]);
+    expect(
+      database.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'apns_registration_tombstones'")
+        .get(),
+    ).toEqual({ strict: 1 });
     expect(() =>
       database.db
         .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
         .run("not-an-integer"),
     ).toThrow();
+  });
+
+  it("doctor migrates existing APNs tombstone tables to STRICT without losing rows", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE apns_registration_tombstones RENAME TO apns_registration_tombstones_strict;
+      CREATE TABLE apns_registration_tombstones (
+        node_id TEXT NOT NULL PRIMARY KEY,
+        deleted_at_ms INTEGER NOT NULL
+      );
+      INSERT INTO apns_registration_tombstones VALUES ('ios-node-1', 42);
+      DROP TABLE apns_registration_tombstones_strict;
+    `);
+    legacyDb.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Migrated shared state tables to SQLite STRICT typing (1)"],
+      warnings: [],
+    });
+    const migrated = openOpenClawStateDatabase(options);
+    expect(
+      migrated.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'apns_registration_tombstones'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(migrated.db.prepare("SELECT * FROM apns_registration_tombstones").get()).toEqual({
+      node_id: "ios-node-1",
+      deleted_at_ms: 42,
+    });
   });
 
   it("doctor migrates version 2 tables to STRICT without losing rows", () => {
