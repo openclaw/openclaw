@@ -1,4 +1,4 @@
-// Mattermost tests cover monitor onchar plugin behavior.
+// Mattermost test support covers monitor onchar plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 

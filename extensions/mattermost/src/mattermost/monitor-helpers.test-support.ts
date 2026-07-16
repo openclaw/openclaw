@@ -1,4 +1,4 @@
-// Mattermost tests cover monitor helpers plugin behavior.
+// Mattermost test support covers monitor helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeMention, shouldDropEmptyMattermostBody } from "./monitor-helpers.js";
 
