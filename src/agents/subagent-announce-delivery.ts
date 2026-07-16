@@ -1579,6 +1579,23 @@ function resolveGeneratedMediaSessionDeliveryRoute(params: {
   };
 }
 
+function buildRequesterWakeWithVisibleDeliveryFailure(params: {
+  reason?: SubagentAnnounceDeliveryResult["reason"];
+  error: string;
+}): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: true,
+    path: "direct",
+    ...(params.reason ? { reason: params.reason } : {}),
+    terminal: true,
+    requesterWakeStatus: "delivered",
+    visibleDeliveryRequired: true,
+    visibleDeliveryStatus: "failed",
+    visibleDeliveryError: params.error,
+    error: params.error,
+  };
+}
+
 async function sendSubagentAnnounceDirectly(params: {
   requesterSessionKey: string;
   targetRequesterSessionKey: string;
@@ -2093,6 +2110,12 @@ async function sendSubagentAnnounceDirectly(params: {
         if (textDelivery) {
           return textDelivery;
         }
+      }
+      if (isSubagentCompletion && expectedMediaUrls.length === 0) {
+        return buildRequesterWakeWithVisibleDeliveryFailure({
+          reason: "message_tool_delivery_missing",
+          error: "completion agent did not use the message tool for message-tool-only delivery",
+        });
       }
       return {
         delivered: false,

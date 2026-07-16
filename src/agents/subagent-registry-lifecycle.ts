@@ -362,6 +362,32 @@ export function createSubagentRegistryLifecycleController(params: {
     if (typeof delivery.enqueuedAt === "number") {
       deliveryState.enqueuedAt ??= delivery.enqueuedAt;
     }
+    if (delivery.requesterWakeStatus === "delivered") {
+      deliveryState.requesterWakeDeliveredAt =
+        typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
+    }
+    if (delivery.visibleDeliveryRequired !== undefined) {
+      deliveryState.visibleRequired = delivery.visibleDeliveryRequired;
+    }
+    if (delivery.visibleDeliveryStatus !== undefined) {
+      deliveryState.visibleStatus = delivery.visibleDeliveryStatus;
+      deliveryState.visibleError =
+        delivery.visibleDeliveryStatus === "failed"
+          ? (delivery.visibleDeliveryError ?? delivery.error ?? null)
+          : undefined;
+    }
+    if (
+      delivery.terminal === true &&
+      delivery.requesterWakeStatus === "delivered" &&
+      delivery.visibleDeliveryRequired === true &&
+      delivery.visibleDeliveryStatus === "failed"
+    ) {
+      // A terminal requester turn must survive restart as cleanup-only state;
+      // replaying it can duplicate tools or visible output.
+      deliveryState.status = "failed";
+      deliveryState.lastError =
+        delivery.visibleDeliveryError ?? delivery.error ?? "visible delivery failed";
+    }
     if (delivery.delivered) {
       const deliveredAt =
         typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
@@ -1114,15 +1140,30 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (didAnnounce) {
       const delivery = ensureDeliveryState(entry);
+      const visibleDeliveryError =
+        delivery.status === "failed" || delivery.visibleStatus === "failed"
+          ? (delivery.visibleError ?? getDeliveryLastError(entry) ?? "visible delivery failed")
+          : undefined;
       const shouldCreditDelivery =
         !options?.skipAnnounce ||
         delivery.status === "delivered" ||
+        delivery.status === "failed" ||
+        typeof delivery.requesterWakeDeliveredAt === "number" ||
         typeof delivery.announcedAt === "number";
       if (shouldCreditDelivery) {
-        const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
-        delivery.status = "delivered";
+        const deliveredAt =
+          delivery.deliveredAt ??
+          delivery.announcedAt ??
+          delivery.requesterWakeDeliveredAt ??
+          Date.now();
+        delivery.status = visibleDeliveryError ? "failed" : "delivered";
         delivery.deliveredAt = deliveredAt;
         delivery.announcedAt = delivery.announcedAt ?? deliveredAt;
+        if (visibleDeliveryError) {
+          delivery.lastError = visibleDeliveryError;
+        } else {
+          delivery.lastError = undefined;
+        }
         if (!options?.skipAnnounce) {
           delivery.announcedAt = deliveredAt;
           params.persist();
@@ -1131,17 +1172,22 @@ export function createSubagentRegistryLifecycleController(params: {
       clearPendingFinalDelivery(entry);
       const finalDelivery = ensureDeliveryState(entry);
       if (shouldCreditDelivery) {
-        finalDelivery.status = "delivered";
+        finalDelivery.status = visibleDeliveryError ? "failed" : "delivered";
         finalDelivery.suspendedAt = undefined;
         finalDelivery.suspendedReason = undefined;
+        if (visibleDeliveryError) {
+          finalDelivery.lastError = visibleDeliveryError;
+        } else {
+          finalDelivery.lastError = undefined;
+        }
       }
       if (shouldCreditDelivery && !options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
           entry,
-          deliveryStatus: "delivered",
+          deliveryStatus: visibleDeliveryError ? "failed" : "delivered",
+          deliveryError: visibleDeliveryError,
         });
       }
-      finalDelivery.lastError = undefined;
       finalDelivery.lastDropReason = undefined;
       entry.wakeOnDescendantSettle = undefined;
       const completion = ensureCompletionState(entry);
@@ -1272,7 +1318,17 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     const cleanup = entry.cleanup;
-    if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
+    const delivery = entry.delivery;
+    const hasTerminalVisibleFailure =
+      delivery?.status === "failed" &&
+      typeof delivery.requesterWakeDeliveredAt === "number" &&
+      delivery.visibleRequired === true &&
+      delivery.visibleStatus === "failed";
+    if (
+      typeof delivery?.announcedAt === "number" ||
+      delivery?.status === "delivered" ||
+      hasTerminalVisibleFailure
+    ) {
       if (!beginSubagentCleanup(runId)) {
         return false;
       }
@@ -1397,25 +1453,32 @@ export function createSubagentRegistryLifecycleController(params: {
               return true;
             }
           : undefined,
-      onDeliveryResult: (delivery) => {
+      onDeliveryResult: (deliveryResult) => {
         if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
           retireSupersededCleanupInBackground(runId, entry, cleanupGeneration);
           return;
         }
-        recordAnnounceDeliveryResult(entry, delivery);
-        if (delivery.delivered) {
+        recordAnnounceDeliveryResult(entry, deliveryResult);
+        if (deliveryResult.delivered) {
           const deliveryState = ensureDeliveryState(entry);
-          if (deliveryState.lastError !== undefined) {
+          const visibleDeliveryError =
+            deliveryResult.visibleDeliveryStatus === "failed"
+              ? (deliveryResult.visibleDeliveryError ?? deliveryResult.error)
+              : undefined;
+          if (visibleDeliveryError) {
+            deliveryState.lastError = visibleDeliveryError;
+            params.persist();
+          } else if (deliveryState.lastError !== undefined) {
             deliveryState.lastError = undefined;
             params.persist();
           }
           latestDeliveryError = undefined;
           return;
         }
-        if (delivery.path === "none") {
+        if (deliveryResult.path === "none") {
           ensureDeliveryState(entry).lastDropReason = "sink_unavailable";
         }
-        latestDeliveryError = formatAnnounceDeliveryError(delivery);
+        latestDeliveryError = formatAnnounceDeliveryError(deliveryResult);
         if (ensureDeliveryState(entry).lastError !== latestDeliveryError) {
           ensureDeliveryState(entry).lastError = latestDeliveryError;
           params.persist();
