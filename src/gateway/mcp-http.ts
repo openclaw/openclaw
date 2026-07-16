@@ -74,9 +74,9 @@ function isMcpJsonParseError(error: unknown): error is Error & { code: "mcp_json
   );
 }
 
-function parseMcpJsonBody(body: string): JsonRpcRequest | JsonRpcRequest[] {
+function parseMcpJsonBody(body: string): unknown {
   try {
-    return JSON.parse(body) as JsonRpcRequest | JsonRpcRequest[];
+    return JSON.parse(body) as unknown;
   } catch (error) {
     throw createMcpJsonParseError(error);
   }
@@ -94,36 +94,27 @@ function isJsonRpcRequest(message: unknown): message is JsonRpcRequest {
   return isRecord(message) && message.jsonrpc === "2.0" && typeof message.method === "string";
 }
 
-function isJsonRpcNotification(message: JsonRpcRequest): boolean {
-  return !Object.hasOwn(message, "id");
+function shouldSendJsonRpcResponse(message: unknown): boolean {
+  return !isJsonRpcRequest(message) || Object.hasOwn(message, "id");
 }
 
-function isPreResolutionJsonRpcNotification(message: unknown): message is JsonRpcRequest {
-  if (!isJsonRpcRequest(message) || !isJsonRpcNotification(message)) {
-    return false;
-  }
-  return (
-    message.method === "tools/list" ||
-    message.method === "notifications/initialized" ||
-    message.method === "notifications/cancelled"
+function collectJsonRpcResponses<T>(
+  messages: unknown[],
+  createResponse: (message: unknown) => T,
+): T[] {
+  return messages.filter(shouldSendJsonRpcResponse).map(createResponse);
+}
+
+function jsonRpcInternalError(parsed: unknown) {
+  const isBatch = Array.isArray(parsed);
+  const messages = isBatch ? parsed : [parsed];
+  const responses = collectJsonRpcResponses(messages, (message) =>
+    jsonRpcError(readJsonRpcRequestId(message), -32603, "Internal error"),
   );
-}
-
-function isPreResolutionJsonRpcNotificationBatch(messages: unknown[]): boolean {
-  return messages.every(isPreResolutionJsonRpcNotification);
-}
-
-function jsonRpcInternalError(parsed: JsonRpcRequest | JsonRpcRequest[] | undefined) {
-  if (Array.isArray(parsed)) {
-    const responses = parsed
-      .filter((message) => !isJsonRpcRequest(message) || !isJsonRpcNotification(message))
-      .map((message) => jsonRpcError(readJsonRpcRequestId(message), -32603, "Internal error"));
-    return responses.length === 0 ? null : responses;
-  }
-  if (isJsonRpcRequest(parsed) && isJsonRpcNotification(parsed)) {
+  if (responses.length === 0) {
     return null;
   }
-  return jsonRpcError(readJsonRpcRequestId(parsed), -32603, "Internal error");
+  return isBatch ? responses : responses[0];
 }
 
 function shouldLogMcpLoopbackTraffic(): boolean {
@@ -224,18 +215,18 @@ async function startMcpLoopbackServer(port = 0): Promise<{
     const cliRequestCaptureHandle = markMcpLoopbackRequestStarted(cliCaptureKey);
     const requestAbort = createRequestAbortSignal(req, res);
     void (async () => {
-      let parsed: JsonRpcRequest | JsonRpcRequest[] | undefined;
+      let parsed: unknown;
       let cliCaptureHandles: Array<ReturnType<typeof markMcpLoopbackToolCallStarted>> = [];
       try {
         const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
         parsed = parseMcpJsonBody(body);
-        const messages = Array.isArray(parsed) ? parsed : [parsed];
-        if (isPreResolutionJsonRpcNotificationBatch(messages)) {
+        if (Array.isArray(parsed) && parsed.length === 0) {
           markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
-          res.writeHead(202);
-          res.end();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(jsonRpcError(null, -32600, "Invalid Request")));
           return;
         }
+        const messages = Array.isArray(parsed) ? parsed : [parsed];
         cliCaptureHandles = messages.map((message) => {
           if (
             !cliRequestCaptureHandle ||
@@ -281,13 +272,18 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           (!harnessEntry ||
             isAgentHarnessSessionStoreEntryProtected(requestContext.sessionKey, harnessEntry))
         ) {
-          const errors = messages.map((message) =>
+          const errors = collectJsonRpcResponses(messages, (message) =>
             jsonRpcError(
               readJsonRpcRequestId(message),
               -32600,
               AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
             ),
           );
+          if (errors.length === 0) {
+            res.writeHead(202);
+            res.end();
+            return;
+          }
           const payload = Array.isArray(parsed)
             ? JSON.stringify(errors)
             : JSON.stringify(errors[0]);
@@ -397,7 +393,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           } finally {
             markMcpLoopbackToolCallFinished(cliCaptureHandle);
           }
-          if (response !== null && !isJsonRpcNotification(message)) {
+          if (response !== null && shouldSendJsonRpcResponse(message)) {
             const responseToolName =
               message.method === "tools/call" && isRecord(message.params)
                 ? message.params.name

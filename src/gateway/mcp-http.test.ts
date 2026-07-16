@@ -998,6 +998,40 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
   });
 
+  it("suppresses reserved-harness errors for notifications", async () => {
+    const { runtime, port } = await startLoopbackServerForTest();
+    const headers = {
+      "content-type": "application/json",
+      "x-session-key": "agent:main:harness:codex:supervision:native-thread",
+    };
+    const notificationResponse = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+    });
+    const mixedResponse = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers,
+      body: JSON.stringify([
+        { jsonrpc: "2.0", method: "tools/list" },
+        { jsonrpc: "2.0", id: 42, method: "tools/list" },
+      ]),
+    });
+
+    expect(notificationResponse.status).toBe(202);
+    await expect(notificationResponse.text()).resolves.toBe("");
+    expect(mixedResponse.status).toBe(200);
+    await expect(mixedResponse.json()).resolves.toEqual([
+      expect.objectContaining({
+        id: 42,
+        error: { code: -32600, message: expect.stringContaining("reserved") },
+      }),
+    ]);
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
   it("allows an existing unlocked legacy harness-prefixed context", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const sessionKey = "agent:main:harness:legacy-notes";
@@ -2902,6 +2936,26 @@ describe("mcp loopback server", () => {
     expect(payload[1]?.result?.tools?.map((tool) => tool.name)).toContain("message");
   });
 
+  it("returns an invalid request for an empty batch before harness policy", async () => {
+    const { runtime, port } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:harness:codex:supervision:native-thread",
+      },
+      body: "[]",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: null,
+      error: { code: -32600, message: "Invalid Request" },
+    });
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
   it("returns 202 with an empty body for JSON-RPC notifications", async () => {
     server = await startMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
@@ -2916,7 +2970,7 @@ describe("mcp loopback server", () => {
     await expect(response.text()).resolves.toBe("");
   });
 
-  it("does not resolve tools for tools/list notification-only requests", async () => {
+  it("suppresses internal errors for notification-only requests", async () => {
     resolveGatewayScopedToolsMock.mockImplementation(() => {
       throw new Error("tool resolution exploded");
     });
@@ -2931,29 +2985,27 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(202);
     await expect(response.text()).resolves.toBe("");
-    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["notifications/initialized", "notifications/cancelled"])(
-    "does not resolve tools for %s notification-only requests",
-    async (method) => {
-      resolveGatewayScopedToolsMock.mockImplementation(() => {
-        throw new Error("tool resolution exploded");
-      });
-      server = await startMcpLoopbackServer(0);
-      const runtime = getActiveMcpLoopbackRuntime();
-      const response = await sendRaw({
-        port: server.port,
-        token: runtime?.ownerToken,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", method }),
-      });
+  it("returns only request responses for mixed batches", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", method: "tools/list" },
+        { jsonrpc: "2.0", id: 42, method: "tools/list" },
+      ]),
+    });
+    const payload = (await response.json()) as Array<{ id?: unknown }>;
 
-      expect(response.status).toBe(202);
-      await expect(response.text()).resolves.toBe("");
-      expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(response.status).toBe(200);
+    expect(payload).toHaveLength(1);
+    expect(payload[0]?.id).toBe(42);
+  });
 
   it("dispatches tools/call notifications without returning a response", async () => {
     const execute = vi.fn(async () => ({
