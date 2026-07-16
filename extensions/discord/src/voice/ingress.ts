@@ -67,8 +67,8 @@ export async function resolveDiscordVoiceIngressContext(params: {
   userId: string;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
-  ownerAllowFrom?: string[];
-  ownerAllowAll?: boolean;
+  commandAllowFrom?: string[];
+  commandAllowAll?: boolean;
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceIngressContext | null> {
@@ -88,8 +88,8 @@ export async function resolveDiscordVoiceIngressContext(params: {
     channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
     channelLabel: formatMention({ channelId: entry.channelId }),
     memberRoleIds: speakerIdentity.memberRoleIds,
-    ownerAllowFrom: params.ownerAllowFrom,
-    ownerAllowAll: params.ownerAllowAll,
+    commandAllowFrom: params.commandAllowFrom,
+    commandAllowAll: params.commandAllowAll,
     sender: {
       id: speakerIdentity.id,
       name: speakerIdentity.name,
@@ -115,8 +115,8 @@ export async function runDiscordVoiceAgentTurn(params: {
   runtime: RuntimeEnv;
   context?: DiscordVoiceIngressContext;
   toolsAllow?: string[];
-  ownerAllowFrom?: string[];
-  ownerAllowAll?: boolean;
+  commandAllowFrom?: string[];
+  commandAllowAll?: boolean;
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceAgentTurnResult | null> {
@@ -127,8 +127,8 @@ export async function runDiscordVoiceAgentTurn(params: {
       userId: params.userId,
       cfg: params.cfg,
       discordConfig: params.discordConfig,
-      ownerAllowFrom: params.ownerAllowFrom,
-      ownerAllowAll: params.ownerAllowAll,
+      commandAllowFrom: params.commandAllowFrom,
+      commandAllowAll: params.commandAllowAll,
       fetchGuildName: params.fetchGuildName,
       speakerContext: params.speakerContext,
     }));

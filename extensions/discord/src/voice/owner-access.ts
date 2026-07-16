@@ -7,21 +7,30 @@ export function resolveDiscordVoiceOwnerAccess(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
-}): { ownerAllowFrom: string[]; ownerAllowAll: boolean } {
+}): {
+  commandAllowFrom: string[];
+  commandAllowAll: boolean;
+  ownerAllowFrom: string[];
+  ownerAllowAll: boolean;
+} {
   const commandOwnerAllowFrom = resolveDiscordCommandOwnerAllowFrom(params.cfg);
   if (commandOwnerAllowFrom) {
+    const allowAll = commandOwnerAllowFrom.includes("*");
     return {
+      commandAllowFrom: commandOwnerAllowFrom,
+      commandAllowAll: allowAll,
       ownerAllowFrom: commandOwnerAllowFrom,
-      ownerAllowAll: commandOwnerAllowFrom.includes("*"),
+      ownerAllowAll: allowAll,
     };
   }
   return {
-    ownerAllowFrom:
+    commandAllowFrom:
       resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
       params.discordConfig.allowFrom ??
       params.discordConfig.dm?.allowFrom ??
       [],
-    // Legacy Discord wildcards grant transport access, not owner authority.
+    commandAllowAll: false,
+    ownerAllowFrom: [],
     ownerAllowAll: false,
   };
 }

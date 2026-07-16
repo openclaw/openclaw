@@ -6276,7 +6276,7 @@ describe("DiscordVoiceManager", () => {
     }
   });
 
-  it("accepts allowlisted voice speakers", async () => {
+  it("keeps account allowlisted voice speakers non-owner", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
       nickname: "Owner Nick",
@@ -6291,7 +6291,7 @@ describe("DiscordVoiceManager", () => {
     await processVoiceSegment(manager, "u-owner");
 
     expect(agentCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({ senderIsOwner: true }),
+      expect.objectContaining({ senderIsOwner: false }),
       expect.anything(),
     );
   });
@@ -6464,7 +6464,7 @@ describe("DiscordVoiceManager", () => {
       durationSeconds: 1.2,
       cfg: {},
       discordConfig,
-      ownerAllowFrom: ["discord:u-owner"],
+      commandAllowFrom: ["discord:u-owner"],
       runtime: createRuntime(),
       fetchGuildName: async () => "Guild One",
       speakerContext,

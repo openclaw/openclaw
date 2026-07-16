@@ -31,8 +31,8 @@ export async function authorizeDiscordVoiceIngress(params: {
   scope?: "channel" | "thread";
   channelLabel?: string;
   memberRoleIds: string[];
-  ownerAllowFrom?: string[];
-  ownerAllowAll?: boolean;
+  commandAllowFrom?: string[];
+  commandAllowAll?: boolean;
   sender: { id: string; name?: string; tag?: string };
 }): Promise<
   { ok: true; channelConfig?: DiscordChannelConfigResolved | null } | { ok: false; message: string }
@@ -102,19 +102,22 @@ export async function authorizeDiscordVoiceIngress(params: {
     allowNameMatching: false,
   });
 
-  const { ownerAllowList, ownerAllowed } = resolveDiscordOwnerAccess({
-    allowFrom:
-      params.ownerAllowFrom ?? params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom,
-    sender: params.sender,
-    allowNameMatching: false,
-  });
+  const { ownerAllowList: commandAllowList, ownerAllowed: commandAllowed } =
+    resolveDiscordOwnerAccess({
+      allowFrom:
+        params.commandAllowFrom ??
+        params.discordConfig.allowFrom ??
+        params.discordConfig.dm?.allowFrom,
+      sender: params.sender,
+      allowNameMatching: false,
+    });
 
   const useAccessGroups = params.useAccessGroups ?? params.cfg.commands?.useAccessGroups !== false;
   const authorizers = useAccessGroups
     ? [
         {
-          configured: params.ownerAllowAll === true || ownerAllowList != null,
-          allowed: params.ownerAllowAll === true || ownerAllowed,
+          configured: params.commandAllowAll === true || commandAllowList != null,
+          allowed: params.commandAllowAll === true || commandAllowed,
         },
         { configured: hasAccessRestrictions, allowed: memberAllowed },
       ]

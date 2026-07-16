@@ -265,6 +265,8 @@ export class DiscordVoiceManager {
     string,
     { message: string; skipLogged: boolean }
   >();
+  private readonly commandAllowFrom?: string[];
+  private readonly commandAllowAll: boolean;
   private readonly ownerAllowFrom?: string[];
   private readonly ownerAllowAll: boolean;
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
@@ -293,6 +295,8 @@ export class DiscordVoiceManager {
     this.botUserId = params.botUserId;
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
     const ownerAccess = resolveDiscordVoiceOwnerAccess(params);
+    this.commandAllowFrom = ownerAccess.commandAllowFrom;
+    this.commandAllowAll = ownerAccess.commandAllowAll;
     this.ownerAllowFrom = ownerAccess.ownerAllowFrom;
     this.ownerAllowAll = ownerAccess.ownerAllowAll;
     this.allowedChannels =
@@ -1708,8 +1712,8 @@ export class DiscordVoiceManager {
       userId,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
-      ownerAllowFrom: this.ownerAllowFrom,
-      ownerAllowAll: this.ownerAllowAll,
+      commandAllowFrom: this.commandAllowFrom,
+      commandAllowAll: this.commandAllowAll,
       botUserId: this.botUserId,
       speakerContext: this.speakerContext,
     });
@@ -1739,8 +1743,8 @@ export class DiscordVoiceManager {
       runtime: this.params.runtime,
       context,
       toolsAllow,
-      ownerAllowFrom: this.ownerAllowFrom,
-      ownerAllowAll: this.ownerAllowAll,
+      commandAllowFrom: this.commandAllowFrom,
+      commandAllowAll: this.commandAllowAll,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
         return guild && typeof guild.name === "string" && guild.name.trim()
@@ -1771,8 +1775,8 @@ export class DiscordVoiceManager {
       ...params,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
-      ownerAllowFrom: this.ownerAllowFrom,
-      ownerAllowAll: this.ownerAllowAll,
+      commandAllowFrom: this.commandAllowFrom,
+      commandAllowAll: this.commandAllowAll,
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
       resolveIngressContext: () =>

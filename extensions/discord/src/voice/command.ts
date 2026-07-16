@@ -91,8 +91,8 @@ async function authorizeVoiceCommand(
     scope: channelContext.isThreadChannel ? "thread" : "channel",
     channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
-    ownerAllowFrom: ownerAccess.ownerAllowFrom,
-    ownerAllowAll: ownerAccess.ownerAllowAll,
+    commandAllowFrom: ownerAccess.commandAllowFrom,
+    commandAllowAll: ownerAccess.commandAllowAll,
     sender: {
       id: sender.id,
       name: sender.name,

@@ -34,8 +34,8 @@ export async function processDiscordVoiceSegment(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
-  ownerAllowFrom?: string[];
-  ownerAllowAll?: boolean;
+  commandAllowFrom?: string[];
+  commandAllowAll?: boolean;
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
   ingressContext?: DiscordVoiceIngressContext;
@@ -56,8 +56,8 @@ export async function processDiscordVoiceSegment(params: {
           userId,
           cfg: params.cfg,
           discordConfig: params.discordConfig,
-          ownerAllowFrom: params.ownerAllowFrom,
-          ownerAllowAll: params.ownerAllowAll,
+          commandAllowFrom: params.commandAllowFrom,
+          commandAllowAll: params.commandAllowAll,
           fetchGuildName: params.fetchGuildName,
           speakerContext: params.speakerContext,
         }));
@@ -130,8 +130,8 @@ export async function processDiscordVoiceSegment(params: {
       discordConfig: params.discordConfig,
       runtime: params.runtime,
       context: ingress,
-      ownerAllowFrom: params.ownerAllowFrom,
-      ownerAllowAll: params.ownerAllowAll,
+      commandAllowFrom: params.commandAllowFrom,
+      commandAllowAll: params.commandAllowAll,
       fetchGuildName: params.fetchGuildName,
       speakerContext: params.speakerContext,
     });
