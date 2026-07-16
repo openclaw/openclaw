@@ -1,15 +1,15 @@
 // Control UI view renders logs screen content.
 import { html, nothing } from "lit";
 import {
+  renderPanelRefreshStatus,
+  type PanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
+import {
   renderSettingsEmpty,
   renderSettingsRow,
   renderSettingsStatus,
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
-import {
-  renderPanelRefreshStatus,
-  type PanelRefreshStatus,
-} from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { LogEntry, LogLevel } from "./log-lines.ts";

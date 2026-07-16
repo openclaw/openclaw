@@ -283,12 +283,19 @@ describe("renderSessionDetailPanel filtered usage", () => {
   it("renders independent retry actions for detail request failures", () => {
     const onRetryTimeSeries = vi.fn();
     const onRetrySessionLogs = vi.fn();
-    const container = mount([], null, null, "total", {}, {
-      timeSeries: "timeline unavailable",
-      sessionLogs: "logs unavailable",
-      onRetryTimeSeries,
-      onRetrySessionLogs,
-    });
+    const container = mount(
+      [],
+      null,
+      null,
+      "total",
+      {},
+      {
+        timeSeries: "timeline unavailable",
+        sessionLogs: "logs unavailable",
+        onRetryTimeSeries,
+        onRetrySessionLogs,
+      },
+    );
 
     const timelineError = container.querySelector<HTMLElement>(".usage-detail-error--timeline");
     const conversationError = container.querySelector<HTMLElement>(

@@ -1,3 +1,4 @@
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 // Control UI view renders usageTypes screen content.
 import type {
   CostUsageDailyEntry,
@@ -7,7 +8,6 @@ import type {
   SessionsUsageTotals,
   SessionUsageTimePoint,
 } from "./data-types.ts";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
