@@ -11,8 +11,11 @@ import {
   resolveChannelTarget,
   type ResolvedMessagingTarget,
 } from "../../infra/outbound/target-resolver.js";
-import { resolveNormalizedRouteBindingMatch } from "../../routing/binding-scope.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeRouteBindingChannelId,
+  resolveNormalizedRouteBindingMatch,
+} from "../../routing/binding-scope.js";
+import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
 export { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 export { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 export { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
@@ -82,20 +85,109 @@ export function channelCanResolveOutboundSessionRoute(params: {
   );
 }
 
-/** Returns the set of normalized account IDs bound to an agent across all channels. */
+/**
+ * Returns the set of normalized account IDs bound to an agent.
+ * When a channel is specified, only account IDs bound on that channel are
+ * included; when omitted, account IDs across all channels are returned.
+ * Wildcard (`*`) and channel-default (no explicit accountId) bindings are
+ * not included in the returned set — use {@link hasAgentChannelDefaultBinding}
+ * to check for those.
+ */
 export function resolveAgentBoundAccountIds(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  channelId?: string;
 }): Set<string> {
   const boundIds = new Set<string>();
+  const normalizedAgent = normalizeAgentId(params.agentId);
   for (const binding of listRouteBindings(params.cfg)) {
     const resolved = resolveNormalizedRouteBindingMatch(binding);
     if (!resolved) {
       continue;
     }
-    if (resolved.agentId === normalizeAgentId(params.agentId)) {
-      boundIds.add(resolved.accountId);
+    if (resolved.agentId !== normalizedAgent) {
+      continue;
     }
+    if (
+      params.channelId &&
+      resolved.channelId !== normalizeRouteBindingChannelId(params.channelId)
+    ) {
+      continue;
+    }
+    boundIds.add(resolved.accountId);
   }
   return boundIds;
+}
+
+/**
+ * Returns whether the agent has a route binding on the given channel that
+ * accepts any account ID — either via a `"*"` wildcard accountId or an
+ * omitted accountId (channel-only default binding).  Channel-only bindings
+ * without a concrete accountId authorize the agent to use any account on
+ * that channel.
+ */
+export function hasAgentChannelDefaultBinding(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  channelId: string;
+}): boolean {
+  const normalizedAgent = normalizeAgentId(params.agentId);
+  const normalizedChannel = normalizeRouteBindingChannelId(params.channelId);
+  if (!normalizedChannel) {
+    return false;
+  }
+  for (const binding of listRouteBindings(params.cfg)) {
+    const match = binding.match;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
+    const bindingChannel = normalizeRouteBindingChannelId(match.channel);
+    if (!bindingChannel || bindingChannel !== normalizedChannel) {
+      continue;
+    }
+    if (normalizeAgentId(binding.agentId) !== normalizedAgent) {
+      continue;
+    }
+    const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+    // Wildcard or omitted accountId means any account is authorized on this
+    // channel for this agent.
+    if (!accountId || accountId === "*") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Checks whether an explicit accountId is authorized for an agent on a
+ * channel: either by a concrete binding matching the account or by a
+ * wildcard / channel-default binding.  Used by both Gateway validation and
+ * runtime delivery resolution so the same authorization contract applies at
+ * every layer.
+ */
+export function isAccountAuthorizedForAgentChannel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId: string;
+  channelId: string;
+}): boolean {
+  const normalizedAgent = normalizeAgentId(params.agentId);
+  const normalizedAccount = normalizeAccountId(params.accountId);
+  const normalizedChannel = normalizeRouteBindingChannelId(params.channelId);
+  if (!normalizedChannel) {
+    return false;
+  }
+  const boundIds = resolveAgentBoundAccountIds({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channelId: params.channelId,
+  });
+  if (boundIds.has(normalizedAccount)) {
+    return true;
+  }
+  return hasAgentChannelDefaultBinding({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channelId: params.channelId,
+  });
 }

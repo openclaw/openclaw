@@ -1,7 +1,14 @@
 import { listRouteBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  hasAgentChannelDefaultBinding,
+  isAccountAuthorizedForAgentChannel,
+} from "../../cron/isolated-agent/delivery-target.runtime.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
-import { resolveNormalizedRouteBindingMatch } from "../../routing/binding-scope.js";
+import {
+  normalizeRouteBindingChannelId,
+  resolveNormalizedRouteBindingMatch,
+} from "../../routing/binding-scope.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAccountId,
@@ -183,21 +190,58 @@ export function cronPatchSessionRefsMatchCaller(
 }
 
 // Verifies that an accountId is present in the caller agent's configured
-// channel route bindings. Foreign accounts that belong to another agent must
-// not be accepted even when the agentId/session references are valid.
+// channel route bindings, scoped to a specific channel when known. Foreign
+// accounts that belong to another agent must not be accepted even when the
+// agentId/session references are valid.
+// When channelId is provided, the check is channel-scoped (concrete binding
+// match OR wildcard/default binding on that channel). When channelId is
+// omitted, the check falls back to any-channel matching.
 function isAccountBoundToCallerAgent(params: {
   accountId: string;
   callerAgentId: string;
   cfg: OpenClawConfig;
+  channelId?: string;
 }): boolean {
-  const normalizedAccount = normalizeAccountId(params.accountId);
+  const normalizedChannel = params.channelId
+    ? normalizeRouteBindingChannelId(params.channelId)
+    : undefined;
+  if (normalizedChannel) {
+    // Channel-scoped check: concrete match or wildcard/default on this channel.
+    return isAccountAuthorizedForAgentChannel({
+      cfg: params.cfg,
+      agentId: params.callerAgentId,
+      accountId: params.accountId,
+      channelId: params.channelId!,
+    });
+  }
+  // No channel specified: check across all channels for concrete match or
+  // any-channel wildcard/default binding.
   const normalizedAgent = normalizeAgentId(params.callerAgentId);
+  const normalizedAccount = normalizeAccountId(params.accountId);
   for (const binding of listRouteBindings(params.cfg)) {
     const resolved = resolveNormalizedRouteBindingMatch(binding);
     if (!resolved) {
       continue;
     }
     if (resolved.agentId === normalizedAgent && resolved.accountId === normalizedAccount) {
+      return true;
+    }
+  }
+  for (const binding of listRouteBindings(params.cfg)) {
+    const match = binding.match;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
+    // Only consider bindings with a valid channel — malformed
+    // channelless entries must not silently authorize.
+    if (!normalizeRouteBindingChannelId(match.channel)) {
+      continue;
+    }
+    if (normalizeAgentId(binding.agentId) !== normalizedAgent) {
+      continue;
+    }
+    const aid = typeof match.accountId === "string" ? match.accountId.trim() : "";
+    if (!aid || aid === "*") {
       return true;
     }
   }
@@ -227,6 +271,7 @@ export function cronDeliveryAccountMatchesCallerScope(params: {
         accountId: delivery.accountId,
         callerAgentId: params.callerScope.agentId,
         cfg: params.cfg,
+        channelId: delivery.channel,
       })
     ) {
       return false;
@@ -238,6 +283,7 @@ export function cronDeliveryAccountMatchesCallerScope(params: {
         accountId: delivery.failureDestination.accountId,
         callerAgentId: params.callerScope.agentId,
         cfg: params.cfg,
+        channelId: delivery.failureDestination.channel ?? delivery.channel,
       })
     ) {
       return false;
@@ -270,6 +316,7 @@ export function cronPatchDeliveryAccountMatchesCaller(params: {
         accountId: delivery.accountId,
         callerAgentId: params.callerScope.agentId,
         cfg: params.cfg,
+        channelId: delivery.channel ?? undefined,
       })
     ) {
       return false;
@@ -281,6 +328,7 @@ export function cronPatchDeliveryAccountMatchesCaller(params: {
         accountId: delivery.failureDestination.accountId,
         callerAgentId: params.callerScope.agentId,
         cfg: params.cfg,
+        channelId: delivery.failureDestination.channel ?? delivery.channel ?? undefined,
       })
     ) {
       return false;

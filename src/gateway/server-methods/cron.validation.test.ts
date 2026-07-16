@@ -2331,6 +2331,262 @@ describe("cron method validation", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
+  describe("cron delivery account authorization", () => {
+    function authTestCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
+      return {
+        channels: {
+          telegram: { botToken: "telegram-token" },
+          slack: { botToken: "slack-token" },
+        },
+        plugins: pluginEntries("telegram", "slack"),
+        ...overrides,
+      } as OpenClawConfig;
+    }
+
+    it("rejects cron.add delivery.accountId not bound to the agent on delivery channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "bot-a" } }],
+        }),
+      );
+
+      const { respond } = await invokeCronAdd(
+        agentTurnCronParams({
+          agentId: "ops",
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "telegram:123",
+            accountId: "bot-b",
+          },
+        }),
+        { client: callerClient("ops") },
+      );
+
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "delivery.accountId is not bound to caller agent",
+      });
+    });
+
+    it("rejects cron.add delivery.accountId bound on wrong channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "bot-a" } }],
+        }),
+      );
+
+      const { respond } = await invokeCronAdd(
+        agentTurnCronParams({
+          agentId: "ops",
+          delivery: { mode: "announce", channel: "slack", to: "C123", accountId: "bot-a" },
+        }),
+        { client: callerClient("ops") },
+      );
+
+      // Account bot-a is bound on telegram but delivery is on slack — must reject.
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "delivery.accountId is not bound to caller agent",
+      });
+    });
+
+    it("accepts cron.add delivery.accountId bound on delivery channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "bot-a" } }],
+        }),
+      );
+
+      const { respond } = await invokeCronAdd(
+        agentTurnCronParams({
+          agentId: "ops",
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "telegram:123",
+            accountId: "bot-a",
+          },
+        }),
+        { client: callerClient("ops") },
+      );
+
+      expectCronSuccess(respond);
+    });
+
+    it("accepts cron.add delivery.accountId with wildcard binding on delivery channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+        }),
+      );
+
+      const { respond } = await invokeCronAdd(
+        agentTurnCronParams({
+          agentId: "ops",
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "telegram:123",
+            accountId: "any-account",
+          },
+        }),
+        { client: callerClient("ops") },
+      );
+
+      expectCronSuccess(respond);
+    });
+
+    it("accepts cron.add delivery.accountId with channel-default binding on delivery channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
+        }),
+      );
+
+      const { respond } = await invokeCronAdd(
+        agentTurnCronParams({
+          agentId: "ops",
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "telegram:123",
+            accountId: "any-account",
+          },
+        }),
+        { client: callerClient("ops") },
+      );
+
+      expectCronSuccess(respond);
+    });
+
+    it("rejects cron.add failure-destination accountId not bound on failure channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [
+            { agentId: "ops", match: { channel: "telegram", accountId: "bot-a" } },
+            { agentId: "ops", match: { channel: "slack", accountId: "bot-b" } },
+          ],
+        }),
+      );
+
+      const { respond } = await invokeCronAdd(
+        agentTurnCronParams({
+          agentId: "ops",
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "telegram:123",
+            accountId: "bot-a",
+            failureDestination: {
+              mode: "announce",
+              channel: "slack",
+              to: "C123",
+              accountId: "bot-a",
+            },
+          },
+        }),
+        { client: callerClient("ops") },
+      );
+
+      // bot-a is bound on telegram, not slack — failure destination must check its own channel.
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "delivery.accountId is not bound to caller agent",
+      });
+    });
+
+    it("accepts cron.add failure-destination accountId bound on failure channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [
+            { agentId: "ops", match: { channel: "telegram", accountId: "bot-a" } },
+            { agentId: "ops", match: { channel: "slack", accountId: "bot-b" } },
+          ],
+        }),
+      );
+
+      const { respond } = await invokeCronAdd(
+        agentTurnCronParams({
+          agentId: "ops",
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "telegram:123",
+            accountId: "bot-a",
+            failureDestination: {
+              mode: "announce",
+              channel: "slack",
+              to: "C123",
+              accountId: "bot-b",
+            },
+          },
+        }),
+        { client: callerClient("ops") },
+      );
+
+      expectCronSuccess(respond);
+    });
+
+    it("rejects cron.update delivery.accountId not bound on delivery channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "bot-a" } }],
+        }),
+      );
+
+      const { respond } = await invokeCronUpdate(
+        {
+          id: "cron-1",
+          patch: {
+            delivery: {
+              channel: "telegram",
+              to: "telegram:123",
+              accountId: "bot-b",
+              mode: "announce",
+            },
+          },
+        },
+        createCronJob({ agentId: "ops" }),
+        { client: callerClient("ops") },
+      );
+
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "delivery.accountId is not bound to caller agent",
+      });
+    });
+
+    it("accepts cron.update delivery.accountId with wildcard binding on delivery channel", async () => {
+      setRuntimeConfig(
+        authTestCfg({
+          bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
+        }),
+      );
+
+      const { respond } = await invokeCronUpdate(
+        {
+          id: "cron-1",
+          patch: {
+            delivery: {
+              channel: "telegram",
+              to: "telegram:123",
+              accountId: "any-account",
+              mode: "announce",
+            },
+          },
+        },
+        createCronJob({
+          agentId: "ops",
+          delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
+        }),
+        { client: callerClient("ops") },
+      );
+
+      expectCronSuccess(respond);
+    });
+  });
+
   describe("wake", () => {
     it("forwards sessionKey to context.cron.wake when provided", async () => {
       const { context, respond } = await invokeWake({

@@ -1629,5 +1629,80 @@ describe("resolveDeliveryTarget", () => {
     expect(result.ok).toBe(true);
     expect(result.accountId).toBe("my-account");
   });
+
+  it("rejects foreign delivery.accountId bound on a different channel", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-cross-chan",
+      lastChannel: "forum",
+      lastTo: "room:ops",
+      lastAccountId: "default",
+    });
+    // Agent has account "bot-a" bound on telegram, but delivery is on forum.
+    const cfg = makeCfg({
+      bindings: [{ agentId: AGENT_ID, match: { channel: "telegram", accountId: "bot-a" } }],
+    });
+
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: "bot-a",
+    });
+
+    // Account bot-a is on telegram, not forum — falls back to session-derived.
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("default");
+  });
+
+  it("accepts explicit delivery.accountId on channel with wildcard binding", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [{ agentId: AGENT_ID, match: { channel: "forum", accountId: "*" } }],
+    });
+
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: "any-account",
+    });
+
+    // Wildcard binding on this channel authorizes any account.
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("any-account");
+  });
+
+  it("accepts explicit delivery.accountId on channel with default (no accountId) binding", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [{ agentId: AGENT_ID, match: { channel: "forum" } }],
+    });
+
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: "any-account",
+    });
+
+    // Default (no accountId) binding on this channel authorizes any account.
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("any-account");
+  });
+
+  it("rejects explicit delivery.accountId on channel with no binding at all", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [{ agentId: "other-agent", match: { channel: "forum", accountId: "bot-a" } }],
+    });
+
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: "bot-a",
+    });
+
+    // No binding for this agent at all on any channel — account rejected.
+    // Falls back to undefined because there's also no session-derived account.
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBeUndefined();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -245,15 +245,23 @@ export async function resolveDeliveryTarget(
     // Only accept the explicit accountId when it is actually bound to the
     // job's owning agent — a foreign account must never override the agent's
     // own bindings even when set explicitly on the delivery payload.
-    const boundIds = deliveryTargetRuntime.resolveAgentBoundAccountIds({
-      cfg,
-      agentId,
-    });
-    const normalizedExplicit = normalizeAccountId(explicitAccountId);
-    if (boundIds.has(normalizedExplicit)) {
+    // Authorization is scoped to the resolved delivery channel: a binding
+    // on another channel does not authorize a different channel's delivery.
+    // Uses the same shared helper as Gateway validation so both layers
+    // enforce the identical authorization contract.
+    if (
+      channel &&
+      deliveryTargetRuntime.isAccountAuthorizedForAgentChannel({
+        cfg,
+        agentId,
+        accountId: explicitAccountId,
+        channelId: channel,
+      })
+    ) {
       accountId = explicitAccountId;
     }
-    // Foreign accountId: silently discard and fall through to bound resolution.
+    // Foreign accountId or unresolvable channel: silently discard and fall
+    // through to bound resolution.
   }
   accountId = accountId ?? resolved.accountId;
   if (!accountId && channel) {
