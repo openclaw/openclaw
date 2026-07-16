@@ -183,7 +183,7 @@ function appendRuntimeContextMessageForPrompt(params: {
  * can rehydrate a transcript ending in tool-call messages, so the active prompt
  * is found by walking backward through tool-call assistants.
  */
-export function insertRuntimeContextMessageForPrompt(params: {
+function insertRuntimeContextMessageForPrompt(params: {
   message: RuntimeContextCustomMessage;
   messages: AgentMessage[];
 }): AgentMessage[] {

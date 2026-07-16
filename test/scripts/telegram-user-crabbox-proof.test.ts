@@ -75,7 +75,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -861,7 +861,7 @@ fs.writeFileSync(${JSON.stringify(recorderExitPath)}, "exited");
             startDelayMs: 0,
             target: "linux",
           }),
-          delay(500).then(() => {
+          delay(500, undefined, { ref: false }).then(() => {
             throw new Error("recordProbeVideo hung after the recorder had already exited");
           }),
         ]),

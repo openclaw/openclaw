@@ -260,9 +260,9 @@ const loadWebHandlers = lazyHandlerModule(
   () => import("./server-methods/web.js"),
   (module) => module.webHandlers,
 );
-const loadCrestodianHandlers = lazyHandlerModule(
-  () => import("./server-methods/crestodian.js"),
-  (module) => module.crestodianHandlers,
+const loadSystemAgentHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-agent.js"),
+  (module) => module.systemAgentHandlers,
 );
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
@@ -513,13 +513,14 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "crestodian.chat",
-      "crestodian.setup.detect",
-      "crestodian.setup.verify",
-      "crestodian.setup.activate",
-      "crestodian.setup.auth.start",
+      "openclaw.chat",
+      "openclaw.approval.list",
+      "openclaw.setup.detect",
+      "openclaw.setup.verify",
+      "openclaw.setup.activate",
+      "openclaw.setup.auth.start",
     ],
-    loadHandlers: loadCrestodianHandlers,
+    loadHandlers: loadSystemAgentHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -642,6 +643,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.rename",
       "sessions.groups.delete",
       "sessions.dispatch",
+      "sessions.reclaim",
     ],
     loadHandlers: loadSessionsHandlers,
   }),

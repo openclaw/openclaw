@@ -116,6 +116,7 @@ import {
   PendingSessionApprovalEventSchema,
   PluginApprovalPresentationSchema,
   PluginApprovalSeveritySchema,
+  SystemAgentApprovalPresentationSchema,
   TerminalApprovalSnapshotSchema,
   TerminalSessionApprovalEventSchema,
 } from "./approvals.js";
@@ -193,18 +194,6 @@ import {
   UpdateStatusParamsSchema,
   UpdateRunParamsSchema,
 } from "./config.js";
-import {
-  CrestodianChatParamsSchema,
-  CrestodianChatResultSchema,
-  CrestodianSetupActivateParamsSchema,
-  CrestodianSetupActivateResultSchema,
-  CrestodianSetupAuthStartParamsSchema,
-  CrestodianSetupAuthStartResultSchema,
-  CrestodianSetupDetectParamsSchema,
-  CrestodianSetupDetectResultSchema,
-  CrestodianSetupVerifyParamsSchema,
-  CrestodianSetupVerifyResultSchema,
-} from "./crestodian.js";
 import {
   CronAddParamsSchema,
   CronAddResultSchema,
@@ -322,6 +311,18 @@ import {
   NodeSkillsUpdateParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
+import {
+  SystemAgentChatParamsSchema,
+  SystemAgentChatResultSchema,
+  SystemAgentSetupActivateParamsSchema,
+  SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAuthStartParamsSchema,
+  SystemAgentSetupAuthStartResultSchema,
+  SystemAgentSetupDetectParamsSchema,
+  SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyParamsSchema,
+  SystemAgentSetupVerifyResultSchema,
+} from "./openclaw.js";
 import {
   PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParamsSchema,
@@ -694,16 +695,16 @@ export const ProtocolSchemas = {
   ConfigSchemaLookupParams: ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,
   ConfigSchemaLookupResult: ConfigSchemaLookupResultSchema,
-  CrestodianChatParams: CrestodianChatParamsSchema,
-  CrestodianChatResult: CrestodianChatResultSchema,
-  CrestodianSetupDetectParams: CrestodianSetupDetectParamsSchema,
-  CrestodianSetupDetectResult: CrestodianSetupDetectResultSchema,
-  CrestodianSetupVerifyParams: CrestodianSetupVerifyParamsSchema,
-  CrestodianSetupVerifyResult: CrestodianSetupVerifyResultSchema,
-  CrestodianSetupActivateParams: CrestodianSetupActivateParamsSchema,
-  CrestodianSetupActivateResult: CrestodianSetupActivateResultSchema,
-  CrestodianSetupAuthStartParams: CrestodianSetupAuthStartParamsSchema,
-  CrestodianSetupAuthStartResult: CrestodianSetupAuthStartResultSchema,
+  SystemAgentChatParams: SystemAgentChatParamsSchema,
+  SystemAgentChatResult: SystemAgentChatResultSchema,
+  SystemAgentSetupDetectParams: SystemAgentSetupDetectParamsSchema,
+  SystemAgentSetupDetectResult: SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyParams: SystemAgentSetupVerifyParamsSchema,
+  SystemAgentSetupVerifyResult: SystemAgentSetupVerifyResultSchema,
+  SystemAgentSetupActivateParams: SystemAgentSetupActivateParamsSchema,
+  SystemAgentSetupActivateResult: SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAuthStartParams: SystemAgentSetupAuthStartParamsSchema,
+  SystemAgentSetupAuthStartResult: SystemAgentSetupAuthStartResultSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,
@@ -835,7 +836,6 @@ export const ProtocolSchemas = {
   SkillsUploadCommitParams: SkillsUploadCommitParamsSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
-
   // Scheduler, logs, approval, plugin control, device, chat, and lifecycle events.
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
@@ -861,6 +861,7 @@ export const ProtocolSchemas = {
   PluginApprovalSeverity: PluginApprovalSeveritySchema,
   ExecApprovalPresentation: ExecApprovalPresentationSchema,
   PluginApprovalPresentation: PluginApprovalPresentationSchema,
+  SystemAgentApprovalPresentation: SystemAgentApprovalPresentationSchema,
   ApprovalPresentation: ApprovalPresentationSchema,
   PendingApprovalSnapshot: PendingApprovalSnapshotSchema,
   AllowedApprovalSnapshot: AllowedApprovalSnapshotSchema,
@@ -942,7 +943,6 @@ export const ProtocolSchemas = {
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
 } satisfies Record<string, TSchema>;
-
 export {
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,

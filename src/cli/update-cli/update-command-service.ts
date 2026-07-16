@@ -109,7 +109,7 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   return params.serviceLoaded;
 }
 
-export function shouldUseLegacyProcessRestartAfterUpdate(params: {
+function shouldUseLegacyProcessRestartAfterUpdate(params: {
   updateMode: UpdateRunResult["mode"];
 }): boolean {
   return !isPackageManagerUpdateMode(params.updateMode);
@@ -126,7 +126,7 @@ type PostUpdateLaunchAgentRecoveryDeps = {
   recover?: typeof recoverInstalledLaunchAgent;
 };
 
-export async function recoverInstalledLaunchAgentAfterUpdate(params: {
+async function recoverInstalledLaunchAgentAfterUpdate(params: {
   service?: GatewayService;
   env?: NodeJS.ProcessEnv;
   deps?: PostUpdateLaunchAgentRecoveryDeps;
@@ -171,7 +171,7 @@ type PostUpdateGatewayHealthRecoveryDeps = {
   waitForHealthy?: typeof waitForGatewayHealthyRestart;
 };
 
-export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   health: GatewayRestartSnapshot;
   service: GatewayService;
   port: number;
@@ -228,7 +228,7 @@ function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string 
   return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
 }
 
-export function formatPostUpdateGatewayRecoveryInstructions(
+function formatPostUpdateGatewayRecoveryInstructions(
   result: UpdateRunResult,
   platform: NodeJS.Platform = process.platform,
 ): string[] {
@@ -240,6 +240,16 @@ export function formatPostUpdateGatewayRecoveryInstructions(
     );
   }
   return lines;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.updateCommandServiceTestApi")] =
+    {
+      formatPostUpdateGatewayRecoveryInstructions,
+      recoverInstalledLaunchAgentAfterUpdate,
+      recoverLaunchAgentAndRecheckGatewayHealth,
+      shouldUseLegacyProcessRestartAfterUpdate,
+    };
 }
 
 export type PreManagedServiceStop = {
@@ -710,24 +720,37 @@ export function tryResolveInvocationCwd(): string | undefined {
   }
 }
 
-export async function resolvePackageRuntimePreflightError(params: {
+type PackageRuntimePreflightResult = {
+  error: string | null;
+  nodeRunner?: string;
+  replacedNodeRunner?: string;
+  targetVersion?: string;
+};
+
+export async function resolvePackageRuntimePreflight(params: {
   tag: string;
   timeoutMs?: number;
   nodeRunner?: string;
+  fallbackNodeRunner?: string;
   spec?: string;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<string | null> {
+}): Promise<PackageRuntimePreflightResult> {
+  const nodeRunner = normalizeOptionalString(params.nodeRunner);
+  const unchanged = (): PackageRuntimePreflightResult => ({
+    error: null,
+    ...(nodeRunner ? { nodeRunner } : {}),
+  });
   if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
-    return null;
+    return unchanged();
   }
   if (params.spec && !canResolveRegistryVersionForPackageTarget(params.spec)) {
-    return null;
+    return unchanged();
   }
   const target = params.tag.trim();
   if (!target) {
-    return null;
+    return unchanged();
   }
   const status = await fetchNpmPackageTargetStatus({
     target,
@@ -738,29 +761,63 @@ export async function resolvePackageRuntimePreflightError(params: {
     env: params.env,
   });
   if (status.error) {
-    return null;
+    return unchanged();
   }
   const runtime = await resolvePackageRuntimeForPreflight({
-    nodeRunner: params.nodeRunner,
+    nodeRunner,
     timeoutMs: params.timeoutMs,
   });
   const satisfies = nodeVersionSatisfiesEngine(runtime.version, status.nodeEngine);
-  if (satisfies !== false) {
-    return null;
+  const targetVersion = status.version ?? target;
+  if (satisfies === true) {
+    return {
+      error: null,
+      ...(nodeRunner ? { nodeRunner } : {}),
+      targetVersion,
+    };
   }
-  const targetLabel = status.version ?? target;
+  const fallbackNodeRunner = normalizeOptionalString(params.fallbackNodeRunner);
+  if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
+    const fallbackRuntime = await resolvePackageRuntimeForPreflight({
+      nodeRunner: fallbackNodeRunner,
+      timeoutMs: params.timeoutMs,
+    });
+    const fallbackSatisfies = nodeVersionSatisfiesEngine(
+      fallbackRuntime.version,
+      status.nodeEngine,
+    );
+    if (fallbackSatisfies === true) {
+      return {
+        error: null,
+        nodeRunner: fallbackNodeRunner,
+        replacedNodeRunner: nodeRunner,
+        targetVersion,
+      };
+    }
+  }
+  if (satisfies !== false) {
+    return {
+      error: null,
+      ...(nodeRunner ? { nodeRunner } : {}),
+      targetVersion,
+    };
+  }
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
-  return [
-    `${runtimeLabel} is too old for openclaw@${targetLabel}.`,
-    `The requested package requires ${status.nodeEngine}.`,
-    runtime.nodeRunner
-      ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-      : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
-    "Bare `npm i -g openclaw` can silently install an older compatible release.",
-    "After upgrading Node, use `npm i -g openclaw@latest`.",
-  ].join("\n");
+  return {
+    error: [
+      `${runtimeLabel} is too old for openclaw@${targetVersion}.`,
+      `The requested package requires ${status.nodeEngine}.`,
+      runtime.nodeRunner
+        ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
+        : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
+      "Bare `npm i -g openclaw` can silently install an older compatible release.",
+      "After upgrading Node, use `npm i -g openclaw@latest`.",
+    ].join("\n"),
+    ...(nodeRunner ? { nodeRunner } : {}),
+    targetVersion,
+  };
 }
 
 async function resolvePackageRuntimeForPreflight(params: {

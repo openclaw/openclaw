@@ -112,6 +112,31 @@ describe("resolveNpmChannelTag", () => {
     );
   });
 
+  it("normalizes npm 12 singleton-array metadata", async () => {
+    const npm12RunCommand = vi.fn(async () => ({
+      stdout: JSON.stringify([
+        {
+          version: "2026.7.1",
+          engines: { node: ">=22.22.3" },
+        },
+      ]),
+      stderr: "",
+      code: 0,
+    }));
+
+    await expect(
+      fetchNpmPackageTargetStatus({
+        target: "latest",
+        timeoutMs: 1000,
+        runCommand: npm12RunCommand,
+      }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: "2026.7.1",
+      nodeEngine: ">=22.22.3",
+    });
+  });
+
   it("uses npm global scope, user config auth, and ignores project npmrc for real metadata", async () => {
     await withTempDir({ prefix: "openclaw-update-check-npm-view-" }, async (base) => {
       const requests: Array<{ url: string; authorization?: string }> = [];
@@ -208,6 +233,51 @@ describe("resolveNpmChannelTag", () => {
       version: "2026.6.8",
       nodeEngine: ">=22.19.0",
     });
+  });
+
+  it("times out when the public registry response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("missing registry request signal");
+        }
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resultPromise = Promise.race([
+        fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 50 }),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("registry response body exceeded timeoutMs")), 2000);
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        target: "latest",
+        version: null,
+        nodeEngine: null,
+        error: "TimeoutError: request timed out",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://registry.npmjs.org/openclaw/latest",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 
   it("cancels public registry HTTP failure bodies", async () => {

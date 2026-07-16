@@ -341,6 +341,8 @@ import {
   SessionsDescribeParamsSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
+  SessionsReclaimParamsSchema,
+  SessionsReclaimResultSchema,
   SessionGroupSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsListParamsSchema,
@@ -446,16 +448,16 @@ import {
   WakeParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
-  CrestodianChatParamsSchema,
-  CrestodianChatResultSchema,
-  CrestodianSetupDetectParamsSchema,
-  CrestodianSetupDetectResultSchema,
-  CrestodianSetupVerifyParamsSchema,
-  CrestodianSetupVerifyResultSchema,
-  CrestodianSetupActivateParamsSchema,
-  CrestodianSetupActivateResultSchema,
-  CrestodianSetupAuthStartParamsSchema,
-  CrestodianSetupAuthStartResultSchema,
+  SystemAgentChatParamsSchema,
+  SystemAgentChatResultSchema,
+  SystemAgentSetupDetectParamsSchema,
+  SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyParamsSchema,
+  SystemAgentSetupVerifyResultSchema,
+  SystemAgentSetupActivateParamsSchema,
+  SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAuthStartParamsSchema,
+  SystemAgentSetupAuthStartResultSchema,
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -641,6 +643,8 @@ export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSche
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
 export const validateSessionsDispatchResult = lazyCompile(SessionsDispatchResultSchema);
+export const validateSessionsReclaimParams = lazyCompile(SessionsReclaimParamsSchema);
+export const validateSessionsReclaimResult = lazyCompile(SessionsReclaimResultSchema);
 export const validateSessionsMessagesSubscribeParams = lazyCompile(
   SessionsMessagesSubscribeParamsSchema,
 );
@@ -680,14 +684,14 @@ export const validateConfigPatchParams = lazyCompile(ConfigPatchParamsSchema);
 export const validateConfigSchemaParams = lazyCompile(ConfigSchemaParamsSchema);
 export const validateConfigSchemaLookupParams = lazyCompile(ConfigSchemaLookupParamsSchema);
 export const validateConfigSchemaLookupResult = lazyCompile(ConfigSchemaLookupResultSchema);
-export const validateCrestodianChatParams = lazyCompile(CrestodianChatParamsSchema);
-export const validateCrestodianSetupDetectParams = lazyCompile(CrestodianSetupDetectParamsSchema);
-export const validateCrestodianSetupVerifyParams = lazyCompile(CrestodianSetupVerifyParamsSchema);
-export const validateCrestodianSetupActivateParams = lazyCompile(
-  CrestodianSetupActivateParamsSchema,
+export const validateSystemAgentChatParams = lazyCompile(SystemAgentChatParamsSchema);
+export const validateSystemAgentSetupDetectParams = lazyCompile(SystemAgentSetupDetectParamsSchema);
+export const validateSystemAgentSetupVerifyParams = lazyCompile(SystemAgentSetupVerifyParamsSchema);
+export const validateSystemAgentSetupActivateParams = lazyCompile(
+  SystemAgentSetupActivateParamsSchema,
 );
-export const validateCrestodianSetupAuthStartParams = lazyCompile(
-  CrestodianSetupAuthStartParamsSchema,
+export const validateSystemAgentSetupAuthStartParams = lazyCompile(
+  SystemAgentSetupAuthStartParamsSchema,
 );
 export const validateWizardStartParams = lazyCompile(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile(WizardNextParamsSchema);
@@ -993,6 +997,8 @@ export {
   SessionsCreateResultSchema,
   SessionsDispatchParamsSchema,
   SessionsDispatchResultSchema,
+  SessionsReclaimParamsSchema,
+  SessionsReclaimResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
@@ -1049,16 +1055,16 @@ export {
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
   UpdateStatusParamsSchema,
-  CrestodianChatParamsSchema,
-  CrestodianChatResultSchema,
-  CrestodianSetupDetectParamsSchema,
-  CrestodianSetupDetectResultSchema,
-  CrestodianSetupVerifyParamsSchema,
-  CrestodianSetupVerifyResultSchema,
-  CrestodianSetupActivateParamsSchema,
-  CrestodianSetupActivateResultSchema,
-  CrestodianSetupAuthStartParamsSchema,
-  CrestodianSetupAuthStartResultSchema,
+  SystemAgentChatParamsSchema,
+  SystemAgentChatResultSchema,
+  SystemAgentSetupDetectParamsSchema,
+  SystemAgentSetupDetectResultSchema,
+  SystemAgentSetupVerifyParamsSchema,
+  SystemAgentSetupVerifyResultSchema,
+  SystemAgentSetupActivateParamsSchema,
+  SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAuthStartParamsSchema,
+  SystemAgentSetupAuthStartResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1340,16 +1346,16 @@ export type {
   ConfigPatchParams,
   ConfigSchemaParams,
   ConfigSchemaResponse,
-  CrestodianChatParams,
-  CrestodianChatResult,
-  CrestodianSetupDetectParams,
-  CrestodianSetupDetectResult,
-  CrestodianSetupVerifyParams,
-  CrestodianSetupVerifyResult,
-  CrestodianSetupActivateParams,
-  CrestodianSetupActivateResult,
-  CrestodianSetupAuthStartParams,
-  CrestodianSetupAuthStartResult,
+  SystemAgentChatParams,
+  SystemAgentChatResult,
+  SystemAgentSetupDetectParams,
+  SystemAgentSetupDetectResult,
+  SystemAgentSetupVerifyParams,
+  SystemAgentSetupVerifyResult,
+  SystemAgentSetupActivateParams,
+  SystemAgentSetupActivateResult,
+  SystemAgentSetupAuthStartParams,
+  SystemAgentSetupAuthStartResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1548,6 +1554,8 @@ export type {
   SessionWorktreeInfo,
   SessionsDispatchParams,
   SessionsDispatchResult,
+  SessionsReclaimParams,
+  SessionsReclaimResult,
   SessionsCreateResult,
   SessionsPatchParams,
   SessionsResetParams,

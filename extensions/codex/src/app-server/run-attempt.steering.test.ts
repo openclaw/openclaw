@@ -1,7 +1,7 @@
 // Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   createParams,

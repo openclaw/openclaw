@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import ignore from "ignore";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
@@ -19,7 +18,7 @@ const MAX_NAME_LENGTH = 64;
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
 
-export interface SkillFrontmatter {
+interface SkillFrontmatter {
   name?: string;
   description?: string;
   "disable-model-invocation"?: boolean;
@@ -37,7 +36,7 @@ export interface Skill {
   disableModelInvocation: boolean;
 }
 
-export interface LoadSkillsResult {
+interface LoadSkillsResult {
   skills: Skill[];
   diagnostics: ResourceDiagnostic[];
 }
@@ -83,13 +82,6 @@ function validateDescription(description: string | undefined): string[] {
   return errors;
 }
 
-export interface LoadSkillsFromDirOptions {
-  /** Directory to scan for skills */
-  dir: string;
-  /** Source identifier for these skills */
-  source: string;
-}
-
 function createSkillSourceInfo(filePath: string, baseDir: string, source: string): SourceInfo {
   switch (source) {
     case "user":
@@ -114,19 +106,6 @@ function createSkillSourceInfo(filePath: string, baseDir: string, source: string
   }
 }
 
-/**
- * Load skills from a directory.
- *
- * Discovery rules:
- * - if a directory contains SKILL.md, treat it as a skill root and do not recurse further
- * - otherwise, load direct .md children in the root
- * - recurse into subdirectories to find SKILL.md
- */
-export function loadSkillsFromDir(options: LoadSkillsFromDirOptions): LoadSkillsResult {
-  const { dir, source } = options;
-  return loadSkillsFromDirInternal(dir, source, true);
-}
-
 function loadSkillsFromDirInternal(
   dir: string,
   source: string,
@@ -142,8 +121,7 @@ function loadSkillsFromDirInternal(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = addIgnoreRules(dir, root, ignoreMatcher);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -299,7 +277,7 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
   return formatSkillContractForPrompt(visibleSkills);
 }
 
-export interface LoadSkillsOptions {
+interface LoadSkillsOptions {
   /** Working directory for project-local skills. */
   cwd: string;
   /** Agent config directory for global skills. */

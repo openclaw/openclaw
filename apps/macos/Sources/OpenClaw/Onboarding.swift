@@ -15,7 +15,7 @@ enum RemoteOnboardingProbeState: Equatable {
     case failed(String)
 }
 
-enum OnboardingCrestodianResumeStore {
+enum OnboardingSystemAgentResumeStore {
     struct ActivationOwner: Equatable {
         let id: String
         let routeFingerprint: String
@@ -130,7 +130,7 @@ enum OnboardingCrestodianResumeStore {
     static func markPending(
         routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
-        activationTimeoutMs: Double = OnboardingCrestodianResumeStore.maximumActivationTimeoutMs,
+        activationTimeoutMs: Double = OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs,
         defaults: UserDefaults = .standard,
         now: Date = Date())
         -> Date?
@@ -264,14 +264,27 @@ enum OnboardingCrestodianResumeStore {
     }
 
     static func clear(defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: onboardingCrestodianPendingKey)
+        defaults.removeObject(forKey: onboardingSystemAgentPendingKey)
+        defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
+    }
+
+    /// Pre-rename releases stored the lease under the Crestodian key; adopt it once
+    /// so an app upgrade cannot orphan a live activation record.
+    private static func storedPendingPayload(defaults: UserDefaults) -> Any? {
+        if let stored = defaults.object(forKey: onboardingSystemAgentPendingKey) { return stored }
+        guard let retired = defaults.object(forKey: onboardingSystemAgentPendingRetiredKey) else {
+            return nil
+        }
+        defaults.set(retired, forKey: onboardingSystemAgentPendingKey)
+        defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
+        return retired
     }
 
     private static func loadRecords(
         defaults: UserDefaults,
         now: Date = Date()) -> [String: Record]
     {
-        guard let stored = defaults.object(forKey: onboardingCrestodianPendingKey) else { return [:] }
+        guard let stored = self.storedPendingPayload(defaults: defaults) else { return [:] }
         if let legacyRoute = normalized(stored as? String) {
             let records = [legacyRoute: conservativeLegacyRecord(now: now)]
             self.writeRecords(records, defaults: defaults)
@@ -400,7 +413,7 @@ enum OnboardingCrestodianResumeStore {
         }
         defaults.set(
             ["version": self.recordVersion, "records": payload],
-            forKey: onboardingCrestodianPendingKey)
+            forKey: onboardingSystemAgentPendingKey)
     }
 
     private static func date(_ value: Any?) -> Date? {
@@ -609,7 +622,7 @@ struct OnboardingView: View {
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var crestodianState = OnboardingCrestodianChatState()
+    @State var systemAgentState = OnboardingSystemAgentChatState()
     @State var aiSetup = OnboardingAISetupModel()
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
     @State var didLoadOnboardingSkills = false
@@ -617,7 +630,7 @@ struct OnboardingView: View {
     @State var defaultsToLocalGateway: Bool
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
-    let crestodianDefaults: UserDefaults
+    let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
 
@@ -755,16 +768,16 @@ struct OnboardingView: View {
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),
         aiSetupGateway: GatewayConnection = .shared,
-        crestodianDefaults: UserDefaults = .standard,
+        systemAgentDefaults: UserDefaults = .standard,
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil)
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
-        self.crestodianDefaults = crestodianDefaults
+        self.systemAgentDefaults = systemAgentDefaults
         let routeIdentityProvider = aiSetupRouteIdentityProvider ?? {
-            OnboardingCrestodianResumeStore.selectedRouteIdentity(state: state)
+            OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: state)
         }
         self.aiSetupRouteIdentityProvider = routeIdentityProvider
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
@@ -775,7 +788,7 @@ struct OnboardingView: View {
         _gatewayDiscovery = State(initialValue: discoveryModel)
         _aiSetup = State(initialValue: OnboardingAISetupModel(
             gateway: aiSetupGateway,
-            defaults: crestodianDefaults,
+            defaults: systemAgentDefaults,
             routeIdentityProvider: routeIdentityProvider))
         _configuredGatewayProbe = State(
             initialValue: OnboardingConfiguredGatewayProbe(

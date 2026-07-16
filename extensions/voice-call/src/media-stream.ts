@@ -581,11 +581,7 @@ export class MediaStreamHandler {
       };
     }
     if (bufferedBeforeBytes > MAX_WS_BUFFERED_BYTES) {
-      try {
-        session.ws.close(1013, "Backpressure: send buffer exceeded");
-      } catch {
-        // Best-effort close; caller still receives sent:false.
-      }
+      session.ws.close(1013, "Backpressure: send buffer exceeded");
       return {
         sent: false,
         readyState,
@@ -598,11 +594,7 @@ export class MediaStreamHandler {
       session.ws.send(JSON.stringify(message));
       const bufferedAfterBytes = session.ws.bufferedAmount;
       if (bufferedAfterBytes > MAX_WS_BUFFERED_BYTES) {
-        try {
-          session.ws.close(1013, "Backpressure: send buffer exceeded");
-        } catch {
-          // Best-effort close; caller still receives sent:false.
-        }
+        session.ws.close(1013, "Backpressure: send buffer exceeded");
         return {
           sent: false,
           readyState,

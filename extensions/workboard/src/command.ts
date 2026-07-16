@@ -96,7 +96,7 @@ function requireWriteAccess(params: {
   };
 }
 
-export async function handleWorkboardCommand(params: {
+async function handleWorkboardCommand(params: {
   api: WorkboardCommandApi;
   store: WorkboardStore;
   args?: string;

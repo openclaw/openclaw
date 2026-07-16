@@ -8,6 +8,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 
+type StartSessionDeliveryRuntime =
+  typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
+
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
     stop: vi.fn(),
@@ -15,6 +18,7 @@ const hoisted = vi.hoisted(() => {
   };
   const stopModelPricingRefresh = vi.fn();
   const stopSessionUpstreamMonitor = vi.fn();
+  const stopSessionDeliveryRuntime = vi.fn();
   return {
     heartbeatRunner,
     startHeartbeatRunner: vi.fn(() => heartbeatRunner),
@@ -25,13 +29,20 @@ const hoisted = vi.hoisted(() => {
     })),
     stopModelPricingRefresh,
     stopSessionUpstreamMonitor,
+    stopSessionDeliveryRuntime,
+    startSessionDeliveryRuntime: vi.fn<StartSessionDeliveryRuntime>(
+      () => stopSessionDeliveryRuntime,
+    ),
+    schedulePendingSessionDeliveries: vi.fn(async () => undefined),
     startSessionUpstreamMonitor: vi.fn(() => ({ stop: stopSessionUpstreamMonitor })),
     startGatewayModelPricingRefresh: vi.fn(() => stopModelPricingRefresh),
     loadModelPricingCacheModule: vi.fn(),
     isVitestRuntimeEnv: vi.fn(() => false),
     recoverPendingDeliveries: vi.fn(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+    deliverQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
+    removeCronRunContinuationSessionIfIdle: vi.fn(async () => undefined),
   };
 });
 
@@ -56,7 +67,17 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
 }));
 
+vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
+  startSessionDeliveryRuntime: hoisted.startSessionDeliveryRuntime,
+  schedulePendingSessionDeliveries: hoisted.schedulePendingSessionDeliveries,
+}));
+
+vi.mock("../tasks/cron-run-continuation-cleanup.js", () => ({
+  removeCronRunContinuationSessionIfIdle: hoisted.removeCronRunContinuationSessionIfIdle,
+}));
+
 vi.mock("./server-restart-sentinel.js", () => ({
+  deliverQueuedSessionDelivery: hoisted.deliverQueuedSessionDelivery,
   recoverPendingRestartContinuationDeliveries: hoisted.recoverPendingRestartContinuationDeliveries,
 }));
 
@@ -93,11 +114,16 @@ describe("server-runtime-services", () => {
     hoisted.stopModelPricingRefresh.mockClear();
     hoisted.startSessionUpstreamMonitor.mockClear();
     hoisted.stopSessionUpstreamMonitor.mockClear();
+    hoisted.stopSessionDeliveryRuntime.mockClear();
+    hoisted.startSessionDeliveryRuntime.mockClear();
+    hoisted.schedulePendingSessionDeliveries.mockClear();
     hoisted.loadModelPricingCacheModule.mockClear();
     hoisted.isVitestRuntimeEnv.mockReset().mockReturnValue(false);
     hoisted.recoverPendingDeliveries.mockClear();
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+    hoisted.deliverQueuedSessionDelivery.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
+    hoisted.removeCronRunContinuationSessionIfIdle.mockClear();
   });
 
   afterEach(() => {
@@ -319,6 +345,37 @@ describe("server-runtime-services", () => {
       maxEnqueuedAt: 123,
       log: sessionDeliveryLog,
     });
+    const runtimeParams = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0] as
+      | { onSettled?: (entry: { id: string; sessionKey: string }) => Promise<void> }
+      | undefined;
+    await runtimeParams?.onSettled?.({
+      id: "settled-delivery-1",
+      sessionKey: "agent:main:cron:job:run:run-1",
+    });
+    expect(hoisted.removeCronRunContinuationSessionIfIdle).toHaveBeenCalledWith(
+      "agent:main:cron:job:run:run-1",
+      "settled-delivery-1",
+    );
+    expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules pending session deliveries when startup recovery fails", async () => {
+    vi.useFakeTimers();
+    hoisted.recoverPendingRestartContinuationDeliveries.mockRejectedValueOnce(
+      new Error("database busy"),
+    );
+    const log = createLog();
+    activateScheduledServicesForTest({ log });
+
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(log.error).toHaveBeenCalledWith(
+        "Session delivery recovery failed: Error: database busy",
+      ),
+    );
   });
 
   it("can defer cron startup while activating other scheduled services", async () => {
