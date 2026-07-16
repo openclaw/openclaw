@@ -37,7 +37,6 @@ let estimateToolResultReductionPotential: typeof import("./tool-result-truncatio
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
-let TOOL_RESULT_WARNING_DEDUPE_LIMIT: typeof import("./tool-result-truncation.js").TOOL_RESULT_WARNING_DEDUPE_LIMIT;
 let toolResultWarningDedupe: typeof import("./tool-result-truncation.js").toolResultWarningDedupe;
 let tmpDir: string | undefined;
 
@@ -55,7 +54,6 @@ async function loadFreshToolResultTruncationModuleForTest() {
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
     resolveLiveToolResultAggregateMaxChars,
-    TOOL_RESULT_WARNING_DEDUPE_LIMIT,
     toolResultWarningDedupe,
   } = await import("./tool-result-truncation.js"));
 }
@@ -102,22 +100,24 @@ function makeToolResult(text: string, toolCallId = "call_1", details?: unknown):
 }
 
 describe("tool-result warning dedupe", () => {
+  const warningDedupeLimit = 1_024;
+
   it.each([
     ["prompt pressure", () => toolResultWarningDedupe.promptPressure],
     ["session recovery", () => toolResultWarningDedupe.sessionRecovery],
   ])("bounds and evicts the oldest %s warning keys", (_name, getCache) => {
     const cache = getCache();
 
-    for (let index = 0; index <= TOOL_RESULT_WARNING_DEDUPE_LIMIT; index += 1) {
+    for (let index = 0; index <= warningDedupeLimit; index += 1) {
       expect(cache.check(`session-${index}`)).toBe(false);
     }
 
-    expect(cache.size()).toBe(TOOL_RESULT_WARNING_DEDUPE_LIMIT);
+    expect(cache.size()).toBe(warningDedupeLimit);
     expect(cache.peek("session-0")).toBe(false);
     expect(cache.peek("session-1")).toBe(true);
-    expect(cache.peek(`session-${TOOL_RESULT_WARNING_DEDUPE_LIMIT}`)).toBe(true);
+    expect(cache.peek(`session-${warningDedupeLimit}`)).toBe(true);
     expect(cache.check("session-0")).toBe(false);
-    expect(cache.check(`session-${TOOL_RESULT_WARNING_DEDUPE_LIMIT}`)).toBe(true);
+    expect(cache.check(`session-${warningDedupeLimit}`)).toBe(true);
   });
 });
 

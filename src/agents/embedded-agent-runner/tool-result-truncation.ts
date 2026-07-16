@@ -69,7 +69,7 @@ const AGGREGATE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
  */
 const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
-export const TOOL_RESULT_WARNING_DEDUPE_LIMIT = 1_024;
+const TOOL_RESULT_WARNING_DEDUPE_LIMIT = 1_024;
 // Both warning paths live for the process lifetime. Keep their dedupe state
 // independently bounded so one hot path cannot evict the other's sessions.
 export const toolResultWarningDedupe = {
