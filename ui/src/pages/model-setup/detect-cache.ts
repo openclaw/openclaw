@@ -24,7 +24,3 @@ export function consumeCachedModelSetupDetection(
   cached = undefined;
   return result;
 }
-
-export function clearModelSetupDetectionCache(): void {
-  cached = undefined;
-}

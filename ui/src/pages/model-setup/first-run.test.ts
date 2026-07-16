@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { clearModelSetupDetectionCache, consumeCachedModelSetupDetection } from "./detect-cache.ts";
+import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
 import { isDefaultChatLanding, startModelSetupFirstRunRedirect } from "./first-run.ts";
 
 describe("model setup first-run redirect", () => {
@@ -38,7 +38,6 @@ describe("model setup first-run redirect", () => {
   });
 
   it("detects once, caches the result, and redirects once", async () => {
-    clearModelSetupDetectionCache();
     const result = {
       candidates: [],
       manualProviders: [],
@@ -86,7 +85,6 @@ describe("model setup first-run redirect", () => {
   });
 
   it("does not redirect after the operator leaves the default landing", async () => {
-    clearModelSetupDetectionCache();
     const result = {
       candidates: [],
       manualProviders: [],

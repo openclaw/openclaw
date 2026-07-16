@@ -4,8 +4,9 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import type { ModelSetupViewProps } from "./view.ts";
 import { renderModelSetup } from "./view.ts";
+
+type ModelSetupViewProps = Parameters<typeof renderModelSetup>[0];
 
 const detected: SystemAgentSetupDetectResult = {
   candidates: [

@@ -13,7 +13,7 @@ import { renderModelSetupWizard } from "./wizard-view.ts";
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 
-export type ModelSetupViewProps = {
+type ModelSetupViewProps = {
   page: ModelSetupPageState;
   activation: ModelSetupActivationState;
   wizard: ModelSetupWizardState;

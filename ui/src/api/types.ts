@@ -890,16 +890,10 @@ export type SystemAgentSetupActivateParams =
   import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateParams;
 export type SystemAgentSetupActivateResult =
   import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateResult;
-export type SystemAgentSetupAuthStartParams =
-  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupAuthStartParams;
 export type SystemAgentSetupAuthStartResult =
   import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupAuthStartResult;
 export type SystemAgentSetupDetectResult =
   import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupDetectResult;
-export type SystemAgentSetupVerifyResult =
-  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupVerifyResult;
-export type WizardNextParams =
-  import("../../../packages/gateway-protocol/src/schema.js").WizardNextParams;
 export type WizardNextResult =
   import("../../../packages/gateway-protocol/src/schema.js").WizardNextResult;
 export type WizardStep = import("../../../packages/gateway-protocol/src/schema.js").WizardStep;

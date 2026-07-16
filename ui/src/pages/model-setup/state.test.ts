@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WizardStep } from "../../api/types.ts";
 import {
-  MODEL_SETUP_ACTIVATE_TIMEOUT_MS,
-  MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS,
   activationTimeoutForKind,
   initialWizardValue,
   mapActivationResult,
@@ -11,11 +9,9 @@ import {
 
 describe("model setup state", () => {
   it("selects the extended activation timeout only for Codex CLI", () => {
-    expect(activationTimeoutForKind("codex-cli")).toBe(MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS);
-    expect(activationTimeoutForKind("claude-cli")).toBe(MODEL_SETUP_ACTIVATE_TIMEOUT_MS);
-    expect(activationTimeoutForKind("api-key")).toBe(MODEL_SETUP_ACTIVATE_TIMEOUT_MS);
-    expect(MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS).toBe(480_000);
-    expect(MODEL_SETUP_ACTIVATE_TIMEOUT_MS).toBe(150_000);
+    expect(activationTimeoutForKind("codex-cli")).toBe(480_000);
+    expect(activationTimeoutForKind("claude-cli")).toBe(150_000);
+    expect(activationTimeoutForKind("api-key")).toBe(150_000);
   });
 
   it("maps activation success and categorized failure results", () => {
