@@ -308,7 +308,7 @@ function Ensure-PortableNodeOnUserPath {
 
 function Resolve-PortableNodeDownload {
     $architecture = Get-WindowsPortableArchitecture
-    $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json"
+    $index = Invoke-RestMethod -TimeoutSec 30 -Uri "https://nodejs.org/dist/index.json"
     $release = $index |
         Where-Object { $_.version -match '^v24\.' } |
         Select-Object -First 1
@@ -396,7 +396,7 @@ function Install-PortableNode {
 
     try {
         Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
-        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip
+        Invoke-WebRequest -UseBasicParsing -TimeoutSec 300 -Uri $download.Url -OutFile $tmpZip
         Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot
     } finally {
         if (Test-Path $tmpZip) {
@@ -652,7 +652,7 @@ function Resolve-PortableGitDownload {
         "User-Agent" = "openclaw-installer"
         "Accept" = "application/vnd.github+json"
     }
-    $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers
+    $release = Invoke-RestMethod -TimeoutSec 30 -Uri $releaseApi -Headers $headers
     if (-not $release -or -not $release.assets) {
         throw "Could not resolve latest git-for-windows release metadata."
     }
@@ -708,7 +708,7 @@ function Install-PortableGit {
 
     try {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip
+        Invoke-WebRequest -TimeoutSec 300 -Uri $download.Url -OutFile $tmpZip
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
     } finally {
@@ -1361,7 +1361,7 @@ function Install-OpenClawFromGit {
     if (-not $SkipUpdate) {
         # PowerShell 7+ surfaces native-command stderr as terminating errors when
         # $ErrorActionPreference=Stop, so git's normal "From <url>" progress line
-        # would abort the script. Swallow failures here — pull is best-effort.
+        # would abort the script. Swallow failures here - pull is best-effort.
         $dirty = $null
         try { $dirty = git -C $RepoDir status --porcelain 2>$null } catch {}
         if (-not $dirty) {
