@@ -1363,6 +1363,44 @@ describe("google transport stream", () => {
     });
   });
 
+  it("times out when an authorized_user ADC token response body stalls after headers", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-idle-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "idle-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    vi.useFakeTimers();
+
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"access_token":'));
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const pendingRefresh = resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock);
+    // Attach the rejection handler before advancing fake time so the expected
+    // idle timeout cannot surface as an unhandled rejection between timer ticks.
+    const refreshError = pendingRefresh.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(tokenFetchMock).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(30_060);
+    await expect(refreshError).resolves.toMatchObject({
+      message: "Google OAuth token response stalled for 30000ms",
+    });
+  });
+
   it("refreshes authorized_user ADC from a compressed token response", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-gzip-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");

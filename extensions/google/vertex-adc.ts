@@ -301,9 +301,15 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
 async function readGoogleOauthTokenResponsePayload(
   response: Response,
 ): Promise<GoogleOauthTokenResponsePayload | undefined> {
+  // Request AbortSignal stays live through body read, but mock/hostile bodies
+  // may ignore it. Idle-timeout the token payload so a stalled stream cannot
+  // hang Vertex ADC refresh after headers.
   const bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES, {
+    chunkTimeoutMs: GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS,
     onOverflow: ({ maxBytes }) =>
       new Error(`Google OAuth token response exceeds ${maxBytes} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Google OAuth token response stalled for ${chunkTimeoutMs}ms`),
   });
   const text = decodeGoogleOauthTokenResponseBody(bytes, response.headers.get("content-encoding"));
   if (!text.trim()) {
