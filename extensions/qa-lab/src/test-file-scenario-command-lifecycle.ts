@@ -2,10 +2,13 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import {
   appendQaChildOutput,
+  appendQaChildOutputTail,
   createQaChildOutputCapture,
+  createQaChildOutputTail,
   QA_CHILD_STDERR_TAIL_BYTES,
   QA_CHILD_STDOUT_MAX_BYTES,
   readQaChildOutput,
+  readQaChildOutputTail,
 } from "./child-output.js";
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
@@ -65,7 +68,8 @@ export function killQaScenarioWindowsProcessTree(
 // One owner keeps timers, parent handlers, child signals, and final result
 // settlement symmetric across every command exit path.
 class QaScenarioCommandLifecycle {
-  private readonly stderr = createQaChildOutputCapture(QA_CHILD_STDERR_TAIL_BYTES);
+  private readonly stderr = createQaChildOutputTail();
+  private stderrBytes = 0;
   private readonly stdout = createQaChildOutputCapture(QA_CHILD_STDOUT_MAX_BYTES);
   private resolve: ((result: QaScenarioCommandResult) => void) | undefined;
   private settled = false;
@@ -150,11 +154,23 @@ class QaScenarioCommandLifecycle {
   };
 
   private handleOutput(source: "stderr" | "stdout", chunk: Buffer) {
-    const capture = source === "stdout" ? this.stdout : this.stderr;
-    appendQaChildOutput(capture, chunk);
-    if (capture.exceeded) {
+    if (source === "stderr") {
+      this.stderrBytes = Math.min(
+        this.stderrBytes + chunk.byteLength,
+        QA_CHILD_STDERR_TAIL_BYTES + 1,
+      );
+      appendQaChildOutputTail(this.stderr, chunk);
+      if (this.stderrBytes > QA_CHILD_STDERR_TAIL_BYTES) {
+        this.handleTerminalFailure(
+          `${this.commandLabel()} stderr exceeded ${QA_CHILD_STDERR_TAIL_BYTES} bytes`,
+        );
+      }
+      return;
+    }
+    appendQaChildOutput(this.stdout, chunk);
+    if (this.stdout.exceeded) {
       this.handleTerminalFailure(
-        `${this.commandLabel()} ${source} exceeded ${capture.maxBytes} bytes`,
+        `${this.commandLabel()} stdout exceeded ${this.stdout.maxBytes} bytes`,
       );
     }
   }
@@ -255,7 +271,7 @@ class QaScenarioCommandLifecycle {
     this.resolve?.({
       ...result,
       stdout: readQaChildOutput(this.stdout),
-      stderr: readQaChildOutput(this.stderr),
+      stderr: readQaChildOutputTail(this.stderr),
     });
   }
 

@@ -74,6 +74,10 @@ export function appendQaChildOutputTail(tail: QaChildOutputTail, chunk: unknown)
   tail.truncated = true;
 }
 
+export function readQaChildOutputTail(tail: QaChildOutputTail) {
+  return tail.buffer.toString("utf8");
+}
+
 export function formatQaChildOutputTail(tail: QaChildOutputTail, label: string) {
   const text = tail.buffer.toString("utf8").trim();
   if (!text) {
