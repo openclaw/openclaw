@@ -237,7 +237,7 @@ describe("acp translator stop reason mapping", () => {
         cwd: "/tmp",
         complete: true,
       });
-      const request = vi.fn(async (method: string) => {
+      const requestMock = vi.fn(async (method: string) => {
         if (method === "chat.send") {
           return {};
         }
@@ -245,7 +245,8 @@ describe("acp translator stop reason mapping", () => {
           throw new Error("gateway closed (1006): connection lost");
         }
         return {};
-      }) as GatewayClient["request"];
+      });
+      const request = requestMock as GatewayClient["request"];
       const { agent, sessionId, sessionUpdate } = createSessionAgentHarness(request, {
         eventLedger,
       });
@@ -254,7 +255,7 @@ describe("acp translator stop reason mapping", () => {
       await vi.waitFor(() => {
         expect(request).toHaveBeenCalledWith("chat.send", expect.any(Object), { timeoutMs: null });
       });
-      const runId = requireFirstRequestIdempotencyKey(request);
+      const runId = requireFirstRequestIdempotencyKey(requestMock);
       await agent.handleGatewayEvent(
         createChatEvent({
           runId,
