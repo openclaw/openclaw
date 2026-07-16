@@ -150,6 +150,30 @@ describe("collectClawStateHealthFindings", () => {
     ]);
   });
 
+  it("reports a newer state schema instead of interpreting it", async () => {
+    const current = await fixture();
+    const databasePath = resolveOpenClawStateSqlitePath(current.env);
+    await mkdir(dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    database.exec("PRAGMA user_version = 2");
+    database.close();
+
+    const findings = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: {},
+      sourceMcpServers: {},
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining("uses newer schema version 2"),
+      }),
+    ]);
+    const reopened = new DatabaseSync(databasePath, { readOnly: true });
+    expect(reopened.isOpen).toBe(true);
+    reopened.close();
+  });
+
   it("does not change existing database bytes, metadata, schema, or journal mode", async () => {
     const current = await installFixture({ withMcp: true, withCron: true });
     closeOpenClawStateDatabaseForTest();

@@ -1653,6 +1653,12 @@ export function openExistingOpenClawStateDatabaseReadOnly(
   }
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  try {
+    assertSupportedSchemaVersion(db, pathname);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
   return {
     db,
     path: pathname,
