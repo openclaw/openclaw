@@ -424,13 +424,31 @@ export function unwrapNodeInvokePayload(value: unknown): unknown {
   return "payload" in value ? value.payload : value;
 }
 
-export function catalogError(code: string, _error: unknown): CodexSessionCatalogError {
+function catalogErrorDetail(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.trim();
+  }
+  if (typeof error === "string") {
+    return error.trim();
+  }
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    return typeof message === "string" ? message.trim() : "";
+  }
+  return "";
+}
+
+export function catalogError(code: string, error: unknown): CodexSessionCatalogError {
   const messages: Record<string, string> = {
     APP_SERVER_UNAVAILABLE: "Codex app-server is unavailable on this host",
     NODE_INVOKE_FAILED: "The paired node could not return its Codex session catalog",
     NODE_LIST_FAILED: "Paired nodes could not be listed",
   };
-  return { code, message: messages[code] ?? "Codex session catalog request failed" };
+  const summary = messages[code] ?? "Codex session catalog request failed";
+  // Node-list failures are operator diagnostics from the local Gateway. Other
+  // catalog errors may cross node/App Server boundaries and keep their bounded summary.
+  const detail = code === "NODE_LIST_FAILED" ? catalogErrorDetail(error) : "";
+  return { code, message: detail && detail !== summary ? `${summary}: ${detail}` : summary };
 }
 
 export function parseTranscriptPage(value: unknown): CodexThreadTurnsListResponse {
@@ -458,4 +476,13 @@ export function parseTranscriptPage(value: unknown): CodexThreadTurnsListRespons
     throw new Error("Codex app-server transcript page exceeds the safe response size");
   }
   return page;
+}
+
+// Local adoptions always record a bound thread; a missing one means binding
+// resolution failed, so fail loud rather than baseline the wrong source thread.
+export function requireBoundThread(entry: { boundThreadId?: string }): string {
+  if (!entry.boundThreadId) {
+    throw new CatalogParamsError("Codex adoption is missing its bound thread. Retry.");
+  }
+  return entry.boundThreadId;
 }

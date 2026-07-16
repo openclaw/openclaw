@@ -17,9 +17,10 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { catalogError } from "./session-catalog-parsing.js";
+import { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_TERMINAL_RESUME_COMMAND,
   codexSessionCatalogRuntime,
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
@@ -76,10 +77,29 @@ vi.mock("./app-server/shared-client.js", () => ({
 vi.mock("./app-server/transcript-mirror.js", () => ({
   importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
 }));
-vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>()),
-  runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-}));
+vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
+  return {
+    ...actual,
+    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
+    resolveNodeHostExecutable: (
+      command: string,
+      options: {
+        env?: NodeJS.ProcessEnv;
+        pathEnv?: string;
+        includeExtensionless?: boolean;
+      },
+    ) => {
+      const env = options.env ?? process.env;
+      return actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: options.pathEnv ?? env.PATH ?? env.Path ?? "",
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+    },
+  };
+});
 
 type CreateSessionEntryParams = Parameters<
   PluginRuntime["agent"]["session"]["createSessionEntry"]
@@ -367,6 +387,15 @@ beforeEach(() => {
 afterEach(async () => {
   process.env.PATH = originalPath;
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+describe("Codex session catalog errors", () => {
+  it("keeps the underlying paired-node list failure", () => {
+    expect(catalogError("NODE_LIST_FAILED", new Error("paired store is unreadable"))).toEqual({
+      code: "NODE_LIST_FAILED",
+      message: "Paired nodes could not be listed: paired store is unreadable",
+    });
+  });
 });
 
 describe("Codex supervision catalog", () => {
@@ -766,6 +795,7 @@ describe("Codex supervision catalog", () => {
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: expect.not.objectContaining({ archived: expect.anything() }),
         timeoutMs: 65_000,
+        scopes: ["operator.write"],
       }),
     );
     expect(JSON.stringify(result)).not.toContain("private");
@@ -915,12 +945,14 @@ describe("Codex supervision catalog", () => {
       expect.objectContaining({
         nodeId: "healthy",
         params: { cursor: "healthy-page-2", limit: 7, searchTerm: "match" },
+        scopes: ["operator.write"],
       }),
     );
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "broken",
         params: { cursor: "broken-page-2", limit: 7, searchTerm: "match" },
+        scopes: ["operator.write"],
       }),
     );
     expect(result.hosts).toEqual([
@@ -1409,6 +1441,11 @@ describe("Codex supervision actions", () => {
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl({ readThread: vi.fn(async () => sourceThread) });
+    const baselines: Array<{
+      connectionFingerprint: string;
+      turnId: string | null;
+      userMessageCount: number;
+    }> = [];
 
     const first = await continueLocalCodexSession({
       api,
@@ -1416,6 +1453,7 @@ describe("Codex supervision actions", () => {
       config,
       control,
       threadId: "thread-1",
+      onContinued: (baseline) => baselines.push(baseline),
     });
     const second = await continueLocalCodexSession({
       api,
@@ -1423,6 +1461,7 @@ describe("Codex supervision actions", () => {
       config,
       control,
       threadId: "thread-1",
+      onContinued: (baseline) => baselines.push(baseline),
     });
 
     expect(first).toEqual({
@@ -1430,6 +1469,20 @@ describe("Codex supervision actions", () => {
       disposition: "forked",
     });
     expect(second).toEqual({ sessionKey: first.sessionKey, disposition: "existing" });
+    expect(baselines).toEqual([
+      {
+        connectionFingerprint: "catalog-connection",
+        // Marker baseline includes the active turn; history import below still
+        // stops at the last terminal turn.
+        turnId: "turn-active",
+        userMessageCount: 0,
+      },
+      {
+        connectionFingerprint: "catalog-connection",
+        turnId: "turn-active",
+        userMessageCount: 0,
+      },
+    ]);
     expect(control.withPinnedConnection).toHaveBeenCalledTimes(2);
     expect(createSessionEntry).toHaveBeenCalledOnce();
     expect(createSessionEntry).toHaveBeenCalledWith(
@@ -1489,8 +1542,70 @@ describe("Codex supervision actions", () => {
     });
     expect(control.readThread).toHaveBeenCalledTimes(2);
     expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
-    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", false);
+    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", true);
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("baselines a re-continued adoption from its bound canonical thread", async () => {
+    const sessionKey = supervisionSessionKey("thread-1");
+    const sessionId = "openclaw-session-existing";
+    const canonicalTurn = {
+      id: "turn-canonical",
+      status: "completed",
+      startedAt: 200,
+      items: [
+        { id: "user-1", type: "userMessage", text: "first" },
+        { id: "user-2", type: "userMessage", text: "second" },
+      ],
+    } as NonNullable<CodexThread["turns"]>[number];
+    const canonicalThread = idleThread({
+      id: "thread-1-branch",
+      turns: [canonicalTurn],
+    });
+    const { runtime } = createRuntime({
+      entries: [
+        {
+          sessionKey,
+          entry: adoptedEntry({ sourceThreadId: "thread-1", sessionId }),
+        },
+      ],
+    });
+    const { api } = createGatewayApi(runtime);
+    const bindingStore = createCodexTestBindingStore();
+    await seedSupervisionBinding({
+      bindingStore,
+      sessionId,
+      sessionKey,
+      sourceThreadId: "thread-1",
+    });
+    const control = createEligibleControl({
+      readThread: vi.fn(async (threadId: string) =>
+        threadId === canonicalThread.id ? canonicalThread : idleThread({ id: threadId }),
+      ),
+    });
+    const baselines: Array<{
+      connectionFingerprint: string;
+      turnId: string | null;
+      userMessageCount: number;
+    }> = [];
+
+    await continueLocalCodexSession({
+      api,
+      bindingStore,
+      config,
+      control,
+      threadId: "thread-1",
+      onContinued: (baseline) => baselines.push(baseline),
+    });
+
+    expect(control.readThread).toHaveBeenCalledWith("thread-1-branch", true);
+    expect(baselines).toEqual([
+      {
+        connectionFingerprint: "catalog-connection",
+        turnId: "turn-canonical",
+        userMessageCount: 2,
+      },
+    ]);
   });
 
   it("keeps adopted sessions discoverable when the configured default agent changes", async () => {
@@ -1994,12 +2109,15 @@ describe("Codex supervision actions", () => {
     expect(createSessionEntry).not.toHaveBeenCalled();
   });
 
-  it("opens a mapped active source without applying the unadopted idle gate", async () => {
+  it("opens a mapped active bound thread without applying the unadopted idle gate", async () => {
     const { runtime, entries, createSessionEntry, patchSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
     const control = createEligibleControl({
       readThread: vi.fn(async () =>
-        idleThread({ status: { type: "active", activeFlags: ["waitingOnApproval"] } }),
+        idleThread({
+          id: "thread-1-branch",
+          status: { type: "active", activeFlags: ["waitingOnApproval"] },
+        }),
       ),
     });
     const sessionKey = supervisionSessionKey("thread-1");
@@ -2028,13 +2146,13 @@ describe("Codex supervision actions", () => {
       sessionKey,
       disposition: "existing",
     });
-    expect(control.readThread).toHaveBeenCalledWith("thread-1", false);
+    expect(control.readThread).toHaveBeenCalledWith("thread-1-branch", true);
     expect(patchSessionEntry).toHaveBeenCalledOnce();
     expect(createSessionEntry).not.toHaveBeenCalled();
   });
 
   it.each([
-    { name: "mapped", mapped: true, includeTurns: false },
+    { name: "mapped", mapped: true, includeTurns: true },
     { name: "unmapped", mapped: false, includeTurns: true },
   ])(
     "rejects a $name Continue when the fresh read returns a different thread",
@@ -2070,7 +2188,10 @@ describe("Codex supervision actions", () => {
         }),
       ).rejects.toThrow("returned a different thread than requested");
 
-      expect(control.readThread).toHaveBeenCalledWith("thread-1", includeTurns);
+      expect(control.readThread).toHaveBeenCalledWith(
+        mapped ? "thread-1-branch" : "thread-1",
+        includeTurns,
+      );
       expect(createSessionEntry).not.toHaveBeenCalled();
       expect(patchSessionEntry).not.toHaveBeenCalled();
       expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).not.toHaveBeenCalled();
@@ -2103,7 +2224,7 @@ describe("Codex supervision actions", () => {
           throw new Error("missing mapped session");
         }
         entry.sessionId = "openclaw-session-replacement";
-        return idleThread();
+        return idleThread({ id: "thread-1-branch" });
       }),
     });
 
@@ -3303,6 +3424,8 @@ describe("Codex supervision actions", () => {
       command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
       params: { threadId: "thread-remote", cursor: "remote-turns-1", limit: 25 },
       timeoutMs: 65_000,
+      scopes: ["operator.write"],
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

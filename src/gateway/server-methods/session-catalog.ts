@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -18,9 +19,21 @@ import type {
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { bindPluginSessionConversation } from "../../plugins/session-conversation-binding.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
+
+function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(search);
+  return normalized
+    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
+    : undefined;
+}
 
 function catalogError(error: unknown): { code: string; message: string } {
   const record =
@@ -175,13 +188,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     if (!resolvedAgent) {
       return;
     }
+    const search = normalizeSessionCatalogSearch(request.search);
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
         const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
         try {
           const hosts = await provider.list({
-            search: request.search,
+            search,
             limitPerHost: request.limitPerHost,
             hostIds: request.hostIds,
             ...("cursors" in request ? { cursors: request.cursors } : {}),
@@ -263,6 +277,35 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           afterBind: result.afterConversationBound,
         });
       }
+      // Adopted sessions are created under the resolved default store agent, so the
+      // key-derived agent matches the owning agent. Provider-authoritative agent
+      // identity (a `SessionCatalogContinueProviderResult.agentId`) is a follow-up
+      // that would let adapters adopt under non-default agents; see issue tracker.
+      const agentId = resolveAgentIdFromSessionKey(result.sessionKey);
+      if (result.upstream) {
+        // Links exist only for adoptions made on this version: pre-upgrade adopted
+        // sessions are transient linkage with no shipped contract, and re-continuing
+        // from the catalog establishes the link. No doctor backfill by design.
+        upsertSessionUpstreamLink({
+          sessionKey: result.sessionKey,
+          agentId,
+          catalogId: request.catalogId,
+          hostId: request.hostId,
+          threadId: request.threadId,
+          upstreamKind: result.upstream.kind,
+          upstreamRef: result.upstream.ref,
+          marker: result.upstream.marker,
+        });
+      }
+      recordSessionStateEvent({
+        sessionKey: result.sessionKey,
+        agentId,
+        kind: "adopted",
+        actorType: "human",
+        dedupeKey: `adopted:${result.sessionKey}`,
+        summary: `adopted from ${request.catalogId}`,
+        payload: { catalogId: request.catalogId, hostId: request.hostId },
+      });
       respond(true, { sessionKey: result.sessionKey });
     } catch (error) {
       const details = catalogError(error);

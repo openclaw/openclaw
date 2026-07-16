@@ -1,3 +1,8 @@
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardCard,
+  type WorkboardStatus,
+} from "@openclaw/workboard-contract";
 // Workboard plugin module implements cli behavior.
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -7,7 +12,6 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
-import { WORKBOARD_STATUSES, type WorkboardCard, type WorkboardStatus } from "./types.js";
 
 type JsonOptions = {
   json?: boolean;

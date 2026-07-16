@@ -26,6 +26,7 @@ import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
@@ -231,6 +232,7 @@ export async function monitorLineProvider(
                       pushMessagesLine,
                       createFlexMessage,
                       createImageMessage,
+                      buildMediaMessage: buildLineMediaMessage,
                       createLocationMessage,
                       onReplyError: (replyErr) => {
                         logVerbose(
@@ -245,10 +247,11 @@ export async function monitorLineProvider(
                     // Text reached the user but a rich/media bubble did not.
                     // Surface the tagged partial failure after adopting the
                     // consumed reply-token state so later blocks in this turn
-                    // route correctly; recordChannelRuntimeState is skipped
-                    // because this delivery was not a clean success.
+                    // route correctly without retrying text the user already saw.
                     throw deliveryResult.error;
                   }
+
+                  return { visibleReplySent: deliveryResult.visibleReplySent };
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));

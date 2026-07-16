@@ -210,6 +210,35 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("classifies OpenAI-native code-only failover errors", () => {
+    const provider = buildOpenAIProvider();
+
+    for (const providerId of ["openai", "azure-openai", "azure-openai-responses"]) {
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "",
+          code: "SERVER_ERROR",
+        }),
+      ).toBe("server_error");
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "",
+          code: "INSUFFICIENT_QUOTA",
+        }),
+      ).toBe("billing");
+    }
+    // API_ERROR is an Anthropic-native code, not OpenAI's: fall through to generic.
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "openai",
+        errorMessage: "",
+        code: "API_ERROR",
+      }),
+    ).toBeUndefined();
+  });
+
   it("marks the OpenAI manifest catalog as runtime-discovered", () => {
     expect(manifest.modelCatalog.discovery.openai).toBe("runtime");
   });
@@ -540,6 +569,7 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.6-sol",
           agentRuntime: "codex",
+          api: "openai-chatgpt-responses",
           compat: liveSol?.compat,
         } as never)?.levels,
       ).not.toContainEqual({ id: "ultra" });
@@ -719,6 +749,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         modelId: "gpt-5.6-sol",
         agentRuntime: "codex",
+        api: "openai-chatgpt-responses",
         compat: sol?.compat,
       } as never)?.levels,
     ).not.toContainEqual({ id: "ultra" });
@@ -781,6 +812,7 @@ describe("buildOpenAIProvider", () => {
             provider: "openai",
             modelId,
             agentRuntime: "codex",
+            api: "openai-chatgpt-responses",
             compat: model?.compat,
           } as never)
           ?.levels.map((level) => level.id),
@@ -793,6 +825,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         modelId: "gpt-5.6-luna",
         agentRuntime: "codex",
+        api: "openai-chatgpt-responses",
         compat: luna?.compat,
       } as never)
       ?.levels.map((level) => level.id);
@@ -1679,6 +1712,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai",
       modelId: "gpt-5.6-luna",
       agentRuntime: "codex",
+      api: "openai-responses",
       compat: {
         supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
       },
@@ -1687,6 +1721,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai",
       modelId: "gpt-5.6-sol",
       agentRuntime: "codex",
+      api: "openai-responses",
       compat: {
         supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
       },
@@ -1695,6 +1730,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai",
       modelId: "gpt-5.6-sol",
       agentRuntime: "codex",
+      api: "openai-chatgpt-responses",
       compat: {
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       },
@@ -2221,3 +2257,4 @@ describe("buildOpenAIProvider", () => {
     await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

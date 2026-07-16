@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import JSZip from "jszip";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { registerGoogleMeetCli, testing } from "./cli.js";
@@ -674,7 +675,8 @@ describe("google-meet CLI", () => {
       expectFields(firstRecord(firstRecord(artifacts.artifacts).transcripts), {
         documentText: "Transcript document body.",
       });
-      expect(readFileSync(`${tempDir}.zip`).subarray(0, 4).toString("hex")).toBe("504b0304");
+      const zip = await JSZip.loadAsync(readFileSync(`${tempDir}.zip`));
+      expect(await zip.file("summary.md")?.async("string")).toContain("# Google Meet Artifacts");
     } finally {
       stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
@@ -1385,3 +1387,4 @@ describe("google-meet CLI", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

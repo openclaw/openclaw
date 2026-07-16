@@ -1375,7 +1375,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     isCloudflareAiGateway;
 
   const useMaxTokens =
-    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether;
+    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isZai;
 
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
@@ -1454,3 +1454,4 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
       model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -175,9 +175,7 @@ export async function runEmbeddedAttemptSettledPhase(
         ...(boundaryTimezone ? { boundaryTimezone } : {}),
         includeBoundaryTimestamp,
         isRawModelRun: input.isRawModelRun,
-        ...(typeof preparedUserTurnMessage?.timestamp === "number"
-          ? { preparedUserTurnTimestamp: preparedUserTurnMessage.timestamp }
-          : {}),
+        ...(preparedUserTurnMessage ? { preparedUserTurnMessage } : {}),
         sessionAgentId: input.setup.sessionAgentId,
         setActiveSessionSystemPrompt,
         ...(systemPromptReport ? { systemPromptReport } : {}),

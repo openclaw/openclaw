@@ -585,7 +585,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 8_000): Pr
     if (predicate()) {
       return;
     }
-    await delay(50);
+    await delay(10);
   }
   throw new Error("timed out waiting for condition");
 }
@@ -3352,11 +3352,11 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("retries a cold Crabbox whose run --help is slower than the default probe timeout", () => {
     const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
-    // First probe is SIGKILLed at 150ms; the retry gets the full generous timeout
-    // and reads the (600ms) stderr help, so the wrapper must not hard-fail.
+    // First probe is SIGKILLed at 25ms; the retry gets the full generous timeout
+    // and reads the (80ms) stderr help, so the wrapper must not hard-fail.
     const result = runWrapper(helpText, ["--version"], {
-      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "150" },
-      extraPathEntries: [makeSlowHelpCrabbox(helpText, 600)],
+      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "25" },
+      extraPathEntries: [makeSlowHelpCrabbox(helpText, 80)],
     });
 
     expect(result.error).toBeUndefined();
@@ -4470,7 +4470,7 @@ describe("scripts/crabbox-wrapper", () => {
     async () => {
       await runSignalCleanupProof(async (runnerPid) => {
         process.kill(runnerPid, "SIGTERM");
-        await delay(50);
+        await delay(20);
         process.kill(runnerPid, "SIGTERM");
       });
     },
