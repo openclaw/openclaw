@@ -1,53 +1,70 @@
 // Line plugin module implements group history behavior.
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import {
+  buildInboundHistoryFromEntries,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/reply-history";
 
-function lineHistoryEntryKey(entry: HistoryEntry): string {
-  return entry.messageId ?? `${entry.timestamp ?? ""}:${entry.sender}:${entry.body}`;
-}
+export type LineGroupHistoryReservation = {
+  inboundHistory?: HistoryEntry[];
+  commit: () => void;
+  release: () => void;
+};
+
+// Entries stay in the bounded history map while a turn owns them so failed
+// turns need no reinsertion or ordering repair. Other overlapping turns skip
+// these exact objects until the owner commits or releases the reservation.
+const reservedEntries = new WeakSet<HistoryEntry>();
 
 // Fire-and-forget webhook dispatch runs group events in parallel, so a plain
 // (unmentioned) message can be recorded while the agent is still handling a
-// mention. The turn must read the window and capture the identity keys it
-// consumed in one synchronous step: a key captured before the read could miss
-// entries the turn sees (duplicated next turn), and a whole-key clear would
-// drop entries the turn never saw (lost messages).
-export function snapshotLineGroupHistory(
+// mention. Reserve the available entry objects and render their bounded window
+// in one synchronous step. Object identity distinguishes otherwise identical
+// concurrent messages without serializing whole agent turns.
+export function reserveLineGroupHistory(
   historyMap: Map<string, HistoryEntry[]> | undefined,
   historyKey: string | undefined,
   limit: number,
-): { inboundHistory?: HistoryEntry[]; consumedKeys?: Set<string> } {
+): LineGroupHistoryReservation {
   if (!historyMap || !historyKey || limit <= 0) {
-    return {};
+    return { commit: () => {}, release: () => {} };
   }
-  const inboundHistory = createChannelHistoryWindow({ historyMap }).buildInboundHistory({
-    historyKey,
+  const consumedEntries = (historyMap.get(historyKey) ?? []).filter(
+    (entry) => !reservedEntries.has(entry),
+  );
+  for (const entry of consumedEntries) {
+    reservedEntries.add(entry);
+  }
+  const inboundHistory = buildInboundHistoryFromEntries({
+    entries: consumedEntries,
     limit,
   });
+  let settled = false;
+  const settle = () => {
+    if (settled) {
+      return false;
+    }
+    settled = true;
+    for (const entry of consumedEntries) {
+      reservedEntries.delete(entry);
+    }
+    return true;
+  };
   return {
     inboundHistory,
-    consumedKeys: new Set((inboundHistory ?? []).map(lineHistoryEntryKey)),
+    commit: () => {
+      if (!settle() || consumedEntries.length === 0) {
+        return;
+      }
+      const consumed = new Set(consumedEntries);
+      const kept = (historyMap.get(historyKey) ?? []).filter((entry) => !consumed.has(entry));
+      if (kept.length > 0) {
+        historyMap.set(historyKey, kept);
+      } else {
+        historyMap.delete(historyKey);
+      }
+    },
+    release: () => {
+      settle();
+    },
   };
-}
-
-// Clear only the entries the turn consumed (captured in consumedKeys); retain
-// anything recorded concurrently. A whole-key clear would drop those and
-// silently lose group messages that arrived while the agent was running.
-export function clearConsumedLineGroupHistory(
-  historyMap: Map<string, HistoryEntry[]> | undefined,
-  historyKey: string | undefined,
-  consumedKeys: Set<string> | undefined,
-): void {
-  if (!historyMap || !historyKey || !consumedKeys) {
-    return;
-  }
-  const entries = historyMap.get(historyKey);
-  if (!entries) {
-    return;
-  }
-  const kept = entries.filter((entry) => !consumedKeys.has(lineHistoryEntryKey(entry)));
-  if (kept.length > 0) {
-    historyMap.set(historyKey, kept);
-  } else {
-    historyMap.delete(historyKey);
-  }
 }

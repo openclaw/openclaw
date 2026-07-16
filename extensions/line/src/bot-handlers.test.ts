@@ -58,6 +58,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   DEFAULT_GROUP_HISTORY_LIMIT: 20,
+  buildInboundHistoryFromEntries: ({
+    entries,
+    limit,
+  }: {
+    entries: HistoryEntry[];
+    limit: number;
+  }) => (limit <= 0 ? undefined : entries.slice(-limit)),
   createChannelHistoryWindow: ({ historyMap }: { historyMap: Map<string, HistoryEntry[]> }) => ({
     record: ({
       historyKey,
@@ -1040,7 +1047,6 @@ describe("handleLineWebhookEvents", () => {
             id: "m-past",
             type: "text",
             text: "earlier chatter",
-            quoteToken: "q-past",
           },
           source: { type: "group", groupId: "grp-race", userId: "user-b" },
           webhookEventId: "evt-past",
@@ -1078,7 +1084,6 @@ describe("handleLineWebhookEvents", () => {
             id: "m-concurrent",
             type: "text",
             text: "ping",
-            quoteToken: "q-concurrent",
           },
           source: { type: "group", groupId: "grp-race", userId: "user-c" },
           webhookEventId: "evt-concurrent",
@@ -1096,13 +1101,11 @@ describe("handleLineWebhookEvents", () => {
     // The turn's context saw exactly the pre-mention window...
     expect(buildLineMessageContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        inboundHistory: [expect.objectContaining({ messageId: "m-past" })],
+        inboundHistory: [expect.objectContaining({ body: "earlier chatter" })],
       }),
     );
     // ...so cleanup drops "m-past" and the concurrent "m-concurrent" survives.
-    expect(groupHistories.get("grp-race")).toEqual([
-      expect.objectContaining({ messageId: "m-concurrent" }),
-    ]);
+    expect(groupHistories.get("grp-race")).toEqual([expect.objectContaining({ body: "ping" })]);
   });
 
   it("keeps a message arriving between the history snapshot and context construction for the next mention", async () => {
@@ -1123,7 +1126,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-past", type: "text", text: "earlier chatter", quoteToken: "q-past" },
+          message: { id: "m-past", type: "text", text: "earlier chatter" },
           source: { type: "group", groupId: "grp-mid", userId: "user-b" },
           webhookEventId: "evt-past",
           timestamp: 1000,
@@ -1138,7 +1141,7 @@ describe("handleLineWebhookEvents", () => {
       await contextGate;
       return {
         ctxPayload: { From: "line:group:grp-mid" },
-        replyToken: "reply-token",
+        replyToken: "test-auth-token",
         route: { agentId: "default" },
         isGroup: true,
         accountId: "default",
@@ -1166,7 +1169,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-mid", type: "text", text: "ping", quoteToken: "q-mid" },
+          message: { id: "m-mid", type: "text", text: "ping" },
           source: { type: "group", groupId: "grp-mid", userId: "user-c" },
           webhookEventId: "evt-mid",
           timestamp: 3000,
@@ -1179,7 +1182,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        inboundHistory: [expect.objectContaining({ messageId: "m-past" })],
+        inboundHistory: [expect.objectContaining({ body: "earlier chatter" })],
       }),
     );
 
@@ -1187,9 +1190,7 @@ describe("handleLineWebhookEvents", () => {
     await mentionRun;
 
     // Cleanup drops only the consumed "m-past"; "m-mid" survives...
-    expect(groupHistories.get("grp-mid")).toEqual([
-      expect.objectContaining({ messageId: "m-mid" }),
-    ]);
+    expect(groupHistories.get("grp-mid")).toEqual([expect.objectContaining({ body: "ping" })]);
 
     // ...and the next mention turn consumes it exactly once.
     await handleLineWebhookEvents(
@@ -1211,7 +1212,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        inboundHistory: [expect.objectContaining({ messageId: "m-mid" })],
+        inboundHistory: [expect.objectContaining({ body: "ping" })],
       }),
     );
     expect(groupHistories.has("grp-mid")).toBe(false);
@@ -1233,7 +1234,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-ambient", type: "text", text: "context", quoteToken: "q-ambient" },
+          message: { id: "m-ambient", type: "text", text: "context" },
           source: { type: "group", groupId: "grp-fail", userId: "user-b" },
           webhookEventId: "evt-ambient",
           timestamp: 1000,

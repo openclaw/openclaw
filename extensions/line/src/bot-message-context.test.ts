@@ -136,13 +136,11 @@ describe("buildLineMessageContext", () => {
       cfg,
       account,
       commandAuthorized: true,
-      inboundHistory: [
-        { sender: "user:user-2", body: "earlier chatter", timestamp: 1000, messageId: "m-1" },
-      ],
+      inboundHistory: [{ sender: "user:user-2", body: "earlier chatter", timestamp: 1000 }],
     });
 
     expect(context?.ctxPayload.InboundHistory).toEqual([
-      { sender: "user:user-2", body: "earlier chatter", timestamp: 1000, messageId: "m-1" },
+      { sender: "user:user-2", body: "earlier chatter", timestamp: 1000 },
     ]);
   });
 

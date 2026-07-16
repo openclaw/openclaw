@@ -36,7 +36,7 @@ import {
   type LineInboundContext,
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
-import { clearConsumedLineGroupHistory, snapshotLineGroupHistory } from "./group-history.js";
+import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
@@ -453,66 +453,70 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           sender: `user:${senderId}`,
           body: rawText || `<${message.type}>`,
           timestamp: event.timestamp,
-          messageId: message.id,
         },
       });
     }
     return;
   }
 
-  // Read the group window and capture its identity keys in one synchronous
-  // step: entries recorded during any await below stay out of both this turn's
-  // context and the post-turn cleanup.
+  // Reserve the group window before any await below. Concurrent ambient and
+  // mention events see only unreserved entries; failed turns release theirs.
   const groupHistoryKey = isGroup ? (groupId ?? roomId) : undefined;
-  const { inboundHistory, consumedKeys } = snapshotLineGroupHistory(
+  const historyReservation = reserveLineGroupHistory(
     context.groupHistories,
     groupHistoryKey,
     context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
 
-  const allMedia: MediaRef[] = [];
-  let mediaUnavailable = false;
+  try {
+    const allMedia: MediaRef[] = [];
+    let mediaUnavailable = false;
 
-  if (isDownloadableLineMessageType(message.type)) {
-    try {
-      const originalFilename =
-        message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
-      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes, {
-        originalFilename,
-      });
-      allMedia.push({
-        path: media.path,
-        contentType: media.contentType,
-      });
-    } catch (err) {
-      mediaUnavailable = true;
-      const errMsg = String(err);
-      if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
-        logVerbose(`line: media exceeds size limit for message ${message.id}`);
-      } else {
-        runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+    if (isDownloadableLineMessageType(message.type)) {
+      try {
+        const originalFilename =
+          message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+        const media = await downloadLineMedia(
+          message.id,
+          account.channelAccessToken,
+          mediaMaxBytes,
+          { originalFilename },
+        );
+        allMedia.push({
+          path: media.path,
+          contentType: media.contentType,
+        });
+      } catch (err) {
+        mediaUnavailable = true;
+        const errMsg = String(err);
+        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+          logVerbose(`line: media exceeds size limit for message ${message.id}`);
+        } else {
+          runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+        }
       }
     }
+
+    const messageContext = await buildLineMessageContext({
+      event,
+      allMedia,
+      mediaUnavailable,
+      cfg,
+      account,
+      commandAuthorized: decision.commandAccess.authorized,
+      inboundHistory: historyReservation.inboundHistory,
+    });
+
+    if (!messageContext) {
+      logVerbose("line: skipping empty message");
+      return;
+    }
+
+    await processMessage(messageContext);
+    historyReservation.commit();
+  } finally {
+    historyReservation.release();
   }
-
-  const messageContext = await buildLineMessageContext({
-    event,
-    allMedia,
-    mediaUnavailable,
-    cfg,
-    account,
-    commandAuthorized: decision.commandAccess.authorized,
-    inboundHistory,
-  });
-
-  if (!messageContext) {
-    logVerbose("line: skipping empty message");
-    return;
-  }
-
-  await processMessage(messageContext);
-
-  clearConsumedLineGroupHistory(context.groupHistories, groupHistoryKey, consumedKeys);
 }
 
 async function handleFollowEvent(event: FollowEvent, _context: LineHandlerContext): Promise<void> {
