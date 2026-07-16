@@ -70,8 +70,6 @@ import {
 } from "./tts-settings.js";
 
 export type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
 };

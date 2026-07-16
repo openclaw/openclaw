@@ -286,7 +286,7 @@ export function resolveTtsPersonaFromPrefs(
   return personaId ? config.personas[personaId] : undefined;
 }
 
-export type ResolvedTtsSettingsSnapshot = {
+type ResolvedTtsSettingsSnapshot = {
   autoMode: TtsAutoMode;
   config: ResolvedTtsConfig;
   maxLength: number;
