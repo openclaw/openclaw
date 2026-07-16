@@ -87,4 +87,42 @@ disable-model-invocation: true
     ]);
     expect(resolveOpenClawMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
   });
+
+  it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-scan-");
+    const brokenDir = path.join(tempDir, "broken");
+    const validDir = path.join(tempDir, "valid");
+    await fs.mkdir(brokenDir);
+    await fs.mkdir(validDir);
+    const brokenFile = path.join(brokenDir, "SKILL.md");
+    await fs.writeFile(
+      brokenFile,
+      `---
+name: [broken
+description: Broken skill
+---
+`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(validDir, "SKILL.md"),
+      `---
+name: valid
+description: Valid sibling
+---
+`,
+      "utf-8",
+    );
+
+    const result = loadSkillsFromDir({ dir: tempDir, source: "test" });
+
+    expect(result.skills.map((skill) => skill.name)).toEqual(["valid"]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "warning",
+        path: brokenFile,
+        message: expect.stringContaining("invalid frontmatter: BAD_INDENT"),
+      }),
+    ]);
+  });
 });
