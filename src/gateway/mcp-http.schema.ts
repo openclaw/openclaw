@@ -224,10 +224,11 @@ function warnSchemaOnce(message: string) {
   logWarn(message);
 }
 
-/** Resets the schema-warning dedupe cache. For tests only. */
-export function resetEmittedSchemaWarningsForTest() {
+function resetEmittedSchemaWarningsForTest() {
   emittedSchemaWarnings.clear();
 }
+
+export const testing = { resetEmittedSchemaWarningsForTest } as const;
 
 /** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {

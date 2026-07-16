@@ -6,12 +6,12 @@ vi.mock("../logger.js", () => ({
   logWarn: logWarnMock,
 }));
 
-import { buildMcpToolSchema, resetEmittedSchemaWarningsForTest } from "./mcp-http.schema.js";
+import { buildMcpToolSchema, testing } from "./mcp-http.schema.js";
 
 describe("buildMcpToolSchema", () => {
   beforeEach(() => {
     logWarnMock.mockClear();
-    resetEmittedSchemaWarningsForTest();
+    testing.resetEmittedSchemaWarningsForTest();
   });
   it("keeps union schema properties named like Object prototype keys", () => {
     const [entry] = buildMcpToolSchema([
