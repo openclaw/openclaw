@@ -15,6 +15,7 @@ const GENERATED_WRAPPER_BASENAMES = new Set([
   "claude-agent-acp-wrapper.mjs",
 ]);
 const OPENCLAW_PLUGIN_DEPS_MARKER = "/plugin-runtime-deps/";
+const ACPX_PROCESS_LIST_TIMEOUT_MS = 2_000;
 const OWNED_ACP_PACKAGE_NAMES = [
   "@zed-industries/codex-acp",
   "@zed-industries/codex-acp-darwin-arm64",
@@ -219,6 +220,7 @@ async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
     logOutput: false,
     maxBuffer: 8 * 1024 * 1024,
+    timeoutMs: ACPX_PROCESS_LIST_TIMEOUT_MS,
   });
   return parseProcessList(stdout);
 }
