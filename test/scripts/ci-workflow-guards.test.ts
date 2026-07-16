@@ -33,6 +33,7 @@ const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
+const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
@@ -259,6 +260,10 @@ function runCiManifestFixture(options: {
 
 function readAndroidReleaseWorkflow() {
   return parse(readFileSync(".github/workflows/android-release.yml", "utf8"));
+}
+
+function readAndroidToolchainAction() {
+  return parse(readFileSync(SETUP_ANDROID_TOOLCHAIN_ACTION, "utf8"));
 }
 
 function readBuildArtifactsTestboxWorkflow() {
@@ -1480,38 +1485,80 @@ describe("ci workflow guards", () => {
   it("installs the Android SDK platform used by Gradle", () => {
     const workflow = readCiWorkflow();
     const releaseWorkflow = readAndroidReleaseWorkflow();
+    const action = readAndroidToolchainAction();
     const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
     const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
-    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
     const packageId = `platforms;android-${appCompileSdk}.0`;
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
-    for (const job of sdkJobs) {
-      const cacheStep = job.steps.find((step: WorkflowStep) => step.name === "Cache Android SDK");
-      const installStep = job.steps.find(
-        (step: WorkflowStep) => step.name === "Install Android SDK packages",
-      );
+    expect(
+      workflow.jobs.android.steps.filter(
+        (step: WorkflowStep) =>
+          step.uses === "./.ci-workflow/.github/actions/setup-android-toolchain",
+      ),
+    ).toHaveLength(1);
+    expect(
+      releaseWorkflow.jobs.publish_signed_android_apk.steps.filter(
+        (step: WorkflowStep) => step.uses === "./.github/actions/setup-android-toolchain",
+      ),
+    ).toHaveLength(1);
 
-      expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}.0-`);
-      expect(installStep.run).toContain(`"${packageId}"`);
-    }
+    const cacheStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Cache Android SDK"),
+      "Android SDK cache step",
+    );
+    const javaStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Setup Java"),
+      "Android Java setup step",
+    );
+    const installStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Install Android SDK packages"),
+      "Android SDK package install step",
+    );
+
+    expect(javaStep.uses).toBe("actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287");
+    expect(javaStep.with).toMatchObject({
+      cache: "gradle",
+      distribution: "temurin",
+      "java-version": 17,
+    });
+    expect(javaStep.with?.["cache-dependency-path"]).toContain(
+      "apps/android/gradle/libs.versions.toml",
+    );
+    expect(cacheStep.with?.key).toContain(`platform-${appCompileSdk}.0-`);
+    expect(installStep.run).toContain(`"${packageId}"`);
+  });
+
+  it("loads Android CI setup from the workflow revision for frozen targets", () => {
+    const steps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const checkoutIndex = steps.findIndex((step) => step.name === "Checkout");
+    const actionCheckoutIndex = steps.findIndex(
+      (step) => step.name === "Checkout CI Android toolchain action",
+    );
+    const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
+    const actionCheckout = expectDefined(steps[actionCheckoutIndex], "Android action checkout");
+
+    expect(actionCheckout.uses).toBe(CHECKOUT_V6);
+    expect(actionCheckout.with).toMatchObject({
+      path: ".ci-workflow",
+      "persist-credentials": false,
+      ref: "${{ github.workflow_sha }}",
+      "sparse-checkout": ".github/actions/setup-android-toolchain",
+    });
+    expect(checkoutIndex).toBeLessThan(actionCheckoutIndex);
+    expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
   it("bounds Android SDK command-line tools downloads", () => {
-    const workflow = readCiWorkflow();
-    const releaseWorkflow = readAndroidReleaseWorkflow();
-    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
+    const action = readAndroidToolchainAction();
+    const setupStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) =>
+        step.run?.includes("commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"),
+      ),
+      "Android SDK setup step",
+    );
 
-    for (const job of sdkJobs) {
-      const setupStep = expectDefined(
-        job.steps.find((step: WorkflowStep) =>
-          step.run?.includes("commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"),
-        ),
-        "Android SDK setup step",
-      );
-
-      expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
-    }
+    expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
   });
 
   it("covers Android app variants, lint, and benchmark compilation", () => {
@@ -2114,9 +2161,79 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Run Slack desktop scenario",
     );
 
+    expect(runStep?.run).toContain("for attempt in 1 2 3");
     expect(runStep?.run).toContain(
-      "curl -fsS --connect-timeout 5 --max-time 15 --retry 2 https://checkip.amazonaws.com",
+      "curl -fsS --connect-timeout 5 --max-time 15 https://checkip.amazonaws.com",
     );
+    expect(runStep?.run).not.toContain("--retry");
+    expect(runStep?.run).toContain('runner_ip=""');
+    expect(runStep?.run).toContain('[[ ! "$runner_ip" =~ ^(0|[1-9][0-9]{0,2})\\.');
+    expect(runStep?.run).toContain("((10#$octet > 255))");
+
+    const discoveryBlock = runStep?.run?.match(
+      /runner_ip=""[\s\S]*?echo "Using AWS SSH CIDR \$\{CRABBOX_AWS_SSH_CIDRS\}"/u,
+    )?.[0];
+    expect(discoveryBlock).toBeTruthy();
+
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-mantis-runner-ip-"));
+    try {
+      const fakeBin = path.join(root, "bin");
+      const callCount = path.join(root, "curl-calls");
+      mkdirSync(fakeBin);
+      writeFileSync(callCount, "0\n");
+      writeFileSync(
+        path.join(fakeBin, "curl"),
+        `#!/bin/bash
+count="$(<"$CURL_CALL_COUNT")"
+count=$((count + 1))
+printf '%s\n' "$count" >"$CURL_CALL_COUNT"
+if [[ "$count" == "1" ]]; then
+  printf '198.51.'
+  exit 28
+fi
+printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(path.join(fakeBin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail\n${discoveryBlock}\nprintf 'result=%s\\n' "$CRABBOX_AWS_SSH_CIDRS"`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            CURL_CALL_COUNT: callCount,
+            PATH: `${fakeBin}:${process.env.PATH}`,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("result=203.0.113.7/32");
+      expect(result.stdout).not.toContain("198.51.");
+      expect(readFileSync(callCount, "utf8")).toBe("2\n");
+
+      for (const invalidIp of ["999.0.0.1", "203.0.113.7."]) {
+        writeFileSync(callCount, "0\n");
+        const invalidResult = spawnSync("bash", ["-c", `set -euo pipefail\n${discoveryBlock}`], {
+          encoding: "utf8",
+          env: {
+            CURL_CALL_COUNT: callCount,
+            CURL_SUCCESS_IP: invalidIp,
+            PATH: `${fakeBin}:${process.env.PATH}`,
+          },
+        });
+        expect(invalidResult.status).toBe(1);
+        expect(invalidResult.stderr).toContain(
+          "Could not resolve GitHub runner public IPv4 for AWS SSH ingress.",
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
@@ -3633,6 +3750,12 @@ describe("ci workflow guards", () => {
     expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
     expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
     expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
+    expect(smokeRunStep.run).toContain(
+      "console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+    );
+    expect(smokeRunStep.run).not.toContain(
+      "console.log(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+    );
     expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");

@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
+  AgentsUpdateParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
@@ -67,6 +68,19 @@ describe("AgentsListResultSchema", () => {
     };
 
     expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+  });
+});
+
+describe("AgentsUpdateParamsSchema", () => {
+  it("distinguishes omitted, cleared, and invalid model values", () => {
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work" })).toBe(true);
+    expect(
+      Value.Check(AgentsUpdateParamsSchema, {
+        agentId: "work",
+        model: null,
+      }),
+    ).toBe(true);
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work", model: "" })).toBe(false);
   });
 });
 

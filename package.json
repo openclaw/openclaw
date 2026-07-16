@@ -1440,6 +1440,10 @@
       "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-utility-runtime.js"
     },
+    "./plugin-sdk/widget-html": {
+      "types": "./dist/plugin-sdk/widget-html.d.ts",
+      "default": "./dist/plugin-sdk/widget-html.js"
+    },
     "./plugin-sdk/tool-plugin": {
       "types": "./dist/plugin-sdk/tool-plugin.d.ts",
       "default": "./dist/plugin-sdk/tool-plugin.js"

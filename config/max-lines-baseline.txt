@@ -790,7 +790,6 @@ src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/schtasks.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
-src/docker-setup.e2e.test.ts
 src/fleet/backup.runtime.ts
 src/fleet/containers.runtime.ts
 src/fleet/service.runtime.ts

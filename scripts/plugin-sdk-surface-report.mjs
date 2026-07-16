@@ -100,6 +100,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "self-hosted-provider-setup": 14,
   routing: 1,
   runtime: 3,
+  // Deprecated Telegram-named alias retained for plugin SDK compatibility.
+  "retry-runtime": 1,
   "runtime-logger": 3,
   "runtime-secret-resolution": 5,
   "secret-provider-integration": 4,
@@ -221,6 +223,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
+      // +1: runDetachedWebhookWork gives post-ack work an independently tracked admission root.
       // +9: app-guided provider setup context/candidate/hook types and their public mirrors.
       // +3: atomic SQLite STRICT migration function, options, and result for plugin stores.
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
@@ -230,9 +233,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: dual-field plan payload builder for the steps deprecation window.
       // +12: active plan-step consumers pinned through channel-outbound and mirrors.
       // +6: app-guided provider setup types retained by plugin-entry and mirrors.
+      // +3: widget HTML validation helpers and tool input error.
       // Used-union narrowing: 31 wildcard barrels drop to explicit used exports;
       // proxy stream API and codex marker/scaffold pins retained.
-      7945,
+      // +2: generic channel retry runner and Retry-After parser.
+      7951,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -240,14 +245,17 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // +1: atomic SQLite STRICT migration for plugin stores.
+      // +1: runDetachedWebhookWork gives post-ack work an independently tracked admission root.
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
       // Harvest: retired qa-live-transport-scenarios subpath -3.
       // +4: shared plan checklist formatter across channel barrels.
       // +4: plan-step normalizer across channel barrels.
       // +4: dual-field plan payload builder for the steps deprecation window.
       // +6: active plan-step helpers pinned through channel-outbound and mirrors.
+      // +2: widget HTML document detection and size assertion.
       // Used-union narrowing of the 31 wildcard barrels.
-      4434,
+      // +2: generic channel retry runner and Retry-After parser.
+      4439,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -260,7 +268,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: dual-field plan payload builder through deprecated channel barrels.
       // +8: channel-outbound plan pins mirrored through deprecated barrels.
       // Used-union narrowing drops inherited deprecated exports.
-      2977,
+      // +1: Telegram runner alias retained for plugin SDK compatibility.
+      2978,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
