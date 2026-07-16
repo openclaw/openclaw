@@ -226,6 +226,34 @@ describe("models-config merge helpers", () => {
     expect(merged.OpenAI).toBeUndefined();
   });
 
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])("prefers canonical provider keys when they appear %s case variants", (_position, first) => {
+    const canonical = createConfigProvider({ baseUrl: "https://canonical.example/v1" });
+    const caseVariant = createConfigProvider({ baseUrl: "https://variant.example/v1" });
+    const explicit: Record<string, ProviderConfig> = first
+      ? { openai: canonical, OpenAI: caseVariant }
+      : { OpenAI: caseVariant, openai: canonical };
+
+    const merged = mergeProviders({ explicit });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.baseUrl).toBe("https://canonical.example/v1");
+  });
+
+  it("keeps the later provider when no collision key uses canonical spelling", () => {
+    const merged = mergeProviders({
+      explicit: {
+        OpenAI: createConfigProvider({ baseUrl: "https://first.example/v1" }),
+        " OPENAI ": createConfigProvider({ baseUrl: "https://second.example/v1" }),
+      },
+    });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.baseUrl).toBe("https://second.example/v1");
+  });
+
   it("keeps existing providers alongside newly configured providers in merge mode", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
@@ -335,6 +363,28 @@ describe("models-config merge helpers", () => {
     expect(merged.openai?.baseUrl).toBe("https://agent.example/v1");
     expect(merged.OpenAI).toBeUndefined();
   });
+
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])(
+    "prefers canonical existing providers when they appear %s case variants",
+    (_position, first) => {
+      const canonical = createExistingProvider({ baseUrl: "https://canonical.example/v1" });
+      const caseVariant = createExistingProvider({ baseUrl: "https://variant.example/v1" });
+      const existingProviders: Record<string, ExistingProviderConfig> = first
+        ? { openai: canonical, OpenAI: caseVariant }
+        : { OpenAI: caseVariant, openai: canonical };
+      const merged = mergeWithExistingProviderSecrets({
+        nextProviders: { openai: createConfigProvider() },
+        existingProviders,
+        secretRefManagedProviders: new Set<string>(),
+      });
+
+      expect(Object.keys(merged)).toEqual(["openai"]);
+      expect(merged.openai?.baseUrl).toBe("https://canonical.example/v1");
+    },
+  );
 
   it("preserves implicit provider headers when explicit config adds extra headers", () => {
     const merged = mergeProviderModels(

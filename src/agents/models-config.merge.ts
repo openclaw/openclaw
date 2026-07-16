@@ -1,4 +1,3 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Merges generated model-provider config with explicit user config and
  * preserved secret fields. Setup and doctor flows use this boundary to update
@@ -6,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { normalizeProviderMapKeys } from "./models-config.providers.keys.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 /** Existing provider config shape that may carry persisted secret/base URL fields. */
@@ -147,19 +147,8 @@ export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
 }): Record<string, ProviderConfig> {
-  const out: Record<string, ProviderConfig> = {};
-  for (const [key, implicit] of Object.entries(params.implicit ?? {})) {
-    const providerKey = normalizeProviderId(key);
-    if (!providerKey) {
-      continue;
-    }
-    out[providerKey] = implicit;
-  }
-  for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = normalizeProviderId(key);
-    if (!providerKey) {
-      continue;
-    }
+  const out = normalizeProviderMapKeys(params.implicit);
+  for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
     const implicit = out[providerKey];
     out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
   }
@@ -242,14 +231,8 @@ export function mergeWithExistingProviderSecrets(params: {
   secretRefManagedProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
   const { nextProviders, existingProviders, secretRefManagedProviders } = params;
-  const normalizedExistingProviders: Record<string, ExistingProviderConfig> = {};
-  for (const [key, entry] of Object.entries(existingProviders)) {
-    const providerKey = normalizeProviderId(key);
-    if (!providerKey) {
-      continue;
-    }
-    normalizedExistingProviders[providerKey] = entry;
-  }
+  const normalizedExistingProviders = normalizeProviderMapKeys(existingProviders);
+  const normalizedNextProviders = normalizeProviderMapKeys(nextProviders);
 
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
@@ -258,7 +241,7 @@ export function mergeWithExistingProviderSecrets(params: {
     }
     mergedProviders[key] = entry;
   }
-  for (const [key, newEntry] of Object.entries(nextProviders)) {
+  for (const [key, newEntry] of Object.entries(normalizedNextProviders)) {
     const existing = normalizedExistingProviders[key];
     if (!existing) {
       mergedProviders[key] = newEntry;

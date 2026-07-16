@@ -485,4 +485,47 @@ describe("models-config runtime source snapshot", () => {
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expectOpenAiHeaderMarkers(providers);
   });
+
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])(
+    "prefers canonical source secret ownership when it appears %s a case variant",
+    async (_position, first) => {
+      const canonical = getOpenAiProvider(createOpenAiApiKeySourceConfig());
+      const caseVariant = {
+        ...canonical,
+        apiKey: {
+          source: "env" as const,
+          provider: "default",
+          id: "OPENAI_CASE_VARIANT",
+        },
+      };
+      const sourceProviders = first
+        ? { openai: canonical, OpenAI: caseVariant }
+        : { OpenAI: caseVariant, openai: canonical };
+      const providers = await planGeneratedProviders({
+        config: createOpenAiApiKeyRuntimeConfig(),
+        sourceConfigForSecrets: { models: { providers: sourceProviders } },
+      });
+
+      expect(Object.keys(providers)).toEqual(["openai"]);
+      expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    },
+  );
+
+  it("uses a valid case alias when the canonical source entry is not a provider record", () => {
+    const runtimeConfig = createOpenAiApiKeyRuntimeConfig();
+    const sourceProviders = {
+      openai: null,
+      OpenAI: getOpenAiProvider(createOpenAiApiKeySourceConfig()),
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+    const providers = enforceSourceManagedProviderSecrets({
+      providers: runtimeConfig.models!.providers!,
+      sourceProviders,
+    });
+
+    expect(providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+  });
 });

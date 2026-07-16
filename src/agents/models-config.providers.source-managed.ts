@@ -10,6 +10,7 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
+import { normalizeProviderMapKeys } from "./models-config.providers.keys.js";
 import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secrets.js";
 
 /**
@@ -26,18 +27,12 @@ function normalizeSourceProviderLookup(
   if (!providers) {
     return {};
   }
-  const out: Record<string, ProviderConfig> = {};
-  for (const [key, provider] of Object.entries(providers)) {
-    // Canonicalize source provider ids the same way the merge boundary does, so a source
-    // config keyed as "OpenAI" still matches a generated "openai" provider. A trim-only lookup
-    // here would let resolved runtime secret values leak into generated models.json.
-    const normalizedKey = normalizeProviderId(key);
-    if (!normalizedKey || !isRecord(provider)) {
-      continue;
-    }
-    out[normalizedKey] = provider;
-  }
-  return out;
+  const validProviders = Object.fromEntries(
+    Object.entries(providers).filter(([, provider]) => isRecord(provider)),
+  ) as Record<string, ProviderConfig>;
+  // Use the merge boundary's collision rule so a case alias cannot displace the
+  // canonical SecretRef owner and expose its resolved runtime value to models.json.
+  return normalizeProviderMapKeys(validProviders);
 }
 
 function resolveSourceManagedApiKeyMarker(params: {
