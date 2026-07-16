@@ -1,17 +1,21 @@
 // Telegram plugin module implements bot message context.body behavior.
 import {
   buildMentionRegexes,
+  classifyChannelInboundEvent,
   formatLocationText,
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  resolveUnmentionedGroupInboundPolicy,
   type BuildChannelInboundEventContextParams,
   type BuildMentionRegexesOptions,
+  type InboundEventKind,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   TelegramDirectConfig,
@@ -64,13 +68,14 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("./media-understanding.runtime.js"),
 );
 
-export type TelegramInboundBodyResult = {
+type TelegramInboundBodyResult = {
   bodyText: string;
   rawBody: string;
   historyKey?: string;
   commandAuthorized: boolean;
   effectiveWasMentioned: boolean;
   mentionFacts: TelegramMentionFacts;
+  inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
   hasControlCommand: boolean;
@@ -129,7 +134,6 @@ function resolveTelegramMentionFacts(params: {
   implicitMentionKinds: TelegramMentionFacts["implicitMentionKinds"];
   requireMention: boolean;
   shouldBypassMention: boolean;
-  shouldSkip: boolean;
 }): TelegramMentionFacts {
   let mentionSource: TelegramMentionFacts["mentionSource"];
   if (params.explicitlyMentionedBot) {
@@ -150,7 +154,6 @@ function resolveTelegramMentionFacts(params: {
     implicitMentionKinds: params.implicitMentionKinds,
     effectiveWasMentioned: params.effectiveWasMentioned,
     requireMention: params.requireMention,
-    shouldSkip: params.shouldSkip,
   };
 }
 
@@ -415,6 +418,20 @@ export async function resolveTelegramInboundBody(params: {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  const commandSource =
+    options?.commandSource ??
+    (commandAuthorized && hasControlCommandInMessage ? "text" : undefined);
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: isGroup ? "group" : "direct" },
+    unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
+      cfg,
+      agentId: routeAgentId,
+    }),
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand: hasControlCommandInMessage,
+    hasAbortRequest: isAbortRequestText(rawBody, { botUsername }),
+    commandSource,
+  });
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
     recordTelegramGroupHistoryEntry({
@@ -479,6 +496,7 @@ export async function resolveTelegramInboundBody(params: {
     historyKey,
     commandAuthorized,
     effectiveWasMentioned,
+    inboundEventKind,
     mentionFacts: resolveTelegramMentionFacts({
       canDetectMention,
       effectiveWasMentioned,
@@ -487,7 +505,6 @@ export async function resolveTelegramInboundBody(params: {
       implicitMentionKinds,
       requireMention: Boolean(requireMention),
       shouldBypassMention: mentionDecision.shouldBypassMention,
-      shouldSkip: mentionDecision.shouldSkip,
     }),
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,

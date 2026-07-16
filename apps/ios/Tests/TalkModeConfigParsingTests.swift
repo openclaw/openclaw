@@ -394,6 +394,34 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
     }
 
+    @Test func `realtime failures remain visible on the watch`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Realtime disconnected")
+        #expect(manager.watchPresentation == .localized("Realtime disconnected"))
+
+        manager._test_handleRealtimeRelayStatus("Backend rejected realtime request")
+        #expect(manager.watchPresentation == .verbatim("Backend rejected realtime request"))
+
+        manager._test_handleRealtimeRelayStatus("Reconnecting")
+        #expect(manager.phase == .connecting)
+        #expect(manager.watchPresentation == .phase)
+    }
+
+    @Test func `WebRTC progress remains semantic on the watch`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Connecting")
+        #expect(manager.phase == .connecting)
+        #expect(manager.watchPresentation == .phase)
+
+        for status in ["Asking OpenClaw", "Still asking OpenClaw", "Updating OpenClaw"] {
+            manager._test_handleRealtimeRelayStatus(status)
+            #expect(manager.phase == .thinking)
+            #expect(manager.watchPresentation == .phase)
+        }
+    }
+
     @Test func `relay close restarts enabled continuous realtime`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_prepareEnabledRealtimeSessionForClose()
@@ -432,6 +460,42 @@ struct TalkModeManagerTests {
         #expect(!manager._test_hasPendingRealtimeIssue())
         #expect(manager._test_gatewayTalkCurrentFallbackIssue() == nil)
         #expect(manager._test_gatewayTalkLastIssueText()?.contains("Realtime closed before") == true)
+    }
+
+    @Test func `session switch invalidates an in flight realtime relay start`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_setRealtimeRelayStartInFlight(true)
+
+        manager.updateMainSessionKey("agent:main:replacement")
+
+        #expect(!manager._test_realtimeRelayStartIsInFlight())
+        #expect(manager._test_mainSessionKey() == "agent:main:replacement")
+    }
+
+    @Test func `duplicate start preserves realtime owned speaking phase`() async {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager.updateGatewayConnected(true)
+        manager.isEnabled = true
+        manager.isListening = false
+        manager.isSpeaking = true
+        manager.statusText = "Speaking"
+        manager._test_setRealtimeRelayStartInFlight(true)
+
+        await manager.start()
+
+        #expect(manager._test_realtimeRelayStartIsInFlight())
+        #expect(!manager.isListening)
+        #expect(manager.isSpeaking)
+        #expect(manager.statusText == "Speaking")
+    }
+
+    @Test func `route preference change does not activate enabled idle Talk`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager.isEnabled = true
+
+        manager.applyAudioRoutePreferenceChanged()
+
+        #expect(!manager._test_audioSessionIsActive())
     }
 
     @Test func `maps web RTC realtime transport to native web RTC on IOS`() {
@@ -546,6 +610,20 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 1) == 500_000_000)
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 2) == 2_000_000_000)
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 3) == nil)
+    }
+
+    @Test @MainActor func `speech restart clears only the presentation revision it owns`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
+        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
+        #expect(manager.statusText == String(localized: "Listening"))
+        #expect(manager.phase == .listening)
+
+        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
+        manager.statusText = "Neue Statusmeldung"
+        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
+        #expect(manager.statusText == "Neue Statusmeldung")
+        #expect(manager.phase == .idle)
     }
 
     @Test func `keeps provider web socket realtime transport on gateway relay`() {
@@ -842,5 +920,84 @@ struct TalkModeManagerTests {
             code: -1,
             userInfo: [NSLocalizedDescriptionKey: "queue enqueue failed"])
         #expect(TalkModeManager._test_isPCMFormatRejectedByAPI(error) == false)
+    }
+
+    @Test func `history fallback only selects the current run reply`() {
+        let messages: [[String: Any]] = [
+            [
+                "role": "assistant",
+                "idempotencyKey": "old-run",
+                "content": [["type": "text", "text": "stale answer"]],
+            ],
+            [
+                "role": "assistant",
+                "__openclaw": ["idempotencyKey": "current-run"],
+                "content": [["type": "text", "text": "current answer"]],
+            ],
+        ]
+
+        #expect(TalkModeManager._test_latestAssistantText(
+            messages: messages,
+            runId: "current-run") == "current answer")
+        #expect(TalkModeManager._test_latestAssistantText(
+            messages: messages,
+            runId: "missing-run") == nil)
+    }
+
+    @Test func `subscribes before sending chat completion request`() throws {
+        let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let sourceURL = testsURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Voice/TalkModeManager.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let processingStart = try #require(source.range(of: "private func runTranscriptProcessing("))
+        let completionStart = try #require(
+            source.range(
+                of: "private func completeTranscriptResponse(",
+                range: processingStart.upperBound..<source.endIndex))
+        let waiterStart = try #require(
+            source.range(
+                of: "private func waitForChatCompletion(",
+                range: completionStart.upperBound..<source.endIndex))
+        let streamingStart = try #require(
+            source.range(
+                of: "private func streamAssistant(",
+                range: waiterStart.upperBound..<source.endIndex))
+        let streamingEnd = try #require(
+            source.range(
+                of: "private func updateIncrementalContextIfNeeded(",
+                range: streamingStart.upperBound..<source.endIndex))
+        let processing = source[processingStart.lowerBound..<completionStart.lowerBound]
+        let completion = source[completionStart.lowerBound..<waiterStart.lowerBound]
+        let streaming = source[streamingStart.lowerBound..<streamingEnd.lowerBound]
+        let subscription = try #require(
+            processing.range(of: "let completionSubscription = await gateway.makeServerEventSubscription"))
+        let cleanup = try #require(processing.range(of: "defer { completionSubscription.cancel() }"))
+        let retention = try #require(processing.range(of: "streamingOwner.completionEvents = completionEvents"))
+        let send = try #require(processing.range(of: "let acknowledgement = try await sendChat("))
+
+        #expect(subscription.lowerBound < cleanup.lowerBound)
+        #expect(cleanup.lowerBound < retention.lowerBound)
+        #expect(retention.lowerBound < send.lowerBound)
+        #expect(processing.contains("idempotencyKey: runId"))
+        #expect(completion.contains("guard let completionEvents = streamingOwner.completionEvents"))
+        #expect(completion.contains("stream: completionEvents"))
+        #expect(streaming.contains("as: OpenClawChatEventPayload.self"))
+        #expect(streaming.contains("OpenClawChatEventText.assistantText"))
+        #expect(streaming.contains(#"chatEvent.state == "delta" || chatEvent.state == "final""#))
+        #expect(!streaming.contains("OpenClawAgentEventPayload"))
+    }
+
+    @Test func `late incremental final cannot reopen canceled speech ownership`() async {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let speechGeneration = manager._test_beginIncrementalSpeechOwnership()
+
+        manager._test_stopSpeaking(storeInterruption: false)
+        let completed = await manager._test_handleIncrementalAssistantFinal(
+            text: "late assistant reply.",
+            speechGeneration: speechGeneration)
+
+        #expect(!completed)
+        #expect(!manager._test_hasIncrementalSpeechOwnership())
     }
 }

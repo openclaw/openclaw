@@ -34,24 +34,31 @@ const sendTextMock = vi.hoisted(() =>
 );
 const audioFileToSilkBase64Mock = vi.hoisted(() => vi.fn(async () => "silk-base64"));
 
-vi.mock("../messaging/sender.js", () => ({
-  accountToCreds: (account: GatewayAccount) => ({
-    appId: account.appId,
-    clientSecret: account.clientSecret,
-  }),
-  buildDeliveryTarget: (target: { type: string; senderId: string; groupOpenid?: string }) => ({
-    type: target.type === "group" ? "group" : target.type === "c2c" ? "c2c" : target.type,
-    id: target.type === "group" ? target.groupOpenid : target.senderId,
-  }),
-  initApiConfig: vi.fn(),
-  sendFileMessage: vi.fn(),
-  sendImage: vi.fn(),
-  sendText: sendTextMock,
-  sendVideoMessage: vi.fn(),
-  sendVoiceMessage: sendVoiceMessageMock,
-  sendMedia: sendMediaMock,
-  withTokenRetry: async (_creds: unknown, fn: () => Promise<unknown>) => await fn(),
-}));
+vi.mock("../messaging/sender.js", async () => {
+  // Real error class so prod `instanceof UploadDailyLimitExceededError` checks
+  // in error paths don't trip vitest's missing-export guard on this mock.
+  const { UploadDailyLimitExceededError } =
+    await vi.importActual<typeof import("../api/media-chunked.js")>("../api/media-chunked.js");
+  return {
+    accountToCreds: (account: GatewayAccount) => ({
+      appId: account.appId,
+      clientSecret: account.clientSecret,
+    }),
+    buildDeliveryTarget: (target: { type: string; senderId: string; groupOpenid?: string }) => ({
+      type: target.type === "group" ? "group" : target.type === "c2c" ? "c2c" : target.type,
+      id: target.type === "group" ? target.groupOpenid : target.senderId,
+    }),
+    initApiConfig: vi.fn(),
+    sendFileMessage: vi.fn(),
+    sendImage: vi.fn(),
+    sendText: sendTextMock,
+    sendVideoMessage: vi.fn(),
+    sendVoiceMessage: sendVoiceMessageMock,
+    sendMedia: sendMediaMock,
+    UploadDailyLimitExceededError,
+    withTokenRetry: async (_creds: unknown, fn: () => Promise<unknown>) => await fn(),
+  };
+});
 
 vi.mock("../utils/image-size.js", async () => {
   const actual =
@@ -309,7 +316,9 @@ describe("dispatchOutbound", () => {
   });
 
   it("loads scoped media through host read callbacks", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-"));
+    // realpath: macOS tmpdir is a /var -> /private/var symlink and root
+    // containment checks compare against canonicalized roots.
+    const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-host-read-")));
     try {
       const mediaPath = path.join(tmpRoot, "host-report.txt");
       const mediaReadFile = vi.fn(async () => Buffer.from("host report"));
@@ -370,7 +379,11 @@ describe("dispatchOutbound", () => {
   });
 
   it("lets missing voice files inside scoped outbound roots reach the voice wait path", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-voice-"));
+    // realpath: missing-path resolution returns canonicalized-root joins, so a
+    // symlinked macOS tmpdir root would change the asserted voice path.
+    const tmpRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-voice-")),
+    );
     try {
       const missingVoicePath = path.join(tmpRoot, "pending.wav");
       const runtime = makeRuntime({
@@ -848,7 +861,10 @@ describe("dispatchOutbound", () => {
         {
           runtime,
           cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account: { ...account, config: { streaming: true } },
+          account: {
+            ...account,
+            config: { streaming: { mode: "partial", nativeTransport: true } },
+          },
         },
       );
 
@@ -984,7 +1000,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: true } },
+      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -994,7 +1010,7 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
-  it("delivers text-only tool progress for legacy C2C stream API accounts", async () => {
+  it("delivers text-only tool progress when nativeTransport is on despite mode off", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {
         await deliver({ text: "Working: checking logs" }, { kind: "tool" });
@@ -1007,7 +1023,7 @@ describe("dispatchOutbound", () => {
       cfg: {},
       account: {
         ...account,
-        config: { streaming: { mode: "off", c2cStreamApi: true } },
+        config: { streaming: { mode: "off", nativeTransport: true } },
       },
     });
 
@@ -1049,7 +1065,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
@@ -1083,7 +1099,7 @@ describe("dispatchOutbound", () => {
         agentBody: "do it",
         body: "[member-openid] do it (@you)",
       }),
-      { runtime, cfg: {}, account: { ...account, config: { streaming: false } } },
+      { runtime, cfg: {}, account: { ...account, config: { streaming: { mode: "off" } } } },
     );
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -1105,7 +1121,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
@@ -1125,7 +1141,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
@@ -1146,7 +1162,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
@@ -1166,7 +1182,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1189,7 +1205,7 @@ describe("dispatchOutbound", () => {
       await dispatchOutbound(makeInbound(), {
         runtime,
         cfg: {},
-        account: { ...account, config: { streaming: false } },
+        account: { ...account, config: { streaming: { mode: "off" } } },
       });
 
       expect(sendMediaMock).toHaveBeenCalledTimes(1);
@@ -1217,7 +1233,7 @@ describe("dispatchOutbound", () => {
     const dispatchPromise = dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     await vi.advanceTimersByTimeAsync(90_000);
@@ -1240,7 +1256,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendMediaMock).toHaveBeenCalledTimes(1);
@@ -1261,7 +1277,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1285,7 +1301,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: true } },
+      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1462,3 +1478,4 @@ describe("dispatchOutbound", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

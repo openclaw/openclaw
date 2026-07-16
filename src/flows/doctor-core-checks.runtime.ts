@@ -14,6 +14,7 @@ import {
 } from "../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -42,6 +43,10 @@ import {
 import { resolveGatewayService, readGatewayServiceState } from "../daemon/service.js";
 import { buildGatewayProbeConnectionDetails } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  formatLocalAudioSelection,
+  inspectLocalAudioSelection,
+} from "../media-understanding/local-audio.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
@@ -65,6 +70,38 @@ export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[]
     agentId,
   });
   return collectUnavailableAgentSkills(report);
+}
+
+export async function collectLocalAudioAccelerationFindings(): Promise<readonly HealthFinding[]> {
+  const selection = await inspectLocalAudioSelection();
+  const available = selection.candidates.filter((candidate) => candidate.available);
+  if (available.length === 0) {
+    return [];
+  }
+  const summary = formatLocalAudioSelection(selection);
+  if (summary) {
+    return [
+      {
+        checkId: "core/doctor/local-audio-acceleration",
+        severity: "info",
+        message: `Local STT auto-selection: ${summary}.`,
+        path: "tools.media.audio.models",
+      },
+    ];
+  }
+  const blockers = available
+    .map((candidate) => `${candidate.command}: ${candidate.reason}`)
+    .join("; ");
+  return [
+    {
+      checkId: "core/doctor/local-audio-acceleration",
+      severity: "info",
+      message: `Local STT commands were found but none are ready for auto-selection: ${blockers}.`,
+      path: "tools.media.audio.models",
+      fixHint:
+        "Install the matching local model/runtime, or configure an explicit tools.media.audio.models CLI entry.",
+    },
+  ];
 }
 
 export async function collectGatewayHealthFindings(
@@ -792,9 +829,12 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
   const activeBundleTools = applyFinalEffectiveToolPolicy({
     bundledTools: params.bundleRuntime.tools,
     config: params.cfg,
-    agentId: params.agentId,
-    modelProvider: params.modelRef.provider,
-    modelId: params.modelRef.model,
+    conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      config: params.cfg,
+      agentId: params.agentId,
+      modelProvider: params.modelRef.provider,
+      modelId: params.modelRef.model,
+    }),
     warn: () => {},
     toolPolicyAuditLogLevel: "debug",
   });
@@ -1002,9 +1042,12 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
     applyFinalEffectiveToolPolicy({
       bundledTools: collectBundleMcpDiagnosticSentinels(params),
       config: params.cfg,
-      agentId: params.agentId,
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+        config: params.cfg,
+        agentId: params.agentId,
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      }),
       warn: () => {},
       toolPolicyAuditLogLevel: "debug",
     }).length > 0
@@ -1128,3 +1171,4 @@ export async function collectRuntimeToolSchemaFindings(
   }
   return findings;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

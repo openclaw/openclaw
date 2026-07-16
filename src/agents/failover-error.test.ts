@@ -10,11 +10,13 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  findCliMaxTurnsError,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
+  resolveModelFallbackError,
 } from "./failover-error.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
@@ -60,6 +62,19 @@ const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
+  it("finds CLI max-turn failures through aggregate wrappers", () => {
+    const maxTurns = new FailoverError("max turns", {
+      reason: "unknown",
+      code: "cli_max_turns",
+    });
+    const aggregate = new AggregateError(
+      [new Error("fork successor persistence failed"), { error: maxTurns }],
+      "CLI turn and persistence failed",
+    );
+
+    expect(findCliMaxTurnsError(aggregate)).toBe(maxTurns);
+  });
+
   it("infers failover reason from HTTP status", () => {
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
     // Anthropic Claude Max plan surfaces rate limits as HTTP 402 (#30484)
@@ -374,6 +389,41 @@ describe("failover-error", () => {
         message: "The model gpt-foo does not exist.",
       }),
     ).toBe("model_not_found");
+  });
+
+  it("classifies account-restricted model 400s as model_not_found (#104490)", () => {
+    // Codex/OpenAI reject plan-restricted models with HTTP 400
+    // invalid_request_error; without a model_not_found classification the 400
+    // branch collapses this into "format" and users get generic retry//new copy
+    // for a config-only failure.
+    const codexAccountRestrictedPayload =
+      '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.5-pro\' model is not supported when using Codex with a ChatGPT account."}}';
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "codex",
+        status: 400,
+        message: codexAccountRestrictedPayload,
+      }),
+    ).toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "The 'gpt-5.5-pro' model is not supported when using Codex with a ChatGPT account.",
+      }),
+    ).toBe("model_not_found");
+    // Capability rejections stay out of the model_not_found class.
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "This model is not supported for tool calling.",
+      }),
+    ).not.toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "This model is not supported when using tool calling.",
+      }),
+    ).not.toBe("model_not_found");
   });
 
   it("does not classify generic access errors as model_not_found", () => {
@@ -945,6 +995,18 @@ describe("failover-error", () => {
     expect(coerceToFailoverError(err)?.status).toBe(429);
   });
 
+  it("classifies a structured prompt error independently of its wording", () => {
+    const promptError = Object.assign(new Error("quota exhausted"), { status: 429 as const });
+    const failoverError = coerceToFailoverError(promptError, {
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(failoverError?.reason).toBe("rate_limit");
+    expect(failoverError?.status).toBe(429);
+    expect(failoverError?.message).toBe("quota exhausted");
+  });
+
   it("lets wrapped causes override parent context-overflow classifications", () => {
     const err = new Error("INVALID_ARGUMENT: input exceeds the maximum number of tokens", {
       cause: { code: "RESOURCE_EXHAUSTED" },
@@ -1335,6 +1397,67 @@ describe("failover-error", () => {
         ),
       ).toBe(false);
     });
+
+    it("returns false when takeover wrapper holds a classifiable provider timeout in promptError", () => {
+      // Simulates EmbeddedAttemptPromptErrorWithCleanupTakeoverError: name matches
+      // EmbeddedAttemptSessionTakeoverError, but the real cause is in .promptError.
+      const timeoutPromptErr = Object.assign(new Error("request timed out"), {
+        name: "TimeoutError",
+      });
+      const wrapper = Object.assign(new Error("request timed out"), {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        promptError: timeoutPromptErr,
+      });
+      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
+    });
+
+    it("returns false when takeover wrapper holds rate_limit in promptError", () => {
+      const rateLimitPromptErr = {
+        status: 429,
+        code: "RATE_LIMITED",
+        message: "too many requests",
+      };
+      const wrapper = Object.assign(new Error("cleanup takeover"), {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        promptError: rateLimitPromptErr,
+      });
+      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
+      const resolution = resolveModelFallbackError(wrapper);
+      expect(resolution).toMatchObject({
+        kind: "failover",
+        error: {
+          message: "too many requests",
+          reason: "rate_limit",
+          status: 429,
+          code: "RATE_LIMITED",
+        },
+      });
+      expect(resolution.error).toHaveProperty("cause", wrapper);
+    });
+
+    it("returns true when takeover wrapper holds an unclassifiable promptError", () => {
+      const unknownPromptErr = { weirdField: "something unknown" };
+      const wrapper = Object.assign(new Error("unknown"), {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        promptError: unknownPromptErr,
+      });
+      expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(true);
+    });
+
+    it("returns true for pure takeover error without promptError (regression)", () => {
+      const pureTakeover = Object.assign(
+        new Error("session file changed while embedded prompt lock was released"),
+        { name: "EmbeddedAttemptSessionTakeoverError" },
+      );
+      expect(isNonProviderRuntimeCoordinationError(pureTakeover)).toBe(true);
+      expect(
+        isNonProviderRuntimeCoordinationError(
+          Object.assign(new Error("provider rejected request: rate limit"), {
+            name: "EmbeddedAttemptSessionTakeoverError",
+          }),
+        ),
+      ).toBe(true);
+    });
   });
 });
 
@@ -1437,3 +1560,4 @@ describe("isSignalTimeoutReason", () => {
     expect(isSignalTimeoutReason(undefined)).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

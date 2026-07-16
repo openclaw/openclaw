@@ -12,12 +12,18 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] QR code scanning in onboarding
 - [x] Performance improvements
 - [x] Streaming support in chat UI
+- [x] Dedicated per-device Android chat session created/adopted on connect without resetting history
 - [x] Request camera/location and other permissions in onboarding/settings flow
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
+- [x] Foreground on-device Voice Wake with Gateway-synced wake words
 - [x] Screen tab full functionality
+- [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
+- [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
+- [x] Per-app language selection for translated resources follows Android system settings and persistence
+- [x] Cron job settings support details, run history, run now, edits, enable/disable, and deletion with admin-scoped Gateway access
 
 ## Open in Android Studio
 
@@ -43,6 +49,12 @@ cd apps/android
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
+Repository-backed debug Gradle invocations, including `pnpm android:run` and
+`pnpm android:screenshots`, stamp the full checkout commit and capture one UTC
+build timestamp shared by every debug variant in that invocation. Release
+tasks still require explicit `openclawBuildCommit` and
+`openclawBuildTimestamp` properties so signed artifacts remain reproducible.
+
 Android release archives use the pinned version in `apps/android/version.json`. Update it with:
 
 ```bash
@@ -61,6 +73,7 @@ MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
 ```
 
 The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
+Standalone release APK verification also requires that key's public certificate SHA-256 fingerprint to match `Config/ReleaseSigning.json`.
 
 Generate raw Google Play screenshots:
 
@@ -68,16 +81,13 @@ Generate raw Google Play screenshots:
 pnpm android:screenshots
 ```
 
-To make screenshot capture own emulator startup, pass a named AVD:
-
-```bash
-ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
-```
-
-The screenshot script uses one connected ADB device when available. If none is
-connected and `ANDROID_SCREENSHOT_AVD` is set, it boots that emulator
-headlessly, waits for Android to finish booting, disables animations, captures
-the screenshots, then shuts down the emulator it started.
+The screenshot script defaults to a retained `OpenClaw_Screenshots_API36` AVD
+created from Android's no-cutout Pixel 2 profile. It creates the AVD when
+missing, boots it headlessly, waits for Android to finish booting, disables
+animations, captures the screenshots, then shuts down the emulator it started.
+The API 36 Google APIs system image must be installed in the local Android SDK.
+Use `ANDROID_SCREENSHOT_AVD` or `--avd` to select another AVD, or `--device` to
+explicitly use a connected emulator.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
@@ -85,6 +95,10 @@ the screenshots, then shuts down the emulator it started.
 - Third-party build: `openclaw-<version>-third-party-release.apk`
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+
+Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. `.github/workflows/android-release.yml` is the only automated GitHub Release upload path; `OpenClaw Release Publish` dispatches it while the canonical release is still a draft and blocks publication until the uploaded asset contract verifies.
+
+The protected `android-release` environment supplies `MATCH_PASSWORD`; the repository's read-only GitHub App token checks out encrypted material from `openclaw/apps-signing`. The workflow builds the exact release tag, refuses to replace different existing bytes, and re-downloads the APK for checksum, certificate, and provenance verification.
 
 `pnpm android:release:archive` is for local archive validation only. It is not a
 fallback upload path after `pnpm android:release:upload` fails.
@@ -97,12 +111,14 @@ Google Play API commands, or Play Console mutation commands.
 
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
-Flavor-specific direct Gradle tasks:
+Prefer `pnpm android:release:archive`, which stamps and validates the full Git commit and one UTC build timestamp before signing. Flavor-specific direct Gradle release tasks must pass the same metadata explicitly:
 
 ```bash
 cd apps/android
-./gradlew :app:bundlePlayRelease
-./gradlew :app:bundleThirdPartyRelease
+commit="$(git -C ../.. rev-parse HEAD)"
+built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundlePlayRelease
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundleThirdPartyRelease
 ```
 
 ## Kotlin Lint + Format
@@ -240,6 +256,9 @@ More details: `docs/platforms/android.md`.
 - Discovery:
   - Android 13+ (`API 33+`): `NEARBY_WIFI_DEVICES`
   - Android 12 and below: `ACCESS_FINE_LOCATION` (required for NSD scanning)
+- Location:
+  - Both flavors: `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` for foreground checks.
+  - Third-party flavor only: `ACCESS_BACKGROUND_LOCATION` plus `FOREGROUND_SERVICE_LOCATION` for user-enabled `Always` checks.
 - Foreground service notification (Android 13+): `POST_NOTIFICATIONS`
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`
@@ -265,9 +284,9 @@ Current OpenClaw Android implication:
 - APK / sideload build can keep SMS, Call Log, and recent-photo features.
 - Google Play build excludes SMS send/search, Call Log search, and recent-photo access unless the product is intentionally positioned and approved under the relevant policy exception.
 - The repo now ships this split as Android product flavors:
-  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, and `READ_EXTERNAL_STORAGE`; hides SMS, Call Log, and Photos surfaces in onboarding, settings, and advertised node capabilities.
+  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, `READ_EXTERNAL_STORAGE`, and background location; hides SMS, Call Log, Photos, and `Always` location surfaces.
   - Installed-app listing is user controlled. `device.apps` is advertised only after the user enables **Settings > Phone Capabilities > Installed Apps**. The command defaults to launcher-visible apps and does not require `QUERY_ALL_PACKAGES`.
-  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality, and offers explicit `Always` location opt-in through Android settings.
 
 Policy links:
 

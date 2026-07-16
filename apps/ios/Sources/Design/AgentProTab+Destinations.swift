@@ -18,7 +18,15 @@ extension AgentProTab {
             self.usageDestination
         case .dreaming:
             self.dreamingDestination
+        case .files:
+            self.filesDestination
         }
+    }
+
+    var filesDestination: some View {
+        AgentWorkspaceFilesScreen(
+            agentId: self.activeAgentID,
+            headerLeadingAction: self.directHeaderLeadingAction(for: .files))
     }
 
     var agentsDestination: some View {
@@ -40,6 +48,7 @@ extension AgentProTab {
         .refreshable {
             await self.refreshOverview(force: true)
         }
+        .font(OpenClawType.body)
         .toolbar {
             if let headerLeadingAction {
                 ToolbarItem(placement: .topBarLeading) {
@@ -70,6 +79,7 @@ extension AgentProTab {
                     self.skillsList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -101,11 +111,11 @@ extension AgentProTab {
                 VStack(alignment: .leading, spacing: 16) {
                     self.directHeader(
                         for: .cron,
-                        title: "Cron Jobs",
+                        title: "Automations",
                         subtitle: self.cronDetail)
                     self.detailSummaryCard(
                         icon: "clock.arrow.circlepath",
-                        title: "Cron Jobs",
+                        title: "Automations",
                         value: self.cronValue,
                         detail: self.cronDetail,
                         color: self.cronColor)
@@ -113,13 +123,14 @@ extension AgentProTab {
                     self.cronJobsList(limit: nil)
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
             }
             .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle("Cron Jobs")
+        .navigationTitle("Automations")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -142,6 +153,7 @@ extension AgentProTab {
                     self.usageDailyList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -170,10 +182,10 @@ extension AgentProTab {
     func directHeader(for route: AgentRoute, title: String, subtitle: String) -> some View {
         if let headerLeadingAction = self.directHeaderLeadingAction(for: route) {
             OpenClawAdaptiveHeaderRow(
-                title: title,
-                subtitle: subtitle,
-                titleFont: .title3.weight(.semibold),
-                subtitleFont: .callout)
+                title: .localized(title),
+                subtitle: .localized(subtitle),
+                titleFont: OpenClawType.title3SemiBold,
+                subtitleFont: OpenClawType.subheadMedium)
             {
                 OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
             } accessory: {
@@ -199,9 +211,9 @@ extension AgentProTab {
                 ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)

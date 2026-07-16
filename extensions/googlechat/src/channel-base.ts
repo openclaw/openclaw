@@ -20,7 +20,7 @@ import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
 
-export const googlechatMeta = {
+const googlechatMeta = {
   id: GOOGLECHAT_CHANNEL_ID,
   label: "Google Chat",
   selectionLabel: "Google Chat (Chat API)",
@@ -96,8 +96,9 @@ export function createGoogleChatPluginBase(
     setupWizard: googlechatSetupWizard,
     capabilities: {
       chatTypes: ["direct", "group", "thread"],
-      reactions: true,
       threads: true,
+      // Inbound attachment download remains supported even though service-account
+      // authentication cannot use Google Chat's user-auth-only upload endpoint.
       media: true,
       nativeCommands: false,
       blockStreaming: true,

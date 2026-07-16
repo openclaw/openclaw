@@ -1,7 +1,7 @@
 // Runner entry guard tests cover malformed decision data formatting without
 // depending on provider execution.
 import { describe, expect, it } from "vitest";
-import { formatDecisionSummary, formatMissingProviderHint } from "./runner.entries.js";
+import { buildModelDecision, formatDecisionSummary, runProviderEntry } from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";
 
 describe("media-understanding formatDecisionSummary guards", () => {
@@ -46,60 +46,78 @@ describe("media-understanding formatDecisionSummary guards", () => {
   });
 });
 
-describe("media-understanding formatMissingProviderHint", () => {
-  it("returns the catalog hint for a provider with mediaUnderstandingProviders contract (groq)", () => {
-    const hint = formatMissingProviderHint("groq");
-    expect(hint).toContain("openclaw plugins install @openclaw/groq-provider");
-    expect(hint).toContain("openclaw plugins registry --refresh");
-    expect(hint).toContain("stop and start the gateway service");
-    expect(hint).toContain("openclaw doctor --fix");
-    expect(hint).toContain("official external plugin");
+describe("media-understanding CLI backend decisions", () => {
+  it.each([
+    {
+      command: "sherpa-onnx-offline",
+      args: ["--provider=cuda", "{{MediaPath}}"],
+      requestedBackend: "cuda",
+    },
+    {
+      command: "sherpa-onnx-offline",
+      args: ["{{MediaPath}}"],
+      requestedBackend: "cpu",
+    },
+    {
+      command: "whisper-cli",
+      args: ["--no-gpu", "{{MediaPath}}"],
+      requestedBackend: "cpu",
+    },
+    {
+      command: "whisper-cli",
+      args: ["--device", "GPU0", "{{MediaPath}}"],
+      requestedBackend: "device:GPU0",
+    },
+  ])(
+    "reports $command backend request as $requestedBackend",
+    ({ command, args, requestedBackend }) => {
+      expect(
+        buildModelDecision({
+          entry: { type: "cli", command, args },
+          entryType: "cli",
+          outcome: "success",
+        }),
+      ).toMatchObject({ provider: command, model: command, requestedBackend });
+    },
+  );
+});
+
+async function getMissingProviderError(provider: string): Promise<string> {
+  type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];
+  const error = await runProviderEntry({
+    capability: "audio",
+    entry: { provider },
+    cfg: {},
+    ctx: {} as RunProviderEntryParams["ctx"],
+    attachmentIndex: 0,
+    cache: {} as RunProviderEntryParams["cache"],
+    providerRegistry: new Map(),
+  }).then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+  if (!(error instanceof Error)) {
+    throw new Error("expected missing media provider error");
+  }
+  return error.message;
+}
+
+describe("media-understanding missing provider errors", () => {
+  it("includes the catalog repair hint for a media provider contract", async () => {
+    const message = await getMissingProviderError("groq");
+    expect(message).toMatch(/^Media provider not available: groq .*openclaw plugins install/);
+    expect(message).toContain("@openclaw/groq-provider");
+    expect(message).toContain("openclaw plugins registry --refresh");
+    expect(message).toContain("stop and start the gateway service");
+    expect(message).toContain("openclaw doctor --fix");
   });
 
-  it("returns empty string for a provider with only generic providers[] entry but no mediaUnderstandingProviders contract (amazon-bedrock)", () => {
-    const hint = formatMissingProviderHint("amazon-bedrock");
-    expect(hint).toBe("");
-  });
-
-  it("returns empty string for a non-cataloged id (no convention fallback)", () => {
-    const hint = formatMissingProviderHint("mystery-provider");
-    expect(hint).toBe("");
-  });
-
-  it("returns empty string for an empty/whitespace id", () => {
-    expect(formatMissingProviderHint("")).toBe("");
-    expect(formatMissingProviderHint("   ")).toBe("");
-  });
-
-  it("returns empty string for an id that does not look like a plugin id", () => {
-    expect(formatMissingProviderHint("bad/id")).toBe("");
-    expect(formatMissingProviderHint("a")).toBe("");
-    expect(formatMissingProviderHint("some/long/path")).toBe("");
-  });
-
-  it("preserves the legacy prefix when hint is appended (catalog-known id)", () => {
-    const hint = formatMissingProviderHint("groq");
-    const composed = `Media provider not available: groq${hint}`;
-    expect(composed).toMatch(/^Media provider not available: groq .*openclaw plugins install/);
-    expect(composed).toMatch(/official external plugin/);
-    expect(composed).toMatch(/stop and start the gateway service/);
-  });
-
-  it("preserves the legacy message verbatim when the id is not cataloged", () => {
-    const hint = formatMissingProviderHint("mystery-provider");
-    expect(`Media provider not available: mystery-provider${hint}`).toBe(
-      "Media provider not available: mystery-provider",
-    );
-  });
-
-  it("returns empty string for a channel-only id (feishu)", () => {
-    expect(formatMissingProviderHint("feishu")).toBe("");
-  });
-
-  it("returns empty string for a catalog provider without mediaUnderstandingProviders contract (amazon-bedrock legacy prefix)", () => {
-    const hint = formatMissingProviderHint("amazon-bedrock");
-    expect(`Media provider not available: amazon-bedrock${hint}`).toBe(
-      "Media provider not available: amazon-bedrock",
-    );
-  });
+  it.each(["amazon-bedrock", "mystery-provider", "feishu"])(
+    "keeps the legacy error for provider without a media contract: %s",
+    async (provider) => {
+      await expect(getMissingProviderError(provider)).resolves.toBe(
+        `Media provider not available: ${provider}`,
+      );
+    },
+  );
 });

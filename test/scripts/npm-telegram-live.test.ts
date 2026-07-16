@@ -1,5 +1,5 @@
 // Npm Telegram Live tests cover npm telegram live script behavior.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -130,6 +130,22 @@ describe("package Telegram live Docker E2E", () => {
     );
   });
 
+  it("installs prepared root and companion tarballs through an exact local registry", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
+    expect(script).toContain('package_source_kind="prepared-package-set"');
+    expect(script).toContain('package_install_source="openclaw@$(read_package_version');
+    expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
+    expect(script).toContain(
+      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"',
+    );
+    expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_SET");
+    expect(script).toContain("node /tmp/openclaw-npm-registry-server.mjs");
+    expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+    expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
+  });
+
   it("keeps live Docker artifacts isolated by default", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
@@ -140,9 +156,12 @@ describe("package Telegram live Docker E2E", () => {
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"',
     );
     expect(script).toContain(
-      'OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"',
+      'OUTPUT_DIR_CONTAINER_RELATIVE=".artifacts/qa-e2e/npm-telegram-live-output"',
     );
-    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
+    expect(script).toContain('OUTPUT_DIR_CONTAINER="/app/$OUTPUT_DIR_CONTAINER_RELATIVE"');
+    expect(script).toContain(
+      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"',
+    );
     expect(script).not.toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
@@ -164,6 +183,22 @@ describe("package Telegram live Docker E2E", () => {
     ).toBe(".artifacts/custom");
   });
 
+  it("keeps the installed OpenClaw command as the package SUT", async () => {
+    const prefix = mkTempRoot();
+    const command = path.join(prefix, "bin", "openclaw");
+    mkdirSync(path.dirname(command), { recursive: true });
+    writeFileSync(command, "#!/bin/sh\n");
+
+    await expect(
+      testing.resolveTrustedOpenClawCommand(command, {
+        NPM_CONFIG_PREFIX: prefix,
+      }),
+    ).resolves.toEqual({
+      executablePath: command,
+      usePackagedPlugins: true,
+    });
+  });
+
   it("mounts configured output paths before entering the container", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const dockerEnvStart = script.indexOf("docker_env=(");
@@ -172,7 +207,10 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain('*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;');
     expect(script).toContain('mkdir -p "$OUTPUT_DIR_HOST"');
-    expect(dockerEnv).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
+    expect(dockerEnv).toContain(
+      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"',
+    );
+    expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
     expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
     expect(script).toContain('-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"');
   });
@@ -208,10 +246,18 @@ describe("package Telegram live Docker E2E", () => {
       path.resolve(TEST_DIR, "../../extensions/qa-lab/src/runtime-api.ts"),
       "utf8",
     );
+    const qaHarnessSources = [
+      "extensions/qa-lab/api.ts",
+      "extensions/qa-lab/src/self-check.ts",
+      "extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts",
+      "extensions/qa-lab/src/suite-launch.runtime.ts",
+      "extensions/qa-lab/src/suite.ts",
+    ].map((relativePath) => readFileSync(path.resolve(TEST_DIR, "../..", relativePath), "utf8"));
 
     expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
     expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
     expect(script).toContain('-v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro"');
     expect(script).not.toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
     expect(script).toContain("node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs");
     expect(script).toContain("/app/node_modules/openclaw/package.json");
@@ -219,6 +265,9 @@ describe("package Telegram live Docker E2E", () => {
     expect(preparePackage).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
     expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
     expect(qaRuntimeApi).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
+    for (const source of qaHarnessSources) {
+      expect(source).not.toContain('from "openclaw/plugin-sdk/qa-runtime"');
+    }
   });
 
   it("exposes installed package dependencies to the mounted QA harness", () => {
@@ -252,15 +301,15 @@ describe("package Telegram live Docker E2E", () => {
 
   it("defaults package Telegram RTT for the normal package live lane", () => {
     expect(testing.resolveRttOptions({})).toEqual({
-      rttCount: 20,
-      rttTimeoutMs: undefined,
-      maxRttFailures: 20,
-      rttCheckIds: [],
+      scenarioId: "channel-canary",
+      count: 20,
+      timeoutMs: 30_000,
+      maxFailures: 20,
     });
   });
 
   it("does not force default RTT onto focused non-RTT scenario runs", () => {
-    expect(testing.resolveRttOptions({}, ["telegram-canary"])).toEqual({});
+    expect(testing.resolveRttOptions({}, ["telegram-status-command"])).toBeUndefined();
   });
 
   it("maps repeated RTT env onto package Telegram live options", () => {
@@ -269,14 +318,38 @@ describe("package Telegram live Docker E2E", () => {
         OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES: "7",
         OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS: "45000",
         OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES: "2",
-        OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "telegram-mentioned-message-reply",
+        OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "channel-canary",
       }),
     ).toEqual({
-      rttCount: 7,
-      rttTimeoutMs: 45_000,
-      maxRttFailures: 2,
-      rttCheckIds: ["telegram-mentioned-message-reply"],
+      scenarioId: "channel-canary",
+      count: 7,
+      timeoutMs: 45_000,
+      maxFailures: 2,
     });
+  });
+
+  it("builds a generic suite probe for the Telegram RTT lane", () => {
+    const probe = testing.createRoundTripProbe(testing.resolveRttOptions({}));
+
+    expect(probe).toMatchObject({
+      scenarioId: "channel-canary",
+      count: 20,
+      timeoutMs: 30_000,
+      markerPrefix: "QA-TELEGRAM-RTT",
+      textPrefix: "@openclaw Telegram RTT check. Reply exactly: ",
+      chainReplies: true,
+      input: {
+        conversation: { id: "telegram-rtt-room", kind: "group" },
+      },
+    });
+  });
+
+  it("rejects retired RTT scenario ids", () => {
+    expect(() =>
+      testing.resolveRttOptions({
+        OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: "telegram-mentioned-message-reply",
+      }),
+    ).toThrow("unknown Telegram QA RTT check: telegram-mentioned-message-reply");
   });
 
   it("rejects invalid repeated RTT env", () => {

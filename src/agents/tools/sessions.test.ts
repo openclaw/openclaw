@@ -2,17 +2,54 @@
 // announce-target resolution, and assistant-visible text sanitization.
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
+const facadeRuntimeMock = vi.hoisted(() => ({
+  sessionKeyResolvers: new Map<
+    string,
+    (params: { kind: "group" | "channel"; rawId: string }) => {
+      id: string;
+      threadId?: string | null;
+      baseConversationId?: string | null;
+      parentConversationCandidates?: string[];
+    } | null
+  >(),
+}));
+
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
+    "../../plugin-sdk/facade-runtime.js",
+  );
+  return {
+    ...actual,
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: (params: {
+      dirName: string;
+      artifactBasename: string;
+    }) => {
+      if (params.artifactBasename === "session-key-api.js") {
+        const resolveSessionConversation = facadeRuntimeMock.sessionKeyResolvers.get(
+          params.dirName,
+        );
+        if (resolveSessionConversation) {
+          return { resolveSessionConversation };
+        }
+      }
+      return actual.tryLoadActivatedBundledPluginPublicSurfaceModuleSync(params);
+    },
+  };
+});
 
 type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string; agentToAgent?: { maxPingPongTurns: number } };
@@ -305,12 +342,17 @@ describe("sanitizeTextContent", () => {
 });
 
 beforeEach(() => {
+  facadeRuntimeMock.sessionKeyResolvers.clear();
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
     tools: { agentToAgent: { enabled: false } },
   });
   setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("extractAssistantText", () => {
@@ -979,6 +1021,45 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("rejects Telegram topic session targets before dispatching an agent run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    facadeRuntimeMock.sessionKeyResolvers.set("telegram", ({ kind, rawId }) => {
+      if (kind !== "group") {
+        return null;
+      }
+      const [rawConversationId, threadId] = rawId.split(":topic:");
+      if (!threadId) {
+        return null;
+      }
+      const id = expectDefined(rawConversationId, "Telegram conversation id");
+      return { id, threadId, baseConversationId: id };
+    });
+    setRuntimeConfigSnapshot({ plugins: { entries: { telegram: { enabled: true } } } });
+    expect(parseSessionThreadInfo(topicSessionKey).threadId).toBe("77");
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-telegram-topic-target", {
+      sessionKey: topicSessionKey,
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe(topicSessionKey);
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("rejects label targets that resolve to canonical thread sessions", async () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
@@ -1035,8 +1116,40 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
-  it("does not reuse a stale assistant reply when no new reply appears", async () => {
+  it("rejects a synchronous target that resolves to the calling session", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: MAIN_AGENT_SESSION_KEY });
     const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-self-send", {
+      sessionKey: "current",
+      message: "use this as my reply",
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: "sessions_send cannot target the calling session; use your own reply instead",
+      sessionKey: "current",
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({ method: "agent" }),
+    ]);
+  });
+
+  it("keeps synchronous distinct-target sends unchanged", async () => {
+    const targetSessionKey = "agent:main:other";
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
     let historyCalls = 0;
     const staleAssistantMessage = {
       role: "assistant",
@@ -1049,7 +1162,7 @@ describe("sessions_send gating", () => {
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+          sessions: [{ key: targetSessionKey, kind: "direct" }],
         };
       }
       if (request.method === "agent") {
@@ -1066,7 +1179,7 @@ describe("sessions_send gating", () => {
     });
 
     const result = await tool.execute("call-stale-send", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
+      sessionKey: targetSessionKey,
       message: "ping",
       timeoutSeconds: 1,
     });
@@ -1075,7 +1188,7 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
-    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(details.sessionKey).toBe(targetSessionKey);
   });
 
   it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
@@ -1116,6 +1229,55 @@ describe("sessions_send gating", () => {
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
     expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
+    expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+  });
+
+  it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const tool = createSessionsSendTool({
+      agentSessionKey: "main",
+      agentChannel: MAIN_AGENT_CHANNEL,
+      config: {
+        session: { scope: "per-sender", mainKey: MAIN_AGENT_SESSION_KEY },
+        tools: { agentToAgent: { enabled: false } },
+      } as never,
+    });
+    const staleAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "older reply from a previous run" }],
+      timestamp: 20,
+    };
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [staleAssistantMessage] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-alias-fire-and-forget", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-aliased-fire-and-forget-same-session", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe("main");
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    expect(flowParams?.requesterSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(flowParams?.targetSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
   });
 
@@ -1182,7 +1344,18 @@ describe("sessions_send gating", () => {
   );
 
   it("caps oversized timeoutSeconds before waiting for the target run", async () => {
-    const tool = createMainSessionsSendTool();
+    const targetSessionKey = "agent:main:other";
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
     const waitTimeouts: unknown[] = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1190,7 +1363,7 @@ describe("sessions_send gating", () => {
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+          sessions: [{ key: targetSessionKey, kind: "direct" }],
         };
       }
       if (request.method === "agent") {
@@ -1207,7 +1380,7 @@ describe("sessions_send gating", () => {
     });
 
     const result = await tool.execute("call-huge-timeout", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
+      sessionKey: targetSessionKey,
       message: "ping",
       timeoutSeconds: Number.MAX_SAFE_INTEGER,
     });
@@ -1216,3 +1389,4 @@ describe("sessions_send gating", () => {
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

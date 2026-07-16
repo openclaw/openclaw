@@ -5,7 +5,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
-import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "../format.js";
+import { markdownToTelegramHtml } from "../format.js";
 import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
 import {
   buildTelegramSendParams,
@@ -14,16 +14,20 @@ import {
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "../retry-after.js";
+import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
 import {
-  buildTelegramRichMessage,
+  buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
+  isEmptyTelegramRichMessage,
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
+  type TelegramInputRichMessage,
 } from "../rich-message.js";
 import {
+  buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
-  isTelegramRichEntityInvalidError,
-} from "../send-error-predicates.js";
+  warnTelegramRichBlocksDegradations,
+} from "../rich-plain-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
@@ -100,6 +104,8 @@ export async function sendTelegramText(
     textMode?: "markdown" | "html";
     plainText?: string;
     richMessages?: boolean;
+    richMessage?: TelegramInputRichMessage;
+    richDegradationReasons?: readonly TelegramRichBlocksDegradationReason[];
     linkPreview?: boolean;
     tableMode?: MarkdownTableMode;
     silent?: boolean;
@@ -139,11 +145,33 @@ export async function sendTelegramText(
     return res.message_id;
   };
 
-  if (opts?.richMessages === true) {
-    const richMessage = buildTelegramRichMessage(text, textMode, {
-      skipEntityDetection: opts.linkPreview === false,
-      tableMode: opts.tableMode,
+  // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
+  // newlines, tag-aware chunking) even on rich accounts.
+  if (opts?.richMessages === true && textMode !== "html") {
+    const richPlan = opts.richMessage
+      ? {
+          richMessage: opts.richMessage,
+          plainText: fallbackText,
+          degradationReasons: opts.richDegradationReasons ?? [],
+        }
+      : buildTelegramRichMarkdownPlan(text, {
+          skipEntityDetection: opts.linkPreview === false,
+          tableMode: opts.tableMode,
+        });
+    warnTelegramRichBlocksDegradations({
+      context: "sendRichMessage",
+      reasons: richPlan.degradationReasons,
+      warn: (message) => runtime.log?.(message),
     });
+    if (isEmptyTelegramRichMessage(richPlan.richMessage)) {
+      if (!hasFallbackText) {
+        throw new Error(
+          "telegram sendRichMessage failed: empty rich text and empty plain fallback",
+        );
+      }
+      runtime.log?.("telegram sendRichMessage rendered empty; falling back to plain text");
+      return await sendPlainFallback();
+    }
     try {
       const res = await sendTelegramWithThreadFallback({
         operation: "sendRichMessage",
@@ -154,7 +182,7 @@ export async function sendTelegramText(
         send: (effectiveParams) =>
           getTelegramRichRawApi(bot.api).sendRichMessage({
             chat_id: chatId,
-            rich_message: richMessage,
+            rich_message: richPlan.richMessage,
             ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
             ...effectiveParams,
           }),
@@ -162,16 +190,16 @@ export async function sendTelegramText(
       runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
       return res.message_id;
     } catch (err) {
-      if (!isTelegramRichEntityInvalidError(err) || !hasFallbackText) {
+      const fallbackPlan = buildTelegramPlainFallbackPlan({
+        plainText: richPlan.plainText || fallbackText,
+        err,
+        context: "sendRichMessage",
+        warn: (message) => runtime.log?.(message),
+      });
+      if (!fallbackPlan || !hasFallbackText) {
         throw err;
       }
-      const errText = formatErrorMessage(err);
-      const richFallbackText =
-        opts?.plainText ?? (textMode === "html" ? telegramHtmlToPlainTextFallback(text) : text);
-      runtime.log?.(
-        `telegram sendRichMessage rejected invalid entity; falling back to plain text: ${errText}`,
-      );
-      return await sendPlainFallback(richFallbackText);
+      return await sendPlainFallback(fallbackPlan.plainText);
     }
   }
 

@@ -46,7 +46,7 @@ export type FeishuReactionCreatedEvent = {
   action_time?: string;
 };
 
-export type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
+type FeishuReactionDeletedEvent = FeishuReactionCreatedEvent & {
   reaction_id?: string;
 };
 
@@ -445,11 +445,11 @@ function registerEventHandlers(
   });
 }
 
-export type BotOpenIdSource =
+type BotOpenIdSource =
   | { kind: "prefetched"; botOpenId?: string; botName?: string }
   | { kind: "fetch" };
 
-export type MonitorSingleAccountParams = {
+type MonitorSingleAccountParams = {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   channelRuntime?: PluginRuntime["channel"];
@@ -500,7 +500,9 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     const eventDispatcher = createEventDispatcher(account);
     const chatHistories = new Map<string, HistoryEntry[]>();
     threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
-    const channelRuntime = params.channelRuntime?.inbound ? params.channelRuntime : getFeishuRuntime().channel;
+    const channelRuntime = params.channelRuntime?.inbound
+      ? params.channelRuntime
+      : getFeishuRuntime().channel;
 
     registerEventHandlers(eventDispatcher, {
       cfg,

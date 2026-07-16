@@ -10,6 +10,12 @@ import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
+import ai.openclaw.app.GatewaySkillWorkshopProposal
+import ai.openclaw.app.GatewaySkillWorkshopSummary
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.normalizeOperatorScopes
 import ai.openclaw.app.ui.design.ClawStatus
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
@@ -18,6 +24,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 class ShellScreenLogicTest {
   @Test
@@ -25,6 +32,17 @@ class ShellScreenLogicTest {
     assertTrue(shellBottomNavVisible(keyboardVisible = false, commandOpen = false))
     assertFalse(shellBottomNavVisible(keyboardVisible = true, commandOpen = false))
     assertFalse(shellBottomNavVisible(keyboardVisible = false, commandOpen = true))
+  }
+
+  @Test
+  fun localizedUppercaseUsesTheSelectedAppLocale() {
+    assertEquals("İLETİŞİM", localizedUppercase("iletişim", languageTag = "tr", fallbackLocale = Locale.US))
+  }
+
+  @Test
+  fun settingsDisclosureUsesTheLocalizedTitle() {
+    assertEquals("Open Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = true))
+    assertEquals("Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = false))
   }
 
   @Test
@@ -220,6 +238,147 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun homeAttentionRowsDoNotClaimUnknownProvidersAreUnavailable() {
+    val rows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary = emptyNodesDevices(),
+        readyProviderCount = 0,
+        unknownProviderCount = 1,
+      )
+
+    assertEquals(emptyList<String>(), rows.map { it.title })
+  }
+
+  @Test
+  fun skillWorkshopSummaryPrioritizesPendingAndHeldProposals() {
+    assertEquals(
+      "2 pending",
+      skillWorkshopSummaryText(
+        GatewaySkillWorkshopSummary(
+          proposals =
+            listOf(
+              skillWorkshopProposal("one", "pending"),
+              skillWorkshopProposal("two", "pending"),
+              skillWorkshopProposal("three", "applied"),
+            ),
+        ),
+      ),
+    )
+    assertEquals(
+      "1 held",
+      skillWorkshopSummaryText(
+        GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("held", "quarantined"))),
+      ),
+    )
+    assertEquals(null, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = emptyList())))
+    assertEquals(false, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("pending", "pending")))))
+    assertEquals(true, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("applied", "applied")))))
+  }
+
+  @Test
+  fun skillWorkshopFilteringMatchesHeldAndSearchText() {
+    val proposals =
+      listOf(
+        skillWorkshopProposal("pending", "pending", title = "Browser Playbook", skillKey = "browser-playbook"),
+        skillWorkshopProposal("stale", "stale", title = "Old Draft", skillKey = "old-draft"),
+        skillWorkshopProposal("quarantine", "quarantined", title = "Risky Skill", skillKey = "risky-skill"),
+      )
+
+    assertEquals(listOf("stale", "quarantine"), skillWorkshopFilteredProposals(proposals, "held", "").map { it.id })
+    assertEquals(listOf("pending"), skillWorkshopFilteredProposals(proposals, "all", "browser").map { it.id })
+    assertTrue(skillWorkshopStatusMatchesFilter("stale", "held"))
+    assertFalse(skillWorkshopStatusMatchesFilter("applied", "held"))
+  }
+
+  @Test
+  fun skillWorkshopStatusLabelsMapKnownCodesAndPreserveUnknownValues() {
+    assertEquals("Pending", skillWorkshopStatusLabel("pending"))
+    assertEquals("Held", skillWorkshopStatusLabel("quarantined"))
+    assertEquals("Held", skillWorkshopStatusLabel("stale"))
+    assertEquals("Applied", skillWorkshopStatusLabel("applied"))
+    assertEquals("Rejected", skillWorkshopStatusLabel("rejected"))
+    assertEquals("Loading", skillWorkshopStatusLabel("loading"))
+    assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
+  }
+
+  @Test
+  fun skillWorkshopVisibleProposalsAreKeyedBySelectedAgentScope() {
+    val mainProposal = skillWorkshopProposal("main-proposal", "pending")
+    val opsProposal = skillWorkshopProposal("ops-proposal", "pending")
+
+    assertEquals(
+      listOf("main-proposal"),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "", proposals = listOf(mainProposal)),
+        selectedAgentId = null,
+      ).map { it.id },
+    )
+    assertEquals(
+      emptyList<String>(),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "main", proposals = listOf(mainProposal)),
+        selectedAgentId = "ops",
+      ).map { it.id },
+    )
+    assertEquals(
+      listOf("ops-proposal"),
+      skillWorkshopVisibleProposals(
+        GatewaySkillWorkshopSummary(agentId = "ops", proposals = listOf(opsProposal)),
+        selectedAgentId = " ops ",
+      ).map { it.id },
+    )
+  }
+
+  @Test
+  fun skillWorkshopProposalActionsRequireAdminScope() {
+    assertTrue(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = true,
+        busy = false,
+        status = "pending",
+      ),
+    )
+    assertFalse(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = false,
+        busy = false,
+        status = "pending",
+      ),
+    )
+    assertFalse(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = true,
+        busy = true,
+        status = "pending",
+      ),
+    )
+    assertFalse(
+      skillWorkshopProposalActionEnabled(
+        isConnected = true,
+        operatorAdminScopeAvailable = true,
+        busy = false,
+        status = "applied",
+      ),
+    )
+  }
+
+  @Test
+  fun operatorScopesNormalizeForStableAdminChecks() {
+    assertEquals(
+      listOf("operator.admin", "operator.read", "operator.write"),
+      normalizeOperatorScopes(
+        listOf(" operator.write ", "operator.admin", "", "operator.write", "operator.read"),
+      ),
+    )
+  }
+
+  @Test
   fun homeAttentionRowsSurfacePendingNodeCapabilityApproval() {
     val rows =
       homeAttentionRows(
@@ -306,7 +465,7 @@ class ShellScreenLogicTest {
         sessionCount = 4,
       )
 
-    assertEquals(listOf("Gateway", "Nodes", "Approvals", "Sessions"), cards.map { it.title })
+    assertEquals(listOf("Gateway", "Nodes", "Approvals", "Sessions", "Files"), cards.map { it.title })
     assertEquals("Online", cards.single { it.title == "Gateway" }.value)
     assertEquals("Review highlighted items", cards.single { it.title == "Gateway" }.subtitle)
     assertEquals("1/1", cards.single { it.title == "Nodes" }.value)
@@ -315,6 +474,119 @@ class ShellScreenLogicTest {
     assertEquals(1f, cards.single { it.title == "Nodes" }.progressFraction ?: 0f, 0.001f)
     assertEquals("2", cards.single { it.title == "Approvals" }.value)
     assertEquals("4", cards.single { it.title == "Sessions" }.value)
+    assertEquals("Browse", cards.single { it.title == "Files" }.value)
+    assertEquals(Tab.Files, cards.single { it.title == "Files" }.tab)
+  }
+
+  @Test
+  fun overviewRecentSessionCountIgnoresRetainedRowsOutsideTheRecentWindow() {
+    val sessions =
+      (1..51).map { index ->
+        ChatSessionEntry(key = "session-$index", updatedAtMs = index.toLong())
+      }
+
+    assertEquals(50, overviewRecentSessionCount(sessions))
+    assertEquals((51 downTo 2).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
+  }
+
+  @Test
+  fun overviewRecentSessionsSortByMostRecentTimestamp() {
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "cron", updatedAtMs = 2),
+        ChatSessionEntry(key = "main", updatedAtMs = 3),
+        ChatSessionEntry(key = "telegram", updatedAtMs = 1),
+      )
+
+    assertEquals(listOf("main", "cron", "telegram"), overviewRecentSessions(sessions).map { session -> session.key })
+  }
+
+  @Test
+  fun overviewRecentSessionsPreferLastActivityForRecency() {
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "main", updatedAtMs = 10, lastActivityAt = 10),
+        ChatSessionEntry(key = "cron", updatedAtMs = 50, lastActivityAt = 20),
+        ChatSessionEntry(key = "telegram", updatedAtMs = 1, lastActivityAt = 100),
+      )
+
+    assertEquals(listOf("telegram", "cron", "main"), overviewRecentSessions(sessions).map { session -> session.key })
+  }
+
+  @Test
+  fun overviewRecentSessionsDeduplicateByNewestEntry() {
+    val sessions =
+      overviewRecentSessions(
+        listOf(
+          ChatSessionEntry(key = "main", displayName = "Stale main", updatedAtMs = 10, lastActivityAt = 10),
+          ChatSessionEntry(key = "cron", displayName = "Cron", updatedAtMs = 2),
+          ChatSessionEntry(key = "main", displayName = "Fresh main", updatedAtMs = 3, lastActivityAt = 30),
+        ),
+      )
+
+    assertEquals(listOf("main", "cron"), sessions.map { session -> session.key })
+    assertEquals("Fresh main", sessions.first().displayName)
+  }
+
+  @Test
+  fun overviewRecentSessionsUseStableKeyOrderWhenTimestampsMatch() {
+    assertEquals(
+      listOf("cron", "main", "telegram"),
+      overviewRecentSessions(
+        listOf(
+          ChatSessionEntry(key = "telegram", updatedAtMs = 1),
+          ChatSessionEntry(key = "main", updatedAtMs = 1),
+          ChatSessionEntry(key = "cron", updatedAtMs = 1),
+        ),
+      ).map { session -> session.key },
+    )
+  }
+
+  @Test
+  fun overviewRecentSessionRowsUseLastActivityForMetadata() {
+    val rows =
+      overviewRecentSessionRows(
+        sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = null, lastActivityAt = System.currentTimeMillis())),
+        channelsSummary = emptyChannels(),
+      )
+
+    assertTrue(rows.single().metadata.isNotBlank())
+  }
+
+  @Test
+  fun stableOverviewRecentRowsKeepPreviousMetadataDuringPartialRefresh() {
+    val rows =
+      stableOverviewRecentRows(
+        previousRows =
+          listOf(
+            RecentSessionListItem(key = "main", title = "Main session", source = "OpenClaw", metadata = "1h"),
+          ),
+        candidateRows =
+          listOf(
+            RecentSessionListItem(key = "main", title = "Main session", source = "OpenClaw", metadata = ""),
+          ),
+      )
+
+    assertEquals("1h", rows.single().metadata)
+  }
+
+  @Test
+  fun stableOverviewRecentRowsFollowCandidateRows() {
+    val rows =
+      stableOverviewRecentRows(
+        previousRows =
+          listOf(
+            RecentSessionListItem(key = "main", title = "Main session", source = "OpenClaw", metadata = "1h"),
+            RecentSessionListItem(key = "discord", title = "Discord", source = "Discord", metadata = "2h"),
+          ),
+        candidateRows =
+          listOf(
+            RecentSessionListItem(key = "main", title = "Main session", source = "OpenClaw", metadata = "1h"),
+            RecentSessionListItem(key = "cron", title = "Cron", source = "Cron", metadata = "4h"),
+          ),
+      )
+
+    assertEquals(listOf("main", "cron"), rows.map { row -> row.key })
   }
 
   @Test
@@ -414,6 +686,37 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun channelsSummaryTextUsesDistinctIssuePluralization() {
+    fun channel(
+      id: String,
+      error: String?,
+    ) = GatewayChannelSummary(
+      id = id,
+      label = id,
+      accountCount = 1,
+      enabled = true,
+      configured = true,
+      linked = true,
+      running = error == null,
+      connected = error == null,
+      error = error,
+    )
+
+    assertEquals(
+      "1 issue",
+      channelsSummaryText(GatewayChannelsSummary(channels = listOf(channel("one", "offline")))),
+    )
+    assertEquals(
+      "2 issues",
+      channelsSummaryText(
+        GatewayChannelsSummary(
+          channels = listOf(channel("one", "offline"), channel("two", "unauthorized")),
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun sessionSourceLabelDerivesCompactSourceFromRealSessionKey() {
     assertEquals("Telegram", sessionSourceLabel("telegram:8227096397"))
     assertEquals("Discord", sessionSourceLabel("discord:1465779285020381361#daily-inf"))
@@ -451,15 +754,15 @@ class ShellScreenLogicTest {
 
   @Test
   fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway))
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs))
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities))
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications))
-    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance))
-    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health))
+    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
+    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())
+    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities).resolveNativeText())
+    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications).resolveNativeText())
+    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance).resolveNativeText())
+    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health).resolveNativeText())
   }
 
   @Test
@@ -483,7 +786,7 @@ class ShellScreenLogicTest {
         "Profile & device",
         "Diagnostics",
       ),
-      sections.map { it.title },
+      sections.map { it.title.resolveNativeText() },
     )
   }
 
@@ -538,7 +841,7 @@ class ShellScreenLogicTest {
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
-  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route.name, "Value", Icons.Default.Settings, route = route)
+  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(verbatimText(route.name), verbatimText("Value"), Icons.Default.Settings, route = route)
 
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(
@@ -549,5 +852,24 @@ class ShellScreenLogicTest {
       recommendedNextStep = null,
       pauseReconnect = false,
       retryable = false,
+    )
+
+  private fun skillWorkshopProposal(
+    id: String,
+    status: String,
+    title: String = id,
+    skillKey: String = id,
+  ): GatewaySkillWorkshopProposal =
+    GatewaySkillWorkshopProposal(
+      id = id,
+      kind = "create",
+      status = status,
+      title = title,
+      description = null,
+      skillName = title,
+      skillKey = skillKey,
+      createdAt = "2026-07-08T00:00:00.000Z",
+      updatedAt = "2026-07-08T00:00:00.000Z",
+      scanState = null,
     )
 }

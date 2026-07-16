@@ -1,4 +1,6 @@
 // Session action contract tests cover plugin session action metadata and execution contracts.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -12,7 +14,7 @@ import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
-import { createPluginRecord } from "../status.test-helpers.js";
+import { createPluginRecord } from "../status.test-fixtures.js";
 import type { OpenClawPluginApi } from "../types.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
@@ -39,7 +41,10 @@ async function callPluginSessionActionForTest(params: {
   const respond: RespondFn = (ok, payload, error) => {
     response = { ok, payload, error };
   };
-  await pluginHostHookHandlers["plugins.sessionAction"]({
+  await expectDefined(
+    pluginHostHookHandlers["plugins.sessionAction"],
+    'pluginHostHookHandlers["plugins.sessionAction"] test invariant',
+  )({
     req: { id: "test", type: "req", method: "plugins.sessionAction", params: params.body },
     params: params.body,
     client: {
@@ -168,7 +173,7 @@ describe("plugin session actions", () => {
     });
 
     expect(registry.registry.sessionActions).toHaveLength(1);
-    const actionEntry = registry.registry.sessionActions?.[0];
+    const actionEntry = registry.registry.sessionActions[0];
     expect(actionEntry?.pluginId).toBe("session-action-fixture");
     expect(actionEntry?.pluginName).toBe("Session Action Fixture");
     expect(actionEntry?.action.id).toBe("approve");
@@ -209,7 +214,7 @@ describe("plugin session actions", () => {
       },
     });
 
-    expect(registry.registry.sessionActions?.map((entry) => entry.action.id)).toEqual(["dup"]);
+    expect(registry.registry.sessionActions.map((entry) => entry.action.id)).toEqual(["dup"]);
     const diagnosticMessages = registry.registry.diagnostics?.map((diagnostic) => {
       expect(diagnostic.pluginId).toBe("invalid-session-actions");
       return diagnostic.message;
@@ -623,7 +628,10 @@ describe("plugin session actions", () => {
     registry.plugins = [createPluginRecord({ id: "scope-copy-fixture" })];
     setActivePluginRegistry(registry);
 
-    await pluginHostHookHandlers["plugins.sessionAction"]({
+    await expectDefined(
+      pluginHostHookHandlers["plugins.sessionAction"],
+      'pluginHostHookHandlers["plugins.sessionAction"] test invariant',
+    )({
       req: {
         id: "scope-copy",
         type: "req",

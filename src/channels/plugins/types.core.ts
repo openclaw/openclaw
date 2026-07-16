@@ -19,6 +19,7 @@ import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
+import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
@@ -138,6 +139,7 @@ export type ChannelSetupInput = {
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
+  workspace?: string;
 };
 
 export type ChannelStatusIssue = {
@@ -213,6 +215,7 @@ export type ChannelAccountSnapshot = {
   lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: string;
+  terminalDisconnect?: boolean;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
@@ -386,6 +389,8 @@ export type ChannelFocusedBindingContext = {
 export type ChannelOutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
+  /** Route authority for explicit recipient session selection. */
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: {
     kind: ChatType;
     id: string;
@@ -458,6 +463,8 @@ export type ChannelThreadingContext = {
   To?: string;
   ChatType?: string;
   CurrentMessageId?: string | number;
+  /** Effective channel reply mode prepared for this turn. */
+  ReplyToMode?: MsgContext["ReplyToMode"];
   ReplyToId?: string;
   ReplyToIdFull?: string;
   ThreadLabel?: string;
@@ -469,6 +476,8 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
+  /** Trusted normalized conversation kind for the active inbound turn. */
+  currentChatType?: ChatType;
   /** Routable messaging target when it differs from the platform-native channel id. */
   currentMessagingTarget?: string;
   currentGraphChannelId?: string;
@@ -495,6 +504,12 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
+  directTargetStyle?: "user-prefixed";
+  /** Equality rule for ids carried by prefixed outbound targets. */
+  targetIdComparison?: "case-sensitive" | "lowercase";
+  /** Bare numeric conversation/topic shorthand is valid for this channel. */
+  numericTopicShorthand?: true;
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
@@ -635,6 +650,11 @@ export type ChannelMessagingAdapter = {
   /**
    * Provider-specific session-route builder used after target resolution.
    * Keep session-key orchestration in core and channel-native routing rules here.
+   * Set `recipientSessionExact` to true only when the target maps unambiguously
+   * to the same canonical session that inbound delivery uses. `direct-alias`
+   * may be used when only the direct chat kind is authoritative.
+   * `delivery-identity` requires a stable outbound-only recipient identity and
+   * a provider-keyed session that stays isolated from the agent main session.
    */
   resolveOutboundSessionRoute?: (params: {
     cfg: OpenClawConfig;
@@ -659,7 +679,7 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
-  inboundFormattingHints?: (params: { accountId?: string | null }) =>
+  inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;
         rules: string[];
@@ -683,7 +703,7 @@ export type ChannelDirectoryEntry = {
   raw?: unknown;
 };
 
-export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {
@@ -704,6 +724,11 @@ export type ChannelMessageActionContext = {
   requesterSenderId?: string | null;
   /** Trusted owner identity bit from command/channel-action auth. */
   senderIsOwner?: boolean;
+  /**
+   * Server-owned origin for this operation. Missing values are delegated.
+   * Plugins must use it only for conversation-read visibility policy.
+   */
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   sessionKey?: string | null;
   sessionId?: string | null;
   inboundEventKind?: InboundEventKind;
@@ -735,6 +760,8 @@ export type ChannelMessagePreparedSendPayloadContext = {
   to: string;
   payload: ReplyPayload;
   replyToId?: string | null;
+  /** Preserve caller intent when plugins translate reply ids into durable payloads. */
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number | null;
 };
 
@@ -767,6 +794,15 @@ export type ChannelMessageActionAdapter = {
         deliveryTargetAliases?: string[];
         /** Convert typed owner fields such as chatId into the canonical shared target shape. */
         resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
+        /**
+         * Prove that provider-native aliases name the trusted current conversation.
+         * Core consults this only for host-owned bundled registrations.
+         */
+        matchesCurrentConversation?: (params: {
+          args: Record<string, unknown>;
+          accountId: string;
+          toolContext: ChannelThreadingToolContext;
+        }) => boolean;
       }
     >
   >;

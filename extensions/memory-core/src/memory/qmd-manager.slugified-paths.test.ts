@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,16 +13,18 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logInfoMock: vi.fn(),
 }));
 
+type MockStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+
 interface MockChild extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+  stdout: MockStream;
+  stderr: MockStream;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
 }
 
 function createMockChild(params?: { autoClose?: boolean }): MockChild {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  const stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const child = new EventEmitter() as unknown as MockChild;
   child.stdout = stdout;
   child.stderr = stderr;
@@ -260,7 +263,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "slugified QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: actualRelative,
       text: "line-1\nline-2\nline-3",
       from: 1,
@@ -332,7 +336,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "vault QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: `qmd/${collectionName}/${actualRelative}`,
       text: "vault memory",
       from: 1,
@@ -391,7 +396,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "exact QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: exactRelative,
       text: "exact slugified path",
       from: 1,

@@ -6,6 +6,10 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
   applyAnthropicPayloadPolicyToParams,
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
@@ -46,6 +50,12 @@ type AnthropicServiceTier = "auto" | "standard_only";
 type DynamicFastMode = boolean | (() => boolean | undefined);
 
 function isAnthropic1MModel(modelId: string): boolean {
+  if (
+    resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined
+  ) {
+    return true;
+  }
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
@@ -180,7 +190,11 @@ export function createAnthropicServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (isAnthropicOAuthApiKey(options?.apiKey)) {
+    // Sonnet 5 does not support Priority Tier; omit service_tier entirely.
+    if (
+      isAnthropicOAuthApiKey(options?.apiKey) ||
+      resolveClaudeSonnet5ModelIdentity(model) !== undefined
+    ) {
       return underlying(model, context, options);
     }
 
@@ -195,15 +209,13 @@ export function createAnthropicServiceTierWrapper(
     }
 
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) =>
-      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
+      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy, new Set()),
     );
   };
 }
 
 /** Wrap a stream function to strip trailing assistant prefill before thinking requests. */
-export function createAnthropicThinkingPrefillWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
+function createAnthropicThinkingPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createAnthropicThinkingPrefillPayloadWrapper(baseStreamFn, (stripped) => {
     log.warn(
       `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
@@ -264,9 +276,3 @@ export function wrapAnthropicProviderStream(
     (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );
 }
-
-/** Test-only hooks for Anthropic stream wrapper behavior. */
-export const testing = {
-  log,
-};
-export { testing as __testing };

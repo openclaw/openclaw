@@ -1,10 +1,13 @@
 /**
  * Tests for talk gateway methods that coordinate speech and audio providers.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 
 const mocks = vi.hoisted(() => ({
@@ -23,10 +26,12 @@ const mocks = vi.hoisted(() => ({
   canonicalizeRealtimeTranscriptionProviderId: vi.fn((providerId: string | undefined) =>
     providerId === "openai-realtime" ? "openai" : providerId?.trim().toLowerCase(),
   ),
+  getRealtimeTranscriptionProvider: vi.fn(),
   listRealtimeTranscriptionProviders: vi.fn(() => []),
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
   createTalkRealtimeRelaySession: vi.fn(),
   sendTalkRealtimeRelayAudio: vi.fn(),
+  acknowledgeTalkRealtimeRelayMark: vi.fn(),
   cancelTalkRealtimeRelayTurn: vi.fn(),
   stopTalkRealtimeRelaySession: vi.fn(),
   registerTalkRealtimeRelayAgentRun: vi.fn(),
@@ -64,6 +69,7 @@ vi.mock("../../talk/provider-registry.js", () => ({
 
 vi.mock("../../realtime-transcription/provider-registry.js", () => ({
   canonicalizeRealtimeTranscriptionProviderId: mocks.canonicalizeRealtimeTranscriptionProviderId,
+  getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
   listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
 }));
 
@@ -89,6 +95,7 @@ vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../talk-realtime-relay.js")>();
   return {
     ...actual,
+    acknowledgeTalkRealtimeRelayMark: mocks.acknowledgeTalkRealtimeRelayMark,
     cancelTalkRealtimeRelayTurn: mocks.cancelTalkRealtimeRelayTurn,
     createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
     registerTalkRealtimeRelayAgentRun: mocks.registerTalkRealtimeRelayAgentRun,
@@ -158,6 +165,21 @@ function expectRespondError(mock: ReturnType<typeof vi.fn>, expected: Record<str
   expect(mockCallArg(mock, 0, 1)).toBeUndefined();
   return expectRecordFields(mockCallArg(mock, 0, 2), expected);
 }
+
+beforeEach(() => {
+  mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) => {
+    const normalized = providerId?.trim().toLowerCase();
+    const providers = mocks.listRealtimeTranscriptionProviders() as Array<{
+      id: string;
+      aliases?: string[];
+    }>;
+    return providers.find(
+      (provider) =>
+        provider.id.toLowerCase() === normalized ||
+        provider.aliases?.some((alias) => alias.toLowerCase() === normalized),
+    );
+  });
+});
 
 describe("talk.catalog handler", () => {
   beforeEach(() => {
@@ -237,7 +259,10 @@ describe("talk.catalog handler", () => {
     } as never);
 
     const respond = vi.fn();
-    await talkHandlers["talk.catalog"]({
+    await expectDefined(
+      talkHandlers["talk.catalog"],
+      'talkHandlers["talk.catalog"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.catalog" },
       params: {},
       client: { connect: { scopes: ["operator.read"] } } as never,
@@ -400,7 +425,10 @@ describe("talk.catalog handler", () => {
     } as never);
 
     const respond = vi.fn();
-    await talkHandlers["talk.catalog"]({
+    await expectDefined(
+      talkHandlers["talk.catalog"],
+      'talkHandlers["talk.catalog"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.catalog" },
       params: {},
       client: { connect: { scopes: ["operator.read"] } } as never,
@@ -453,6 +481,63 @@ describe("talk.catalog handler", () => {
     });
   });
 
+  it("includes a provider-map transcription provider missing from the active registry", async () => {
+    const openai = {
+      id: "openai",
+      label: "OpenAI Realtime Transcription",
+      isConfigured: vi.fn(() => false),
+    };
+    const xai = {
+      id: "xai",
+      label: "xAI Realtime Transcription",
+      resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
+      isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "xai-key"),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([openai] as never);
+    mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) =>
+      providerId === "xai" ? (xai as never) : undefined,
+    );
+
+    const respond = vi.fn();
+    await expectDefined(
+      talkHandlers["talk.catalog"],
+      'talkHandlers["talk.catalog"] test invariant',
+    )({
+      req: { type: "req", id: "1", method: "talk.catalog" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            plugins: {
+              entries: {
+                "voice-call": {
+                  config: {
+                    streaming: {
+                      providers: { xai: { apiKey: "xai-key" } },
+                    },
+                  },
+                },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      transcription: {
+        ready: true,
+        activeProvider: "xai",
+        providers: [
+          { id: "openai", configured: false },
+          { id: "xai", configured: true },
+        ],
+      },
+    });
+  });
+
   it("reports the provider selected by runtime resolution when aliases collide", async () => {
     const transcriptionAlias = {
       id: "transcription-alias",
@@ -491,7 +576,10 @@ describe("talk.catalog handler", () => {
     } as never);
 
     const respond = vi.fn();
-    await talkHandlers["talk.catalog"]({
+    await expectDefined(
+      talkHandlers["talk.catalog"],
+      'talkHandlers["talk.catalog"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.catalog" },
       params: {},
       client: { connect: { scopes: ["operator.read"] } } as never,
@@ -549,7 +637,10 @@ describe("talk.catalog handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.catalog"]({
+    await expectDefined(
+      talkHandlers["talk.catalog"],
+      'talkHandlers["talk.catalog"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.catalog" },
       params: {},
       client: { connect: { scopes: ["operator.read"] } } as never,
@@ -586,7 +677,10 @@ describe("talk.catalog handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.catalog"]({
+    await expectDefined(
+      talkHandlers["talk.catalog"],
+      'talkHandlers["talk.catalog"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.catalog" },
       params: {},
       client: { connect: { scopes: ["operator.read"] } } as never,
@@ -697,7 +791,10 @@ describe("talk.speak handler", () => {
     );
 
     const respond = vi.fn();
-    await talkHandlers["talk.speak"]({
+    await expectDefined(
+      talkHandlers["talk.speak"],
+      'talkHandlers["talk.speak"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.speak" },
       params: { text: "Hello from talk mode." },
       client: null,
@@ -725,6 +822,40 @@ describe("talk.speak handler", () => {
 describe("talk.config handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("projects the runtime realtime transport when source config is invalid", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: false,
+      config: {},
+    });
+
+    const respond = vi.fn();
+    await expectDefined(
+      talkHandlers["talk.config"],
+      'talkHandlers["talk.config"] test invariant',
+    )({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: { transport: "provider-websocket" },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
+    expectRecordFields(response.config?.talk?.realtime, {
+      transport: "provider-websocket",
+    });
   });
 
   it("projects effective legacy realtime provider config for native routing", async () => {
@@ -809,7 +940,10 @@ describe("talk.config handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.config"]({
+    await expectDefined(
+      talkHandlers["talk.config"],
+      'talkHandlers["talk.config"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.config" },
       params: {},
       client: { connect: { scopes: ["operator.read"] } } as never,
@@ -921,7 +1055,10 @@ describe("talk.config handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.config"]({
+    await expectDefined(
+      talkHandlers["talk.config"],
+      'talkHandlers["talk.config"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.config" },
       params: {},
       client: { connect: { scopes: ["operator.read"] } } as never,
@@ -955,7 +1092,10 @@ describe("talk.config handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.config"]({
+    await expectDefined(
+      talkHandlers["talk.config"],
+      'talkHandlers["talk.config"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.config" },
       params: { includeSecrets: true },
       client: { connect: { scopes: ["operator.talk.secrets"] } } as never,
@@ -1038,7 +1178,10 @@ describe("talk.config handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.config"]({
+    await expectDefined(
+      talkHandlers["talk.config"],
+      'talkHandlers["talk.config"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.config" },
       params: { includeSecrets: true },
       client: { connect: { scopes: ["operator.talk.secrets"] } } as never,
@@ -1107,7 +1250,10 @@ describe("talk.config handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.config"]({
+    await expectDefined(
+      talkHandlers["talk.config"],
+      'talkHandlers["talk.config"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.config" },
       params: { includeSecrets: true },
       client: { connect: { scopes: ["operator.talk.secrets"] } } as never,
@@ -1190,7 +1336,10 @@ describe("talk.config handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.config"]({
+    await expectDefined(
+      talkHandlers["talk.config"],
+      'talkHandlers["talk.config"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.config" },
       params: { includeSecrets: true },
       client: { connect: { scopes: ["operator.talk.secrets"] } } as never,
@@ -1235,7 +1384,10 @@ describe("talk.config handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.config"]({
+    await expectDefined(
+      talkHandlers["talk.config"],
+      'talkHandlers["talk.config"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.config" },
       params: {},
       client: { connect: { scopes: ["operator.read"] } } as never,
@@ -1325,7 +1477,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const createRespond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: {
         mode: "realtime",
@@ -1388,7 +1543,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const inputRespond = vi.fn();
-    await talkHandlers["talk.session.appendAudio"]({
+    await expectDefined(
+      talkHandlers["talk.session.appendAudio"],
+      'talkHandlers["talk.session.appendAudio"] test invariant',
+    )({
       req: { type: "req", id: "2", method: "talk.session.appendAudio" },
       params: { sessionId: "relay-unified-1", audioBase64: "aGVsbG8=", timestamp: 42 },
       client: { connId: "conn-1" } as never,
@@ -1404,7 +1562,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const cancelRespond = vi.fn();
-    await talkHandlers["talk.session.cancelOutput"]({
+    await expectDefined(
+      talkHandlers["talk.session.cancelOutput"],
+      'talkHandlers["talk.session.cancelOutput"] test invariant',
+    )({
       req: { type: "req", id: "3", method: "talk.session.cancelOutput" },
       params: { sessionId: "relay-unified-1", reason: "barge-in" },
       client: { connId: "conn-1" } as never,
@@ -1418,8 +1579,36 @@ describe("talk.session unified handlers", () => {
       reason: "barge-in",
     });
 
+    const markRespond = vi.fn();
+    await expectDefined(
+      talkHandlers["talk.session.acknowledgeMark"],
+      'talkHandlers["talk.session.acknowledgeMark"] test invariant',
+    )({
+      req: { type: "req", id: "3-mark", method: "talk.session.acknowledgeMark" },
+      params: { sessionId: "relay-unified-1", markName: "audio-mark-1" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: markRespond as never,
+      context: {} as never,
+    });
+    expect(mocks.acknowledgeTalkRealtimeRelayMark).toHaveBeenCalledWith({
+      relaySessionId: "relay-unified-1",
+      connId: "conn-1",
+      markName: "audio-mark-1",
+    });
+    expectRespondOk(markRespond, { ok: true });
+
+    let acceptToolResult!: () => void;
+    mocks.submitTalkRealtimeRelayToolResult.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        acceptToolResult = resolve;
+      }),
+    );
     const toolRespond = vi.fn();
-    await talkHandlers["talk.session.submitToolResult"]({
+    const toolRequest = expectDefined(
+      talkHandlers["talk.session.submitToolResult"],
+      'talkHandlers["talk.session.submitToolResult"] test invariant',
+    )({
       req: { type: "req", id: "4", method: "talk.session.submitToolResult" },
       params: {
         sessionId: "relay-unified-1",
@@ -1432,6 +1621,9 @@ describe("talk.session unified handlers", () => {
       respond: toolRespond as never,
       context: {} as never,
     });
+    expect(toolRespond).not.toHaveBeenCalled();
+    acceptToolResult();
+    await toolRequest;
     expect(mocks.submitTalkRealtimeRelayToolResult).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
@@ -1439,9 +1631,37 @@ describe("talk.session unified handlers", () => {
       result: { status: "working" },
       options: { suppressResponse: true, willContinue: true },
     });
+    expectRespondOk(toolRespond, { ok: true });
+
+    mocks.submitTalkRealtimeRelayToolResult.mockRejectedValueOnce(
+      new Error("provider rejected tool result"),
+    );
+    const rejectedToolRespond = vi.fn();
+    await expectDefined(
+      talkHandlers["talk.session.submitToolResult"],
+      'talkHandlers["talk.session.submitToolResult"] test invariant',
+    )({
+      req: { type: "req", id: "4-rejected", method: "talk.session.submitToolResult" },
+      params: {
+        sessionId: "relay-unified-1",
+        callId: "call-rejected",
+        result: { ok: true },
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: rejectedToolRespond as never,
+      context: {} as never,
+    });
+    expectRespondError(rejectedToolRespond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: provider rejected tool result",
+    });
 
     const steerRespond = vi.fn();
-    await talkHandlers["talk.session.steer"]({
+    await expectDefined(
+      talkHandlers["talk.session.steer"],
+      'talkHandlers["talk.session.steer"] test invariant',
+    )({
       req: { type: "req", id: "5", method: "talk.session.steer" },
       params: {
         sessionId: "relay-unified-1",
@@ -1468,7 +1688,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const closeRespond = vi.fn();
-    await talkHandlers["talk.session.close"]({
+    await expectDefined(
+      talkHandlers["talk.session.close"],
+      'talkHandlers["talk.session.close"] test invariant',
+    )({
       req: { type: "req", id: "6", method: "talk.session.close" },
       params: { sessionId: "relay-unified-1" },
       client: { connId: "conn-1" } as never,
@@ -1499,7 +1722,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: {
         mode: "realtime",
@@ -1558,7 +1784,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const createRespond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: { mode: "transcription", provider: "openai-realtime" },
       client: { connId: "conn-1" } as never,
@@ -1604,7 +1833,10 @@ describe("talk.session unified handlers", () => {
       model: "gpt-4o-mini-transcribe",
     });
     const inputRespond = vi.fn();
-    await talkHandlers["talk.session.appendAudio"]({
+    await expectDefined(
+      talkHandlers["talk.session.appendAudio"],
+      'talkHandlers["talk.session.appendAudio"] test invariant',
+    )({
       req: { type: "req", id: "2", method: "talk.session.appendAudio" },
       params: { sessionId: "stt-unified-1", audioBase64: "aGVsbG8=" },
       client: { connId: "conn-1" } as never,
@@ -1619,7 +1851,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const closeRespond = vi.fn();
-    await talkHandlers["talk.session.close"]({
+    await expectDefined(
+      talkHandlers["talk.session.close"],
+      'talkHandlers["talk.session.close"] test invariant',
+    )({
       req: { type: "req", id: "3", method: "talk.session.close" },
       params: { sessionId: "stt-unified-1" },
       client: { connId: "conn-1" } as never,
@@ -1633,10 +1868,76 @@ describe("talk.session unified handlers", () => {
     });
   });
 
+  it("creates transcription sessions with an aliased provider missing from the active registry", async () => {
+    const openai = {
+      id: "openai",
+      aliases: ["openai-realtime"],
+      label: "OpenAI Realtime Transcription",
+      resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
+      isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "openai-key"),
+      createSession: vi.fn(),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      { id: "xai", label: "xAI Realtime Transcription", isConfigured: () => true },
+    ] as never);
+    mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) =>
+      providerId === "openai-realtime" ? (openai as never) : undefined,
+    );
+    mocks.createTalkTranscriptionRelaySession.mockReturnValue({
+      provider: "openai",
+      mode: "transcription",
+      transport: "gateway-relay",
+      transcriptionSessionId: "stt-openai-1",
+      audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: { mode: "transcription", transport: "gateway-relay", brain: "none" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            plugins: {
+              entries: {
+                "voice-call": {
+                  config: {
+                    streaming: {
+                      provider: "openai-realtime",
+                      providers: { openai: { apiKey: "openai-key" } },
+                    },
+                  },
+                },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, {
+      provider: "openai",
+      transcriptionSessionId: "stt-openai-1",
+    });
+    expect(mockCallArg(mocks.createTalkTranscriptionRelaySession)).toMatchObject({
+      provider: openai,
+      providerConfig: { apiKey: "openai-key" },
+    });
+  });
+
   it("creates and controls managed-room sessions through the unified API", async () => {
     const broadcastToConnIds = vi.fn();
     const createRespond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: {
         mode: "stt-tts",
@@ -1671,7 +1972,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const joinRespond = vi.fn();
-    await talkHandlers["talk.session.join"]({
+    await expectDefined(
+      talkHandlers["talk.session.join"],
+      'talkHandlers["talk.session.join"] test invariant',
+    )({
       req: { type: "req", id: "2", method: "talk.session.join" },
       params: { sessionId: session.sessionId, token: session.token },
       client: { connId: "conn-1" } as never,
@@ -1694,7 +1998,10 @@ describe("talk.session unified handlers", () => {
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({ dropIfSlow: true });
 
     const startRespond = vi.fn();
-    await talkHandlers["talk.session.startTurn"]({
+    await expectDefined(
+      talkHandlers["talk.session.startTurn"],
+      'talkHandlers["talk.session.startTurn"] test invariant',
+    )({
       req: { type: "req", id: "3", method: "talk.session.startTurn" },
       params: { sessionId: session.sessionId, turnId: "turn-1" },
       client: { connId: "conn-1" } as never,
@@ -1723,7 +2030,10 @@ describe("talk.session unified handlers", () => {
     expect(mockCallArg(broadcastToConnIds, 1, 3)).toEqual({ dropIfSlow: true });
 
     const mismatchedSteerRespond = vi.fn();
-    await talkHandlers["talk.session.steer"]({
+    await expectDefined(
+      talkHandlers["talk.session.steer"],
+      'talkHandlers["talk.session.steer"] test invariant',
+    )({
       req: { type: "req", id: "4", method: "talk.session.steer" },
       params: {
         sessionId: session.sessionId,
@@ -1745,7 +2055,10 @@ describe("talk.session unified handlers", () => {
     expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
 
     const steerRespond = vi.fn();
-    await talkHandlers["talk.session.steer"]({
+    await expectDefined(
+      talkHandlers["talk.session.steer"],
+      'talkHandlers["talk.session.steer"] test invariant',
+    )({
       req: { type: "req", id: "5", method: "talk.session.steer" },
       params: {
         sessionId: session.sessionId,
@@ -1772,7 +2085,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const closeRespond = vi.fn();
-    await talkHandlers["talk.session.close"]({
+    await expectDefined(
+      talkHandlers["talk.session.close"],
+      'talkHandlers["talk.session.close"] test invariant',
+    )({
       req: { type: "req", id: "6", method: "talk.session.close" },
       params: { sessionId: session.sessionId },
       client: { connId: "conn-1" } as never,
@@ -1794,7 +2110,10 @@ describe("talk.session unified handlers", () => {
 
   it("passes managed-room spawnedBy visibility scope to session resolution", async () => {
     const createRespond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: {
         mode: "stt-tts",
@@ -1827,7 +2146,10 @@ describe("talk.session unified handlers", () => {
 
   it("rejects unscoped managed-room session keys without admin scope", async () => {
     const createRespond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: {
         mode: "stt-tts",
@@ -1853,7 +2175,10 @@ describe("talk.session unified handlers", () => {
   it("requires managed-room ownership before turn control", async () => {
     const broadcastToConnIds = vi.fn();
     const createRespond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: {
         mode: "stt-tts",
@@ -1870,7 +2195,10 @@ describe("talk.session unified handlers", () => {
     const session = mockCallArg(createRespond, 0, 1) as { sessionId: string; token: string };
 
     const unjoinedStartRespond = vi.fn();
-    await talkHandlers["talk.session.startTurn"]({
+    await expectDefined(
+      talkHandlers["talk.session.startTurn"],
+      'talkHandlers["talk.session.startTurn"] test invariant',
+    )({
       req: { type: "req", id: "2", method: "talk.session.startTurn" },
       params: { sessionId: session.sessionId, turnId: "turn-1" },
       client: { connId: "creator" } as never,
@@ -1883,7 +2211,10 @@ describe("talk.session unified handlers", () => {
       message: "talk.session.startTurn requires the active managed-room connection",
     });
 
-    await talkHandlers["talk.session.join"]({
+    await expectDefined(
+      talkHandlers["talk.session.join"],
+      'talkHandlers["talk.session.join"] test invariant',
+    )({
       req: { type: "req", id: "3", method: "talk.session.join" },
       params: { sessionId: session.sessionId, token: session.token },
       client: { connId: "conn-1" } as never,
@@ -1893,7 +2224,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const staleStartRespond = vi.fn();
-    await talkHandlers["talk.session.startTurn"]({
+    await expectDefined(
+      talkHandlers["talk.session.startTurn"],
+      'talkHandlers["talk.session.startTurn"] test invariant',
+    )({
       req: { type: "req", id: "4", method: "talk.session.startTurn" },
       params: { sessionId: session.sessionId, turnId: "turn-1" },
       client: { connId: "conn-2" } as never,
@@ -1906,7 +2240,10 @@ describe("talk.session unified handlers", () => {
       message: "talk.session.startTurn requires the active managed-room connection",
     });
 
-    await talkHandlers["talk.session.startTurn"]({
+    await expectDefined(
+      talkHandlers["talk.session.startTurn"],
+      'talkHandlers["talk.session.startTurn"] test invariant',
+    )({
       req: { type: "req", id: "5", method: "talk.session.startTurn" },
       params: { sessionId: session.sessionId, turnId: "turn-1" },
       client: { connId: "conn-1" } as never,
@@ -1916,7 +2253,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const staleEndRespond = vi.fn();
-    await talkHandlers["talk.session.endTurn"]({
+    await expectDefined(
+      talkHandlers["talk.session.endTurn"],
+      'talkHandlers["talk.session.endTurn"] test invariant',
+    )({
       req: { type: "req", id: "6", method: "talk.session.endTurn" },
       params: { sessionId: session.sessionId, turnId: "turn-1" },
       client: { connId: "conn-2" } as never,
@@ -1930,7 +2270,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const staleCancelRespond = vi.fn();
-    await talkHandlers["talk.session.cancelTurn"]({
+    await expectDefined(
+      talkHandlers["talk.session.cancelTurn"],
+      'talkHandlers["talk.session.cancelTurn"] test invariant',
+    )({
       req: { type: "req", id: "7", method: "talk.session.cancelTurn" },
       params: { sessionId: session.sessionId, turnId: "turn-1" },
       client: { connId: "conn-2" } as never,
@@ -1944,7 +2287,10 @@ describe("talk.session unified handlers", () => {
     });
 
     const staleCloseRespond = vi.fn();
-    await talkHandlers["talk.session.close"]({
+    await expectDefined(
+      talkHandlers["talk.session.close"],
+      'talkHandlers["talk.session.close"] test invariant',
+    )({
       req: { type: "req", id: "8", method: "talk.session.close" },
       params: { sessionId: session.sessionId },
       client: { connId: "conn-2" } as never,
@@ -1957,7 +2303,10 @@ describe("talk.session unified handlers", () => {
       message: "talk.session.close requires the active managed-room connection",
     });
 
-    await talkHandlers["talk.session.close"]({
+    await expectDefined(
+      talkHandlers["talk.session.close"],
+      'talkHandlers["talk.session.close"] test invariant',
+    )({
       req: { type: "req", id: "9", method: "talk.session.close" },
       params: { sessionId: session.sessionId },
       client: { connId: "conn-1" } as never,
@@ -1969,7 +2318,10 @@ describe("talk.session unified handlers", () => {
 
   it("keeps direct-tools managed-room sessions behind admin scope", async () => {
     const rejectedRespond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: {
         mode: "stt-tts",
@@ -1992,7 +2344,10 @@ describe("talk.session unified handlers", () => {
     expect(mocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
 
     const createRespond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "2", method: "talk.session.create" },
       params: {
         mode: "stt-tts",
@@ -2015,7 +2370,10 @@ describe("talk.session unified handlers", () => {
     }) as Record<string, unknown>;
     expect(createResult.sessionId).toBeTypeOf("string");
 
-    await talkHandlers["talk.session.close"]({
+    await expectDefined(
+      talkHandlers["talk.session.close"],
+      'talkHandlers["talk.session.close"] test invariant',
+    )({
       req: { type: "req", id: "3", method: "talk.session.close" },
       params: { sessionId: session.sessionId },
       client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
@@ -2027,7 +2385,10 @@ describe("talk.session unified handlers", () => {
 
   it("keeps browser-owned transports on the client session endpoint", async () => {
     const respond = vi.fn();
-    await talkHandlers["talk.session.create"]({
+    await expectDefined(
+      talkHandlers["talk.session.create"],
+      'talkHandlers["talk.session.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.session.create" },
       params: { mode: "realtime", transport: "webrtc" },
       client: { connId: "conn-1" } as never,
@@ -2058,7 +2419,10 @@ describe("talk.client.toolCall handler", () => {
   it("starts agent consult through gateway policy instead of exposing chat.send to browser clients", async () => {
     const respond = vi.fn();
 
-    await talkHandlers["talk.client.toolCall"]({
+    await expectDefined(
+      talkHandlers["talk.client.toolCall"],
+      'talkHandlers["talk.client.toolCall"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.toolCall" },
       params: {
         sessionKey: "main",
@@ -2086,10 +2450,48 @@ describe("talk.client.toolCall handler", () => {
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
   });
 
+  it("returns the tool-call acknowledgement while the agent run continues", async () => {
+    let finishRun: (() => void) | undefined;
+    mocks.chatSend.mockImplementationOnce(
+      ({ respond }: { respond: (ok: boolean, result?: unknown, error?: unknown) => void }) =>
+        new Promise<void>((resolve) => {
+          finishRun = resolve;
+          respond(true, { runId: "run-active" }, undefined);
+        }),
+    );
+    const respond = vi.fn();
+
+    await expectDefined(
+      talkHandlers["talk.client.toolCall"],
+      'talkHandlers["talk.client.toolCall"] test invariant',
+    )({
+      req: { type: "req", id: "1", method: "talk.client.toolCall" },
+      params: {
+        sessionKey: "main",
+        callId: "call-active",
+        name: "openclaw_agent_consult",
+        args: { question: "What is running?" },
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        logGateway: { warn: vi.fn() },
+      } as never,
+    });
+
+    expectRespondOk(respond, { runId: "run-active" });
+    finishRun?.();
+  });
+
   it("passes configured consult thinking and fast-mode overrides to chat.send", async () => {
     const respond = vi.fn();
 
-    await talkHandlers["talk.client.toolCall"]({
+    await expectDefined(
+      talkHandlers["talk.client.toolCall"],
+      'talkHandlers["talk.client.toolCall"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.toolCall" },
       params: {
         sessionKey: "main",
@@ -2122,7 +2524,10 @@ describe("talk.client.toolCall handler", () => {
   it("links relay-owned agent consult runs so relay cancellation can abort them", async () => {
     const respond = vi.fn();
 
-    await talkHandlers["talk.client.toolCall"]({
+    await expectDefined(
+      talkHandlers["talk.client.toolCall"],
+      'talkHandlers["talk.client.toolCall"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.toolCall" },
       params: {
         sessionKey: "main",
@@ -2167,7 +2572,10 @@ describe("talk.client.toolCall handler", () => {
       );
       const respond = vi.fn();
 
-      await talkHandlers["talk.client.toolCall"]({
+      await expectDefined(
+        talkHandlers["talk.client.toolCall"],
+        'talkHandlers["talk.client.toolCall"] test invariant',
+      )({
         req: { type: "req", id: "1", method: "talk.client.toolCall" },
         params: {
           sessionKey: "main",
@@ -2195,7 +2603,10 @@ describe("talk.client.toolCall handler", () => {
   it("rejects client tool calls that are not the agent consult tool", async () => {
     const respond = vi.fn();
 
-    await talkHandlers["talk.client.toolCall"]({
+    await expectDefined(
+      talkHandlers["talk.client.toolCall"],
+      'talkHandlers["talk.client.toolCall"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.toolCall" },
       params: {
         sessionKey: "main",
@@ -2256,7 +2667,10 @@ describe("talk.client.steer handler", () => {
   it("routes browser-owned voice steering through the shared agent control helper", async () => {
     const respond = vi.fn();
 
-    await talkHandlers["talk.client.steer"]({
+    await expectDefined(
+      talkHandlers["talk.client.steer"],
+      'talkHandlers["talk.client.steer"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.steer" },
       params: {
         sessionKey: "agent:main:main",
@@ -2284,7 +2698,10 @@ describe("talk.client.steer handler", () => {
   it("rejects steering for a session key owned by another connection", async () => {
     const respond = vi.fn();
 
-    await talkHandlers["talk.client.steer"]({
+    await expectDefined(
+      talkHandlers["talk.client.steer"],
+      'talkHandlers["talk.client.steer"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.steer" },
       params: {
         sessionKey: "agent:main:main",
@@ -2307,7 +2724,10 @@ describe("talk.client.steer handler", () => {
   it("rejects malformed client steering params", async () => {
     const respond = vi.fn();
 
-    await talkHandlers["talk.client.steer"]({
+    await expectDefined(
+      talkHandlers["talk.client.steer"],
+      'talkHandlers["talk.client.steer"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.steer" },
       params: {
         sessionKey: "agent:main:main",
@@ -2329,6 +2749,26 @@ describe("talk.client.create handler", () => {
     vi.clearAllMocks();
   });
 
+  it("builds realtime launch defaults from talk.realtime", () => {
+    expect(
+      buildTalkRealtimeConfig({
+        talk: {
+          realtime: {
+            vadThreshold: 0.45,
+            silenceDurationMs: 650,
+            prefixPaddingMs: 250,
+            reasoningEffort: " low ",
+          },
+        },
+      }),
+    ).toMatchObject({
+      vadThreshold: 0.45,
+      silenceDurationMs: 650,
+      prefixPaddingMs: 250,
+      reasoningEffort: "low",
+    });
+  });
+
   it("uses talk.realtime provider, model, voice, and instructions without reading speech provider config", async () => {
     const createBrowserSession = vi.fn(async (_input: unknown) => ({
       provider: "openai",
@@ -2348,7 +2788,10 @@ describe("talk.client.create handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: {
         sessionKey: "main",
@@ -2423,7 +2866,10 @@ describe("talk.client.create handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: {},
       client: { connId: "conn-1" } as never,
@@ -2483,7 +2929,10 @@ describe("talk.client.create handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: {},
       client: { connId: "conn-1" } as never,
@@ -2550,7 +2999,10 @@ describe("talk.client.create handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: {},
       client: { connId: "conn-1" } as never,
@@ -2608,7 +3060,10 @@ describe("talk.client.create handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: {},
       client: { connId: "conn-1" } as never,
@@ -2655,7 +3110,10 @@ describe("talk.client.create handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: {},
       client: { connId: "conn-1" } as never,
@@ -2714,7 +3172,10 @@ describe("talk.client.create handler", () => {
     });
 
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: {},
       client: { connId: "conn-1" } as never,
@@ -2749,7 +3210,10 @@ describe("talk.client.create handler", () => {
 
   it("rejects Gateway-owned transports on the client endpoint", async () => {
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: { sessionKey: "main", mode: "realtime", transport: "gateway-relay" },
       client: { connId: "conn-1" } as never,
@@ -2766,7 +3230,10 @@ describe("talk.client.create handler", () => {
 
   it("rejects realtime brains the client endpoint cannot run", async () => {
     const respond = vi.fn();
-    await talkHandlers["talk.client.create"]({
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
       req: { type: "req", id: "1", method: "talk.client.create" },
       params: { sessionKey: "main" },
       client: { connId: "conn-1" } as never,
@@ -2790,3 +3257,4 @@ describe("talk.client.create handler", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

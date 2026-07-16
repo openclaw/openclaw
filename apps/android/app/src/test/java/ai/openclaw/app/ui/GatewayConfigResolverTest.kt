@@ -10,6 +10,60 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun insecureRemoteGuidanceRetainsTheCompleteSecurityRuleAndFix() {
+    val message =
+      gatewayEndpointValidationMessage(
+        GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+        GatewayEndpointInputSource.MANUAL,
+      )
+
+    assertEquals(
+      "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs. " +
+        "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
+      message,
+    )
+  }
+
+  @Test
+  fun manualTransportForcesSecureConnectionForRemoteHosts() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "gateway.example.com",
+        requestedTls = false,
+      )
+
+    assertEquals(true, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertEquals("Secure connection is required for this host.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportAllowsUnencryptedPrivateLanConnections() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = false,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(false, presentation.effectiveTls)
+    assertEquals("Use only on a trusted private network.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportDoesNotRepeatSelectedPrivateLanTlsState() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = true,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertNull(presentation.helperText)
+  }
+
+  @Test
   fun parseGatewayEndpointUsesDefaultTlsPortForBareWssUrls() {
     val parsed = parseGatewayEndpoint("wss://gateway.example")
 
@@ -189,23 +243,15 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointAllowsLinkLocalIpv6ZoneCleartextWsUrls() {
-    val parsed = parseGatewayEndpoint("ws://[fe80::1%25eth0]")
-
-    assertEquals("fe80::1%25eth0", parsed?.host)
-    assertEquals(18789, parsed?.port)
-    assertEquals(false, parsed?.tls)
-    assertEquals("http://[fe80::1%25eth0]:18789", parsed?.displayUrl)
-  }
-
-  @Test
-  fun parseGatewayEndpointAllowsSecureIpv6ZoneUrls() {
-    val parsed = parseGatewayEndpoint("wss://[fe80::1%25wlan0]:443")
-
-    assertEquals("fe80::1%25wlan0", parsed?.host)
-    assertEquals(443, parsed?.port)
-    assertEquals(true, parsed?.tls)
-    assertEquals("https://[fe80::1%25wlan0]", parsed?.displayUrl)
+  fun parseGatewayEndpointReportsUnsupportedIpv6ZoneIds() {
+    listOf(
+      "ws://[fe80::1%25eth0]",
+      "wss://[fe80::1%25wlan0]:443",
+    ).forEach { url ->
+      val parsed = parseGatewayEndpointResult(url)
+      assertNull(url, parsed.config)
+      assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
+    }
   }
 
   @Test
@@ -241,6 +287,17 @@ class GatewayConfigResolverTest {
   fun resolveScannedSetupCodeResultAcceptsRawSetupCode() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCodeResult(setupCode)
+
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
+  }
+
+  @Test
+  fun resolveScannedSetupCodeResultAcceptsEmulatorSetupCode() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
 
     val resolved = resolveScannedSetupCodeResult(setupCode)
 
@@ -336,6 +393,35 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun resolveScannedSetupCodeResultPreservesIpv6ZoneError() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://[fe80::1%25wlan0]:443","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCodeResult(setupCode)
+
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, resolved.error)
+  }
+
+  @Test
+  fun gatewayEndpointValidationMessageExplainsIpv6ZoneReplacement() {
+    val error = GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED
+
+    assertEquals(
+      "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
+      gatewayEndpointValidationMessage(error, GatewayEndpointInputSource.MANUAL),
+    )
+    assertEquals(
+      "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      gatewayEndpointValidationMessage(error, GatewayEndpointInputSource.SETUP_CODE),
+    )
+    assertEquals(
+      "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      gatewayEndpointValidationMessage(error, GatewayEndpointInputSource.QR_SCAN),
+    )
+  }
+
+  @Test
   fun parseGatewayEndpointResultFlagsInsecureRemoteGateway() {
     val parsed = parseGatewayEndpointResult("ws://gateway.example:18789")
 
@@ -405,6 +491,18 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun manualTokenDetectsSetupCodePayloads() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
+    val qrPayload = """{"setupCode":"$setupCode"}"""
+
+    assertEquals(true, manualTokenLooksLikeSetupCode(setupCode))
+    assertEquals(true, manualTokenLooksLikeSetupCode(qrPayload))
+    assertEquals(false, manualTokenLooksLikeSetupCode("local-mobile-test"))
+    assertEquals(false, manualTokenLooksLikeSetupCode(""))
+  }
+
+  @Test
   fun resolveGatewayConnectConfigPrefersBootstrapTokenFromSetupCode() {
     val setupCode =
       encodeSetupCode(
@@ -415,6 +513,32 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = true,
         setupCode = setupCode,
+        manualHostInput = "",
+        manualPortInput = "",
+        manualTlsInput = false,
+        bootstrapTokenInput = "",
+        tokenInput = "shared-token",
+        passwordInput = "shared-password",
+      )
+
+    assertEquals("gateway.example", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(true, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("", resolved?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigAcceptsQrJsonSetupCodePayload() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
+    val qrPayload = """{"setupCode":"$setupCode"}"""
+
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = true,
+        setupCode = qrPayload,
         manualHostInput = "",
         manualPortInput = "",
         manualTlsInput = false,
@@ -590,6 +714,7 @@ class GatewayConfigResolverTest {
     assertEquals("token", plan?.config?.token)
     assertEquals("", plan?.config?.bootstrapToken)
     assertEquals("", plan?.config?.password)
+    assertEquals(GatewaySavedAuthAction.REPLACE_CREDENTIALS, plan?.savedAuthAction)
   }
 
   @Test
@@ -736,10 +861,31 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
+  fun composeGatewayManualUrlDefaultsPortTo18789ForNonTailnetTlsHostsWhenPortBlank() {
+    val url = composeGatewayManualUrl("gateway.example.com", "", tls = true)
+
+    assertEquals("https://gateway.example.com:18789", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsPortTo443ForTailnetHostWithTrailingDotWhenPortBlank() {
+    val url = composeGatewayManualUrl("device.sample.ts.net.", "", tls = true)
+
+    assertEquals("https://device.sample.ts.net.:443", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDoesNotTreatLookalikeTailnetSuffixAsTailnet() {
+    val url = composeGatewayManualUrl("gateway.ts.net.evil.com", "", tls = true)
+
+    assertEquals("https://gateway.ts.net.evil.com:18789", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsBlankCleartextPortTo18789() {
     val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
 
-    assertNull(url)
+    assertEquals("http://127.0.0.1:18789", url)
   }
 
   @Test

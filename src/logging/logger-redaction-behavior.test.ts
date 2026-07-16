@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
-  resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
@@ -29,7 +28,6 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDiagnosticEventsForTest();
-  resetDiagnosticTraceContextForTest();
   resetLogger();
   setLoggerOverride(null);
 });
@@ -190,6 +188,18 @@ describe("file log redaction", () => {
     expect(record.hostname).toBeTypeOf("string");
     expect(record.hostname).not.toBe("");
     expect(record.message).toBe("request completed");
+  });
+
+  it("keeps bounded file-log messages UTF-16 safe", () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const prefix = "x".repeat(4_095);
+
+    getLogger().info(`${prefix}😀tail`);
+
+    const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
+    const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
+    expect(record.message).toBe(`${prefix}...(truncated)`);
   });
 
   it("retries hostname resolution after an empty value and caches the first real value", () => {

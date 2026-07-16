@@ -1,15 +1,26 @@
 // Ollama tests cover stream runtime plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock, ollamaStreamWarnMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
+  ollamaStreamWarnMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: () => ({ warn: ollamaStreamWarnMock }),
+  };
+});
+
 import {
+  OLLAMA_INCOMPLETE_STREAM_ERROR,
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
@@ -28,6 +39,10 @@ type GuardedFetchCall = {
   timeoutMs?: number;
   auditContext?: string;
 };
+
+function requireEntry<T>(entries: readonly T[], index: number, context: string): T {
+  return expectDefined(entries[index], context);
+}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
@@ -72,6 +87,7 @@ function expectIteratorEvent(
 
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
+  ollamaStreamWarnMock.mockReset();
 });
 
 describe("buildOllamaChatRequest", () => {
@@ -757,8 +773,14 @@ describe("convertToOllamaMessages", () => {
   it("prepends system message when provided", () => {
     const messages = [{ role: "user", content: "hello" }];
     const result = convertToOllamaMessages(messages, "You are helpful.");
-    expect(result[0]).toEqual({ role: "system", content: "You are helpful." });
-    expect(result[1]).toEqual({ role: "user", content: "hello" });
+    expect(requireEntry(result, 0, "first converted Ollama message")).toEqual({
+      role: "system",
+      content: "You are helpful.",
+    });
+    expect(requireEntry(result, 1, "second converted Ollama message")).toEqual({
+      role: "user",
+      content: "hello",
+    });
   });
 
   it("converts assistant messages with toolCall content blocks", () => {
@@ -772,9 +794,9 @@ describe("convertToOllamaMessages", () => {
       },
     ];
     const result = convertToOllamaMessages(messages);
-    expect(result[0].role).toBe("assistant");
-    expect(result[0].content).toBe("Let me check.");
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").role).toBe("assistant");
+    expect(requireEntry(result, 0, "first converted Ollama message").content).toBe("Let me check.");
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       { id: "call_1", function: { name: "bash", arguments: { command: "ls" } } },
     ]);
   });
@@ -794,7 +816,7 @@ describe("convertToOllamaMessages", () => {
       },
     ];
     const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       { id: "fc_ollama_123", function: { name: "bash", arguments: { command: "pwd" } } },
     ]);
   });
@@ -810,7 +832,7 @@ describe("convertToOllamaMessages", () => {
       },
     ];
     const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       { id: "call_1", function: { name: "exec", arguments: { command: "pwd" } } },
       { id: "call_2", function: { name: "read", arguments: { path: "README.md" } } },
     ]);
@@ -830,7 +852,7 @@ describe("convertToOllamaMessages", () => {
     const result = convertToOllamaMessages(messages, undefined, {
       availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
     });
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       { id: "call_1", function: { name: "tool_a", arguments: { value: 1 } } },
       { id: "call_2", function: { name: "tools_invoke_test", arguments: { value: 2 } } },
       { id: "call_3", function: { name: "function-run", arguments: { value: 3 } } },
@@ -851,7 +873,7 @@ describe("convertToOllamaMessages", () => {
     const result = convertToOllamaMessages(messages, undefined, {
       availableToolNames: new Set(["exec", "read"]),
     });
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       { id: "call_1", function: { name: "exec", arguments: { command: "pwd" } } },
       { id: "call_2", function: { name: "read", arguments: { path: "." } } },
       { id: "call_3", function: { name: "tool_missing", arguments: {} } },
@@ -871,7 +893,7 @@ describe("convertToOllamaMessages", () => {
       },
     ];
     const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       { id: "call_1", function: { name: "functionshell", arguments: {} } },
       { id: "call_2", function: { name: "tooling", arguments: {} } },
       { id: "call_3", function: { name: "tools", arguments: {} } },
@@ -896,7 +918,7 @@ describe("convertToOllamaMessages", () => {
       },
     ];
     const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       { id: "call_2", function: { name: "Read", arguments: { file_path: "/tmp/test.txt" } } },
     ]);
   });
@@ -911,7 +933,7 @@ describe("convertToOllamaMessages", () => {
       },
     ];
     const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       { id: "toolu_1", function: { name: "exec", arguments: { command: "echo hello" } } },
     ]);
   });
@@ -931,7 +953,7 @@ describe("convertToOllamaMessages", () => {
       },
     ];
     const result = convertToOllamaMessages(messages);
-    expect(result[0].tool_calls).toEqual([
+    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
       {
         id: "call_3",
         function: {
@@ -966,7 +988,9 @@ describe("convertToOllamaMessages", () => {
     const messages = [{ role: "toolResult", content: "output" }];
     const result = convertToOllamaMessages(messages);
     expect(result).toEqual([{ role: "tool", content: "output" }]);
-    expect(result[0]).not.toHaveProperty("tool_name");
+    expect(requireEntry(result, 0, "first converted Ollama message")).not.toHaveProperty(
+      "tool_name",
+    );
   });
 
   it("handles empty messages array", () => {
@@ -1228,8 +1252,8 @@ describe("buildAssistantMessage", () => {
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("toolUse");
     expect(result.content.length).toBe(1); // toolCall only (empty content is skipped)
-    expect(result.content[0].type).toBe("toolCall");
-    const toolCall = result.content[0] as {
+    expect(requireEntry(result.content, 0, "Ollama tool-call content").type).toBe("toolCall");
+    const toolCall = requireEntry(result.content, 0, "Ollama tool-call content") as {
       type: "toolCall";
       id: string;
       name: string;
@@ -1254,8 +1278,13 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expectToolCallContent(result.content[0], { name: "bash", arguments: { command: "pwd" } });
-    expect((result.content[0] as { id?: string }).id).toBe("fc_ollama_real_1");
+    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
+      name: "bash",
+      arguments: { command: "pwd" },
+    });
+    expect(
+      (requireEntry(result.content, 0, "Ollama tool-call content") as { id?: string }).id,
+    ).toBe("fc_ollama_real_1");
   });
 
   it("preserves parallel Ollama response tool-call ids independently", () => {
@@ -1277,7 +1306,10 @@ describe("buildAssistantMessage", () => {
       "fc_ollama_real_1",
       "fc_ollama_real_2",
     ]);
-    expectToolCallContent(result.content[0], { name: "read", arguments: { path: "a.txt" } });
+    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
+      name: "read",
+      arguments: { path: "a.txt" },
+    });
     expectToolCallContent(result.content[1], { name: "exec", arguments: { command: "date" } });
   });
 
@@ -1297,7 +1329,10 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.content).toHaveLength(2);
-    expectToolCallContent(result.content[0], { name: "exec", arguments: { command: "pwd" } });
+    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
+      name: "exec",
+      arguments: { command: "pwd" },
+    });
     expectToolCallContent(result.content[1], { name: "read", arguments: { path: "README.md" } });
   });
 
@@ -1320,7 +1355,10 @@ describe("buildAssistantMessage", () => {
       availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
     });
     expect(result.content).toHaveLength(3);
-    expectToolCallContent(result.content[0], { name: "tool_a", arguments: { value: 1 } });
+    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
+      name: "tool_a",
+      arguments: { value: 1 },
+    });
     expectToolCallContent(result.content[1], {
       name: "tools_invoke_test",
       arguments: { value: 2 },
@@ -1346,7 +1384,10 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.content).toHaveLength(4);
-    expectToolCallContent(result.content[0], { name: "functionshell", arguments: {} });
+    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
+      name: "functionshell",
+      arguments: {},
+    });
     expectToolCallContent(result.content[1], { name: "tooling", arguments: {} });
     expectToolCallContent(result.content[2], { name: "tools", arguments: {} });
     expectToolCallContent(result.content[3], { name: "tool_a", arguments: {} });
@@ -1364,7 +1405,7 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expectToolCallContent(result.content[0], {
+    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
       name: "bash",
       arguments: { command: "ls", path: "/tmp" },
     });
@@ -1389,7 +1430,7 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expectToolCallContent(result.content[0], {
+    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
       name: "send",
       arguments: {
         target: "9223372036854775807",
@@ -1410,7 +1451,10 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expectToolCallContent(result.content[0], { name: "bash", arguments: {} });
+    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
+      name: "bash",
+      arguments: {},
+    });
   });
 
   it("sets all costs to zero for local models", () => {
@@ -1432,9 +1476,12 @@ describe("buildAssistantMessage", () => {
 });
 
 // Helper: build a ReadableStreamDefaultReader from NDJSON lines
-function mockNdjsonReader(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
+function mockNdjsonReader(
+  lines: string[],
+  options: { trailingNewline?: boolean } = {},
+): ReadableStreamDefaultReader<Uint8Array> {
   const encoder = new TextEncoder();
-  const payload = lines.join("\n") + "\n";
+  const payload = lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
   let consumed = false;
   return {
     read: async () => {
@@ -1464,7 +1511,37 @@ async function expectDoneEventContent(lines: string[], expectedContent: unknown)
   });
 }
 
+async function expectNoParsedChunks(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  const chunks = [];
+  for await (const chunk of parseNdjsonStream(reader)) {
+    chunks.push(chunk);
+  }
+  expect(chunks).toEqual([]);
+}
+
 describe("parseNdjsonStream", () => {
+  it("does not log a dangling surrogate for a malformed complete line", async () => {
+    const prefix = "x".repeat(119);
+    const reader = mockNdjsonReader([`${prefix}😀tail`]);
+
+    await expectNoParsedChunks(reader);
+
+    expect(ollamaStreamWarnMock).toHaveBeenCalledExactlyOnceWith(
+      `Skipping malformed NDJSON line: ${prefix}`,
+    );
+  });
+
+  it("does not log a dangling surrogate for malformed trailing data", async () => {
+    const prefix = "x".repeat(119);
+    const reader = mockNdjsonReader([`${prefix}😀tail`], { trailingNewline: false });
+
+    await expectNoParsedChunks(reader);
+
+    expect(ollamaStreamWarnMock).toHaveBeenCalledExactlyOnceWith(
+      `Skipping malformed trailing data: ${prefix}`,
+    );
+  });
+
   it("parses text-only streaming chunks", async () => {
     const reader = mockNdjsonReader([
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Hello"},"done":false}',
@@ -1476,9 +1553,9 @@ describe("parseNdjsonStream", () => {
       chunks.push(chunk);
     }
     expect(chunks).toHaveLength(3);
-    expect(chunks[0].message.content).toBe("Hello");
-    expect(chunks[1].message.content).toBe(" world");
-    expect(chunks[2].done).toBe(true);
+    expect(requireEntry(chunks, 0, "first parsed Ollama chunk").message.content).toBe("Hello");
+    expect(requireEntry(chunks, 1, "second parsed Ollama chunk").message.content).toBe(" world");
+    expect(requireEntry(chunks, 2, "final parsed Ollama chunk").done).toBe(true);
   });
 
   it("parses tool_calls from intermediate chunk (not final)", async () => {
@@ -1492,11 +1569,19 @@ describe("parseNdjsonStream", () => {
       chunks.push(chunk);
     }
     expect(chunks).toHaveLength(2);
-    expect(chunks[0].done).toBe(false);
-    expect(chunks[0].message.tool_calls).toHaveLength(1);
-    expect(chunks[0].message.tool_calls![0].function.name).toBe("bash");
-    expect(chunks[1].done).toBe(true);
-    expect(chunks[1].message.tool_calls).toBeUndefined();
+    const firstChunk = requireEntry(chunks, 0, "first parsed Ollama chunk");
+    const firstToolCall = requireEntry(
+      expectDefined(firstChunk.message.tool_calls, "first parsed Ollama chunk tool calls"),
+      0,
+      "first parsed Ollama tool call",
+    );
+    expect(firstChunk.done).toBe(false);
+    expect(firstChunk.message.tool_calls).toHaveLength(1);
+    expect(firstToolCall.function.name).toBe("bash");
+    expect(requireEntry(chunks, 1, "second parsed Ollama chunk").done).toBe(true);
+    expect(
+      requireEntry(chunks, 1, "second parsed Ollama chunk").message.tool_calls,
+    ).toBeUndefined();
   });
 
   it("accumulates tool_calls across multiple intermediate chunks", async () => {
@@ -1518,10 +1603,14 @@ describe("parseNdjsonStream", () => {
       }
     }
     expect(accumulatedToolCalls).toHaveLength(2);
-    expect(accumulatedToolCalls[0].function.name).toBe("read");
-    expect(accumulatedToolCalls[1].function.name).toBe("bash");
+    expect(requireEntry(accumulatedToolCalls, 0, "first accumulated tool call").function.name).toBe(
+      "read",
+    );
+    expect(
+      requireEntry(accumulatedToolCalls, 1, "second accumulated tool call").function.name,
+    ).toBe("bash");
     // Final done:true chunk has no tool_calls
-    expect(chunks[2].message.tool_calls).toBeUndefined();
+    expect(requireEntry(chunks, 2, "final parsed Ollama chunk").message.tool_calls).toBeUndefined();
   });
 
   it("preserves unsafe integer tool arguments as exact strings", async () => {
@@ -1760,7 +1849,7 @@ describe("createOllamaStreamFn streaming events", () => {
         // No text content means no start/text_start/text_delta/text_end events
         const types = events.map((e) => e.type);
         expect(types).toEqual(["done"]);
-        const doneEvent = events[0];
+        const doneEvent = requireEntry(events, 0, "tool-call-only done event");
         if (doneEvent.type === "done") {
           expect(doneEvent.reason).toBe("toolUse");
         }
@@ -1932,6 +2021,9 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
         const errorEvent = events.at(-1);
         expect(errorEvent?.type).toBe("error");
+        if (errorEvent?.type === "error") {
+          expect(errorEvent.error.errorMessage).toBe(OLLAMA_INCOMPLETE_STREAM_ERROR);
+        }
       },
     );
   });
@@ -2960,3 +3052,4 @@ describe("createConfiguredOllamaStreamFn", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

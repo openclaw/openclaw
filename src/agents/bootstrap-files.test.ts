@@ -1,7 +1,9 @@
 /** Tests agent bootstrap file discovery, filtering, and injected context modes. */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -10,7 +12,6 @@ import {
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
@@ -298,7 +299,11 @@ describe("resolveBootstrapFilesForRun", () => {
         ["HEARTBEAT.md", "heartbeat"],
         ["BOOTSTRAP.md", "setup"],
       ].map(([fileName, content]) =>
-        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
       ),
     );
 
@@ -323,7 +328,11 @@ describe("resolveBootstrapFilesForRun", () => {
         ["HEARTBEAT.md", "heartbeat"],
         ["BOOTSTRAP.md", "setup"],
       ].map(([fileName, content]) =>
-        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
       ),
     );
 
@@ -486,11 +495,18 @@ describe("hasCompletedBootstrapTurn", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("returns false when session file does not exist", async () => {
     expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "missing.jsonl"))).toBe(false);
+  });
+
+  it("returns false for SQLite transcript markers", async () => {
+    expect(
+      await hasCompletedBootstrapTurn("sqlite:main:session-1:/tmp/openclaw/sessions.json"),
+    ).toBe(false);
   });
 
   it("returns false for empty session files", async () => {
@@ -625,6 +641,37 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
   });
 
+  it("finds a recent full bootstrap marker when the tail read returns short", async () => {
+    const sessionFile = path.join(tmpDir, "short-read-tail.jsonl");
+    const lines = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+      JSON.stringify({
+        type: "custom",
+        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        data: { timestamp: 1 },
+      }),
+    ];
+    await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
+
+    const realOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      return new Proxy(handle, {
+        get(target, prop, receiver) {
+          if (prop === "read") {
+            return (buffer: Buffer, offset: number, length: number, position: number) =>
+              realRead(buffer, offset, Math.min(length, 16), position);
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+    });
+
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
   it("returns false for symbolic links", async () => {
     const realFile = path.join(tmpDir, "real.jsonl");
     const linkFile = path.join(tmpDir, "link.jsonl");
@@ -639,14 +686,11 @@ describe("hasCompletedBootstrapTurn", () => {
 });
 
 describe("makeBootstrapWarn", () => {
-  afterEach(() => {
-    resetBootstrapWarningCacheForTest();
-  });
-
   it("deduplicates repeated warnings for the same session and message", () => {
     const warnings: string[] = [];
     const warn = makeBootstrapWarn({
       sessionLabel: "agent:main:test-session",
+      workspaceDir: `/tmp/${randomUUID()}`,
       warn: (message) => warnings.push(message),
     });
 
@@ -660,12 +704,15 @@ describe("makeBootstrapWarn", () => {
 
   it("keeps warnings distinct across sessions", () => {
     const warnings: string[] = [];
+    const workspaceDir = `/tmp/${randomUUID()}`;
     const first = makeBootstrapWarn({
       sessionLabel: "agent:main:first-session",
+      workspaceDir,
       warn: (message) => warnings.push(message),
     });
     const second = makeBootstrapWarn({
       sessionLabel: "agent:main:second-session",
+      workspaceDir,
       warn: (message) => warnings.push(message),
     });
 
@@ -680,14 +727,15 @@ describe("makeBootstrapWarn", () => {
 
   it("keeps warnings distinct across workspaces with the same session", () => {
     const warnings: string[] = [];
+    const workspaceRoot = `/tmp/${randomUUID()}`;
     const first = makeBootstrapWarn({
       sessionLabel: "agent:main:shared-session",
-      workspaceDir: "/tmp/workspace-a",
+      workspaceDir: `${workspaceRoot}/workspace-a`,
       warn: (message) => warnings.push(message),
     });
     const second = makeBootstrapWarn({
       sessionLabel: "agent:main:shared-session",
-      workspaceDir: "/tmp/workspace-b",
+      workspaceDir: `${workspaceRoot}/workspace-b`,
       warn: (message) => warnings.push(message),
     });
 

@@ -1,13 +1,22 @@
 import OpenClawKit
 import SwiftUI
 
+struct GatewaySetupRequest {
+    let id: Int
+    let link: GatewayConnectDeepLink
+}
+
+enum GatewayConnectionAttempt: Equatable {
+    case gateway(GatewayStableIdentifier.Key)
+    case manual
+    case setupCode
+}
+
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(VoiceWakeManager.self) var voiceWake
     @Environment(GatewayConnectionController.self) var gatewayController
     @Environment(\.scenePhase) var scenePhase
-    @AppStorage(AppAppearancePreference.storageKey) var appearancePreferenceRaw: String =
-        AppAppearancePreference.system.rawValue
     @AppStorage("node.displayName") var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") var instanceId: String = UUID().uuidString
     @AppStorage("camera.enabled") var cameraEnabled: Bool = true
@@ -34,23 +43,42 @@ struct SettingsProTab: View {
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false
     @AppStorage("onboarding.requestID") var onboardingRequestID: Int = 0
+    @AppStorage(NotificationServingPreference.storageKey) var notificationServingEnabled: Bool =
+        NotificationServingPreference.defaultEnabled
     @State var isReconnectingGateway = false
     @State var isRefreshingGateway = false
     @State var isChangingLocationMode = false
-    @State var connectingGatewayID: String?
+    @State var connectingGateway: GatewayConnectionAttempt?
+    @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
+    @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
     @State var gatewayToken = ""
     @State var gatewayPassword = ""
+    @State var gatewayCredentialFieldStableID: String?
     @State var manualGatewayPortText = ""
     @State var setupStatusText: String?
+    @State var setupAttemptID: UUID?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
+    @State var scannerResultHandoff = QRScannerResultHandoff()
+    @State var scannerScanID: UInt64 = 0
+    @State var pendingTargetSuppression = GatewayPendingTargetSuppression()
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
+    @State var showLocationAccessDialog = false
+    @State var pendingLocationMode: OpenClawLocationMode?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var watchDirectSetupStatusText: String?
+    @State var isSendingWatchDirectSetup = false
+    @State var locationPermissionSummary = LocationPermissionSummary(
+        desiredMode: .off,
+        locationServicesEnabled: true,
+        authorizationStatus: .notDetermined,
+        accuracyAuthorization: .fullAccuracy)
+    @State var locationPermissionRefreshID = 0
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State var notificationStatus: SettingsNotificationStatus = .checking
     @State var isRequestingNotificationAuthorization = false
@@ -58,29 +86,40 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
-    @State var isShowingAppearanceDialog = false
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
+    let acceptsGatewaySetupRequests: Bool
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
+    let onApprovalNotificationsRoute: ((String) -> Void)?
+    let gatewaySetupRequest: GatewaySetupRequest?
+    let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
+        acceptsGatewaySetupRequests: Bool = false,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
-        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil,
+        onApprovalNotificationsRoute: ((String) -> Void)? = nil,
+        gatewaySetupRequest: GatewaySetupRequest? = nil,
+        onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
+        self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
         self.headerLeadingAction = headerLeadingAction
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
+        self.onApprovalNotificationsRoute = onApprovalNotificationsRoute
+        self.gatewaySetupRequest = gatewaySetupRequest
+        self.onGatewaySetupRequestHandled = onGatewaySetupRequestHandled
     }
 
     var body: some View {
@@ -113,34 +152,44 @@ struct SettingsProTab: View {
             self.gatewaySection
             self.settingsListSection
         }
-        .listStyle(.insetGrouped)
+        .font(OpenClawType.body)
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
+        }
         .toolbar {
             if let headerLeadingAction {
                 ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                    OpenClawSidebarRevealButton(action: headerLeadingAction)
                 }
             }
-        }
-        .navigationDestination(for: SettingsRoute.self) { route in
-            self.destination(for: route)
         }
     }
 
     private func settingsLifecycle(_ content: some View) -> some View {
         content
+            .onDisappear {
+                self.invalidateGatewaySetupAttempt()
+            }
             .task {
                 self.previousLocationModeRaw = self.locationModeRaw
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
-                self.applyPendingGatewaySetupLinkIfNeeded()
+                self.applyGatewaySetupRequestIfNeeded()
                 self.applyInitialRouteIfNeeded()
                 self.notifyRouteChange()
+            }
+            .onDisappear {
+                self.scannerResultHandoff.cancel()
+                self.pendingTargetSuppression.resumeAutoConnect(controller: self.gatewayController)
+            }
+            .onChange(of: self.gatewaySetupRequest?.id) { _, _ in
+                self.applyGatewaySetupRequestIfNeeded()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
                     self.syncSettingsState()
+                    self.applyPendingLocationModeIfAvailable()
                     self.refreshNotificationSettings()
                 }
             }
@@ -156,22 +205,17 @@ struct SettingsProTab: View {
                     self.selectedAgentPickerId = newValue
                 }
             }
-            .onChange(of: self.gatewayToken) { _, newValue in
-                self.persistGatewayToken(newValue)
-            }
-            .onChange(of: self.gatewayPassword) { _, newValue in
-                self.persistGatewayPassword(newValue)
-            }
             .onChange(of: self.setupCode) { _, newValue in
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.stagedGatewaySetupLink = nil
+                    self.clearStagedGatewaySetupLink()
                 }
             }
             .onChange(of: self.defaultShareInstruction) { _, newValue in
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
             }
-            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
-                self.applyPendingGatewaySetupLinkIfNeeded()
+            .onChange(of: self.acceptsGatewaySetupRequests) { _, acceptsRequests in
+                guard acceptsRequests else { return }
+                self.applyGatewaySetupRequestIfNeeded()
             }
             .onChange(of: self.onboardingRequestID) { _, _ in
                 // Root-owned resets leave Settings mounted behind onboarding.
@@ -179,71 +223,169 @@ struct SettingsProTab: View {
                 self.syncAfterOnboardingReset()
             }
             .onChange(of: self.navigationPath) { _, _ in
+                self.invalidateGatewaySetupAttempt()
                 self.notifyRouteChange()
             }
     }
 
     private func settingsModalPresentation(_ content: some View) -> some View {
-        content
+        let scanID = self.scannerScanID
+        return content
             .sheet(isPresented: self.$showTalkIssueDetails) {
                 if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
                     TalkRuntimeIssueDetailsSheet(issue: issue)
                 }
             }
-            .sheet(isPresented: self.$showQRScanner) {
-                NavigationStack {
-                    QRScannerView(
-                        onGatewayLink: { link in
-                            self.handleScannedGatewayLink(link)
-                        },
-                        onSetupCode: { code in
-                            self.handleScannedSetupCode(code)
-                        },
-                        onError: { error in
-                            self.showQRScanner = false
-                            self.setupStatusText = "Scanner error: \(error)"
-                            self.scannerError = error
-                        },
-                        onDismiss: {
-                            self.showQRScanner = false
-                        })
-                        .ignoresSafeArea()
-                        .navigationTitle("Scan QR Code")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button("Cancel") { self.showQRScanner = false }
+            .sheet(
+                isPresented: self.$showQRScanner,
+                onDismiss: {
+                    self.processQueuedScannerResult()
+                },
+                content: {
+                    NavigationStack {
+                        QRScannerView(
+                            onResult: { result in
+                                self.queueScannedResult(result, scanID: scanID)
+                            },
+                            onError: { error in
+                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
+                                self.showQRScanner = false
+                                self.setupStatusText = "Scanner error: \(error)"
+                                self.scannerError = error
+                            },
+                            onDismiss: {
+                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
+                                self.showQRScanner = false
+                            })
+                            .ignoresSafeArea()
+                            .navigationTitle("Scan QR Code")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .font(OpenClawType.body)
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button {
+                                        self.scannerResultHandoff.cancel()
+                                        self.showQRScanner = false
+                                    } label: {
+                                        Text("Cancel")
+                                            .font(OpenClawType.subheadSemiBold)
+                                    }
+                                    .font(OpenClawType.subheadSemiBold)
+                                }
                             }
-                        }
-                }
-            }
+                    }
+                })
             .sheet(isPresented: self.$showNotificationRelayDisclosure) {
                 HostedPushRelayDisclosureSheet(
                     message: self.notificationRelayDisclosureMessage,
-                    onContinue: self.requestNotificationAuthorizationFromSettings)
+                    onContinue: self.acceptNotificationRelayDisclosure)
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
-                Button("Reset", role: .destructive) {
-                    self.resetOnboarding()
+                Button(role: .destructive) {
+                    Task { await self.resetOnboarding() }
+                } label: {
+                    Text("Reset")
+                        .font(OpenClawType.subheadSemiBold)
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+                    .font(OpenClawType.subhead)
             }
             .alert(
                 "QR Scanner Unavailable",
                 isPresented: Binding(
                     get: { self.scannerError != nil },
-                    set: { if !$0 { self.scannerError = nil } }))
-            {
-                Button("OK", role: .cancel) {}
+                    set: {
+                        if !$0 {
+                            self.scannerError = nil
+                        }
+                    })) {
+                Button(role: .cancel) {} label: {
+                    Text("OK")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text(self.scannerError ?? "")
+                    .font(OpenClawType.subhead)
             }
+            .confirmationDialog(
+                "Access Level",
+                isPresented: self.$showLocationAccessDialog,
+                titleVisibility: .visible)
+            {
+                Button {
+                    self.selectLocationAccessLevel(.whileUsing)
+                } label: {
+                    Text("While Using the App")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button {
+                    self.selectLocationAccessLevel(.always)
+                } label: {
+                    Text("Always")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            } message: {
+                Text("Choose when OpenClaw may share this iPhone's location with gateway tools.")
+                    .font(OpenClawType.subhead)
+            }
+            .confirmationDialog(
+                    String(
+                        format: String(localized: "Forget %@?"),
+                        self.pendingForgetGateway?.name ?? String(localized: "gateway")),
+                    isPresented: Binding(
+                        get: { self.pendingForgetGateway != nil },
+                        set: {
+                            if !$0 {
+                                self.pendingForgetGateway = nil
+                            }
+                        }),
+                    titleVisibility: .visible)
+            {
+                Button(role: .destructive) {
+                    self.forgetPendingGateway()
+                } label: {
+                    Text("Forget Gateway")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) {
+                    self.pendingForgetGateway = nil
+                } label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                } message: {
+                    // Keep the extraction key contiguous for the native localization inventory.
+                    // swiftlint:disable line_length
+                    Text(
+                        String(
+                            localized:
+                            "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
+                        .font(OpenClawType.subhead)
+                    // swiftlint:enable line_length
+                }
+    }
+
+    private func applyGatewaySetupRequestIfNeeded() {
+        guard self.acceptsGatewaySetupRequests else { return }
+        guard let gatewaySetupRequest else { return }
+        self.applyGatewaySetupLink(gatewaySetupRequest.link)
+        self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
     func openNotificationsRouteFromApprovals() {
         guard self.directRoute == nil else { return }
+        if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
+            self.onApprovalNotificationsRoute?(approvalID)
+        }
         if !self.ownsNavigationStack, let navigateToRoute {
             navigateToRoute(.notifications)
             return
@@ -279,26 +421,32 @@ struct HostedPushRelayDisclosureSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
-                        .font(.title2.weight(.semibold))
+                        .font(OpenClawType.title2SemiBold)
                         .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
-                        .font(.title3.weight(.semibold))
+                        .font(OpenClawType.title3SemiBold)
                     Text(self.message)
-                        .font(.body)
+                        .font(OpenClawType.body)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .font(OpenClawType.body)
             }
             VStack(spacing: 10) {
                 Button {
                     self.dismiss()
                     self.onContinue()
                 } label: {
-                    Text("Continue").frame(maxWidth: .infinity)
+                    Text("Continue")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Not Now", role: .cancel) {
+                Button(role: .cancel) {
                     self.dismiss()
+                } label: {
+                    Text("Not Now")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .buttonStyle(.bordered)
                 .frame(maxWidth: .infinity)

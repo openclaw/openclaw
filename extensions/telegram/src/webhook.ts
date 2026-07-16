@@ -50,17 +50,19 @@ import {
   TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
 } from "./spooled-update-retry-policy.js";
 import {
-  claimNextTelegramSpooledUpdate,
-  completeTelegramSpooledUpdate,
-  failTelegramSpooledUpdateClaim,
+  isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
+} from "./telegram-ingress-claim-owner.js";
+import {
+  claimNextTelegramSpooledUpdate,
+  completeTelegramSpooledUpdateWithRetry,
+  failTelegramSpooledUpdateClaim,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
   refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   resolveTelegramIngressSpoolDir,
-  TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
   writeTelegramSpooledUpdate,
   type ClaimedTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
@@ -72,6 +74,8 @@ import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const TELEGRAM_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const TELEGRAM_WEBHOOK_ACCEPTED_VALUE = "durable";
 const TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS = 500;
 const TELEGRAM_WEBHOOK_SPOOLED_CLAIM_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS = 25 * 60_000;
@@ -246,6 +250,9 @@ function isTrustedProxyAddress(
     }
     if (trimmed.includes("/")) {
       const [address, prefix] = trimmed.split("/", 2);
+      if (address === undefined || prefix === undefined) {
+        continue;
+      }
       const parsedPrefix = parseStrictNonNegativeInteger(prefix);
       const family = net.isIP(address);
       if (family === 4 && parsedPrefix !== undefined && parsedPrefix >= 0 && parsedPrefix <= 32) {
@@ -528,36 +535,40 @@ async function waitForWebhookSpooledDeferredWork(params: {
   log: (line: string) => void;
   update: ClaimedTelegramSpooledUpdate;
 }): Promise<WebhookSpooledDeferredWorkResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<WebhookSpooledDeferredWorkResult>((resolve) => {
-    timer = setTimeout(() => {
-      const age = formatDurationPrecise(TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
-      const message = `Telegram webhook spool buffered processing timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed.`;
-      params.log(`[telegram] ${message}`);
-      params.deferredWork.settle({
-        kind: "failed-retryable",
-        error: new Error(message),
-      });
-      resolve({ kind: "failed-retryable", error: new Error(message), timedOut: true });
-    }, TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
-    timer.unref?.();
-  });
+  let timeoutError: Error | undefined;
+  const timer = setTimeout(() => {
+    const age = formatDurationPrecise(TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
+    const message = `Telegram webhook spool buffered processing timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed.`;
+    params.log(`[telegram] ${message}`);
+    timeoutError = new Error(message);
+    params.deferredWork.settle({
+      kind: "failed-retryable",
+      error: timeoutError,
+    });
+  }, TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS);
+  timer.unref?.();
   try {
-    return await Promise.race([
-      params.deferredWork.task.catch((err: unknown): TelegramMessageProcessingResult => {
-        return { kind: "failed-retryable", error: err };
+    const result = await params.deferredWork.task.catch(
+      (err: unknown): TelegramMessageProcessingResult => ({
+        kind: "failed-retryable",
+        error: err,
       }),
-      timeout,
-    ]);
+    );
+    // A durable-adoption hold can discard the timeout and settle completed.
+    // Only the exact timeout result owns the handler-timeout failure path.
+    return timeoutError !== undefined &&
+      result.kind === "failed-retryable" &&
+      result.error === timeoutError
+      ? { ...result, timedOut: true }
+      : result;
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    clearTimeout(timer);
   }
 }
 
 async function handleWebhookSpooledUpdate(params: {
   accountId: string;
+  abortSignal?: AbortSignal;
   bot: ReturnType<typeof createTelegramBot>;
   log: (line: string) => void;
   update: ClaimedTelegramSpooledUpdate;
@@ -642,13 +653,15 @@ async function handleWebhookSpooledUpdate(params: {
       return {};
     }
   }
-  try {
-    await completeTelegramSpooledUpdate(params.update);
-  } catch (err) {
-    params.log(
-      `[telegram][diag] webhook spooled update ${params.update.updateId} completed but processing marker cleanup failed: ${formatErrorMessage(err)}`,
-    );
-  }
+  await completeTelegramSpooledUpdateWithRetry({
+    update: params.update,
+    abortSignal: params.abortSignal,
+    onRetry: ({ attempt, delayMs, error }) => {
+      params.log(
+        `[telegram][diag] webhook spooled update ${params.update.updateId} completion retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}: ${formatErrorMessage(error)}`,
+      );
+    },
+  });
   return {};
 }
 
@@ -689,6 +702,10 @@ export async function startTelegramWebhook(opts: {
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const spoolDir = opts.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: opts.accountId });
   let shutDown = false;
+  const shutdownAbortController = new AbortController();
+  const webhookAbortSignal = opts.abortSignal
+    ? AbortSignal.any([shutdownAbortController.signal, opts.abortSignal])
+    : shutdownAbortController.signal;
   const telegramAccountConfig = opts.config
     ? mergeTelegramAccountConfig(opts.config, opts.accountId ?? "default")
     : undefined;
@@ -700,10 +717,15 @@ export async function startTelegramWebhook(opts: {
     closeTransportPromise ??= telegramTransport.close();
     return closeTransportPromise;
   };
+  const botAbortController = new AbortController();
+  const botFetchAbortSignal = opts.abortSignal
+    ? AbortSignal.any([opts.abortSignal, botAbortController.signal])
+    : botAbortController.signal;
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,
+    fetchAbortSignal: botFetchAbortSignal,
     config: opts.config,
     accountId: opts.accountId,
     telegramTransport,
@@ -716,6 +738,7 @@ export async function startTelegramWebhook(opts: {
       retryPolicy: webhookRegistrationRetryPolicy,
     });
   } catch (err) {
+    botAbortController.abort();
     await bot.stop();
     await closeTransportOnce();
     throw err;
@@ -749,9 +772,10 @@ export async function startTelegramWebhook(opts: {
         staleMs: 0,
         shouldRecover: (claim) =>
           !activeWebhookSpooledLaneKeys.has(resolveWebhookSpooledUpdateLaneKey(claim.update)) &&
-          !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
-            maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
-          }),
+          !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
+        shouldRecoverCorrupt: (claim) =>
+          !(claim.laneKey && activeWebhookSpooledLaneKeys.has(claim.laneKey)) &&
+          !isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(claim),
       });
       const claimedLaneKeys = new Set(
         (
@@ -803,6 +827,7 @@ export async function startTelegramWebhook(opts: {
         let retainLaneGuardTask: Promise<unknown> | undefined;
         void handleWebhookSpooledUpdate({
           accountId: opts.accountId ?? "default",
+          abortSignal: webhookAbortSignal,
           bot,
           log,
           update: claimedUpdate,
@@ -931,6 +956,7 @@ export async function startTelegramWebhook(opts: {
       });
       // Enqueue duplicate detection makes Telegram webhook retries idempotent:
       // re-posted update_ids map to the same spool row and still ack fast.
+      res.setHeader(TELEGRAM_WEBHOOK_ACCEPTED_HEADER, TELEGRAM_WEBHOOK_ACCEPTED_VALUE);
       respondText(200);
       status.noteWebhookUpdateReceived();
       requestWebhookSpoolDrain();
@@ -976,7 +1002,9 @@ export async function startTelegramWebhook(opts: {
     if (shutDown) {
       return;
     }
+    botAbortController.abort();
     shutDown = true;
+    shutdownAbortController.abort();
     if (drainTimer) {
       clearInterval(drainTimer);
     }
@@ -1050,23 +1078,11 @@ export async function startTelegramWebhook(opts: {
           runtime.error?.(
             `telegram setWebhook retry stopped after non-recoverable error: ${formatErrorMessage(err)}`,
           );
+          await shutdown();
           return;
         }
       }
       attempt += 1;
-    }
-  };
-  const closeAfterStartupFailure = async () => {
-    shutDown = true;
-    if (drainTimer) {
-      clearInterval(drainTimer);
-    }
-    server.close();
-    await bot.stop();
-    await closeTransportOnce();
-    status.noteWebhookStop();
-    if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
     }
   };
 
@@ -1077,7 +1093,7 @@ export async function startTelegramWebhook(opts: {
       await advertiseWebhook();
     } catch (err) {
       if (!shouldRetryWebhookRegistration(err)) {
-        await closeAfterStartupFailure();
+        await shutdown();
         throw err;
       }
       void retryWebhookRegistration(1);
@@ -1091,3 +1107,4 @@ export async function startTelegramWebhook(opts: {
 
   return { server, bot, stop: shutdown };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,13 +1,9 @@
 // Feishu tests cover bot.helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { parseMessageContent } from "./bot-content.js";
-import {
-  buildBroadcastSessionKey,
-  buildFeishuAgentBody,
-  resolveBroadcastAgents,
-  toMessageResourceType,
-} from "./bot.js";
+import { buildFeishuAgentBody } from "./bot-agent-body.js";
+import { buildBroadcastSessionKey, resolveBroadcastAgents } from "./bot-broadcast.js";
+import { parseMessageContent, resolveFeishuMediaFailurePresentation } from "./bot-content.js";
 
 describe("buildFeishuAgentBody", () => {
   it("builds message id, speaker, quoted content, mention context, and permission notice in order", () => {
@@ -67,22 +63,6 @@ describe("buildFeishuAgentBody", () => {
   });
 });
 
-describe("toMessageResourceType", () => {
-  it("maps image to image", () => {
-    expect(toMessageResourceType("image")).toBe("image");
-  });
-
-  it("maps audio to file", () => {
-    expect(toMessageResourceType("audio")).toBe("file");
-  });
-
-  it("maps video/file/sticker to file", () => {
-    expect(toMessageResourceType("video")).toBe("file");
-    expect(toMessageResourceType("file")).toBe("file");
-    expect(toMessageResourceType("sticker")).toBe("file");
-  });
-});
-
 describe("parseMessageContent media placeholders", () => {
   it("uses an audio placeholder instead of leaking raw file_key JSON", () => {
     expect(
@@ -97,12 +77,24 @@ describe("parseMessageContent media placeholders", () => {
         "audio",
       ),
     ).toBe("spoken words");
+    expect(
+      resolveFeishuMediaFailurePresentation(
+        JSON.stringify({ file_key: "file_audio", speech_to_text: " spoken words " }),
+        "audio",
+      ),
+    ).toEqual({ mediaPlaceholder: undefined, unavailableBody: undefined });
   });
 
   it("keeps media filenames as placeholder context without raw payload fields", () => {
     expect(
       parseMessageContent(JSON.stringify({ file_key: "file_doc", file_name: "q1.pdf" }), "file"),
     ).toBe("<media:document> (q1.pdf)");
+    expect(
+      resolveFeishuMediaFailurePresentation(
+        JSON.stringify({ file_key: "file_doc", file_name: "q1.pdf" }),
+        "file",
+      ),
+    ).toEqual({ mediaPlaceholder: "<media:document>", unavailableBody: "q1.pdf" });
   });
 });
 

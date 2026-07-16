@@ -25,6 +25,8 @@ import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseGeminiAuth } from "./gemini-auth.js";
+import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -44,36 +46,11 @@ const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "gemini-embedding-2-preview": 8192,
 };
 
-function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
-  if (apiKey.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(apiKey) as { token?: string };
-      if (typeof parsed.token === "string" && parsed.token) {
-        return {
-          headers: {
-            Authorization: `Bearer ${parsed.token}`,
-            "Content-Type": "application/json",
-          },
-        };
-      }
-    } catch {
-      // Fall back to API-key auth below.
-    }
-  }
-
-  return {
-    headers: {
-      "x-goog-api-key": apiKey,
-      "Content-Type": "application/json",
-    },
-  };
-}
-
 type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
 
 // --- gemini-embedding-2-preview support ---
 
-export const GEMINI_EMBEDDING_2_MODELS = new Set([
+const GEMINI_EMBEDDING_2_MODELS = new Set([
   "gemini-embedding-2-preview",
   // Add the GA model name here once released.
 ]);
@@ -136,7 +113,7 @@ function readGeminiBatchEmbeddings(
 }
 
 /** Builds the text-only Gemini embedding request shape used across direct and batch APIs. */
-export function buildGeminiTextEmbeddingRequest(params: {
+function buildGeminiTextEmbeddingRequest(params: {
   text: string;
   taskType: GeminiTaskType;
   outputDimensionality?: number;
@@ -181,7 +158,7 @@ export function buildGeminiEmbeddingRequest(params: {
  * Returns true if the given model name is a gemini-embedding-2 variant that
  * supports `outputDimensionality` and extended task types.
  */
-export function isGeminiEmbedding2Model(model: string): boolean {
+function isGeminiEmbedding2Model(model: string): boolean {
   return GEMINI_EMBEDDING_2_MODELS.has(model);
 }
 
@@ -189,10 +166,7 @@ export function isGeminiEmbedding2Model(model: string): boolean {
  * Validate and return the `outputDimensionality` for gemini-embedding-2 models.
  * Returns `undefined` for older models (they don't support the param).
  */
-export function resolveGeminiOutputDimensionality(
-  model: string,
-  requested?: number,
-): number | undefined {
+function resolveGeminiOutputDimensionality(model: string, requested?: number): number | undefined {
   if (!isGeminiEmbedding2Model(model)) {
     return undefined;
   }
@@ -221,7 +195,7 @@ function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
   return trimmed;
 }
 
-export function normalizeGeminiModel(model: string): string {
+function normalizeGeminiModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return DEFAULT_GEMINI_EMBEDDING_MODEL;
@@ -415,6 +389,12 @@ async function resolveGeminiEmbeddingClient(
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     ...headerOverrides,
+    ...resolveGoogleApiClientHeaders({
+      baseUrl,
+      api: "google-generative-ai",
+      capability: "other",
+      transport: "http",
+    }),
   };
   const apiKeys = collectProviderApiKeysForExecution({
     provider: "google",

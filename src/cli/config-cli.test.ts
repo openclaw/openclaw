@@ -28,21 +28,17 @@ const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
 );
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-    writeConfigFile: (
-      cfg: OpenClawConfig,
-      options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
-    ) => mockWriteConfigFile(cfg, options),
-    replaceConfigFile: (params: {
-      nextConfig: OpenClawConfig;
-      writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
-    }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+  writeConfigFile: (
+    cfg: OpenClawConfig,
+    options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+  ) => mockWriteConfigFile(cfg, options),
+  replaceConfigFile: (params: {
+    nextConfig: OpenClawConfig;
+    writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
+  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
+}));
 
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
@@ -89,15 +85,11 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
   },
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  return {
-    ...actual,
-    loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
-    resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
-      mockLoadPluginMetadataSnapshot(params.config),
-  };
-});
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
+  resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
+    mockLoadPluginMetadataSnapshot(params.config),
+}));
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
@@ -433,6 +425,8 @@ async function runConfigCommand(args: string[]) {
 describe("config cli", () => {
   beforeAll(async () => {
     ({ registerConfigCli } = await import("./config-cli.js"));
+    const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
+    resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerConfigCli(sharedProgram);
@@ -1191,8 +1185,8 @@ describe("config cli", () => {
           issues: [
             {
               path: "update.channel",
-              message: 'Invalid input (allowed: "stable", "beta", "dev")',
-              allowedValues: ["stable", "beta", "dev"],
+              message: 'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
+              allowedValues: ["stable", "extended-stable", "beta", "dev"],
               allowedValuesHiddenCount: 0,
             },
           ],
@@ -1205,8 +1199,8 @@ describe("config cli", () => {
       expect(payload.issues).toEqual([
         {
           path: "update.channel",
-          message: 'Invalid input (allowed: "stable", "beta", "dev")',
-          allowedValues: ["stable", "beta", "dev"],
+          message: 'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
+          allowedValues: ["stable", "extended-stable", "beta", "dev"],
         },
       ]);
       expect(mockError).not.toHaveBeenCalled();
@@ -3368,6 +3362,62 @@ describe("config cli", () => {
       ]);
     });
 
+    it("explains when unset targets a runtime-only default shown by config get", async () => {
+      const resolved = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const runtimeMerged = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "gpt" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const aliasPath = 'agents.defaults.models["openai/gpt-5.4"].alias';
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand(["config", "get", aliasPath]);
+
+      expect(mockLog).toHaveBeenCalledWith("gpt");
+      mockLog.mockClear();
+      setSnapshot(resolved, runtimeMerged);
+
+      await expect(runConfigCommand(["config", "unset", aliasPath])).rejects.toThrow("__exit__:1");
+
+      expectErrorIncludes(`Config path not found in authored config: ${aliasPath}.`);
+      expectErrorIncludes("It only exists after runtime defaults are applied");
+      expectErrorIncludes("openclaw config set <path> <value>");
+      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+        "Run openclaw config get <path>",
+      );
+
+      setSnapshot(resolved, runtimeMerged);
+      await expect(
+        runConfigCommand(["config", "unset", aliasPath, "--dry-run", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: false,
+        errors: [
+          {
+            kind: "missing-path",
+            message: expect.stringContaining(
+              `Config path not found in authored config: ${aliasPath}.`,
+            ),
+          },
+        ],
+      });
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("validates existing refs when unset dry-run removes all secret providers", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
@@ -3770,3 +3820,4 @@ describe("config cli", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,7 @@
 /** Tests runtime SecretRef resolution across core config and auth-profile surfaces. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { redactSensitiveText } from "../logging/redact.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
@@ -11,6 +13,10 @@ const CODEX_APP_SERVER_TOKEN_REF = {
   provider: "default",
   id: "CODEX_APP_SERVER_TOKEN",
 } as const;
+
+afterEach(() => {
+  resetSecretRedactionRegistryForTest();
+});
 
 function expectWarning(
   snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
@@ -25,6 +31,22 @@ function expectWarning(
 }
 
 describe("secrets runtime snapshot", () => {
+  it("registers every resolved value for exact redaction", async () => {
+    const secret = "runtime-registration-secret";
+    await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        talk: {
+          apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+        },
+      }),
+      env: { TALK_API_KEY: secret },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(redactSensitiveText(`resolved ${secret}`, { mode: "off" })).toBe("resolved runtim…cret");
+  });
+
   it("resolves sandbox ssh secret refs for active ssh backends", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

@@ -6,16 +6,16 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  writePackageDistInventory,
-} from "../src/infra/package-dist-inventory.ts";
-import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
   parseReleaseVersion as parseReleaseVersionBase,
 } from "./lib/npm-publish-plan.mjs";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "./lib/package-dist-inventory.ts";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
@@ -32,7 +32,7 @@ type PackageJson = {
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
 
-export type ParsedReleaseVersion = {
+type ParsedReleaseVersion = {
   version: string;
   baseVersion: string;
   channel: "stable" | "alpha" | "beta";
@@ -44,7 +44,7 @@ export type ParsedReleaseVersion = {
   correctionNumber?: number;
 };
 
-export type ParsedReleaseTag = {
+type ParsedReleaseTag = {
   version: string;
   packageVersion: string;
   baseVersion: string;
@@ -52,13 +52,13 @@ export type ParsedReleaseTag = {
   correctionNumber?: number;
 };
 
-export type NpmPublishPlan = {
+type NpmPublishPlan = {
   channel: "stable" | "alpha" | "beta";
   publishTag: "latest" | "alpha" | "beta";
   mirrorDistTags: ("latest" | "alpha" | "beta")[];
 };
 
-export type NpmDistTagMirrorAuth = {
+type NpmDistTagMirrorAuth = {
   hasAuth: boolean;
   source: "node-auth-token" | "npm-token" | "none";
 };
@@ -163,7 +163,7 @@ function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
   if (parent === "node_modules") {
     return true;
   }
-  return parent?.startsWith("@") && segments[index - 2] === "node_modules";
+  return parent !== undefined && parent.startsWith("@") && segments[index - 2] === "node_modules";
 }
 
 function pathContainsPackedTestCargo(packedPath: string): boolean {
@@ -328,7 +328,7 @@ export function runNpmReleaseCheckCommand(
   },
 ): string {
   const env = options.env ?? process.env;
-  const output = execFileSync(invocation.command, invocation.args, {
+  const execOptions = {
     cwd: options.cwd,
     encoding: options.encoding,
     env,
@@ -337,7 +337,11 @@ export function runNpmReleaseCheckCommand(
     stdio: options.stdio,
     timeout: options.timeoutMs ?? resolveNpmReleaseCheckCommandTimeoutMs(env),
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }) as Buffer | string | null;
+  } as Parameters<typeof execFileSync>[2] & { windowsVerbatimArguments?: boolean };
+  const output = execFileSync(invocation.command, invocation.args, execOptions) as
+    | Buffer
+    | string
+    | null;
   if (output == null) {
     return "";
   }
