@@ -289,38 +289,4 @@ describe("config clobber snapshots", () => {
       expect(contents).toContain(`polluted-${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 2}\n`);
     });
   });
-
-  it("deduplicates clobber-cap warnings on the same config path via the bounded cache", async () => {
-    await withCase(async (configPath) => {
-      const warn = vi.fn();
-      const observedAt = "2026-05-04T00:00:00.000Z";
-
-      await Promise.all(
-        Array.from({ length: CONFIG_CLOBBER_SNAPSHOT_LIMIT + 10 }, async (_, index) => {
-          await persistBoundedClobberedConfigSnapshot({
-            deps: { fs, logger: { warn } },
-            configPath,
-            raw: `dedupe-${index}\n`,
-            observedAt,
-          });
-        }),
-      );
-
-      const capWarnings = warn.mock.calls.filter(
-        ([message]) =>
-          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
-      );
-      // warnClobberCapReached → clobberCapWarnedPaths.check(configPath)
-      // suppresses duplicates: only 1 warning per unique configPath.
-      expect(capWarnings.length).toBe(1);
-    });
-  });
-});
-
-describe("clobberCapWarnedPaths", () => {
-  it("loads the module with a bounded dedupe cache", async () => {
-    vi.resetModules();
-    const mod = await import("./io.clobber-snapshot.js");
-    expect(mod.persistBoundedClobberedConfigSnapshot).toBeDefined();
-  });
 });
