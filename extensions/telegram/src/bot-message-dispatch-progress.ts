@@ -41,8 +41,6 @@ function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgr
 }
 
 function buildTelegramTextToolProgressLine(text: string): ChannelProgressDraftLine {
-  // Keep tool-progress strings distinguishable from reasoning strings when a
-  // preamble headline makes the renderer select work-lane rows explicitly.
   return {
     kind: "item",
     label: "",
@@ -81,7 +79,7 @@ export function createTelegramProgressController(params: {
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
-    renderLinesWithPreamble: true,
+    updateOnLineChange: true,
     update: async (streamText, options) => {
       draftEverRendered = true;
       await params.draft.prepareAnswerLaneForToolProgress();

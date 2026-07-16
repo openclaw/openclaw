@@ -396,7 +396,7 @@ describe("createChannelProgressDraftCompositor", () => {
       mode: "progress",
       active: true,
       seed: "test",
-      renderLinesWithPreamble: true,
+      updateOnLineChange: true,
       update,
     });
 

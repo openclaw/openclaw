@@ -62,6 +62,36 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     );
   });
 
+  it("keeps memory-search tool rows beneath a preamble", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking memory",
+      });
+      await replyOptions?.onToolStart?.({
+        name: "memory_search",
+        phase: "start",
+        toolCallId: "memory-search-1",
+        args: { query: "release status" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    const preview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(preview?.text).toContain("Checking memory");
+    expect(preview?.text).toContain("Memory Search");
+  });
+
   it("keeps the progress draft label when tool progress lines are hidden", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

@@ -51,7 +51,8 @@ export function createChannelProgressDraftCompositor(params: {
   update: (text: string, options?: ChannelProgressDraftUpdateOptions) => Promise<void> | void;
   deleteCurrent?: () => Promise<void> | void;
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
-  renderLinesWithPreamble?: boolean;
+  /** Publish when structured lines change even if the rendered text does not. */
+  updateOnLineChange?: boolean;
   formatLine?: (line: string) => string;
   isEmptyLine?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
@@ -143,11 +144,8 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     const text = formatDraftText();
-    const headlineLinesChanged =
-      params.renderLinesWithPreamble === true &&
-      Boolean(preambleText) &&
-      lines !== lastRenderedLines;
-    if (!text || (text === lastRenderedText && !headlineLinesChanged)) {
+    const linesChanged = params.updateOnLineChange === true && lines !== lastRenderedLines;
+    if (!text || (text === lastRenderedText && !linesChanged)) {
       return false;
     }
     lastRenderedText = text;

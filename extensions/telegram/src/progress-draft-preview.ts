@@ -151,12 +151,7 @@ function isStatusHeadlineWorkLine(
   if (typeof line === "string") {
     return false;
   }
-  return (
-    line.icon !== "🧠" &&
-    line.label !== "Commentary" &&
-    !line.id?.startsWith("reasoning:") &&
-    !line.id?.startsWith("commentary:")
-  );
+  return !line.id?.startsWith("reasoning:") && !line.id?.startsWith("commentary:");
 }
 
 export function renderTelegramProgressDraftPreview(
