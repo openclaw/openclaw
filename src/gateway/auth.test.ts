@@ -760,9 +760,7 @@ describe("gateway auth", () => {
         authConfig: {
           mode,
           requireTailscaleSharedSecret: true,
-          ...(mode === "trusted-proxy"
-            ? { trustedProxy: { userHeader: "x-forwarded-user" } }
-            : {}),
+          ...(mode === "trusted-proxy" ? { trustedProxy: { userHeader: "x-forwarded-user" } } : {}),
         },
       });
 

@@ -15,10 +15,7 @@ import {
   testState,
   testTailscaleWhois,
 } from "./server.auth.test-helpers.js";
-import {
-  loadGatewayConfig,
-  waitForGatewayWsClose,
-} from "./shared-auth.test-helpers.js";
+import { loadGatewayConfig, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";
 
 export function registerAuthModesSuite(): void {
   describe("password auth", () => {
