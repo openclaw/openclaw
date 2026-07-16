@@ -1614,6 +1614,7 @@ export const ar: TranslationMap = {
     connectionTimedOut: "تعذّر الاتصال بالجلسة خلال 30 ثانية.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "وكيل",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "غير متصل",

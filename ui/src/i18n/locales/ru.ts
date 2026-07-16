@@ -1635,6 +1635,7 @@ export const ru: TranslationMap = {
     connectionTimedOut: "Не удалось подключиться к сеансу в течение 30 секунд.",
     tabLabel: "Shell {n}",
     tabHint: "{agent} · {cwd}",
+    agentOwnedBadge: "агент",
     exited: "exited",
     exitedCode: "exited ({code})",
     detached: "отсоединен",

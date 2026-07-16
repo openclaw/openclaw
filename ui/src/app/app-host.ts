@@ -617,7 +617,15 @@ class OpenClawShell extends OpenClawLightDomElement {
       window.dispatchEvent(
         new CustomEvent(
           command.panel === "terminal" ? TERMINAL_PANEL_TOGGLE_EVENT : BROWSER_PANEL_TOGGLE_EVENT,
-          { detail: { open: command.open, ...(command.dock ? { dock: command.dock } : {}) } },
+          {
+            detail: {
+              open: command.open,
+              ...(command.dock ? { dock: command.dock } : {}),
+              ...(command.panel === "terminal" && command.terminalSessionId
+                ? { terminalSessionId: command.terminalSessionId }
+                : {}),
+            },
+          },
         ),
       );
       return;

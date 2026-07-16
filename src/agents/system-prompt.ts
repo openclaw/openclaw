@@ -781,6 +781,8 @@ export function buildAgentSystemPrompt(params: {
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control browser",
     screen: "Drive operator web UI",
+    terminal:
+      "Own visible shell. Use for long/interactive jobs user should watch. exec for quiet work",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
     cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
@@ -819,6 +821,7 @@ export function buildAgentSystemPrompt(params: {
     "web_fetch",
     "browser",
     "screen",
+    "terminal",
     "canvas",
     "nodes",
     "cron",

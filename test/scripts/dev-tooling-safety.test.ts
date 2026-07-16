@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -1199,5 +1200,53 @@ describe("script-specific dev tooling hardening", () => {
         maxBytes,
       ),
     ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+  });
+
+  it("aborts a stalled Anthropic proxy upstream at the configured deadline", async () => {
+    const nativeFetch = globalThis.fetch;
+    const upstream = http.createServer(() => {});
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => {
+        upstream.off("error", reject);
+        resolve();
+      });
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("upstream did not bind to a TCP port");
+    }
+    const upstreamUrl = `http://127.0.0.1:${upstreamAddress.port}/v1/messages`;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((_input, init) => nativeFetch(upstreamUrl, init));
+    let proxy: Awaited<ReturnType<typeof promptProbeTesting.startAnthropicProxy>> | undefined;
+
+    try {
+      proxy = await promptProbeTesting.startAnthropicProxy({
+        port: 0,
+        upstreamBaseUrl: "https://api.anthropic.com",
+        timeoutMs: 100,
+      });
+      const startedAt = Date.now();
+      const response = await nativeFetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+        method: "POST",
+        body: "{}",
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.text()).resolves.toMatch(/TimeoutError/u);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.anthropic.com/v1/messages",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+      await proxy?.stop();
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

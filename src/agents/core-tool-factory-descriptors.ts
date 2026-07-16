@@ -41,6 +41,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "spawn_task", family: "openclaw" },
   { name: "create_goal", family: "openclaw" },
   { name: "subagents", family: "openclaw" },
+  { name: "terminal", family: "openclaw" },
   { name: "transcripts", family: "openclaw" },
   { name: "tts", family: "openclaw" },
   { name: "update_goal", family: "openclaw" },

@@ -2645,17 +2645,20 @@ public struct UiPanelCommand: Codable, Sendable {
     public let panel: AnyCodable
     public let _open: Bool
     public let dock: AnyCodable?
+    public let terminalsessionid: String?
 
     public init(
         kind: String,
         panel: AnyCodable,
         _open: Bool,
-        dock: AnyCodable? = nil)
+        dock: AnyCodable? = nil,
+        terminalsessionid: String? = nil)
     {
         self.kind = kind
         self.panel = panel
         self._open = _open
         self.dock = dock
+        self.terminalsessionid = terminalsessionid
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2663,6 +2666,7 @@ public struct UiPanelCommand: Codable, Sendable {
         case panel
         case _open = "open"
         case dock
+        case terminalsessionid = "terminalSessionId"
     }
 }
 
@@ -11283,6 +11287,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
     public let cwd: String
     public let confined: Bool
     public let attached: Bool
+    public let owner: AnyCodable?
     public let createdatms: Int
 
     public init(
@@ -11292,6 +11297,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         cwd: String,
         confined: Bool,
         attached: Bool,
+        owner: AnyCodable? = nil,
         createdatms: Int)
     {
         self.sessionid = sessionid
@@ -11300,6 +11306,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         self.cwd = cwd
         self.confined = confined
         self.attached = attached
+        self.owner = owner
         self.createdatms = createdatms
     }
 
@@ -11310,6 +11317,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         case cwd
         case confined
         case attached
+        case owner
         case createdatms = "createdAtMs"
     }
 }

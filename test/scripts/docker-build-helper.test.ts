@@ -51,6 +51,8 @@ const OPENAI_CHAT_TOOLS_SCENARIO_PATH = "scripts/e2e/lib/openai-chat-tools/scena
 const CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH = "scripts/e2e/codex-npm-plugin-live-docker.sh";
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_PATH =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
+const CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH =
+  "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs";
 const LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH = "scripts/e2e/live-plugin-tool-docker.sh";
 const NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH = "scripts/e2e/npm-onboard-channel-agent-docker.sh";
 const SKILL_INSTALL_DOCKER_E2E_PATH = "scripts/e2e/skill-install-docker.sh";
@@ -2735,6 +2737,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
   it("bounds Codex npm plugin live assertion file and transcript reads", () => {
     const assertions = readFileSync(CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_PATH, "utf8");
+    const followthrough = readFileSync(CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH, "utf8");
     const runner = readFileSync(CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH, "utf8");
 
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES");
@@ -2742,6 +2745,11 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES");
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES");
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES");
+    expect(assertions).toContain(
+      "COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS transcript_bytes",
+    );
+    expect(assertions).toContain('db.exec("BEGIN")');
+    expect(assertions).toContain('db.exec("ROLLBACK")');
     expect(assertions).toContain("const AGENT_TURN_TIMEOUT_SECONDS = readPositiveIntEnv(");
     expect(assertions).toContain('"OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS"');
     expect(assertions).toContain("requestTimeoutMs: AGENT_TURN_TIMEOUT_SECONDS * 1000");
@@ -2762,6 +2770,19 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       'readTextFileTail(\n        "/tmp/openclaw-codex-agent-after-uninstall.err",',
     );
     expect(runner).toContain('assert-agent-error "$post_uninstall_status"');
+    expect(runner).toContain("assert-followthrough");
+    expect(runner).toContain("followthrough-turn.mjs");
+    expect(followthrough).toContain('"dist",\n  "plugin-sdk",\n  "agent-runtime.js"');
+    expect(followthrough).toContain("agentCommandFromIngress");
+    expect(followthrough).toContain('sourceReplyDeliveryMode: "message_tool_only"');
+    expect(followthrough).toContain('thinking: "medium"');
+    expect(runner).toContain("without passing final");
+    expect(runner).toContain("omitted, not false");
+    expect(runner).not.toContain("final=false");
+    expect(runner).toContain("final=true");
+    expect(assertions).toContain('"assert-followthrough": assertFollowthrough');
+    expect(assertions).toContain("expected exact progress and completion replies");
+    expect(assertions).toContain("unexpected Codex follow-through artifact");
     expect(runner).not.toContain("tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err");
     expect(runner).not.toContain("cat /tmp/openclaw-codex-agent-after-uninstall.err");
     const earlyAgentTimeoutEnvIndex = runner.indexOf(
@@ -2797,6 +2818,59 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
     expect(runner).toContain('--timeout "$AGENT_TURN_TIMEOUT_SECONDS"');
     expect(runner).not.toContain("--timeout 420");
+  });
+
+  it("writes the packaged Codex follow-through result independently of stdout logs", () => {
+    const workDir = tempDirs.make("openclaw-codex-followthrough-");
+    const packageRoot = join(workDir, "package");
+    const runtimeDir = join(packageRoot, "dist", "plugin-sdk");
+    const outputPath = join(workDir, "result.json");
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), '{"type":"module"}\n');
+    writeFileSync(
+      join(runtimeDir, "agent-runtime.js"),
+      [
+        "export async function agentCommandFromIngress(opts, runtime) {",
+        '  runtime.log("unexpected runtime output");',
+        '  console.log("unexpected subsystem output");',
+        "  return { captured: opts };",
+        "}",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH,
+        packageRoot,
+        "followthrough-session",
+        "openai/gpt-5.4",
+        "90",
+        outputPath,
+        "follow through",
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("unexpected subsystem output");
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      captured: expect.objectContaining({
+        sessionId: "followthrough-session",
+        model: "openai/gpt-5.4",
+        message: "follow through",
+        thinking: "medium",
+        timeout: "90",
+        json: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        senderIsOwner: true,
+        allowModelOverride: true,
+        cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+        oneShotCliRun: true,
+      }),
+    });
   });
 
   it.each([
