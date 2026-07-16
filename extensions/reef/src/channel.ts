@@ -19,6 +19,7 @@ import {
 } from "./config-schema.js";
 import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
+import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
@@ -197,6 +198,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         },
       });
       const onIngress = async (message: ReefIngressMessage) => {
+        const dispatchContent = resolveReefInboundDispatchContent(message);
         const budget = autonomyBudget(message.autonomy);
         const loop = recordChannelBotPairLoopAndCheckSuppression({
           scopeId: "reef:default",
@@ -223,15 +225,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           senderAddress: `reef:${message.peer}`,
           recipientAddress: `reef:${ctx.account.config.handle}`,
           conversationLabel: `@${message.peer}'s agent`,
-          rawBody: message.text,
-          bodyForAgent: `${message.provenance}\n\n<reef-message>${message.text}</reef-message>`,
+          ...dispatchContent,
           messageId: message.id,
           commandAuthorized: false,
-          extraContext: {
-            ReefProvenance: message.provenance,
-            ReefEnvelopeId: message.id,
-            SenderIsBot: true,
-          },
           deliver: async (payload) => {
             const text =
               payload && typeof payload === "object" && "text" in payload
