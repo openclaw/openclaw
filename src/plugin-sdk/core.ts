@@ -1,4 +1,3 @@
-// Core SDK contracts expose stable identifiers, manifests, and shared plugin metadata types.
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
@@ -37,7 +36,6 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -142,6 +140,8 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
+export type { OpenClawPluginGatewayEventScope } from "../plugins/gateway-events.js";
+export type { OpenClawPluginGatewayEvents } from "../plugins/gateway-events.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
@@ -170,7 +170,7 @@ export type {
   ChannelSetupInput,
 } from "../channels/plugins/types.public.js";
 export type { ChatType } from "../channels/chat-type.js";
-export type { NormalizedLocation } from "../channels/location.js";
+export type { NormalizedLocation, OutboundLocation } from "../channels/location.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 export type { PollInput } from "../polls.js";
@@ -868,3 +868,4 @@ export function createChannelPluginBase<TResolvedAccount>(
     setup: params.setup,
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

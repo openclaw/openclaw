@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -19,30 +20,29 @@ import {
 import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
-  DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
   createPluginRegistryIdNormalizer,
   getPluginRecord,
   inspectPluginRegistry,
   isPluginEnabled,
   listPluginContributionIds,
-  listPluginRecords,
   loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
   refreshPluginRegistry,
-  resolveChannelOwners,
-  resolveCliBackendOwners,
   resolveManifestContractOwnerPluginId,
   resolveManifestContractPluginIds,
   resolveManifestContractPluginIdsByCompatibilityRuntimePath,
   resolvePluginContributionOwners,
   resolveProviderOwners,
-  resolveSetupProviderOwners,
 } from "./plugin-registry.js";
-import { resolvePluginPath } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+
+function listPluginRecords(params: { index: InstalledPluginIndex }) {
+  return params.index.plugins;
+}
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -212,27 +212,6 @@ function expectSnapshotPluginIds(snapshot: InstalledPluginIndex, expectedPluginI
 }
 
 describe("plugin registry facade", () => {
-  it("resolves relative plugin API paths against the plugin root", () => {
-    const pluginRoot = path.join(makeTempDir(), "plugins", "demo");
-
-    expect(resolvePluginPath("data/cache.json", pluginRoot)).toBe(
-      path.join(pluginRoot, "data", "cache.json"),
-    );
-    expect(resolvePluginPath("./data/cache.json", pluginRoot)).toBe(
-      path.join(pluginRoot, "data", "cache.json"),
-    );
-  });
-
-  it("keeps absolute and home plugin API paths user-resolved", () => {
-    const pluginRoot = path.join(makeTempDir(), "plugins", "demo");
-    const absolute = path.resolve(pluginRoot, "..", "outside.txt");
-
-    expect(resolvePluginPath(absolute, pluginRoot)).toBe(resolvePluginPath(absolute, undefined));
-    expect(resolvePluginPath("~/openclaw/plugin.txt", pluginRoot)).toBe(
-      resolvePluginPath("~/openclaw/plugin.txt", undefined),
-    );
-  });
-
   it("resolves cold plugin records and contribution owners without loading runtime", () => {
     const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);
@@ -261,8 +240,20 @@ describe("plugin registry facade", () => {
         matches: "demo-alias",
       }),
     ).toEqual(["demo"]);
-    expect(resolveChannelOwners({ index, channelId: "demo-chat" })).toEqual(["demo"]);
-    expect(resolveCliBackendOwners({ index, cliBackendId: "demo-cli" })).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        index,
+        contribution: "channels",
+        matches: "demo-chat",
+      }),
+    ).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        index,
+        contribution: "cliBackends",
+        matches: "demo-cli",
+      }),
+    ).toEqual(["demo"]);
     expect(
       resolvePluginContributionOwners({
         index,
@@ -270,7 +261,13 @@ describe("plugin registry facade", () => {
         matches: (contributionId) => contributionId === "demo-cli",
       }),
     ).toEqual(["demo"]);
-    expect(resolveSetupProviderOwners({ index, setupProviderId: "demo-setup" })).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        index,
+        contribution: "setupProviders",
+        matches: "demo-setup",
+      }),
+    ).toEqual(["demo"]);
     expect(resolveManifestContractPluginIds({ index, contract: "webSearchProviders" })).toEqual([
       "demo",
     ]);
@@ -346,14 +343,27 @@ describe("plugin registry facade", () => {
 
     expect(listPluginContributionIds({ lookUpTable, contribution: "providers" })).toEqual(["demo"]);
     expect(resolveProviderOwners({ lookUpTable, providerId: "DEMO" })).toEqual(["demo"]);
-    expect(resolveChannelOwners({ lookUpTable, channelId: "demo-chat" })).toEqual(["demo"]);
-    expect(resolveCliBackendOwners({ lookUpTable, cliBackendId: "demo-cli" })).toEqual(["demo"]);
-    expect(resolveCliBackendOwners({ lookUpTable, cliBackendId: "demo-setup-cli" })).toEqual([
-      "demo",
-    ]);
-    expect(resolveSetupProviderOwners({ lookUpTable, setupProviderId: "demo-setup" })).toEqual([
-      "demo",
-    ]);
+    expect(
+      resolvePluginContributionOwners({
+        lookUpTable,
+        contribution: "channels",
+        matches: "demo-chat",
+      }),
+    ).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        lookUpTable,
+        contribution: "cliBackends",
+        matches: "demo-cli",
+      }),
+    ).toEqual(["demo"]);
+    expect(
+      resolvePluginContributionOwners({
+        lookUpTable,
+        contribution: "setupProviders",
+        matches: "demo-setup",
+      }),
+    ).toEqual(["demo"]);
     expect(
       resolvePluginContributionOwners({
         lookUpTable,
@@ -394,7 +404,10 @@ describe("plugin registry facade", () => {
     const index = createIndex("openai", {
       plugins: [
         {
-          ...createIndex("openai").plugins[0],
+          ...expectDefined(
+            createIndex("openai").plugins[0],
+            'createIndex("openai").plugins[0] test invariant',
+          ),
           manifestPath: path.join(rootDir, "openclaw.plugin.json"),
           source: path.join(rootDir, "index.ts"),
           rootDir,
@@ -470,7 +483,10 @@ describe("plugin registry facade", () => {
         policyHash: resolveInstalledPluginIndexPolicyHash(config),
         plugins: [
           {
-            ...createIndex("persisted").plugins[0],
+            ...expectDefined(
+              createIndex("persisted").plugins[0],
+              'createIndex("persisted").plugins[0] test invariant',
+            ),
             manifestPath: path.join(persistedRootDir, "openclaw.plugin.json"),
             manifestHash: hashFile(path.join(persistedRootDir, "openclaw.plugin.json")),
             source: path.join(persistedRootDir, "index.ts"),
@@ -642,7 +658,10 @@ describe("plugin registry facade", () => {
       createIndex("persisted", {
         plugins: [
           {
-            ...createIndex("persisted").plugins[0],
+            ...expectDefined(
+              createIndex("persisted").plugins[0],
+              'createIndex("persisted").plugins[0] test invariant',
+            ),
             manifestPath: path.join(staleBundledRootDir, "openclaw.plugin.json"),
             source: path.join(staleBundledRootDir, "index.ts"),
             rootDir: staleBundledRootDir,

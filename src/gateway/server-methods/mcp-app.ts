@@ -11,8 +11,10 @@ import {
   getMcpAppViewLease,
   type McpAppViewLease,
 } from "../../agents/mcp-ui-resource.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
+import { restoreMcpAppView } from "../mcp-app-reconstruction.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function requireString(params: Record<string, unknown>, key: string): string {
@@ -46,20 +48,37 @@ function isAppCallableListedTool(tool: Tool): boolean {
   return visibility === undefined || visibility.includes("app");
 }
 
-function requireActiveView(params: Record<string, unknown>): {
+function isAllowedByView(view: McpAppViewLease, toolName: string): boolean {
+  return view.allowedAppToolNames === undefined || view.allowedAppToolNames.has(toolName);
+}
+
+async function requireActiveView(
+  params: Record<string, unknown>,
+  cfg?: OpenClawConfig,
+): Promise<{
   runtime: SessionMcpRuntime;
   view: McpAppViewLease;
-} {
+}> {
   const sessionKey = requireString(params, "sessionKey");
   const viewId = requireString(params, "viewId");
-  const runtime = peekSessionMcpRuntime({ sessionKey });
-  if (!runtime || runtime.mcpAppsEnabled !== true) {
+  const existingRuntime = peekSessionMcpRuntime({ sessionKey });
+  if (
+    (existingRuntime && existingRuntime.mcpAppsEnabled !== true) ||
+    (cfg && cfg.mcp?.apps?.enabled !== true)
+  ) {
     throw new Error("MCP App runtime is unavailable");
   }
-  const view = getMcpAppViewLease(viewId, runtime);
-  if (!view) {
+  const existingView = existingRuntime ? getMcpAppViewLease(viewId, existingRuntime) : undefined;
+  const restored =
+    existingRuntime?.mcpAppsEnabled === true && existingView
+      ? { runtime: existingRuntime, view: existingView }
+      : cfg
+        ? await restoreMcpAppView({ cfg, sessionKey, viewId })
+        : undefined;
+  if (!restored) {
     throw new Error("MCP App view expired or is not authorized for this session");
   }
+  const { runtime, view } = restored;
   runtime.markUsed();
   return { runtime, view };
 }
@@ -68,8 +87,9 @@ async function withActiveView<T>(
   params: Record<string, unknown>,
   kind: "read" | "tool",
   operation: (active: { runtime: SessionMcpRuntime; view: McpAppViewLease }) => Promise<T> | T,
+  cfg?: OpenClawConfig,
 ): Promise<T> {
-  const active = requireActiveView(params);
+  const active = await requireActiveView(params, cfg);
   const release = acquireMcpAppViewRequest(active.view, kind);
   const releaseRuntimeLease = active.runtime.acquireLease?.();
   try {
@@ -87,14 +107,14 @@ async function withActiveView<T>(
 
 async function requireCallableTool(
   runtime: SessionMcpRuntime,
-  serverName: string,
+  view: McpAppViewLease,
   toolName: string,
 ): Promise<McpCatalogTool> {
   const catalog = await runtime.getCatalog();
   const tool = catalog.tools.find(
-    (entry) => entry.serverName === serverName && entry.toolName === toolName,
+    (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
   );
-  if (!tool || !isAppCallableTool(tool)) {
+  if (!tool || !isAppCallableTool(tool) || !isAllowedByView(view, toolName)) {
     throw new Error(`MCP tool "${toolName}" is not app-callable`);
   }
   return tool;
@@ -116,22 +136,27 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     await handle(
       respond,
       async () =>
-        await withActiveView(params, "read", ({ view }) => {
-          const sandboxPort = context.getMcpAppSandboxPort?.();
-          if (sandboxPort === undefined) {
-            throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
-          }
-          const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
-          return {
-            sandboxUrl: buildMcpAppSandboxPath(view.csp),
-            sandboxPort,
-            ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
-            html: view.html,
-            ...(view.csp ? { csp: view.csp } : {}),
-            toolInput: view.toolInput,
-            toolResult: view.toolResult,
-          };
-        }),
+        await withActiveView(
+          params,
+          "read",
+          ({ view }) => {
+            const sandboxPort = context.getMcpAppSandboxPort?.();
+            if (sandboxPort === undefined) {
+              throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
+            }
+            const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
+            return {
+              sandboxUrl: buildMcpAppSandboxPath(view.csp),
+              sandboxPort,
+              ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
+              html: view.html,
+              ...(view.csp ? { csp: view.csp } : {}),
+              toolInput: view.toolInput,
+              toolResult: view.toolResult,
+            };
+          },
+          context.getRuntimeConfig(),
+        ),
     );
   },
   "mcp.app.callTool": async ({ respond, params }) => {
@@ -140,7 +165,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
       async () =>
         await withActiveView(params, "tool", async ({ runtime, view }) => {
           const toolName = requireString(params, "toolName");
-          await requireCallableTool(runtime, view.serverName, toolName);
+          await requireCallableTool(runtime, view, toolName);
           return await runtime.callTool(view.serverName, toolName, params.arguments ?? {});
         }),
     );
@@ -159,7 +184,12 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           ]);
           const allowed = new Set(
             catalog.tools
-              .filter((tool) => tool.serverName === view.serverName && isAppCallableTool(tool))
+              .filter(
+                (tool) =>
+                  tool.serverName === view.serverName &&
+                  isAppCallableTool(tool) &&
+                  isAllowedByView(view, tool.toolName),
+              )
               .map((tool) => tool.toolName),
           );
           return {

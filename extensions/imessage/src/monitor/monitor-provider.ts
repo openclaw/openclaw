@@ -24,6 +24,7 @@ import {
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -164,7 +165,7 @@ function isIMessagePluginPayloadAttachment(attachment: {
   );
 }
 
-export function resolveIMessageInboundMediaInput(params: {
+function resolveIMessageInboundMediaInput(params: {
   messageText: string;
   attachments: IMessageAttachment[];
   effectiveAttachmentRoots: readonly string[];
@@ -207,7 +208,7 @@ export function resolveIMessageInboundMediaInput(params: {
   };
 }
 
-export function formatIMessageInboundMediaBody(params: {
+function formatIMessageInboundMediaBody(params: {
   messageText: string;
   optimisticPlaceholder: string;
   mediaAttachments: Array<{ contentType?: string }>;
@@ -359,11 +360,11 @@ const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
 ]);
 const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me"]);
 
-export function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
+function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
   return IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(reason);
 }
 
-export function describeIMessageInboundDropDiagnostic(params: {
+function describeIMessageInboundDropDiagnostic(params: {
   accountId: string;
   reason: string;
   message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
@@ -772,7 +773,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       };
 
       if (entries.length === 1) {
-        await dispatchUnit(entries, entries[0].message);
+        await dispatchUnit(
+          entries,
+          expectDefined(entries[0], "single iMessage dispatch entry").message,
+        );
         return;
       }
 
@@ -1872,3 +1876,4 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await activeClient.stop();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

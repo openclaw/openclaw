@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
+const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
 const waitForTransportOutboundMessage = vi.hoisted(() => vi.fn());
 const waitForChannelOutboundMessage = vi.hoisted(() => vi.fn());
@@ -24,6 +25,7 @@ const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionStore = vi.hoisted(() => vi.fn());
+const seedQaSessionTranscript = vi.hoisted(() => vi.fn());
 const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
@@ -66,6 +68,10 @@ vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
 }));
 
+vi.mock("./scenario-flow-runner.js", () => ({
+  runScenarioFlow,
+}));
+
 vi.mock("./suite-runtime-transport.js", () => ({
   waitForOutboundMessage,
   waitForTransportOutboundMessage,
@@ -95,6 +101,7 @@ vi.mock("./suite-runtime-agent.js", () => ({
   readEffectiveTools,
   readSkillStatus,
   readRawQaSessionStore,
+  seedQaSessionTranscript,
   readSessionTranscriptSummary,
   runQaCli,
   extractMediaPathFromText,
@@ -161,10 +168,37 @@ vi.mock("./gateway-log-sentinel.js", () => ({
   assertNoGatewayLogSentinels,
 }));
 
-import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
+import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 describe("qa suite runtime flow", () => {
+  it("records intentional scenario skips without running later steps", async () => {
+    const laterStep = vi.fn();
+    const result = await runQaSuiteScenarioSteps("requires group credentials", [
+      {
+        name: "Prepare WhatsApp",
+        run: async () => {
+          throw new QaSuiteScenarioSkipError("requires groupJid in the credential payload");
+        },
+      },
+      { name: "Run scenario", run: laterStep },
+    ]);
+
+    expect(result).toMatchObject({
+      status: "skip",
+      details: "requires groupJid in the credential payload",
+      steps: [
+        {
+          name: "Prepare WhatsApp",
+          status: "skip",
+          details: "requires groupJid in the credential payload",
+        },
+      ],
+    });
+    expect(laterStep).not.toHaveBeenCalled();
+  });
+
   it("wires the split suite runtime deps into the scenario runtime api", async () => {
     const env = {
       lab: { baseUrl: "http://127.0.0.1:4444" },
@@ -198,13 +232,14 @@ describe("qa suite runtime flow", () => {
         },
         waitForCondition: vi.fn(),
       },
+      outputDir: "/artifacts",
       repoRoot: "/repo",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
       cfg: {} as QaSuiteRuntimeEnv["cfg"],
-    } satisfies Parameters<typeof createQaSuiteScenarioFlowApi>[0]["env"];
+    } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
     const scenario = {
       id: "session-memory-ranking",
       title: "Session memory ranking",
@@ -225,7 +260,7 @@ describe("qa suite runtime flow", () => {
     const resolveQaLiveTurnTimeoutMs = vi.fn();
     createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
-    const result = createQaSuiteScenarioFlowApi({
+    const result = await runQaSuiteScenarioDefinition({
       env,
       scenario,
       runScenario,
@@ -252,6 +287,7 @@ describe("qa suite runtime flow", () => {
         markGatewayLogCursor: () => number;
         assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
         readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
+        seedQaSessionTranscript: typeof seedQaSessionTranscript;
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
@@ -277,6 +313,7 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.markGatewayLogCursor()).toBe(0);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
     expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
+    expect(call.deps.seedQaSessionTranscript).toBe(seedQaSessionTranscript);
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
     expect(call.deps.waitForAgentHistoryReply).toBe(waitForAgentHistoryReply);

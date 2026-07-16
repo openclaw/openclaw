@@ -31,7 +31,7 @@ import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 
 /** Gateway connection settings forwarded to outbound send helpers. */
-export type OutboundGatewayContext = {
+type OutboundGatewayContext = {
   url?: string;
   token?: string;
   timeoutMs?: number;
@@ -41,7 +41,7 @@ export type OutboundGatewayContext = {
 };
 
 /** Shared execution context for message-tool send and poll actions. */
-export type OutboundSendContext = {
+type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
   params: Record<string, unknown>;
@@ -138,6 +138,7 @@ async function sendCoreMessage(params: {
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
     conversationType: params.ctx.conversationType,
+    conversationReadOrigin: params.ctx.conversationReadOrigin,
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
@@ -240,6 +241,7 @@ async function preparePluginSendPayload(params: {
   to: string;
   payload: ReplyPayload;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number;
 }): Promise<PluginSendPayloadPreparation> {
   const plugin = resolveOutboundChannelPlugin({
@@ -258,6 +260,7 @@ async function preparePluginSendPayload(params: {
     to: params.to,
     payload: params.payload,
     replyToId: params.replyToId,
+    replyToIdSource: params.replyToIdSource,
     threadId: params.threadId,
   });
   // A null result is an ownership decision: the provider-native payload cannot
@@ -281,6 +284,7 @@ export async function executeSendAction(params: {
   forceDocument?: boolean;
   bestEffort?: boolean;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number;
 }): Promise<{
   handledBy: "plugin" | "core";
@@ -301,6 +305,7 @@ export async function executeSendAction(params: {
     to: params.to,
     payload: defaultPayload,
     replyToId: params.replyToId,
+    replyToIdSource: params.replyToIdSource,
     threadId: params.threadId,
   });
   const channelPlugin = resolveOutboundChannelPlugin({

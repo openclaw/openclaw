@@ -70,6 +70,22 @@ export const icons = {
       <line x1="12" x2="12" y1="17" y2="21" />
     </svg>
   `,
+  monitorSmartphone: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8" />
+      <path d="M10 19v-3.96 3.15" />
+      <path d="M7 19h5" />
+      <rect width="6" height="10" x="16" y="12" rx="2" />
+    </svg>
+  `,
+  server: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+      <rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+      <line x1="6" x2="6.01" y1="6" y2="6" />
+      <line x1="6" x2="6.01" y1="18" y2="18" />
+    </svg>
+  `,
   sun: html`
     <svg viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="4" />
@@ -123,13 +139,6 @@ export const icons = {
     <svg viewBox="0 0 24 24">
       <path
         d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
-      />
-    </svg>
-  `,
-  folderOpen: html`
-    <svg viewBox="0 0 24 24">
-      <path
-        d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"
       />
     </svg>
   `,
@@ -234,12 +243,8 @@ export const icons = {
       <path d="M10 18h4" />
     </svg>
   `,
-  arrowDown: html`
-    <svg viewBox="0 0 24 24">
-      <path d="M12 5v14" />
-      <path d="m19 12-7 7-7-7" />
-    </svg>
-  `,
+  arrowDown: html` <svg viewBox="0 0 24 24"><path d="M12 5v14m7-7-7 7-7-7" /></svg> `,
+  arrowUp: html` <svg viewBox="0 0 24 24"><path d="M12 19V5m-7 7 7-7 7 7" /></svg> `,
   arrowLeft: html`
     <svg viewBox="0 0 24 24">
       <path d="m12 19-7-7 7-7" />
@@ -387,6 +392,13 @@ export const icons = {
       <path d="M12 18h.01" />
     </svg>
   `,
+  circleQuestionMark: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <path d="M12 17h.01" />
+    </svg>
+  `,
   plug: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 22v-5" />
@@ -431,6 +443,11 @@ export const icons = {
   chevronRight: html`
     <svg viewBox="0 0 24 24">
       <path d="M9 18l6-6-6-6" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  chevronLeft: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
   externalLink: html`
@@ -481,28 +498,11 @@ export const icons = {
       <line x1="12" x2="12" y1="19" y2="22" />
     </svg>
   `,
-  micOff: html`
-    <svg viewBox="0 0 24 24">
-      <line x1="2" x2="22" y1="2" y2="22" />
-      <path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2" />
-      <path d="M5 10v2a7 7 0 0 0 12 5" />
-      <path d="M15 9.34V5a3 3 0 0 0-5.68-1.33" />
-      <path d="M9 9v3a3 3 0 0 0 5.12 2.12" />
-      <line x1="12" x2="12" y1="19" y2="22" />
-    </svg>
-  `,
   volume2: html`
     <svg viewBox="0 0 24 24">
       <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
       <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
       <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-    </svg>
-  `,
-  volumeOff: html`
-    <svg viewBox="0 0 24 24">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <line x1="22" x2="16" y1="9" y2="15" />
-      <line x1="16" x2="22" y1="9" y2="15" />
     </svg>
   `,
   bookmark: html`
@@ -542,6 +542,17 @@ export const icons = {
     <svg viewBox="0 0 24 24">
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" x2="20" y1="19" y2="19" />
+    </svg>
+  `,
+  claw: html`
+    <svg viewBox="0 0 24 24">
+      <path
+        d="M9.6 9.2 A5.6 5.6 0 1 0 9.6 20.4 A5.6 5.6 0 0 0 9.6 9.2 Z M10 20 C14 20.9 17.9 19.5 20.1 16.1 C20.6 15.4 20.05 14.5 19.25 14.65 C17.1 15 14.9 14.4 13.2 13 L10.6 16 Z"
+      />
+      <path
+        class="claw-icon__jaw"
+        d="M6 10.6 C6.6 4.4 12.4 0.8 17.6 2.8 C20.8 4 22.8 6.8 23 9.8 C23.07 10.9 21.9 11.4 21.1 10.7 C19.4 9.2 16.9 8.7 14.7 9.5 C13.4 10 12.3 10.9 11.6 12.1 L7.2 12.4 Z"
+      />
     </svg>
   `,
   spark: html`

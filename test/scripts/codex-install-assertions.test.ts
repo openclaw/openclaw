@@ -1,7 +1,7 @@
 // Codex Install Assertions tests cover Codex plugin install E2E helpers.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -97,6 +97,7 @@ function runCodexNpmPluginLiveAssertions(params: {
   marker: string;
   sessionId: string;
   modelRef: string;
+  sessionStoreContract?: "legacy-json" | "sqlite";
 }) {
   return spawnSync(
     process.execPath,
@@ -114,9 +115,23 @@ function runCodexNpmPluginLiveAssertions(params: {
         HOME: path.join(params.root, "home"),
         NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
         OPENCLAW_STATE_DIR: path.join(params.root, "state"),
+        OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: params.sessionStoreContract ?? "sqlite",
       },
     },
   );
+}
+
+function runCodexNpmPluginLiveConfigure(root: string) {
+  return spawnSync(process.execPath, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "configure"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: path.join(root, "home"),
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+      OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+    },
+  });
 }
 
 function writeCodexBindingStateSqlite(params: {
@@ -171,27 +186,80 @@ function writeCodexBindingStateSqlite(params: {
   }
 }
 
+function writeSessionStoreSqlite(params: {
+  stateDir: string;
+  sessionId: string;
+  sessionKey: string;
+}) {
+  const dbPath = path.join(params.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT NOT NULL PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        agent_harness_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_entries (
+        session_key TEXT NOT NULL PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE transcript_events (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, seq)
+      );
+    `);
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO sessions (
+         session_id, session_key, agent_harness_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
+    ).run(params.sessionId, params.sessionKey, "codex", now, now);
+    db.prepare(
+      `INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(
+      params.sessionKey,
+      params.sessionId,
+      JSON.stringify({
+        sessionId: params.sessionId,
+        agentHarnessId: "codex",
+      }),
+      now,
+    );
+    db.prepare(
+      `INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(params.sessionId, 0, '{"type":"session"}', now);
+  } finally {
+    db.close();
+  }
+}
+
 function createCodexNpmPluginLiveFixture(root: string, storedSessionId?: string) {
   const stateDir = path.join(root, "state");
-  const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const sessionKey = "agent:main:codex-npm-plugin-live";
   const sessionId = "codex-npm-plugin-live";
-  const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
   const marker = "OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK";
   const threadId = "thread-codex-npm-live";
-  const modelRef = "codex/gpt-5.4";
+  const modelRef = "openai/gpt-5.4";
   writeJson("/tmp/openclaw-codex-agent.json", {
     payloads: [{ text: marker }],
-    meta: { executionTrace: { winnerProvider: "codex" } },
+    meta: { executionTrace: { winnerProvider: "openai" } },
   });
-  writeJson(path.join(sessionsDir, "sessions.json"), {
-    [sessionKey]: {
-      sessionId,
-      sessionFile,
-      agentHarnessId: "codex",
-    },
+  writeSessionStoreSqlite({
+    stateDir,
+    sessionId,
+    sessionKey,
   });
-  writeFileSync(sessionFile, '{"type":"session"}\n', "utf8");
   writeJson(path.join(stateDir, "agents", "main", "codex-home", "sessions", "native.jsonl"), {
     threadId,
     marker,
@@ -204,6 +272,30 @@ function createCodexNpmPluginLiveFixture(root: string, storedSessionId?: string)
     threadId,
   });
   return { root, marker, sessionId, modelRef };
+}
+
+function createLegacyCodexNpmPluginLiveFixture(root: string) {
+  const fixture = createCodexNpmPluginLiveFixture(root);
+  const stateDir = path.join(root, "state");
+  rmSync(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"));
+  rmSync(path.join(stateDir, "state", "openclaw.sqlite"));
+  const sessionFile = path.join(stateDir, "agents", "main", "sessions", "session.jsonl");
+  writeJson(sessionFile, { type: "message" });
+  writeJson(`${sessionFile}.codex-app-server.json`, {
+    schemaVersion: 2,
+    threadId: "thread-codex-npm-live",
+    cwd: stateDir,
+    model: "gpt-5.4",
+    modelProvider: "codex",
+  });
+  writeJson(path.join(stateDir, "agents", "main", "sessions", "sessions.json"), {
+    "agent:main:codex-npm-plugin-live": {
+      sessionId: fixture.sessionId,
+      agentHarnessId: "codex",
+      sessionFile,
+    },
+  });
+  return { ...fixture, sessionStoreContract: "legacy-json" as const };
 }
 
 function createCodexInstallFixture(root: string) {
@@ -244,6 +336,32 @@ function createCodexInstallFixture(root: string) {
 }
 
 describe("Codex install helpers", () => {
+  it("configures the canonical OpenAI model for the Codex runtime by default", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-configure-");
+
+    const result = runCodexNpmPluginLiveConfigure(root);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const config = JSON.parse(readFileSync(path.join(root, "state", "openclaw.json"), "utf8")) as {
+      agents: {
+        defaults: {
+          model: { primary: string; fallbacks: string[] };
+          models: Record<string, { agentRuntime: { id: string } }>;
+        };
+      };
+    };
+
+    expect(config.agents.defaults.model).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: [],
+    });
+    expect(config.agents.defaults.models).toMatchObject({
+      "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+    });
+    expect(config.agents.defaults.models).not.toHaveProperty("codex/gpt-5.4");
+  });
+
   it("resolves package roots and package manifests inside managed npm installs", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-install-utils-");
     const packageRoot = path.join(
@@ -286,7 +404,7 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("accepts the SQLite-backed Codex binding in the npm live assertion", () => {
+  it("accepts SQLite-backed session and Codex binding state in the npm live assertion", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-live-");
     const fixture = createCodexNpmPluginLiveFixture(root);
 
@@ -294,6 +412,29 @@ describe("Codex install helpers", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  it("accepts the explicit frozen-target JSON session and sidecar binding contract", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-live-legacy-");
+    const fixture = createLegacyCodexNpmPluginLiveFixture(root);
+
+    const result = runCodexNpmPluginLiveAssertions(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("keeps current targets fail-closed when the SQLite session database is missing", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-live-no-sqlite-");
+    const fixture = createLegacyCodexNpmPluginLiveFixture(root);
+
+    const result = runCodexNpmPluginLiveAssertions({
+      ...fixture,
+      sessionStoreContract: "sqlite",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("missing agent session database");
   });
 
   it("rejects a Codex binding owned by a stale physical session generation", () => {

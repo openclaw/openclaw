@@ -16,6 +16,7 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "memory_get",
   "sessions_list",
   "sessions_history",
+  "sessions_search",
   "agents_list",
   "get_goal",
   "update_plan",
@@ -81,9 +82,4 @@ export function collectReplaySafeToolNames(
     }
   }
   return replaySafeNames;
-}
-
-/** Test/fixture helper for constructing metadata for audited core tool names. */
-export function isCoreToolNameReplaySafe(toolName: string): boolean {
-  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolName(toolName));
 }

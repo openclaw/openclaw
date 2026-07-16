@@ -5,16 +5,22 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
-import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
+import {
+  normalizeChatSendShortcut,
+  type ChatFollowUpMode,
+  type ChatSendShortcut,
+} from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
-  CATEGORY_LABELS,
   SLASH_COMMANDS,
   getHiddenCommandCount,
+  getSlashCommandCategoryLabel,
   getSlashCommandCompletions,
+  getSlashCommandDescription,
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
@@ -36,11 +42,6 @@ import {
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import {
-  getChatAttachmentPreviewUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
-} from "../attachment-payload-store.ts";
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
@@ -48,6 +49,13 @@ import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import {
+  handleChatAttachmentPaste,
+  isLargePastedTextAttachment,
+  renderAttachmentPreview,
+  renderChatAttachmentInputs,
+  renderChatAttachmentMenu,
+} from "./chat-attachments.ts";
 import {
   renderChatVoiceError,
   renderMicrophoneActivity,
@@ -65,14 +73,12 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "select",
   "textarea",
   "summary",
+  "wa-dropdown",
   "[contenteditable='true']",
   "[role='button']",
   "[role='listbox']",
   "[role='option']",
 ].join(",");
-const CHAT_ATTACHMENT_ACCEPT =
-  "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
-  ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
 type ChatComposerProps = {
   paneId: string;
@@ -94,7 +100,9 @@ type ChatComposerProps = {
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
+  followUpMode?: ChatFollowUpMode;
   attachments?: ChatAttachment[];
+  getAttachments?: () => ChatAttachment[];
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
@@ -442,7 +450,7 @@ function renderChatGoal(
           ${showActions && actions.onGoalEdit && goal.status !== "complete"
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-edit",
-                label: "Edit goal",
+                label: t("chat.goals.edit"),
                 icon: icons.penLine,
                 onClick: () => actions.onGoalEdit?.(goal),
               })
@@ -450,7 +458,7 @@ function renderChatGoal(
           ${showActions && goal.status === "active"
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-pause",
-                label: "Pause goal",
+                label: t("chat.goals.pause"),
                 icon: icons.pause,
                 onClick: () => actions.onGoalCommand?.("/goal pause"),
               })
@@ -458,7 +466,7 @@ function renderChatGoal(
           ${showActions && canResume
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-resume",
-                label: "Resume goal",
+                label: t("chat.goals.resume"),
                 icon: icons.play,
                 onClick: () => actions.onGoalCommand?.("/goal resume"),
               })
@@ -466,7 +474,7 @@ function renderChatGoal(
           ${showActions
             ? renderChatGoalActionButton({
                 className: "agent-chat__goal-clear",
-                label: "Clear goal",
+                label: t("chat.goals.clear"),
                 icon: icons.trash,
                 onClick: () => actions.onGoalCommand?.("/goal clear"),
               })
@@ -743,7 +751,7 @@ function getActiveSlashMenuOptionLabel(state: ChatComposerState): string {
     return "";
   }
   const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
-  return `${command} ${cmd.description}`;
+  return `${command} ${getSlashCommandDescription(cmd)}`;
 }
 
 function scrollActiveSlashMenuOptionIntoView(state: ChatComposerState, paneId: string): void {
@@ -801,10 +809,15 @@ function renderSlashMenu(
     state.slashMenuArgItems.length > 0
   ) {
     return html`
-      <div id=${listboxId} class="slash-menu" role="listbox" aria-label="Command arguments">
+      <div
+        id=${listboxId}
+        class="slash-menu"
+        role="listbox"
+        aria-label=${t("chat.commands.arguments")}
+      >
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">
-            /${state.slashMenuCommand.name} ${state.slashMenuCommand.description}
+            /${state.slashMenuCommand.name} ${getSlashCommandDescription(state.slashMenuCommand)}
           </div>
           ${state.slashMenuArgItems.map(
             (arg, i) => html`
@@ -833,7 +846,9 @@ function renderSlashMenu(
           )}
         </div>
         <div class="slash-menu-footer">
-          <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> run <kbd>Esc</kbd> close
+          <kbd>↑↓</kbd> ${t("chat.commands.navigate")} <kbd>Tab</kbd> ${t("chat.commands.fill")}
+          <kbd>Enter</kbd> ${t("chat.commands.run")} <kbd>Esc</kbd>
+          ${t("chat.commands.close")}
         </div>
       </div>
     `;
@@ -861,7 +876,7 @@ function renderSlashMenu(
   for (const [cat, entries] of grouped) {
     sections.push(html`
       <div class="slash-menu-group">
-        <div class="slash-menu-group__label">${CATEGORY_LABELS[cat]}</div>
+        <div class="slash-menu-group__label">${getSlashCommandCategoryLabel(cat)}</div>
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
@@ -882,11 +897,15 @@ function renderSlashMenu(
                 : nothing}
               <span class="slash-menu-name">/${cmd.name}</span>
               ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
-              <span class="slash-menu-desc">${cmd.description}</span>
+              <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
               ${cmd.argOptions?.length
-                ? html`<span class="slash-menu-badge">${cmd.argOptions.length} options</span>`
+                ? html`<span class="slash-menu-badge"
+                    >${t("chat.commands.optionCount", {
+                      count: String(cmd.argOptions.length),
+                    })}</span
+                  >`
                 : cmd.executeLocal && !cmd.args
-                  ? html` <span class="slash-menu-badge">instant</span> `
+                  ? html` <span class="slash-menu-badge">${t("chat.commands.instant")}</span> `
                   : nothing}
             </div>
           `,
@@ -898,7 +917,7 @@ function renderSlashMenu(
   const hiddenCount = state.slashMenuExpanded ? 0 : getHiddenCommandCount();
 
   return html`
-    <div id=${listboxId} class="slash-menu" role="listbox" aria-label="Slash commands">
+    <div id=${listboxId} class="slash-menu" role="listbox" aria-label=${t("chat.commands.menu")}>
       ${sections}
       ${hiddenCount > 0
         ? html`<button
@@ -910,20 +929,19 @@ function renderSlashMenu(
               updateSlashMenu(draft, requestUpdate, props);
             }}
           >
-            Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
+            ${hiddenCount === 1
+              ? t("chat.commands.showMoreOne")
+              : t("chat.commands.showMoreMany", { count: String(hiddenCount) })}
           </button>`
         : nothing}
       <div class="slash-menu-footer">
-        <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
+        <kbd>↑↓</kbd> ${t("chat.commands.navigate")} <kbd>Tab</kbd> ${t("chat.commands.fill")}
+        <kbd>Enter</kbd> ${t("chat.commands.select")} <kbd>Esc</kbd>
+        ${t("chat.commands.close")}
       </div>
     </div>
   `;
 }
-
-type ChatAttachmentControlsProps = {
-  attachments?: ChatAttachment[];
-  onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
-};
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
@@ -955,7 +973,7 @@ function sendStateLabel(item: ChatQueueItem): string | null {
   }
 }
 
-export function renderChatQueue(props: ChatQueueProps) {
+function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = props.queue.filter((item) => item.sendState !== "sending");
   if (!visibleQueue.length) {
     return nothing;
@@ -989,7 +1007,9 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
         ${failed ? icons.alertTriangle : icons.clock}
       </span>
       ${steered
-        ? html`<span class="chat-queue__badge chat-queue__badge--steered">Steered</span>`
+        ? html`<span class="chat-queue__badge chat-queue__badge--steered"
+            >${t("chat.queue.steered")}</span
+          >`
         : nothing}
       ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
       <span class="chat-queue__text" title=${text}>${text}</span>
@@ -1012,22 +1032,22 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
               <button
                 class="chat-queue__steer"
                 type="button"
-                aria-label="Steer queued message"
+                aria-label=${t("chat.queue.steerQueuedMessage")}
                 @click=${() => props.onQueueSteer?.(item.id)}
               >
                 ${icons.cornerDownRight}
-                <span>Steer</span>
+                <span>${t("chat.queue.steer")}</span>
               </button>
             `
           : nothing}
         ${busy
           ? nothing
           : html`
-              <openclaw-tooltip content="Remove queued message">
+              <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
                 <button
                   class="chat-queue__remove"
                   type="button"
-                  aria-label="Remove queued message"
+                  aria-label=${t("chat.queue.removeQueuedMessage")}
                   @click=${() => props.onQueueRemove(item.id)}
                 >
                   ${icons.x}
@@ -1036,238 +1056,6 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
             `}
       </span>
       ${item.sendError ? html`<span class="chat-queue__error">${item.sendError}</span>` : nothing}
-    </div>
-  `;
-}
-
-function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boolean {
-  if (file.type.startsWith("video/")) {
-    return false;
-  }
-  return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
-}
-
-function clickComposerInput(event: MouseEvent, selector: string) {
-  const target = event.currentTarget;
-  if (!(target instanceof HTMLElement)) {
-    return;
-  }
-  target.closest("details")?.removeAttribute("open");
-  target.closest(".agent-chat__composer-shell")?.querySelector<HTMLInputElement>(selector)?.click();
-}
-
-function clickComposerFileInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__file-input");
-}
-
-function clickComposerPhotoInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__photo-input");
-}
-
-function clickComposerCameraInput(event: MouseEvent) {
-  clickComposerInput(event, ".agent-chat__camera-input");
-}
-
-function generateAttachmentId(): string {
-  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
-  const attachment = {
-    id: generateAttachmentId(),
-    mimeType: file.type || "application/octet-stream",
-    fileName: file.name || undefined,
-    sizeBytes: file.size,
-  };
-  return registerChatAttachmentPayload({ attachment, dataUrl, file });
-}
-
-function dataImageClipboardFile(
-  dataUrl: string,
-  baseName = "pasted-image",
-): { file: File; dataUrl: string } | null {
-  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const mimeType = match[1]?.toLowerCase();
-  const base64Source = match[2];
-  if (!mimeType || !base64Source) {
-    return null;
-  }
-  if (!isSupportedChatAttachmentFile({ name: baseName, type: mimeType })) {
-    return null;
-  }
-  const base64 = base64Source.replace(/\s+/g, "");
-  try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
-    return {
-      file: new File([bytes], `${baseName}.${extension}`, { type: mimeType }),
-      dataUrl: `data:${mimeType};base64,${base64}`,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** Builds a registered chat attachment from a base64 image data URL (e.g. a browser-panel annotation). */
-export function chatAttachmentFromDataUrl(
-  dataUrl: string,
-  fileName: string,
-): ChatAttachment | null {
-  const baseName = fileName.replace(/\.[a-z0-9]+$/i, "") || "image";
-  const parsed = dataImageClipboardFile(dataUrl, baseName);
-  return parsed ? chatAttachmentFromFile(parsed.file, parsed.dataUrl) : null;
-}
-
-function isImageAttachment(att: ChatAttachment): boolean {
-  return att.mimeType.startsWith("image/");
-}
-
-function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
-  const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
-    return;
-  }
-  const imageItems: DataTransferItem[] = [];
-  for (const item of Array.from(items)) {
-    if (item.type.startsWith("image/")) {
-      imageItems.push(item);
-    }
-  }
-  if (imageItems.length === 0) {
-    const text = e.clipboardData?.getData("text/plain");
-    const pasted = text ? dataImageClipboardFile(text) : null;
-    if (!pasted) {
-      return;
-    }
-    e.preventDefault();
-    props.onAttachmentsChange([
-      ...(props.attachments ?? []),
-      chatAttachmentFromFile(pasted.file, pasted.dataUrl),
-    ]);
-    return;
-  }
-  e.preventDefault();
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
-      continue;
-    }
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment = chatAttachmentFromFile(file, dataUrl);
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
-  }
-}
-
-function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
-  const input = e.target as HTMLInputElement;
-  if (!input.files || !props.onAttachmentsChange) {
-    return;
-  }
-  const current = props.attachments ?? [];
-  const additions: ChatAttachment[] = [];
-  let pending = 0;
-  for (const file of input.files) {
-    if (!isSupportedChatAttachmentFile(file)) {
-      continue;
-    }
-    pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push(chatAttachmentFromFile(file, reader.result as string));
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
-    reader.readAsDataURL(file);
-  }
-  input.value = "";
-}
-
-export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
-  e.preventDefault();
-  const files = e.dataTransfer?.files;
-  if (!files || !props.onAttachmentsChange) {
-    return;
-  }
-  const current = props.attachments ?? [];
-  const additions: ChatAttachment[] = [];
-  let pending = 0;
-  for (const file of files) {
-    if (!isSupportedChatAttachmentFile(file)) {
-      continue;
-    }
-    pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push(chatAttachmentFromFile(file, reader.result as string));
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
-    reader.readAsDataURL(file);
-  }
-}
-
-function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
-  const attachments = props.attachments ?? [];
-  if (attachments.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div class="chat-attachments-preview">
-      ${attachments.map(
-        (att) => html`
-          <div
-            class=${[
-              "chat-attachment-thumb",
-              isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          >
-            ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
-              ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
-              : html`
-                  <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
-                    <div class="chat-attachment-file">
-                      <span class="chat-attachment-file__icon">${icons.paperclip}</span>
-                      <span class="chat-attachment-file__name"
-                        >${att.fileName ?? "Attached file"}</span
-                      >
-                    </div>
-                  </openclaw-tooltip>
-                `}
-            <openclaw-tooltip content="Remove attachment">
-              <button
-                class="chat-attachment-remove"
-                type="button"
-                aria-label="Remove attachment"
-                @click=${() => {
-                  const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
-                  releaseChatAttachmentPayload(att.id);
-                  props.onAttachmentsChange?.(next);
-                }}
-              >
-                &times;
-              </button>
-            </openclaw-tooltip>
-          </div>
-        `,
-      )}
     </div>
   `;
 }
@@ -1284,7 +1072,7 @@ type ComposerRunStatus =
 // readers get the composer's persistent sr-only run-status region).
 // Interrupted keeps a visible toast: the transcript shows nothing when a run
 // is killed, so silence would read as "finished".
-export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
+function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
   if (status?.phase !== "interrupted") {
     return nothing;
   }
@@ -1292,17 +1080,18 @@ export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | 
   if (elapsed >= CHAT_RUN_STATUS_TOAST_DURATION_MS) {
     return nothing;
   }
+  const interrupted = t("chat.composer.runInterrupted");
   return html`
     <span
       class="agent-chat__run-status agent-chat__run-status--interrupted"
-      aria-label="Run status: Interrupted"
+      aria-label=${t("chat.composer.runStatus", { status: interrupted })}
     >
-      ${icons.stop}<span class="agent-chat__run-status-label">Interrupted</span>
+      ${icons.stop}<span class="agent-chat__run-status-label">${interrupted}</span>
     </span>
   `;
 }
 
-export function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
+function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -1334,7 +1123,7 @@ export function renderCompactionIndicator(status: CompactionStatus | null | unde
   return nothing;
 }
 
-export function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
+function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
   if (!status) {
     return nothing;
   }
@@ -1470,11 +1259,7 @@ function getThemeNoticeColors() {
   return cachedThemeNoticeColors;
 }
 
-export function resetContextNoticeThemeCacheForTest(): void {
-  cachedThemeNoticeColors = null;
-}
-
-export function getContextNoticeViewModel(
+function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ): {
@@ -1671,6 +1456,11 @@ function renderQuotaGroup(
         ${icons.externalLink}
       </a>
     </div>
+    ${group.accountEmail
+      ? html`<div class="context-usage__account" data-chat-usage-account="true">
+          ${group.accountEmail}
+        </div>`
+      : nothing}
     <div class="context-usage__limits">
       ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
       ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
@@ -1678,7 +1468,7 @@ function renderQuotaGroup(
   `;
 }
 
-export function renderContextNotice(
+function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
@@ -1857,7 +1647,7 @@ export function renderContextNotice(
                 ? "context-ring__action--busy"
                 : ""}"
               type="button"
-              aria-label="Compact recommended session context"
+              aria-label=${t("chat.composer.compactRecommendedContext")}
               ?disabled=${compactDisabled}
               @click=${(event: Event) => {
                 event.preventDefault();
@@ -1877,7 +1667,7 @@ export function renderContextNotice(
   `;
 }
 
-export type ChatRunControlsProps = {
+type ChatRunControlsProps = {
   canAbort: boolean;
   canSend: boolean;
   connected: boolean;
@@ -1885,6 +1675,7 @@ export type ChatRunControlsProps = {
   hasAttachments?: boolean;
   hasMessages: boolean;
   isBusy: boolean;
+  followUpMode?: ChatFollowUpMode;
   sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
@@ -1902,6 +1693,13 @@ export type ChatRunControlsProps = {
 
 function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
+  const steersActiveRun = props.followUpMode !== "queue";
+  const activeRunActionLabel = steersActiveRun
+    ? t("chat.queue.steer")
+    : t("chat.runControls.queue");
+  const activeRunActionDescription = steersActiveRun
+    ? t("chat.followUpModeSteer")
+    : t("chat.runControls.queueMessage");
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
@@ -1965,15 +1763,15 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
         ? html`
             ${hasComposedContent
               ? html`
-                  <openclaw-tooltip .content=${t("chat.runControls.queue")}>
+                  <openclaw-tooltip .content=${activeRunActionLabel}>
                     <button
                       class="chat-send-btn"
                       @click=${storeDraftAndSend}
                       ?disabled=${!props.canSend || props.sending}
-                      aria-label=${t("chat.runControls.queueMessage")}
+                      aria-label=${activeRunActionDescription}
                     >
-                      ${icons.send}
-                      <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
+                      ${icons.arrowUp}
+                      <span class="agent-chat__control-label">${activeRunActionLabel}</span>
                     </button>
                   </openclaw-tooltip>
                 `
@@ -2002,7 +1800,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                     ? t("chat.runControls.queueMessage")
                     : t("chat.runControls.sendMessage")}
                 >
-                  ${icons.send}
+                  ${icons.arrowUp}
                   <span class="agent-chat__control-label"
                     >${props.isBusy
                       ? t("chat.runControls.queue")
@@ -2029,46 +1827,6 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
   `;
 }
 
-export function renderChatRunControls(props: ChatRunControlsProps) {
-  const showPrimary = props.showPrimary ?? true;
-  const showSecondary = props.showSecondary ?? true;
-
-  return html`
-    <div class="agent-chat__toolbar-right">
-      ${showSecondary && !props.canAbort
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.newSession")}>
-              <button
-                class="btn btn--ghost"
-                @click=${props.onNewSession}
-                aria-label=${t("chat.runControls.newSession")}
-              >
-                ${icons.plus}
-                <span class="agent-chat__control-label">${t("chat.runControls.newSession")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${showSecondary
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.export")}>
-              <button
-                class="btn btn--ghost"
-                @click=${props.onExport}
-                aria-label=${t("chat.runControls.exportChat")}
-                ?disabled=${!props.hasMessages}
-              >
-                ${icons.download}
-                <span class="agent-chat__control-label">${t("chat.runControls.export")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${showPrimary ? renderChatPrimaryActions(props) : nothing}
-    </div>
-  `;
-}
-
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
   const canCompose = props.canSend;
@@ -2092,7 +1850,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   const actionDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : visibleDraft;
   let composerTextarea: HTMLTextAreaElement | null = null;
-  const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const hasVisualAttachments = (props.attachments ?? []).some(
+    (attachment) => !isLargePastedTextAttachment(attachment),
+  );
   const tokens = tokenEstimate(visibleDraft);
   const contextNotice = renderContextNotice(
     activeSession,
@@ -2109,12 +1869,12 @@ export function renderChatComposer(props: ChatComposerProps) {
   const assistantName = props.assistantName || "OpenClaw";
   const inProgressLabel =
     submittedProgress?.sendState === "waiting-model"
-      ? "Preparing model..."
+      ? t("chat.composer.preparingModel")
       : props.stream !== null
-        ? `${assistantName} is responding...`
+        ? t("chat.composer.responding", { name: assistantName })
         : props.sending || submittedProgress
-          ? "Sending message..."
-          : `${assistantName} is working...`;
+          ? t("chat.composer.sendingMessage")
+          : t("chat.composer.working", { name: assistantName });
   // Persistent sr-only live region: run phases are otherwise conveyed only
   // visually (thread spark, content arriving, interrupted toast).
   const runStatusAnnouncement =
@@ -2123,15 +1883,15 @@ export function renderChatComposer(props: ChatComposerProps) {
       : composerRunStatus.phase === "in-progress"
         ? inProgressLabel
         : composerRunStatus.phase === "done"
-          ? "Done"
-          : "Interrupted";
+          ? t("chat.composer.runDone")
+          : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
   const placeholder =
     !canCompose && props.disabledReason
       ? props.disabledReason
-      : hasAttachments
+      : hasVisualAttachments
         ? t("chat.composer.placeholderWithAttachments")
         : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
 
@@ -2373,6 +2133,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     hasAttachments: Boolean(props.attachments?.length),
     hasMessages: props.messages.length > 0,
     isBusy,
+    followUpMode: props.followUpMode,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
     voiceStatus: props.realtimeTalkStatus,
@@ -2423,8 +2184,8 @@ export function renderChatComposer(props: ChatComposerProps) {
                   type="button"
                   class="chat-reply-preview__dismiss"
                   @click=${() => props.onClearReply?.()}
-                  aria-label="Cancel reply"
-                  title="Cancel reply"
+                  aria-label=${t("chat.composer.cancelReply")}
+                  title=${t("chat.composer.cancelReply")}
                 >
                   ${icons.x}
                 </button>
@@ -2446,43 +2207,7 @@ export function renderChatComposer(props: ChatComposerProps) {
           })}
         </div>
 
-        <input
-          type="file"
-          accept=${CHAT_ATTACHMENT_ACCEPT}
-          multiple
-          class="agent-chat__file-input"
-          ?disabled=${!canCompose}
-          @change=${(event: Event) => {
-            if (canCompose) {
-              handleChatAttachmentFileSelect(event, props);
-            }
-          }}
-        />
-        <input
-          type="file"
-          accept="image/*"
-          multiple
-          class="agent-chat__photo-input"
-          ?disabled=${!canCompose}
-          @change=${(event: Event) => {
-            if (canCompose) {
-              handleChatAttachmentFileSelect(event, props);
-            }
-          }}
-        />
-        <input
-          type="file"
-          accept="image/*"
-          capture="environment"
-          class="agent-chat__camera-input"
-          ?disabled=${!canCompose}
-          @change=${(event: Event) => {
-            if (canCompose) {
-              handleChatAttachmentFileSelect(event, props);
-            }
-          }}
-        />
-
+        ${renderChatAttachmentInputs({ ...props, disabled: !canCompose })}
         ${renderChatVoiceError({
           status: props.realtimeTalkStatus,
           detail: props.realtimeTalkDetail,
@@ -2490,59 +2215,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         })}
 
         <div class="agent-chat__composer-input-row">
-          <details class="agent-chat__attach-menu">
-            <summary
-              class="agent-chat__input-btn agent-chat__input-btn--attach"
-              aria-label=${t("chat.composer.addAttachment")}
-              aria-disabled=${canCompose ? "false" : "true"}
-              title=${t("chat.composer.addAttachment")}
-              @pointerdown=${(event: PointerEvent) => {
-                if (document.activeElement === composerTextarea) {
-                  event.preventDefault();
-                }
-              }}
-              @click=${(event: MouseEvent) => {
-                if (!canCompose) {
-                  event.preventDefault();
-                }
-              }}
-            >
-              ${icons.plus}
-            </summary>
-            <div
-              class="agent-chat__attach-menu-popover"
-              role="menu"
-              aria-label=${t("chat.composer.addAttachment")}
-            >
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerCameraInput}
-              >
-                ${icons.camera}
-                <span>${t("chat.composer.takePhoto")}</span>
-              </button>
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerPhotoInput}
-              >
-                ${icons.image}
-                <span>${t("chat.composer.attachPhoto")}</span>
-              </button>
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerFileInput}
-              >
-                ${icons.folder}
-                <span>${t("chat.composer.attachFileOption")}</span>
-              </button>
-            </div>
-          </details>
+          ${renderChatAttachmentMenu({ ...props, disabled: !canCompose })}
           <div class="agent-chat__composer-combobox">
             <textarea
               ${ref((element) => {
@@ -2633,3 +2306,4 @@ export function renderChatComposer(props: ChatComposerProps) {
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

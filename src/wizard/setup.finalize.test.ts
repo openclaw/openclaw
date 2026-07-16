@@ -1,14 +1,17 @@
 // Setup finalize tests cover writing final onboarding config and artifacts.
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import type {
-  DefaultModelAuthStatus,
-  DefaultModelCatalogFacts,
-} from "../commands/auth-choice.model-check.js";
+import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+
+type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
+type DefaultModelCatalogFacts = ReturnType<
+  typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
+>;
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
 const restoreTerminalState = vi.hoisted(() => vi.fn());
@@ -947,7 +950,10 @@ describe("finalizeSetupWizard", () => {
     );
     expect(launchTuiCli).toHaveBeenCalledOnce();
     expect(vi.mocked(prompter.outro).mock.invocationCallOrder[0]).toBeLessThan(
-      launchTuiCli.mock.invocationCallOrder[0],
+      expectDefined(
+        launchTuiCli.mock.invocationCallOrder[0],
+        "launchTuiCli.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 
@@ -1726,3 +1732,4 @@ describe("finalizeSetupWizard", () => {
     expect(note.mock.calls.filter((call) => call[1] === "Codex native search")).toEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

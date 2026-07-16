@@ -273,6 +273,9 @@ function resolveKeychainSecretRef(value: string): string | undefined {
     return cached;
   }
   const [, service, account] = match;
+  if (!service || !account) {
+    return undefined;
+  }
   try {
     const resolved =
       execFileSync(
@@ -575,11 +578,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.requestResponseCreate();
   }
 
-  acknowledgeMark(): void {
-    if (this.markQueue.length === 0) {
-      return;
+  acknowledgeMark(markName?: string): void {
+    const index = markName === undefined ? 0 : this.markQueue.indexOf(markName);
+    if (index >= 0) {
+      this.markQueue.splice(index, 1);
     }
-    this.markQueue.shift();
   }
 
   close(): void {
@@ -1582,3 +1585,4 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createOpenAIRealtimeBrowserSession,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS sessions (
   updated_at INTEGER NOT NULL,
   transcript_updated_at INTEGER DEFAULT NULL,
   transcript_observed_at INTEGER DEFAULT NULL,
+  session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1)),
+  acp_owned INTEGER NOT NULL DEFAULT 0 CHECK (acp_owned IN (0, 1)),
+  plugin_owner_id TEXT,
+  hook_external_content_source TEXT CHECK (hook_external_content_source IS NULL OR hook_external_content_source IN ('gmail', 'webhook')),
   started_at INTEGER,
   ended_at INTEGER,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
@@ -107,6 +111,7 @@ CREATE TABLE IF NOT EXISTS session_entries (
   session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
+  status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
@@ -115,6 +120,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_entries_updated_at
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session_updated
   ON session_entries(session_id, updated_at DESC, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_entries_status
+  ON session_entries(status, session_key)
+  WHERE status IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
@@ -233,6 +242,23 @@ CREATE TABLE IF NOT EXISTS memory_embedding_cache (
 CREATE TABLE IF NOT EXISTS memory_index_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_transcript_index_state (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  indexed_seq INTEGER NOT NULL,
+  leaf_event_id TEXT,
+  needs_rebuild INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
+  text,
+  session_id UNINDEXED,
+  message_id UNINDEXED,
+  role UNINDEXED,
+  timestamp UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 2'
 );
 
 INSERT OR IGNORE INTO memory_index_state (id, revision) VALUES (1, 0);

@@ -1,5 +1,5 @@
 // Control UI E2E tests cover the redesigned chat composer.
-import { chromium } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -15,18 +15,26 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 let server: ControlUiE2eServer;
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 
 describeControlUiE2e("Control UI chat composer redesign", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await browser?.close();
     await server?.close();
   });
 
   it("keeps model and settings in the bottom bar and switches the primary action with input state", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -115,11 +123,11 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const contextUsage = composer.locator(".context-ring");
       const textarea = composer.locator("textarea");
       const attach = composer.locator(
-        'summary.agent-chat__input-btn--attach[aria-label="Add attachment"]',
+        'button.agent-chat__input-btn--attach[aria-label="Add attachment"]',
       );
       const camera = composerShell.locator(".agent-chat__camera-btn");
       const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
-      const settings = composer.getByRole("button", { name: "Chat settings", exact: true });
+      const settings = composer.getByRole("button", { name: "View", exact: true });
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
 
@@ -147,6 +155,20 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))
         .toBe(true);
+      // The settings chip must sit centered between the footer divider and
+      // the card edge (the old asymmetric footer padding pinned it to the top).
+      await expect
+        .poll(() =>
+          settings.evaluate((element) => {
+            const footer = element.closest(".agent-chat__composer-footer")?.getBoundingClientRect();
+            const chip = element.getBoundingClientRect();
+            if (!footer || !chip) {
+              return null;
+            }
+            return Math.abs(chip.top - footer.top - (footer.bottom - chip.bottom));
+          }),
+        )
+        .toBeLessThanOrEqual(1.5);
       await expect.poll(() => composer.locator(".agent-chat__composer-header").count()).toBe(0);
       await expect
         .poll(() => model.locator(".chat-controls__inline-select-label").textContent())
@@ -298,13 +320,13 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       );
       await expect
         .poll(() =>
-          voice.evaluate(
-            (node) =>
-              Number.parseFloat(getComputedStyle(node).borderRadius) ===
-              Number.parseFloat(
-                getComputedStyle(node.closest(".agent-chat__input") as HTMLElement).borderRadius,
-              ),
-          ),
+          voice.evaluate((node) => {
+            const bounds = node.getBoundingClientRect();
+            return (
+              bounds.width === bounds.height &&
+              Number.parseFloat(getComputedStyle(node).borderRadius) >= bounds.width / 2
+            );
+          }),
         )
         .toBe(true);
 
@@ -329,21 +351,20 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       ).toBeLessThanOrEqual(1);
 
       await settings.click();
-      const settingsDialog = page.getByRole("dialog", { name: "Chat settings" });
-      await expect.poll(() => settingsDialog.isVisible()).toBe(true);
+      const viewMenu = page.getByRole("menu", { name: "View" });
+      const viewDropdown = composer.locator("wa-dropdown.chat-view-menu");
+      await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await expect
-        .poll(() => settingsDialog.locator(".chat-settings-popover__label").allTextContents())
-        .toEqual(["Chat", "Voice"]);
-      await expect
-        .poll(() => settingsDialog.locator('[aria-label="Voice options"]').isVisible())
-        .toBe(true);
-      const voiceSelect = settingsDialog.locator('[data-talk-select="voice"] select');
-      await voiceSelect.selectOption("cedar");
-      await expect
-        .poll(() => voiceSelect.evaluate((node) => (node as HTMLSelectElement).value))
-        .toBe("cedar");
+        .poll(() => viewDropdown.locator(".chat-view-menu__text").allTextContents())
+        .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
+      const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
+      await reasoning.click();
+      await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
+      await reasoning.click();
+      await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await settings.click();
-      await expect.poll(() => settingsDialog.isVisible()).toBe(false);
+      await expect.poll(() => viewMenu.isVisible()).toBe(false);
 
       await textarea.fill("Send this message");
       await expect
@@ -513,17 +534,15 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(mobilePickerBox.x + mobilePickerBox.width).toBeLessThanOrEqual(393);
       await model.click();
       await settings.click();
-      await expect.poll(() => settingsDialog.isVisible()).toBe(true);
+      await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await settings.click();
-      await expect.poll(() => settingsDialog.isVisible()).toBe(false);
+      await expect.poll(() => viewMenu.isVisible()).toBe(false);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -610,12 +629,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("refreshes agent-scoped models when the pane switches sessions", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -689,12 +706,15 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     try {
       await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
       await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("chat.metadata");
-          return requests.some(
-            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
-          );
-        })
+        .poll(
+          async () => {
+            const requests = await gateway.getRequests("chat.metadata");
+            return requests.some(
+              (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+            );
+          },
+          { timeout: 10_000 },
+        )
         .toBe(true);
 
       const composer = page.locator(".agent-chat__input");
@@ -722,12 +742,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .toBe(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("keeps startup models when the metadata refresh fails", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -749,12 +767,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("does not substitute default-agent models when scoped metadata fails", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -814,12 +830,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("does not request unscoped models when chat metadata is unavailable", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -878,7 +892,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 });

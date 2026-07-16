@@ -1,5 +1,7 @@
 // Chat attachment tests cover inbound image/file parsing, media-store cleanup,
 // warning surfaces, size limits, and outbound message block assembly.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveMediaBufferMock = vi.hoisted(() =>
@@ -27,7 +29,6 @@ import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type ChatAttachment,
-  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
@@ -227,7 +228,7 @@ describe("parseMessageWithAttachments", () => {
     const { parsed, logs } = await parseWithWarnings("read this", [pdfAttachment()]);
     expect(parsed.images).toHaveLength(0);
     expect(parsed.offloadedRefs).toHaveLength(1);
-    const ref = parsed.offloadedRefs[0];
+    const ref = expectDefined(parsed.offloadedRefs[0], "parsed.offloadedRefs[0] test invariant");
     expect(ref.mimeType).toBe("application/pdf");
     expect(ref.label).toBe("report.pdf");
     expect(ref.mediaRef).toMatch(/^media:\/\/inbound\//);
@@ -532,7 +533,7 @@ describe("parseMessageWithAttachments validation errors", () => {
 
 describe("resolveChatAttachmentMaxBytes", () => {
   const MB = 1024 * 1024;
-  const DEFAULT_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * MB;
+  const DEFAULT_BYTES = 20 * MB;
 
   const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
     ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;

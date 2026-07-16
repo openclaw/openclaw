@@ -2,7 +2,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./client.js";
-import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
@@ -16,10 +15,7 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import {
-  shouldRotateCodexAppServerBindingForRuntime,
-  startOrResumeThread as startOrResumeThreadImpl,
-} from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -51,6 +47,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };
@@ -82,7 +79,7 @@ function createNetworkProxyThreadLifecycleAppServerOptions() {
     ...createThreadLifecycleAppServerOptions(),
     networkProxy: {
       profileName: "openclaw-network",
-      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configFingerprint: "test-network-proxy",
       configPatch,
     },
   };
@@ -269,7 +266,7 @@ function createTwoCalendarAppPolicyContext() {
 setupRunAttemptTestHooks();
 
 describe("Codex app-server thread lifecycle bindings", () => {
-  it("resumes the same restricted Crestodian thread so turn two retains native memory", async () => {
+  it("resumes the same restricted OpenClaw thread so turn two retains native memory", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -280,7 +277,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       dynamicToolsFingerprint: "[]",
     });
     const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     let nextThread = 1;
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "config/read") {
@@ -312,11 +309,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
       client: { request } as never,
       params,
       cwd: workspaceDir,
-      dynamicTools: [createNamedDynamicTool("crestodian")],
+      dynamicTools: [createNamedDynamicTool("openclaw")],
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
       userMcpServersEnabled: false,
-      hostCrestodianActive: true,
+      hostSystemAgentActive: true,
     };
 
     const first = await startOrResumeThread(common);
@@ -351,11 +348,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding?.ringZeroClientInstanceId).toEqual(expect.any(String));
   });
 
-  it("starts a fresh restricted Crestodian thread for a new app-server client", async () => {
+  it("starts a fresh restricted OpenClaw thread for a new app-server client", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     let nextThread = 1;
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "config/read") {
@@ -375,11 +372,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const common = {
       params,
       cwd: workspaceDir,
-      dynamicTools: [createNamedDynamicTool("crestodian")],
+      dynamicTools: [createNamedDynamicTool("openclaw")],
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
       userMcpServersEnabled: false,
-      hostCrestodianActive: true,
+      hostSystemAgentActive: true,
     };
 
     const first = await startOrResumeThread({ ...common, client: { request } as never });
@@ -397,11 +394,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-ring-zero-2");
   });
 
-  it("retires a warm Crestodian binding when resume MCP attestation fails", async () => {
+  it("retires a warm OpenClaw binding when resume MCP attestation fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     let attestationCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "config/read") {
@@ -428,11 +425,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
       abandonClient,
       params,
       cwd: workspaceDir,
-      dynamicTools: [createNamedDynamicTool("crestodian")],
+      dynamicTools: [createNamedDynamicTool("openclaw")],
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
       userMcpServersEnabled: false,
-      hostCrestodianActive: true,
+      hostSystemAgentActive: true,
     };
 
     await startOrResumeThread(common);
@@ -455,7 +452,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
   });
 
-  it("fails closed before starting Crestodian when inherited MCP enumeration fails", async () => {
+  it("fails closed before starting OpenClaw when inherited MCP enumeration fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -466,7 +463,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       dynamicToolsFingerprint: "[]",
     });
     const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     const request = vi.fn(async (method: string) => {
       if (method === "config/read") {
         throw new Error("config unavailable");
@@ -479,11 +476,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
         client: { request } as never,
         params,
         cwd: workspaceDir,
-        dynamicTools: [createNamedDynamicTool("crestodian")],
+        dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
         userMcpServersEnabled: false,
-        hostCrestodianActive: true,
+        hostSystemAgentActive: true,
       }),
     ).rejects.toThrow("config unavailable");
     expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
@@ -495,11 +492,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
     { name: "legacy managed MDM", layer: { name: { type: "legacyManagedConfigTomlFromMdm" } } },
     { name: "unknown future", layer: { name: { type: "futureManaged" } } },
     { name: "malformed", layer: { name: {} } },
-  ])("fails closed on $name config layers before Crestodian thread/start", async ({ layer }) => {
+  ])("fails closed on $name config layers before OpenClaw thread/start", async ({ layer }) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     const request = vi.fn(async (method: string) => {
       if (method === "config/read") {
         return { config: {}, layers: [layer] };
@@ -512,23 +509,23 @@ describe("Codex app-server thread lifecycle bindings", () => {
         client: { request } as never,
         params,
         cwd: workspaceDir,
-        dynamicTools: [createNamedDynamicTool("crestodian")],
+        dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
         userMcpServersEnabled: false,
-        hostCrestodianActive: true,
+        hostSystemAgentActive: true,
       }),
     ).rejects.toThrow(/config layer|config layers/u);
     expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
   });
 
   it.each(["hooks", "managed_hooks"] as const)(
-    "fails closed on non-empty %s requirements before Crestodian thread/start",
+    "fails closed on non-empty %s requirements before OpenClaw thread/start",
     async (requirementsKey) => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createParams(sessionFile, workspaceDir);
-      params.toolsAllow = ["crestodian"];
+      params.toolsAllow = ["openclaw"];
       const request = vi.fn(async (method: string) => {
         if (method === "config/read") {
           return { config: {}, layers: [] };
@@ -550,11 +547,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
           client: { request } as never,
           params,
           cwd: workspaceDir,
-          dynamicTools: [createNamedDynamicTool("crestodian")],
+          dynamicTools: [createNamedDynamicTool("openclaw")],
           appServer: createThreadLifecycleAppServerOptions(),
           nativeCodeModeEnabled: false,
           userMcpServersEnabled: false,
-          hostCrestodianActive: true,
+          hostSystemAgentActive: true,
         }),
       ).rejects.toThrow("cannot override managed hooks");
       expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -568,7 +565,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     const request = vi.fn(async (method: string) => {
       if (method === "config/read") {
         return { config: {}, layers: [] };
@@ -584,11 +581,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
         client: { request } as never,
         params,
         cwd: workspaceDir,
-        dynamicTools: [createNamedDynamicTool("crestodian")],
+        dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
         userMcpServersEnabled: false,
-        hostCrestodianActive: true,
+        hostSystemAgentActive: true,
       }),
     ).rejects.toThrow("cannot override required feature hooks");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -601,7 +598,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     { name: "a newly raced server", attestation: { data: [{ name: "raced" }] } },
     { name: "a malformed inventory", attestation: { data: "invalid" } },
     { name: "an inventory RPC failure", attestation: new Error("inventory failed") },
-  ])("retires the cold Crestodian thread when attestation finds $name", async ({ attestation }) => {
+  ])("retires the cold OpenClaw thread when attestation finds $name", async ({ attestation }) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -612,7 +609,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       dynamicToolsFingerprint: "[]",
     });
     const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["crestodian"];
+    params.toolsAllow = ["openclaw"];
     const abandonClient = vi.fn(async () => {});
     const request = vi.fn(async (method: string) => {
       if (method === "config/read") {
@@ -639,11 +636,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
         abandonClient,
         params,
         cwd: workspaceDir,
-        dynamicTools: [createNamedDynamicTool("crestodian")],
+        dynamicTools: [createNamedDynamicTool("openclaw")],
         appServer: createThreadLifecycleAppServerOptions(),
         nativeCodeModeEnabled: false,
         userMcpServersEnabled: false,
-        hostCrestodianActive: true,
+        hostSystemAgentActive: true,
       }),
     ).rejects.toThrow();
     expect(abandonClient).toHaveBeenCalledTimes(1);
@@ -655,35 +652,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
     expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
-  });
-
-  it("rotates remote runtime bindings when the app-server fingerprint is missing or changed", () => {
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
-      }),
-    ).toBe(true);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
-        binding: "remote-runtime-v0",
-      }),
-    ).toBe(true);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "remote",
-        current: "remote-runtime-v1",
-        binding: "remote-runtime-v1",
-      }),
-    ).toBe(false);
-    expect(
-      shouldRotateCodexAppServerBindingForRuntime({
-        connectionClass: "local-loopback",
-        current: "local-runtime-v1",
-      }),
-    ).toBe(false);
   });
 
   it("does not write a binding when thread start resolves after abort", async () => {
@@ -2902,6 +2870,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           headers: {},
         },
         codeModeOnly: false,
+        loopDetectionPreToolUseRelay: true,
         requestTimeoutMs: 60_000,
         turnCompletionIdleTimeoutMs: 60_000,
         approvalPolicy: "never",
@@ -2916,3 +2885,4 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding.modelProvider).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

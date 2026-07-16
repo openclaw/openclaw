@@ -4,6 +4,7 @@
  * Manages CDP-backed Playwright connections, page lookup, observed dialogs,
  * console/network/page state, role refs, and safe navigation handling.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isFutureDateTimestampMs,
   parseFiniteNumber,
@@ -54,7 +55,7 @@ import {
   type BrowserDownloadCaptureOptions,
   type PlaywrightDownload,
 } from "./pw-download-capture.js";
-import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 
 const { chromium } = playwrightCore;
 
@@ -109,7 +110,7 @@ type BrowserObservedState = {
 };
 
 /** Raised when an action is blocked by an observed modal dialog. */
-export class BrowserObservedDialogBlockedError extends Error {
+class BrowserObservedDialogBlockedError extends Error {
   readonly browserState: BrowserObservedState;
 
   constructor(browserState: BrowserObservedState) {
@@ -243,13 +244,6 @@ const closedConnections = new WeakSet<ConnectedBrowser>();
 const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
-let cdpConnectRetryDelayMsForTests: number | undefined;
-
-/** Override CDP reconnect retry delay in tests. */
-export function setCdpConnectRetryDelayMsForTests(delayMs?: number): void {
-  cdpConnectRetryDelayMsForTests = delayMs;
-}
-
 function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
   const parsed = parseFiniteNumber(timeoutMs);
   return Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
@@ -260,7 +254,7 @@ function normalizeCdpUrl(raw: string) {
 }
 
 function resolveCdpConnectRetryDelayMs(attempt: number): number {
-  return cdpConnectRetryDelayMsForTests ?? 250 + attempt * 250;
+  return 250 + attempt * 250;
 }
 
 export function isDownloadStartingNavigationError(err: unknown, expectedUrl?: string): boolean {
@@ -820,7 +814,7 @@ function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
 }
 
 /** Raised when a page target has been quarantined after policy denial. */
-export class BlockedBrowserTargetError extends Error {
+class BlockedBrowserTargetError extends Error {
   constructor() {
     super("Browser target is unavailable after SSRF policy blocked its navigation.");
     this.name = "BlockedBrowserTargetError";
@@ -828,7 +822,7 @@ export class BlockedBrowserTargetError extends Error {
 }
 
 /** Cache role refs for a target id after a snapshot. */
-export function rememberRoleRefsForTarget(opts: {
+function rememberRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId: string;
   refs: RoleRefs;
@@ -1152,7 +1146,7 @@ function resolvePendingDialogForResponse(params: {
     throw new Error(`Dialog "${dialogId}" is not pending.`);
   }
   if (params.state.pendingDialogs.length === 1) {
-    return params.state.pendingDialogs[0];
+    return expectDefined(params.state.pendingDialogs.at(0), "single pending browser dialog");
   }
   if (params.state.pendingDialogs.length > 1) {
     throw new Error("Multiple dialogs are pending; pass dialogId.");
@@ -1179,24 +1173,6 @@ export async function respondToObservedDialogOnPage(opts: {
     accept: opts.accept,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
     closedBy: opts.closedBy ?? "agent",
-  });
-}
-
-/** Resolve a page and respond to one of its observed dialogs. */
-export async function respondToObservedDialogViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  dialogId?: string;
-  accept: boolean;
-  promptText?: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<BrowserObservedDialogRecord> {
-  const page = await getPageForTargetId(opts);
-  return await respondToObservedDialogOnPage({
-    page,
-    accept: opts.accept,
-    ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
-    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   });
 }
 
@@ -1488,7 +1464,7 @@ async function getPageForTargetIdOnce(opts: {
     }
     throw new Error("No pages available in the connected browser.");
   }
-  const first = accessible[0];
+  const first = expectDefined(accessible.at(0), "non-empty accessible browser pages");
   if (!opts.targetId) {
     bindRoleRefsTarget(first.page, opts.cdpUrl, first.targetId);
     return first.page;
@@ -1519,10 +1495,10 @@ export async function getPageForTargetId(opts: {
   }
 }
 
-export type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
+type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
 
 /** Classify requests that can navigate the selected page or one of its frames. */
-export function classifyBrowserDocumentNavigationRequest(
+function classifyBrowserDocumentNavigationRequest(
   page: Page,
   request: Request,
 ): BrowserDocumentNavigationRequestKind | null {
@@ -2453,22 +2429,7 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  try {
-    await page.bringToFront();
-  } catch (err) {
-    try {
-      await withPageScopedCdpClient({
-        cdpUrl: opts.cdpUrl,
-        page,
-        targetId: opts.targetId,
-        fn: async (send) => {
-          await send("Page.bringToFront");
-        },
-      });
-    } catch {
-      throw err;
-    }
-  }
+  await page.bringToFront();
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
@@ -2484,3 +2445,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

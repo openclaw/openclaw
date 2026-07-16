@@ -2,21 +2,38 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderQuickSettings, type QuickSettingsProps } from "./quick.ts";
+import { renderQuickSettings } from "./quick.ts";
 
-function expectButtonByText(container: Element, text: string): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll("button")).find(
+type QuickSettingsProps = Parameters<typeof renderQuickSettings>[0];
+
+type QuickControl = HTMLElement & { checked?: boolean; disabled: boolean };
+
+function expectButtonByText(container: Element, text: string): QuickControl {
+  const button = Array.from(container.querySelectorAll<QuickControl>("button, wa-radio")).find(
     (candidate) => candidate.textContent?.trim() === text,
   );
-  if (!(button instanceof HTMLButtonElement)) {
+  if (!(button instanceof HTMLElement)) {
     throw new Error(`Expected button labelled ${text}`);
   }
   return button;
 }
 
-function expectRowByLabel(container: Element, text: string): HTMLElement {
-  const row = Array.from(container.querySelectorAll<HTMLElement>(".qs-row")).find(
-    (candidate) => candidate.querySelector(".qs-row__label")?.textContent?.trim() === text,
+function selectRadio(control: QuickControl) {
+  if (control.checked) {
+    return;
+  }
+  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
+  expect(group).not.toBeNull();
+  if (!group) {
+    return;
+  }
+  group.value = control.getAttribute("value") ?? "";
+  group.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function expectRowByTitle(container: Element, text: string): HTMLElement {
+  const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === text,
   );
   if (!(row instanceof HTMLElement)) {
     throw new Error(`Expected quick settings row "${text}"`);
@@ -32,8 +49,9 @@ function expectFileInput(input: Element | null | undefined): HTMLInputElement {
 }
 
 function expectStatByLabel(container: Element, text: string): HTMLElement {
-  const stat = Array.from(container.querySelectorAll<HTMLElement>(".qs-stat")).find(
-    (candidate) => candidate.querySelector(".qs-stat__label")?.textContent?.trim() === text,
+  const stat = Array.from(container.querySelectorAll<HTMLElement>(".config-host__stat")).find(
+    (candidate) =>
+      candidate.querySelector(".config-host__stat-label")?.textContent?.trim() === text,
   );
   if (!(stat instanceof HTMLElement)) {
     throw new Error(`Expected system stat "${text}"`);
@@ -107,21 +125,8 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
   };
 }
 
-function collectQuickSettingsCardKinds(container: Element): string[] {
-  const kinds: string[] = [];
-  for (const card of container.querySelectorAll(".qs-card")) {
-    const kind = Array.from(card.classList).find(
-      (className) => className.startsWith("qs-card--") && className !== "qs-card--span-all",
-    );
-    if (kind) {
-      kinds.push(kind);
-    }
-  }
-  return kinds;
-}
-
 function expectAssistantAvatarSource(container: Element): { label: string; source: string } {
-  const source = container.querySelector(".qs-identity-card--assistant .qs-identity-card__source");
+  const source = container.querySelector(".config-identity--assistant .config-identity__source");
   return {
     label: source?.querySelector("span")?.textContent?.trim() ?? "",
     source: source?.querySelector("code")?.textContent?.trim() ?? "",
@@ -129,22 +134,30 @@ function expectAssistantAvatarSource(container: Element): { label: string; sourc
 }
 
 describe("renderQuickSettings", () => {
-  it("uses direct dashboard cards for the compact settings layout", () => {
+  it("renders the single-column settings sections with stable target ids", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(collectQuickSettingsCardKinds(container)).toEqual([
-      "qs-card--general",
-      "qs-card--model",
-      "qs-card--channels",
-      "qs-card--security",
-      "qs-card--system",
-      "qs-card--appearance",
-      "qs-card--personal",
-      "qs-card--automations",
+    expect(container.querySelectorAll(".settings-page")).toHaveLength(1);
+    const targetIds = Array.from(
+      container.querySelectorAll<HTMLElement>("[id^='settings-general-']"),
+    ).map((element) => element.id);
+    expect(targetIds).toEqual([
+      "settings-general-model",
+      "settings-general-channels",
+      "settings-general-security",
+      "settings-general-automations",
+      "settings-general-appearance",
+      "settings-general-personal",
+      "settings-general-system",
     ]);
-    expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(0);
+    // One group surface per section; no nested cards.
+    for (const id of targetIds) {
+      const section = container.querySelector(`#${id}`);
+      expect(section?.querySelectorAll(".settings-group")).toHaveLength(1);
+      expect(section?.querySelector(".settings-group .settings-group")).toBeNull();
+    }
   });
 
   it("changes the Control UI language from General settings", () => {
@@ -153,15 +166,54 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ locale: "pt-BR", onLocaleChange })), container);
 
-    const row = expectRowByLabel(container, "Language");
-    const select = row.querySelector("select");
-    expect(select?.value).toBe("pt-BR");
-    if (!(select instanceof HTMLSelectElement)) {
+    const row = expectRowByTitle(container, "Language");
+    const select = row.querySelector<HTMLElement & { value: string }>("wa-select");
+    if (!(select instanceof HTMLElement)) {
       throw new Error("Expected language selector");
     }
-    select.value = "en";
+    expect(select.getAttribute("value")).toBe("pt-BR");
+    Object.defineProperty(select, "value", { configurable: true, value: "en" });
     select.dispatchEvent(new Event("change"));
     expect(onLocaleChange).toHaveBeenCalledWith("en");
+  });
+
+  it("drills into model settings from the Model row", () => {
+    const onModelChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ onModelChange })), container);
+
+    const row = expectRowByTitle(container, "Model");
+    expect(row.classList.contains("settings-row--nav")).toBe(true);
+    expect(row.querySelector(".settings-row__value")?.textContent?.trim()).toBe("gpt-5.5");
+    row.click();
+    expect(onModelChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows channel status and connect actions", () => {
+    const onChannelConfigure = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          channels: [
+            { id: "discord", label: "Discord", connected: true, detail: "Configured" },
+            { id: "telegram", label: "Telegram", connected: false },
+          ],
+          onChannelConfigure,
+        }),
+      ),
+      container,
+    );
+
+    const discordRow = expectRowByTitle(container, "Discord");
+    expect(discordRow.querySelector(".settings-status")?.textContent?.trim()).toBe("Configured");
+    const telegramRow = expectRowByTitle(container, "Telegram");
+    const connectButton = telegramRow.querySelector("button");
+    expect(connectButton?.textContent?.trim()).toBe("Connect →");
+    connectButton?.click();
+    expect(onChannelConfigure).toHaveBeenCalledWith("telegram");
   });
 
   it("renders Gateway host identity and resources", () => {
@@ -196,46 +248,48 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const name = container.querySelector(".qs-system__name");
+    const name = container.querySelector(".config-host__name");
     expect(name?.textContent?.trim()).toBe("Gateway Mac");
     expect(name?.getAttribute("title")).toBe("gateway.local");
-    expect(container.querySelector(".qs-system__address")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".config-host__address")?.textContent?.trim()).toBe(
       "192.168.1.20:18789",
     );
-    const metas = Array.from(container.querySelectorAll(".qs-system__meta")).map((node) =>
+    const metas = Array.from(container.querySelectorAll(".config-host__meta")).map((node) =>
       node.textContent?.trim(),
     );
     expect(metas).toEqual(["macOS 26.5.0 · arm64", "Node v24.1.0 · PID 1234"]);
     expect(
-      container.querySelector(".qs-card--system .qs-card__header .qs-badge")?.textContent?.trim(),
+      container
+        .querySelector("#settings-general-system .settings-section__actions .settings-status")
+        ?.textContent?.trim(),
     ).toBe("Up 1h");
 
     const cpu = expectStatByLabel(container, "CPU");
-    expect(cpu.querySelector(".qs-stat__value")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "1.2 load",
-    );
-    expect(cpu.querySelector(".qs-stat__detail")?.textContent?.trim()).toBe("10 cores");
+    expect(
+      cpu.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("1.2 load");
+    expect(cpu.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe("10 cores");
     expect(cpu.getAttribute("title")).toBe("Apple M4 · Load average: 1.2 · 1.1 · 0.9");
-    expect(cpu.querySelector(".qs-meter")?.getAttribute("aria-valuenow")).toBe("12");
+    expect(cpu.querySelector(".config-host__meter")?.getAttribute("aria-valuenow")).toBe("12");
 
     const memory = expectStatByLabel(container, "Memory");
-    expect(memory.querySelector(".qs-stat__value")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "50% used",
-    );
-    expect(memory.querySelector(".qs-stat__detail")?.textContent?.trim()).toBe(
+    expect(
+      memory.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("50% used");
+    expect(memory.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
       "16 GB free of 32 GB",
     );
 
     const disk = expectStatByLabel(container, "Disk");
-    expect(disk.querySelector(".qs-stat__value")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "50% used",
-    );
-    expect(disk.querySelector(".qs-stat__detail")?.textContent?.trim()).toBe(
+    expect(
+      disk.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("50% used");
+    expect(disk.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
       "463 GB free of 926 GB",
     );
     expect(disk.getAttribute("title")).toBe("/Users/operator/.openclaw");
-    for (const fill of container.querySelectorAll(".qs-meter__fill")) {
-      expect([...fill.classList]).toContain("qs-meter__fill--ok");
+    for (const fill of container.querySelectorAll(".config-host__meter-fill")) {
+      expect([...fill.classList]).toContain("config-host__meter-fill--ok");
     }
   });
 
@@ -268,10 +322,10 @@ describe("renderQuickSettings", () => {
     );
 
     const tone = (label: string) =>
-      expectStatByLabel(container, label).querySelector(".qs-meter__fill")?.classList[1];
-    expect(tone("CPU")).toBe("qs-meter__fill--critical");
-    expect(tone("Memory")).toBe("qs-meter__fill--critical");
-    expect(tone("Disk")).toBe("qs-meter__fill--warn");
+      expectStatByLabel(container, label).querySelector(".config-host__meter-fill")?.classList[1];
+    expect(tone("CPU")).toBe("config-host__meter-fill--critical");
+    expect(tone("Memory")).toBe("config-host__meter-fill--critical");
+    expect(tone("Disk")).toBe("config-host__meter-fill--warn");
   });
 
   it("hides Gateway host details when the RPC is unavailable", () => {
@@ -279,76 +333,175 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ systemInfoUnavailable: true })), container);
 
-    expect(container.querySelector(".qs-card--system")).toBeNull();
+    expect(container.querySelector("#settings-general-system")).toBeNull();
   });
 
-  it("reserves the Gateway host card while its first snapshot loads", () => {
+  it("reserves the Gateway host section while its first snapshot loads", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    const systemCard = container.querySelector(".qs-card--system");
-    expect(systemCard).not.toBeNull();
-    expect(systemCard?.querySelector(".qs-system__name")?.textContent).toContain("—");
+    const systemSection = container.querySelector("#settings-general-system");
+    expect(systemSection).not.toBeNull();
+    expect(systemSection?.querySelector(".config-host__name")?.textContent).toContain("—");
     for (const label of ["CPU", "Memory", "Disk"]) {
-      const stat = expectStatByLabel(systemCard ?? container, label);
-      expect(stat.querySelector(".qs-stat__value")?.textContent).toContain("—");
-      expect(stat.querySelector(".qs-meter")).toBeNull();
+      const stat = expectStatByLabel(systemSection ?? container, label);
+      expect(stat.querySelector(".config-host__stat-value")?.textContent).toContain("—");
+      expect(stat.querySelector(".config-host__meter")).toBeNull();
     }
-    expect(systemCard?.querySelector(".qs-system__address")).toBeNull();
+    expect(systemSection?.querySelector(".config-host__address")).toBeNull();
   });
 
-  it("hides the pending changes bar when the config is clean", () => {
+  it("hides the restart banner while the config needs no apply", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelector(".qs-pending")).toBeNull();
+    expect(container.querySelector(".config-apply-banner")).toBeNull();
+    expect(expectButtonByText.bind(null, container, "Save")).toThrow();
+    expect(expectButtonByText.bind(null, container, "Apply Now")).toThrow();
   });
 
-  it("renders pending config actions and calls their handlers", () => {
-    const onResetConfig = vi.fn();
-    const onSaveConfig = vi.fn();
+  it("renders the restart banner and wires it to apply", () => {
     const onApplyConfig = vi.fn();
     const container = document.createElement("div");
 
-    render(
-      renderQuickSettings(
-        createProps({
-          configDirty: true,
-          configReady: true,
-          connected: true,
-          onResetConfig,
-          onSaveConfig,
-          onApplyConfig,
-        }),
-      ),
-      container,
-    );
+    render(renderQuickSettings(createProps({ configNeedsApply: true, onApplyConfig })), container);
 
-    expect(container.querySelector(".qs-pending")).not.toBeNull();
-    const discardButton = expectButtonByText(container, "Discard");
-    const saveButton = expectButtonByText(container, "Save");
-    const applyButton = expectButtonByText(container, "Apply Now");
-    expect(saveButton.disabled).toBe(false);
-
-    discardButton.click();
-    saveButton.click();
+    const banner = container.querySelector(".config-apply-banner");
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("Saved to openclaw.json — restart the gateway to apply.");
+    const applyButton = expectButtonByText(container, "Restart & apply");
+    expect(applyButton.disabled).toBe(false);
     applyButton.click();
-
-    expect(onResetConfig).toHaveBeenCalledTimes(1);
-    expect(onSaveConfig).toHaveBeenCalledTimes(1);
     expect(onApplyConfig).toHaveBeenCalledTimes(1);
   });
 
-  it("disables commit actions until the config is ready", () => {
+  it("gates the restart action while a raw draft is pending", () => {
     const container = document.createElement("div");
 
-    render(renderQuickSettings(createProps({ configDirty: true, configReady: false })), container);
+    // apply() always refuses while a raw draft is unsaved; an enabled button
+    // here would be a dead action with a misleading generic failure.
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configRawDraftPending: true })),
+      container,
+    );
 
-    expect(expectButtonByText(container, "Save").disabled).toBe(true);
-    expect(expectButtonByText(container, "Apply Now").disabled).toBe(true);
-    expect(expectButtonByText(container, "Discard").disabled).toBe(false);
+    expect(expectButtonByText(container, "Restart & apply").disabled).toBe(true);
+  });
+
+  it("surfaces the shared autosave status with its recovery actions", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps()), container);
+    expect(container.querySelector(".config-toolbar__status")).toBeNull();
+
+    render(renderQuickSettings(createProps({ configAutoSaveStatus: "saving" })), container);
+    expect(container.querySelector(".config-toolbar__status")?.textContent?.trim()).toBe("Saving…");
+
+    const onRetrySaveConfig = vi.fn();
+    render(
+      renderQuickSettings(createProps({ configAutoSaveStatus: "error", onRetrySaveConfig })),
+      container,
+    );
+    expect(container.querySelector(".config-toolbar__status")?.textContent).toContain(
+      "Save failed",
+    );
+    expectButtonByText(container, "Retry").click();
+    expect(onRetrySaveConfig).toHaveBeenCalledTimes(1);
+
+    const onDiscardConfig = vi.fn();
+    render(
+      renderQuickSettings(createProps({ configAutoSaveStatus: "conflict", onDiscardConfig })),
+      container,
+    );
+    expect(container.querySelector(".config-toolbar__status")?.textContent).toContain(
+      "Settings changed elsewhere",
+    );
+    expectButtonByText(container, "Reload").click();
+    expect(onDiscardConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a busy restart banner while applying", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configApplying: true })),
+      container,
+    );
+
+    const banner = container.querySelector(".config-apply-banner");
+    expect(banner?.textContent).toContain("Applying…");
+    expect(banner?.querySelector("button")?.disabled).toBe(true);
+
+    // Other in-flight config writes gate the action too.
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configSaving: true })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configAutoSaveStatus: "saving" })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configUpdating: true })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+  });
+
+  it("locks config-backed quick controls while a config operation is pending", () => {
+    for (const pending of [
+      { configLoading: true },
+      { configSaving: true },
+      { configApplying: true },
+      { configUpdating: true },
+    ]) {
+      const onThinkingChange = vi.fn();
+      const onFastModeChange = vi.fn();
+      const onToolProfileChange = vi.fn();
+      const container = document.createElement("div");
+      render(
+        renderQuickSettings(
+          createProps({
+            onThinkingChange,
+            onFastModeChange,
+            onToolProfileChange,
+            ...pending,
+          }),
+        ),
+        container,
+      );
+
+      const thinkingButton = expectButtonByText(expectRowByTitle(container, "Thinking"), "High");
+      expect(
+        (thinkingButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
+      ).toBe(true);
+      thinkingButton.click();
+      expect(onThinkingChange).not.toHaveBeenCalled();
+      const fastButton = expectButtonByText(expectRowByTitle(container, "Fast mode"), "Fast");
+      expect(
+        (fastButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
+      ).toBe(true);
+      fastButton.click();
+      expect(onFastModeChange).not.toHaveBeenCalled();
+      const profileButton = expectButtonByText(expectRowByTitle(container, "Tool profile"), "full");
+      expect(
+        (profileButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
+      ).toBe(true);
+      profileButton.click();
+      expect(onToolProfileChange).not.toHaveBeenCalled();
+      const browserRow = expectRowByTitle(container, "Browser enabled");
+      expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+    }
   });
 
   it("keeps auto as a first-class quick settings fast mode", () => {
@@ -357,19 +510,19 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ fastMode: "auto", onFastModeChange })), container);
 
-    const row = expectRowByLabel(container, "Fast mode");
-    const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>("button"));
+    const row = expectRowByTitle(container, "Fast mode");
+    const buttons = Array.from(row.querySelectorAll<QuickControl>("wa-radio"));
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
       "Auto",
       "Fast",
       "Standard",
     ]);
-    expect(row.querySelector(".qs-segmented__btn--active")?.textContent?.trim()).toBe("Auto");
+    expect(row.querySelector(".settings-segmented__btn--active")?.textContent?.trim()).toBe("Auto");
 
-    expectButtonByText(row, "Auto").click();
+    selectRadio(expectButtonByText(row, "Auto"));
     expect(onFastModeChange).not.toHaveBeenCalled();
 
-    expectButtonByText(row, "Standard").click();
+    selectRadio(expectButtonByText(row, "Standard"));
 
     expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
@@ -396,23 +549,48 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const browserRow = expectRowByLabel(container, "Browser enabled");
-    expect(browserRow.querySelector(".qs-toggle__hint")?.textContent).toBe("Disabled");
-    const browserInput = browserRow.querySelector("input");
-    expect(browserInput).toBeInstanceOf(HTMLInputElement);
-    expect((browserInput as HTMLInputElement).checked).toBe(false);
+    const browserRow = expectRowByTitle(container, "Browser enabled");
+    const browserInput = browserRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(browserInput).toBeInstanceOf(HTMLElement);
+    expect(browserInput?.checked).toBe(false);
 
-    (browserInput as HTMLInputElement).checked = true;
+    if (!browserInput) {
+      throw new Error("Expected browser switch");
+    }
+    browserInput.checked = true;
     browserInput?.dispatchEvent(new Event("change"));
     expect(onBrowserEnabledToggle).toHaveBeenCalledWith(true);
 
-    expectButtonByText(container, "full").click();
+    selectRadio(expectButtonByText(container, "full"));
     expect(onToolProfileChange).toHaveBeenCalledWith("full");
-    expect([...expectButtonByText(container, "messaging").classList]).toEqual([
-      "qs-segmented__btn",
-      "qs-segmented__btn--compact",
-      "qs-segmented__btn--active",
-    ]);
+    const activeProfile = expectButtonByText(container, "messaging");
+    expect(activeProfile.classList.contains("settings-segmented__btn--active")).toBe(true);
+  });
+
+  it("shows gateway auth and device auth as dot statuses, not pills", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          security: {
+            gatewayAuth: "none",
+            execPolicy: "allowlist",
+            deviceAuth: true,
+            browserEnabled: true,
+            toolProfile: "full",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const authRow = expectRowByTitle(container, "Gateway auth");
+    const authStatus = authRow.querySelector(".settings-status");
+    expect(authStatus?.textContent?.trim()).toBe("none");
+    expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
+    const deviceRow = expectRowByTitle(container, "Device auth");
+    expect(deviceRow.querySelector(".settings-status--ok")?.textContent?.trim()).toBe("Enabled");
   });
 
   it("opens mobile pairing from Security quick settings", () => {
@@ -421,7 +599,7 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ onPairMobile })), container);
 
-    expectRowByLabel(container, "OpenClaw mobile");
+    expectRowByTitle(container, "OpenClaw mobile");
     const button = expectButtonByText(container, "Pair mobile device");
     expect(button.disabled).toBe(false);
     button.click();
@@ -434,14 +612,45 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
 
-    const textSizeRow = expectRowByLabel(container, "Text size");
-    const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
-      button.classList.contains("qs-segmented__btn--active"),
+    const textSizeRow = expectRowByTitle(container, "Text size");
+    const active = Array.from(textSizeRow.querySelectorAll("wa-radio")).find((button) =>
+      button.classList.contains("settings-segmented__btn--active"),
     );
     expect(active?.textContent?.trim()).toBe("XL");
+    expect(active?.getAttribute("title")).toBe("125%");
 
-    expectButtonByText(textSizeRow, "XXL").click();
+    const xxlButton = expectButtonByText(textSizeRow, "XXL");
+    expect(xxlButton.getAttribute("title")).toBe("140%");
+    selectRadio(xxlButton);
     expect(setTextScale).toHaveBeenCalledWith(140);
+  });
+
+  it("anchors theme mode transitions on the clicked segmented button", () => {
+    const setThemeMode = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ themeMode: "system", setThemeMode })), container);
+
+    const modeRow = expectRowByTitle(container, "Mode");
+    const darkButton = expectButtonByText(modeRow, "Dark");
+    selectRadio(darkButton);
+    expect(setThemeMode).toHaveBeenCalledWith("dark", { element: darkButton });
+  });
+
+  it("renders lobster pet rows as label-wrapped toggle rows", () => {
+    const setLobsterPetVisits = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ setLobsterPetVisits })), container);
+
+    const visitsRow = expectRowByTitle(container, "Lobster visits");
+    const input = visitsRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    if (!(input instanceof HTMLElement)) {
+      throw new Error("Expected lobster visits switch");
+    }
+    input.checked = false;
+    input.dispatchEvent(new Event("change"));
+    expect(setLobsterPetVisits).toHaveBeenCalledWith(false);
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {
@@ -458,17 +667,21 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const titles = Array.from(container.querySelectorAll(".qs-identity-card__title")).map((node) =>
+    const titles = Array.from(container.querySelectorAll(".config-identity__title")).map((node) =>
       node.textContent?.trim(),
     );
     expect(titles).toEqual(["You", "Nova"]);
     expect(container.querySelector('input[placeholder="You"]')).toBeNull();
     expect(
-      Array.from(container.querySelectorAll(".qs-row__label")).some(
+      Array.from(container.querySelectorAll(".settings-row__title")).some(
         (node) => node.textContent?.trim() === "Name",
       ),
     ).toBe(false);
-    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe("blob:nova");
+    expect(
+      container
+        .querySelector(".config-identity--assistant .config-identity__avatar")
+        ?.getAttribute("src"),
+    ).toBe("blob:nova");
   });
 
   it("renders same-origin configured assistant avatar routes", () => {
@@ -487,9 +700,11 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "/avatar/main",
-    );
+    expect(
+      container
+        .querySelector(".config-identity--assistant .config-identity__avatar")
+        ?.getAttribute("src"),
+    ).toBe("/avatar/main");
   });
 
   it("shows the configured avatar source when the assistant falls back to the logo", () => {
@@ -509,14 +724,16 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "/apple-touch-icon.png",
-    );
+    expect(
+      container
+        .querySelector(".config-identity--assistant .config-identity__avatar")
+        ?.getAttribute("src"),
+    ).toBe("/apple-touch-icon.png");
     expect(expectAssistantAvatarSource(container)).toEqual({
       label: "Configured avatar",
       source: "assets/avatars/nova-portrait.png",
     });
-    expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
       "File not found",
     );
     expect(
@@ -543,11 +760,15 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-assistant-avatar--fallback")?.getAttribute("src")).toBe(
+    expect(container.querySelector(".config-identity__avatar--fallback")?.getAttribute("src")).toBe(
       "/apple-touch-icon.png",
     );
-    expect(container.querySelector('.qs-assistant-avatar[src*="/avatar/"]')).toBeNull();
-    expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
+    expect(
+      container.querySelector(
+        '.config-identity--assistant .config-identity__avatar[src*="/avatar/"]',
+      ),
+    ).toBeNull();
+    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
       "File not found",
     );
   });
@@ -569,8 +790,12 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector('.qs-assistant-avatar[src*="/avatar/"]')).toBeNull();
-    expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
+    expect(
+      container.querySelector(
+        '.config-identity--assistant .config-identity__avatar[src*="/avatar/"]',
+      ),
+    ).toBeNull();
+    expect(container.querySelector(".config-identity__issue")?.textContent?.trim()).toBe(
       "Cannot render avatar",
     );
   });
@@ -656,7 +881,7 @@ describe("renderQuickSettings", () => {
 
       const inputs = Array.from(container.querySelectorAll('input[type="file"]'));
       const input = inputs.find((node) =>
-        node.closest(".qs-identity-card--assistant"),
+        node.closest(".config-identity--assistant"),
       ) as HTMLInputElement | null;
       expect(input?.type).toBe("file");
       if (!input) {
@@ -724,12 +949,16 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(dataUrl);
+    expect(
+      container
+        .querySelector(".config-identity--assistant .config-identity__avatar")
+        ?.getAttribute("src"),
+    ).toBe(dataUrl);
     expect(expectAssistantAvatarSource(container)).toEqual({
       label: "UI override",
       source: "data:image/png;base64,...",
     });
-    expect(container.querySelector(".qs-identity-card__issue")).toBeNull();
+    expect(container.querySelector(".config-identity__issue")).toBeNull();
     expect(
       Array.from(container.querySelectorAll("label.btn")).some(
         (label) => label.textContent?.trim() === "Replace image",
@@ -753,7 +982,7 @@ describe("renderQuickSettings", () => {
 
       const input = expectFileInput(
         Array.from(container.querySelectorAll('input[type="file"]')).find(
-          (node) => !node.closest(".qs-identity-card--assistant"),
+          (node) => !node.closest(".config-identity--assistant"),
         ),
       );
 
@@ -777,11 +1006,9 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(
-      Array.from(container.querySelectorAll("button")).some(
-        (button) => button.textContent?.trim() === "Import",
-      ),
-    ).toBe(true);
+    const importButton = expectButtonByText(container, "Import");
+    expect(importButton.localName).toBe("button");
+    expect(importButton.closest("wa-radio-group")).toBeNull();
   });
 
   it("routes custom clicks into the tweakcn importer until a custom theme exists", () => {
@@ -824,10 +1051,10 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const customThemeButton = expectButtonByText(container, "Light Green");
-    customThemeButton.click();
+    const customButton = expectButtonByText(container, "Light Green");
+    selectRadio(customButton);
 
-    expect(setTheme).toHaveBeenCalledWith("custom", { element: customThemeButton });
+    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();
   });
 });

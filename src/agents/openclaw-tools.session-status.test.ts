@@ -1,4 +1,6 @@
 // Verifies session status output across scoped stores, tasks, and runtime hooks.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
@@ -313,6 +315,12 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveProviderBinaryThinking: () => undefined,
+  resolveProviderDefaultThinkingLevel: () => undefined,
+  resolveProviderThinkingProfile: () => undefined,
+  resolveProviderXHighThinking: () => undefined,
+}));
 // Keep provider-runtime/plugin activation out of this focused tool test. The
 // session_status surface only needs model selection semantics here, not real
 // bundled provider registration.
@@ -542,7 +550,7 @@ describe("session_status tool", () => {
     });
     getSessionStateVersionMock.mockReturnValue(12);
     listSessionStateEventsSinceMock.mockReturnValue({
-      events: [{ sequence: 12, kind: "goal_changed", summary: "goal created" }],
+      events: [{ sequence: 12, kind: "upstream_missing", summary: "upstream missing via codex" }],
       truncated: false,
       earliestAvailableSequence: 12,
       historyGap: true,
@@ -557,6 +565,7 @@ describe("session_status tool", () => {
     expect(details.stateVersion).toBe(12);
     expect(details.stateChanges).toMatchObject({ historyGap: true });
     expect(text).toContain("Session state changes:");
+    expect(text).toContain('"kind": "upstream_missing"');
   });
 
   it("enables transcript usage fallback for session_status", async () => {
@@ -1279,7 +1288,10 @@ describe("session_status tool", () => {
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    const saved = expectDefined(
+      savedStore["agent:main:scope:scopy:direct:scopy"],
+      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    );
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -1342,7 +1354,7 @@ describe("session_status tool", () => {
     });
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
-    const event = events[0];
+    const event = expectDefined(events[0], "events[0] test invariant");
     expect(event.type).toBe("session");
     expect(event.action).toBe("patch");
     expect(event.sessionKey).toBe("main");
@@ -1398,7 +1410,10 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    const saved = expectDefined(
+      savedStore["agent:main:scope:scopy:direct:scopy"],
+      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    );
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -2475,3 +2490,4 @@ describe("session_status tool", () => {
     expect(saved.liveModelSwitchPending).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

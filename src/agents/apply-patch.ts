@@ -108,8 +108,7 @@ export function createApplyPatchTool(
   return {
     name: "apply_patch",
     label: "apply_patch",
-    description:
-      "Apply a patch to one or more files using the apply_patch format. The input should include *** Begin Patch and *** End Patch markers.",
+    description: "Patch one/many files. Input requires *** Begin Patch and *** End Patch.",
     parameters: applyPatchSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as { input?: string };
@@ -138,10 +137,7 @@ export function createApplyPatchTool(
 }
 
 /** Parse and apply a patch envelope to the configured filesystem target. */
-export async function applyPatch(
-  input: string,
-  options: ApplyPatchOptions,
-): Promise<ApplyPatchResult> {
+async function applyPatch(input: string, options: ApplyPatchOptions): Promise<ApplyPatchResult> {
   const parsed = parsePatchText(input);
   if (parsed.hunks.length === 0) {
     throw new Error("No files were modified.");
@@ -714,4 +710,10 @@ function parseUpdateFileChunk(
   }
 
   return { chunk, consumed: parsedLines + startIndex };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.applyPatchTestApi")] = {
+    applyPatch,
+  };
 }

@@ -19,11 +19,12 @@ import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
-import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
+import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 async function syncSandboxSkillsToWorkspace(params: {
@@ -134,30 +135,11 @@ async function ensureSandboxWorkspaceLayout(params: {
   };
 }
 
-export async function resolveSandboxDockerUser(params: {
-  docker: SandboxDockerConfig;
-  workspaceDir: string;
-  stat?: (workspaceDir: string) => Promise<{ uid: number; gid: number }>;
-}): Promise<SandboxDockerConfig> {
-  const configuredUser = params.docker.user?.trim();
-  if (configuredUser) {
-    return params.docker;
-  }
-  const stat = params.stat ?? ((workspaceDir: string) => fs.stat(workspaceDir));
-  try {
-    const workspaceStat = await stat(params.workspaceDir);
-    const uid = Number.isInteger(workspaceStat.uid) ? workspaceStat.uid : null;
-    const gid = Number.isInteger(workspaceStat.gid) ? workspaceStat.gid : null;
-    if (uid === null || gid === null || uid < 0 || gid < 0) {
-      return params.docker;
-    }
-    return { ...params.docker, user: `${uid}:${gid}` };
-  } catch {
-    return params.docker;
-  }
-}
-
-function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+function resolveSandboxSession(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -165,6 +147,7 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
+    agentId: params.agentId,
     sessionKey: rawSessionKey,
   });
   if (!runtime.sandboxed) {
@@ -195,7 +178,9 @@ function resolveSandboxWorkspaceInfoWorkdir(params: {
 
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   execOverrides?: ExecPolicyOverrides;
+  requireCurrentConfig?: boolean;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
@@ -239,6 +224,9 @@ export async function resolveSandboxContext(params: {
     agentWorkspaceDir,
     skillsWorkspaceDir,
     cfg: resolvedCfg,
+    ...(params.requireCurrentConfig !== undefined
+      ? { requireCurrentConfig: params.requireCurrentConfig }
+      : {}),
   });
   await updateRegistry({
     containerName: backend.runtimeId,

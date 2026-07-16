@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
@@ -10,6 +11,7 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
+import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { VERSION } from "../../../version.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 
@@ -73,6 +75,27 @@ const mocks = vi.hoisted(() => ({
   resolveOfficialExternalProviderPluginIds: vi.fn(),
   resolveOfficialExternalProviderPluginIdsForEnv: vi.fn(),
   resolveOfficialExternalWebProviderContractPluginIdsForEnv: vi.fn(),
+  resolveDirectBundledProviderPolicySurface: vi.fn(
+    (pluginId: string): BundledProviderPolicySurface | null =>
+      pluginId === "openai"
+        ? {
+            normalizeModelCatalogId: ({ modelId }) => modelId,
+            resolveModelRoutes: ({ requestTransportOverrides }) => ({
+              kind: "routes",
+              routes: [
+                {
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                  authRequirement: "api-key",
+                  requestTransportOverrides: requestTransportOverrides ?? "none",
+                  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+                },
+              ],
+              defaultRuntimeId: "codex",
+            }),
+          }
+        : null,
+  ),
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveDefaultPluginNpmDir: vi.fn(() => "/tmp/openclaw-npm"),
   resolvePluginNpmProjectsDir: vi.fn((npmDir = "/tmp/openclaw-npm") =>
@@ -123,7 +146,6 @@ function writeLegacyNpmDeclarationStub(params: {
 }
 
 vi.mock("../../../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
@@ -201,6 +223,13 @@ vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
 
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries: mocks.resolveProviderInstallCatalogEntries,
+}));
+
+vi.mock("../../../plugins/provider-policy-surface.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/provider-policy-surface.js")>()),
+  // This suite owns install repair. Provider artifact loading and route policy
+  // have dedicated tests, so keep the OpenAI runtime-selection seam in memory.
+  resolveDirectBundledProviderPolicySurface: mocks.resolveDirectBundledProviderPolicySurface,
 }));
 
 vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => {
@@ -397,13 +426,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       pluginId: "matrix",
       installSpec: "@openclaw/plugin-matrix@1.2.3",
     });
-    expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+    expect(
+      configuredPluginInstallIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toMatchObject({
       checkId: "core/doctor/configured-plugin-installs",
       severity: "warning",
       target: "matrix",
       fixHint: "Run `openclaw doctor --fix` to install @openclaw/plugin-matrix@1.2.3.",
     });
-    expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
+    expect(
+      configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
+    ).toEqual({
       kind: "package",
       action: "would-install-configured-plugin",
       target: "matrix",
@@ -461,13 +494,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       pluginId: "discord",
       installPath: missingDiscordPath,
     });
-    expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+    expect(
+      configuredPluginInstallIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toMatchObject({
       checkId: "core/doctor/configured-plugin-installs",
       severity: "warning",
       path: missingDiscordPath,
       target: "discord",
     });
-    expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
+    expect(
+      configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
+    ).toEqual({
       kind: "package",
       action: "would-defer-configured-plugin-install-repair",
       target: "discord",
@@ -2516,6 +2553,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
     });
 
+    expect(mocks.resolveDirectBundledProviderPolicySurface).toHaveBeenCalledWith("openai");
     expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
       spec: expectedNpmInstallSpec("@openclaw/codex"),
@@ -5005,3 +5043,4 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [], records: {} });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

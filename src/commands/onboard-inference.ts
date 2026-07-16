@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-// Inference backend detection shared by onboarding bootstrap and Crestodian setup.
+// Inference backend detection shared by onboarding bootstrap and OpenClaw setup.
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -11,13 +11,13 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.js";
+import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
 
 /**
  * Onboarding treats inference as the one required step: reuse whatever the
  * machine already has (env API keys, Claude Code login, Codex login) before
  * asking the user anything. The ladder order is a documented contract
- * (docs/cli/crestodian.md "Setup bootstrap") — change docs when changing it.
+ * (docs/cli/setup.md "Setup bootstrap") — change docs when changing it.
  */
 export const OPENAI_API_DEFAULT_MODEL_REF = "openai/gpt-5.6";
 export const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-8";
@@ -33,7 +33,7 @@ export type InferenceBackendKind =
   | "codex-cli"
   | "gemini-cli";
 
-export type InferenceBackendCandidate = {
+type InferenceBackendCandidate = {
   kind: InferenceBackendKind;
   modelRef: string;
   /** Short human label, e.g. "Claude Code CLI". */
@@ -47,7 +47,7 @@ export type InferenceBackendCandidate = {
   credentials?: boolean;
 };
 
-export type DetectInferenceBackendsDeps = {
+type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
   readClaudeCliCredentials?: () => { type: string } | null;
   readCodexCliCredentials?: () => { type: string } | null;
@@ -55,14 +55,14 @@ export type DetectInferenceBackendsDeps = {
   randomInt?: (maxExclusive: number) => number;
 };
 
-export type DetectInferenceBackendsOptions = {
+type DetectInferenceBackendsOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   deps?: DetectInferenceBackendsDeps;
 };
 
-export type DetectNativeCodexAppServerOptions = {
+type DetectNativeCodexAppServerOptions = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   probeLocalCommand?: typeof probeLocalCommand;
@@ -155,7 +155,7 @@ async function probeCodexCommand(params: {
   return pathProbe;
 }
 /** Detects a native Codex App Server without coupling it to inference selection. */
-export async function detectNativeCodexAppServer(
+async function detectNativeCodexAppServer(
   options: DetectNativeCodexAppServerOptions = {},
 ): Promise<LocalCommandProbe> {
   return await probeCodexCommand({
@@ -163,6 +163,12 @@ export async function detectNativeCodexAppServer(
     env: options.env ?? process.env,
     platform: options.platform ?? process.platform,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardInferenceTestApi")] = {
+    detectNativeCodexAppServer,
+  };
 }
 /**
  * Detect usable inference backends in ladder order. Returns candidates only

@@ -50,19 +50,10 @@ export { formatError, getStatusCode } from "./session-errors.js";
 export {
   getWebAuthAgeMs,
   logoutWeb,
-  logWebSelfId,
-  pickWebChannel,
-  readWebAuthSnapshot,
-  readWebAuthState,
-  readWebAuthExistsBestEffort,
   readWebAuthExistsForDecision,
-  readWebAuthSnapshotBestEffort,
-  readWebSelfIdentityForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
-  type WhatsAppWebAuthState,
-  webAuthExists,
 } from "./auth-store.js";
 export {
   waitForCredsSaveQueue,
@@ -75,7 +66,7 @@ const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
-export const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
+const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 
 async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
   await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
@@ -513,9 +504,10 @@ export async function waitForWaConnection(
       }
       if (update.connection === "close") {
         cleanup();
+        const disconnectError = update.lastDisconnect?.error ?? update.lastDisconnect;
         reject(
           toLintErrorObject(
-            update.lastDisconnect ?? new Error("Connection closed"),
+            disconnectError ?? new Error("Connection closed"),
             "Non-Error rejection",
           ),
         );

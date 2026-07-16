@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -5,16 +6,12 @@ import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
-import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
+import { discordGuildActionRuntime, discordModerationActionRuntime } from "./runtime-deps.js";
+import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
-import {
-  discordMessagingActionRuntime,
-  handleDiscordMessagingAction,
-} from "./runtime.messaging.js";
-import {
-  discordModerationActionRuntime,
-  handleDiscordModerationAction,
-} from "./runtime.moderation.js";
+import { handleDiscordMessagingAction } from "./runtime.messaging.js";
+import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
+import { handleDiscordModerationAction } from "./runtime.moderation.js";
 
 const originalDiscordMessagingActionRuntime = { ...discordMessagingActionRuntime };
 const originalDiscordGuildActionRuntime = { ...discordGuildActionRuntime };
@@ -1255,8 +1252,9 @@ describe("handleDiscordMessagingAction", () => {
     };
 
     const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
-    expect(payload.messages[0].timestampMs).toBe(expectedMs);
-    expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+    const message = expectDefined(payload.messages[0], "Discord message result");
+    expect(message.timestampMs).toBe(expectedMs);
+    expect(message.timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
   it("rejects unexpected readMessages payloads with a boundary error", async () => {
@@ -1808,8 +1806,9 @@ describe("handleDiscordMessagingAction", () => {
     };
 
     const expectedMs = Date.parse("2026-01-15T12:00:00.000Z");
-    expect(payload.pins[0].timestampMs).toBe(expectedMs);
-    expect(payload.pins[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+    const pin = expectDefined(payload.pins[0], "Discord pin result");
+    expect(pin.timestampMs).toBe(expectedMs);
+    expect(pin.timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
   it("rejects Discord pin reads for non-allowlisted target channels", async () => {
@@ -3469,3 +3468,4 @@ describe("handleDiscordAction per-account gating", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
