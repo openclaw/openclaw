@@ -470,8 +470,8 @@ The branch already has a real shared SQLite base:
   `openclaw-workspace-state.json`, `.openclaw/workspace-state.json`, state-dir
   `workspace-attestations/*.attested`, or sibling `<workspace>.attested`
   sidecars. `openclaw doctor --fix` validates and claims legacy sources,
-   imports them into SQLite with migration receipts, verifies the canonical
-   rows, and only then removes the claimed files.
+  imports them into SQLite with migration receipts, verifies the canonical
+  rows, and only then removes the claimed files.
 - The shared schema reserves an `exec_approvals_config` singleton row, but the
   runtime cutover remains pending. TypeScript and the macOS companion still use
   the state-scoped JSON file and must move to SQLite together.
