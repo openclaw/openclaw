@@ -250,6 +250,33 @@ describe("ReefMessageFlow outbound", () => {
     ).resolves.toEqual({ text: "hello", thread: "01JZ0000000000000000000199" });
   });
 
+  it("uses a message id reserved before delivery", async () => {
+    const alice = reefKeys();
+    const bob = generateIdentity();
+    const cfg = config();
+    cfg.handle = "alice";
+    const trusted = trust({ bob: peerTrust(bob) });
+    const relay = transport();
+    const flow = new ReefMessageFlow({
+      config: cfg,
+      trust: trusted.store,
+      keys: alice,
+      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
+      replay: new MemoryReplayStore(),
+      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+    const reservedId = "01JZ0000000000000000000201";
+
+    await expect(flow.send("bob", "hello", { messageId: reservedId })).resolves.toBe(reservedId);
+    const sent = relay.sendEnvelope.mock.calls[0]![1] as Parameters<typeof open>[0]["envelope"];
+    expect(sent.id).toBe(reservedId);
+  });
+
   it("persists a proposal-bound owner review request and does not send or auto-approve", async () => {
     const alice = reefKeys();
     const bob = generateIdentity();

@@ -49,6 +49,7 @@ import {
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
+  replaceTranscriptMessageByEventIdInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
@@ -232,16 +233,18 @@ export async function appendSqliteTranscriptEvent(
 export function appendSqliteTranscriptEventSync(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
-): void {
+): boolean {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
+  let appended = false;
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
       return;
     }
-    appendTranscriptEventInTransaction(database, resolved, event);
+    appended = appendTranscriptEventInTransaction(database, resolved, event);
   }, toDatabaseOptions(resolved));
+  return appended;
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
@@ -521,11 +524,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
-      };
+      return resolveExistingSqliteTranscriptMessage(database, resolved, options, existing);
     }
   }
 
@@ -564,11 +563,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
-      };
+      return resolveExistingSqliteTranscriptMessage(database, resolved, options, existing);
     }
   }
   if (!appended) {
@@ -588,6 +583,44 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
     appended: true,
     message: finalMessage,
     messageId,
+  };
+}
+
+function resolveExistingSqliteTranscriptMessage<TMessage>(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedTranscriptScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+  existing: { messageId: string; message: unknown },
+): TranscriptMessageAppendResult<TMessage> {
+  if (!options.replaceExistingMessage) {
+    return {
+      appended: false,
+      message: existing.message as TMessage,
+      messageId: existing.messageId,
+    };
+  }
+  const candidate = options.prepareMessageAfterIdempotencyCheck
+    ? options.prepareMessageAfterIdempotencyCheck(options.message)
+    : options.message;
+  const replacement =
+    candidate === undefined
+      ? undefined
+      : options.replaceExistingMessage(existing.message as TMessage, candidate);
+  const updated =
+    replacement === undefined
+      ? undefined
+      : replaceTranscriptMessageByEventIdInTransaction(
+          database,
+          resolved,
+          existing.messageId,
+          replacement,
+          options,
+        );
+  return {
+    appended: false,
+    ...(updated !== undefined ? { updated: true } : {}),
+    message: updated ?? (existing.message as TMessage),
+    messageId: existing.messageId,
   };
 }
 

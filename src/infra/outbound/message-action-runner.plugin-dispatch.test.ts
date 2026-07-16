@@ -3011,6 +3011,7 @@ describe("runMessageAction plugin dispatch", () => {
           mode: "cli",
         },
         agentId: "main",
+        suppressTranscriptMirror: true,
         dryRun: false,
       });
 
@@ -3020,11 +3021,9 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
       expectRecordFields(executeCall, { message: "Deployment trend" }, "execute send call");
-      expectRecordFields(
-        readRecordField(executeCall, "ctx", "execute send context"),
-        { conversationType: "channel" },
-        "execute send context",
-      );
+      const executeContext = readRecordField(executeCall, "ctx", "execute send context");
+      expectRecordFields(executeContext, { conversationType: "channel" }, "execute send context");
+      expect(executeContext.mirror).toBeUndefined();
       expectRecordFields(
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },

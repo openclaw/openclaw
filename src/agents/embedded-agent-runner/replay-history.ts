@@ -88,6 +88,21 @@ type ProviderReplayHookParams = {
   sessionId?: string;
 };
 
+function isReplayableConversationSend(message: AgentMessage): boolean {
+  if (!isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return false;
+  }
+  const marker = (message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
+  return (
+    Boolean(marker) &&
+    typeof marker === "object" &&
+    !Array.isArray(marker) &&
+    (marker as { kind?: unknown; replay?: unknown }).kind === "conversation-send" &&
+    (marker as { status?: unknown }).status === "delivered" &&
+    (marker as { replay?: unknown }).replay === "backing-session"
+  );
+}
+
 function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
   const context = {
     config: params.config,
@@ -305,7 +320,10 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       out.push(message);
       continue;
     }
-    if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    if (
+      isTranscriptOnlyOpenClawAssistantMessage(message) &&
+      !isReplayableConversationSend(message)
+    ) {
       // Drop from the in-memory replay copy; the persisted JSONL keeps the
       // entry so user-facing transcript surfaces are unchanged.
       touched = true;

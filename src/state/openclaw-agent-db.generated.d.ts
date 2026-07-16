@@ -36,6 +36,7 @@ export interface Conversations {
   channel: string;
   conversation_id: string;
   created_at: number;
+  delivery_target: string;
   kind: string;
   label: string | null;
   metadata_json: string | null;

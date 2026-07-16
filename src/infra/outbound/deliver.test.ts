@@ -2647,6 +2647,44 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((entry) => entry.messageId)).toEqual(["ab", "cd"]);
   });
 
+  it("keeps a prepared transport-id delivery atomic", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "prepared-1",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              textChunkLimit: 2,
+              chunker: (text, limit) => [text.slice(0, limit), text.slice(limit)],
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "abcd" }],
+      preparedMessageId: "prepared-1",
+    });
+
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "abcd", preparedMessageId: "prepared-1" }),
+    );
+  });
+
   it("uses replyToId only on the first low-level send for single-use reply modes", async () => {
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
       channel: "matrix" as const,

@@ -78,8 +78,17 @@ describe("delivery-queue storage", () => {
           gatewayClientScopes: ["operator.write"],
           mirror: {
             sessionKey: "agent:main:main",
+            expectedSessionId: "session-main",
             text: "hello",
             mediaUrls: ["https://example.com/file.png"],
+            idempotencyKey: "conversation-outbound:turn-1",
+            deliveryMirror: {
+              kind: "conversation-send",
+              status: "delivered",
+              channel: "reef",
+              conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            },
+            deliveryMirrorUpdateMode: "marker-only",
           },
           session: {
             key: "agent:main:main",
@@ -112,8 +121,17 @@ describe("delivery-queue storage", () => {
       expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
       expect(entry.mirror).toEqual({
         sessionKey: "agent:main:main",
+        expectedSessionId: "session-main",
         text: "hello",
         mediaUrls: ["https://example.com/file.png"],
+        idempotencyKey: "conversation-outbound:turn-1",
+        deliveryMirror: {
+          kind: "conversation-send",
+          status: "delivered",
+          channel: "reef",
+          conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        },
+        deliveryMirrorUpdateMode: "marker-only",
       });
       expect(entry.session).toEqual({
         key: "agent:main:main",

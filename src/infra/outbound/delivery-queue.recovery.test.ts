@@ -1458,8 +1458,17 @@ describe("delivery-queue recovery", () => {
         gatewayClientScopes: ["operator.write"],
         mirror: {
           sessionKey: "agent:main:main",
+          expectedSessionId: "session-main",
           text: "a",
           mediaUrls: ["https://example.com/a.png"],
+          idempotencyKey: "conversation-outbound:turn-1",
+          deliveryMirror: {
+            kind: "conversation-send",
+            status: "delivered",
+            channel: "reef",
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+          },
+          deliveryMirrorUpdateMode: "marker-only",
         },
         session: {
           key: "agent:main:main",
@@ -1502,8 +1511,17 @@ describe("delivery-queue recovery", () => {
     expect(deliverInput.gatewayClientScopes).toEqual(["operator.write"]);
     expect(deliverInput.mirror).toEqual({
       sessionKey: "agent:main:main",
+      expectedSessionId: "session-main",
       text: "a",
       mediaUrls: ["https://example.com/a.png"],
+      idempotencyKey: "conversation-outbound:turn-1",
+      deliveryMirror: {
+        kind: "conversation-send",
+        status: "delivered",
+        channel: "reef",
+        conversationRef: "conv_0123456789abcdef0123456789abcdef",
+      },
+      deliveryMirrorUpdateMode: "marker-only",
     });
     expect(deliverInput.session).toEqual({
       key: "agent:main:main",

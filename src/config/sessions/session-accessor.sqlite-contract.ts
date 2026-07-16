@@ -95,11 +95,13 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   parentId?: string | null;
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+  replaceExistingMessage?: (existing: TMessage, candidate: TMessage) => TMessage | undefined;
   useRawWhenLinear?: boolean;
 };
 
 export type TranscriptMessageAppendResult<TMessage> = {
   appended: boolean;
+  updated?: boolean;
   message: TMessage;
   messageId: string;
 };

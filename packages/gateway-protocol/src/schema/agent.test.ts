@@ -1,7 +1,14 @@
 // Gateway Protocol tests cover agent behavior.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { AgentParamsSchema, MessageActionParamsSchema } from "./agent.js";
+import {
+  AgentParamsSchema,
+  ConversationTurnCancelParamsSchema,
+  ConversationTurnCancelResultSchema,
+  ConversationTurnParamsSchema,
+  ConversationTurnResultSchema,
+  MessageActionParamsSchema,
+} from "./agent.js";
 
 /**
  * Regression coverage for agent-run schema payloads that carry internal
@@ -137,5 +144,44 @@ describe("MessageActionParamsSchema", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("ConversationTurn schemas", () => {
+  it("accepts a Gateway-owned correlated turn and its inline reply", () => {
+    expect(
+      Value.Check(ConversationTurnParamsSchema, {
+        agentId: "main",
+        sourceSessionId: "operator-session",
+        sourceSessionKey: "agent:main:telegram:direct:operator",
+        turnId: "conversation-turn-1",
+        conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        message: "hello",
+        timeoutMs: 30_000,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ConversationTurnResultSchema, {
+        status: "replied",
+        conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        channel: "reef",
+        messageId: "01JZ0000000000000000000200",
+        correlationPersisted: true,
+        reply: {
+          conversationRef: "conv_0123456789abcdef0123456789abcdef",
+          messageId: "01JZ0000000000000000000201",
+          replyToId: "01JZ0000000000000000000200",
+          text: "hello back",
+          timestamp: 123,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts explicit cancellation for an abandoned Gateway-owned turn", () => {
+    expect(Value.Check(ConversationTurnCancelParamsSchema, { turnId: "conversation-turn-1" })).toBe(
+      true,
+    );
+    expect(Value.Check(ConversationTurnCancelResultSchema, { cancelled: true })).toBe(true);
   });
 });

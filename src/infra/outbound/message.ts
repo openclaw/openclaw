@@ -89,6 +89,10 @@ type MessageSendParams = {
   cfg?: OpenClawConfig;
   gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** @internal Use the active adapter directly when already executing inside the Gateway. */
+  gatewayOwnedDelivery?: boolean;
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
@@ -364,7 +368,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
-  if (deliveryMode !== "gateway") {
+  if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
     const outboundChannel = channel;
     const resolvedTarget = resolveOutboundTarget({
       channel: outboundChannel,
@@ -422,6 +426,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       silent: params.silent,
       mediaAccess: params.mediaAccess,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
+      preparedMessageId: params.preparedMessageId,
       mirror: params.mirror
         ? {
             ...params.mirror,

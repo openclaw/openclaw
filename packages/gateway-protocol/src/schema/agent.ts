@@ -20,6 +20,7 @@ const AGENT_INTERNAL_EVENT_SOURCES = [
   "music_generation",
 ] as const;
 const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
+const CONVERSATION_REF_PATTERN = "^conv_[a-f0-9]{32}$";
 
 /** Generated media/file attachment metadata carried by internal agent events. */
 export const AgentGeneratedAttachmentSchema = closedObject({
@@ -143,6 +144,63 @@ export const SendParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
 });
+
+/** Gateway-owned request that sends and consumes one correlated external reply inline. */
+export const ConversationTurnParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  sourceSessionId: Type.Optional(NonEmptyString),
+  sourceSessionKey: Type.Optional(NonEmptyString),
+  turnId: NonEmptyString,
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  message: NonEmptyString,
+  timeoutMs: Type.Integer({ minimum: 1, maximum: 300_000 }),
+});
+
+export const ConversationTurnCancelParamsSchema = closedObject({
+  turnId: NonEmptyString,
+});
+
+export const ConversationTurnCancelResultSchema = closedObject({
+  cancelled: Type.Boolean(),
+});
+
+export const ConversationTurnReplySchema = closedObject({
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  messageId: NonEmptyString,
+  replyToId: Type.Optional(NonEmptyString),
+  threadId: Type.Optional(NonEmptyString),
+  text: Type.String(),
+  timestamp: Type.Integer({ minimum: 0 }),
+  transcriptArtifactId: Type.Optional(NonEmptyString),
+  transcriptMessageId: Type.Optional(NonEmptyString),
+});
+
+const ConversationTurnBaseResultSchema = {
+  conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+  channel: NonEmptyString,
+  messageId: NonEmptyString,
+  correlationPersisted: Type.Boolean(),
+};
+
+export const ConversationTurnResultSchema = Type.Union([
+  closedObject({
+    ...ConversationTurnBaseResultSchema,
+    status: Type.Literal("replied"),
+    reply: ConversationTurnReplySchema,
+  }),
+  closedObject({
+    ...ConversationTurnBaseResultSchema,
+    status: Type.Literal("timeout"),
+  }),
+  closedObject({
+    conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
+    channel: NonEmptyString,
+    messageId: Type.Optional(NonEmptyString),
+    correlationPersisted: Type.Boolean(),
+    status: Type.Literal("sent"),
+    error: NonEmptyString,
+  }),
+]);
 
 /** Poll creation request for adapters that support native polls. */
 export const PollParamsSchema = closedObject({
@@ -271,6 +329,11 @@ export const WakeParamsSchema = Type.Object(
 export type AgentEvent = Static<typeof AgentEventSchema>;
 export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
 export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
+export type ConversationTurnParams = Static<typeof ConversationTurnParamsSchema>;
+export type ConversationTurnCancelParams = Static<typeof ConversationTurnCancelParamsSchema>;
+export type ConversationTurnCancelResult = Static<typeof ConversationTurnCancelResultSchema>;
+export type ConversationTurnReply = Static<typeof ConversationTurnReplySchema>;
+export type ConversationTurnResult = Static<typeof ConversationTurnResultSchema>;
 export type MessageActionParams = Static<typeof MessageActionParamsSchema>;
 export type PollParams = Static<typeof PollParamsSchema>;
 export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;

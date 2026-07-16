@@ -18,10 +18,12 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "../../interactive/payload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -29,6 +31,8 @@ import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
+
+const log = createSubsystemLogger("outbound/send-service");
 
 /** Gateway connection settings forwarded to outbound send helpers. */
 type OutboundGatewayContext = {
@@ -69,6 +73,10 @@ type OutboundSendContext = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /** Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** The Gateway owns this call and may use its active gateway-mode adapter directly. */
+  gatewayOwnedDelivery?: boolean;
 };
 
 type PluginHandledResult = {
@@ -152,6 +160,8 @@ async function sendCoreMessage(params: {
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
     mediaAccess: params.ctx.mediaAccess,
+    preparedMessageId: params.ctx.preparedMessageId,
+    gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
   });
 }
 
@@ -373,14 +383,28 @@ export async function executeSendAction(params: {
         params.ctx.mirror.mediaUrls ??
         params.mediaUrls ??
         (params.mediaUrl ? [params.mediaUrl] : undefined);
-      await appendAssistantMessageToSessionTranscript({
-        agentId: params.ctx.mirror.agentId,
-        sessionKey: params.ctx.mirror.sessionKey,
-        text: mirrorText,
-        mediaUrls: mirrorMediaUrls,
-        idempotencyKey: params.ctx.mirror.idempotencyKey,
-        config: params.ctx.cfg,
-      });
+      try {
+        const mirrorResult = await appendAssistantMessageToSessionTranscript({
+          agentId: params.ctx.mirror.agentId,
+          sessionKey: params.ctx.mirror.sessionKey,
+          expectedSessionId: params.ctx.mirror.expectedSessionId,
+          text: mirrorText,
+          mediaUrls: mirrorMediaUrls,
+          idempotencyKey: params.ctx.mirror.idempotencyKey,
+          deliveryMirror: params.ctx.mirror.deliveryMirror,
+          deliveryMirrorUpdateMode: params.ctx.mirror.deliveryMirrorUpdateMode,
+          config: params.ctx.cfg,
+        });
+        if (!mirrorResult.ok) {
+          log.warn(
+            `failed to mirror plugin-handled delivery; channel send already succeeded: ${mirrorResult.reason}`,
+          );
+        }
+      } catch (error) {
+        log.warn(
+          `failed to mirror plugin-handled delivery; channel send already succeeded: ${formatErrorMessage(error)}`,
+        );
+      }
     },
   });
   if (pluginHandled) {

@@ -129,6 +129,25 @@ describe("searchSessionTranscripts", () => {
     expect(search("alpha").hits).toHaveLength(1);
   });
 
+  it("does not index hidden pending conversation delivery intents", async () => {
+    await appendSqliteTranscriptMessage(transcriptScope("session-1", "agent:main:main"), {
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "unsent-pending-needle" }],
+        openclawDeliveryMirror: {
+          kind: "conversation-send",
+          status: "pending",
+          channel: "reef",
+          conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        },
+      },
+    });
+
+    expect(search("unsent-pending-needle").hits).toHaveLength(0);
+  });
+
   it("filters hits to the requested session keys", async () => {
     await appendUserMessage("session-1", "agent:main:main", "shared keyword payload");
     await appendUserMessage("session-2", "agent:main:other", "shared keyword payload");

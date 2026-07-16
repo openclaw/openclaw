@@ -94,9 +94,15 @@ function buildLegacyDeliveryIndex(
   return candidates;
 }
 
+const reefMessageIds = createMonotonicUlidFactory();
+
+/** Reserves a protocol-valid id before recipient-visible Reef delivery starts. */
+export function prepareReefMessageId(): string {
+  return reefMessageIds();
+}
+
 export class ReefMessageFlow {
   private legacyDeliveryIndex?: Promise<Map<string, LegacyDeliveryCandidate>>;
-  private readonly ulid = createMonotonicUlidFactory();
 
   constructor(
     readonly options: {
@@ -122,6 +128,7 @@ export class ReefMessageFlow {
       replyTo?: string;
       expectedRecipient?: ReefPeerIdentity;
       resendDisabled?: true;
+      messageId?: string;
     } = {},
   ): Promise<string> {
     const friend = this.options.trust.get(peer);
@@ -134,7 +141,7 @@ export class ReefMessageFlow {
       throw new Error(`Reef peer @${peer} is not approved with current keys`);
     }
     const recipient = reefPeerIdentity(friend);
-    const id = this.ulid();
+    const id = context.messageId ?? prepareReefMessageId();
     const body = {
       text,
       ...(context.thread ? { thread: context.thread } : {}),

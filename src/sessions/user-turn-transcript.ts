@@ -229,6 +229,7 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   const openClawMeta = {
     ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
     ...senderMeta,
+    ...(params.transport ? { transport: params.transport } : {}),
   };
   const message = {
     role: "user",
@@ -385,6 +386,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     (message as unknown as { provenance?: unknown }).provenance,
   );
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
+  const transport = readOpenClawMessageMeta(message)?.transport;
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -396,20 +398,24 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean") {
+  if (
+    !idempotencyKey &&
+    typeof senderIsOwner !== "boolean" &&
+    (!transport || typeof transport !== "object" || Array.isArray(transport))
+  ) {
     return nextUserMessage;
   }
+  const protectedMeta = {
+    ...readOpenClawMessageMeta(nextUserMessage),
+    ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
+    ...(transport && typeof transport === "object" && !Array.isArray(transport)
+      ? { transport }
+      : {}),
+  };
   return {
     ...(nextUserMessage as unknown as Record<string, unknown>),
     ...(idempotencyKey ? { idempotencyKey } : {}),
-    ...(typeof senderIsOwner === "boolean"
-      ? {
-          __openclaw: {
-            ...readOpenClawMessageMeta(nextUserMessage),
-            senderIsOwner,
-          },
-        }
-      : {}),
+    ...(Object.keys(protectedMeta).length > 0 ? { __openclaw: protectedMeta } : {}),
   } as unknown as PersistedUserTurnMessage;
 }
 

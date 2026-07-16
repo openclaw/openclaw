@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   account_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('direct', 'group', 'channel')),
   peer_id TEXT NOT NULL,
+  delivery_target TEXT NOT NULL,
   parent_conversation_id TEXT,
   thread_id TEXT,
   native_channel_id TEXT,

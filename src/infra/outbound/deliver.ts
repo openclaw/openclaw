@@ -225,6 +225,7 @@ type ChannelHandlerParams = {
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";
   deliveryQueueId?: string;
+  preparedMessageId?: string;
   requiredUnknownSendReconciliation?: boolean;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
   onPlatformSendDispatch?: () => Promise<void>;
@@ -403,7 +404,9 @@ function createPluginHandler(
   const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound?.sendText;
   const sendMedia = outbound?.sendMedia;
-  const chunker = outbound?.chunker ?? null;
+  // A prepared transport id identifies one atomic platform message. Splitting it
+  // would either reuse the id or leave later chunks outside reply correlation.
+  const chunker = baseCtx.preparedMessageId ? null : (outbound?.chunker ?? null);
   const chunkerMode = outbound?.chunkerMode;
   const onMessageDeliveryResult = params.onDeliveryResult
     ? async (result: ChannelMessageSendResult): Promise<void> => {
@@ -420,6 +423,10 @@ function createPluginHandler(
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
     deliveryPartIndex: overrides?.deliveryPartIndex,
+    preparedMessageId:
+      overrides?.deliveryPartIndex === undefined || overrides.deliveryPartIndex === 0
+        ? baseCtx.preparedMessageId
+        : undefined,
     formatting:
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
@@ -657,6 +664,7 @@ const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
   gatewayClientScopes: params.gatewayClientScopes,
   conversationReadOrigin: params.conversationReadOrigin,
   deliveryQueueId: params.deliveryQueueId,
+  preparedMessageId: params.preparedMessageId,
   onPlatformSendDispatch: params.onPlatformSendDispatch,
   onDeliveryResult: params.onDeliveryResult,
 });
@@ -755,6 +763,8 @@ type DeliverOutboundPayloadsCoreParams = {
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
   /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
   deliveryQueueId?: string;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
   /** @internal Recheck the concrete post-hook send shape before platform I/O. */
   requiredUnknownSendReconciliation?: boolean;
   /** @internal Caller preflight explicitly required provider unknown-send reconciliation. */
@@ -2125,6 +2135,7 @@ async function deliverOutboundPayloadsCore(
       gatewayClientScopes: params.gatewayClientScopes,
       conversationReadOrigin: params.conversationReadOrigin,
       deliveryQueueId: params.deliveryQueueId,
+      preparedMessageId: params.preparedMessageId,
       requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
       onPlatformSendStart: params.onPlatformSendStart,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
@@ -2683,8 +2694,11 @@ async function deliverOutboundPayloadsCore(
         const mirrorResult = await appendAssistantMessageToSessionTranscript({
           agentId: params.mirror.agentId,
           sessionKey: params.mirror.sessionKey,
+          expectedSessionId: params.mirror.expectedSessionId,
           text: mirrorText,
           idempotencyKey: params.mirror.idempotencyKey,
+          deliveryMirror: params.mirror.deliveryMirror,
+          deliveryMirrorUpdateMode: params.mirror.deliveryMirrorUpdateMode,
           config: params.cfg,
         });
         if (!mirrorResult.ok) {

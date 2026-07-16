@@ -25,6 +25,7 @@ import {
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
   indexAppendedTranscriptEventInTransaction,
+  markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -415,6 +416,53 @@ export function readTranscriptMessageByEventId(
 ): { messageId: string; message: unknown } | undefined {
   const identity = readTranscriptIdentityByEventId(database, scope.sessionId, eventId);
   return identity ? readTranscriptMessageByIdentity(database, scope, identity) : undefined;
+}
+
+/** Replaces one keyed message payload without moving its transcript-tree position. */
+export function replaceTranscriptMessageByEventIdInTransaction<TMessage>(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  eventId: string,
+  message: TMessage,
+  options: Pick<TranscriptMessageAppendOptions<TMessage>, "config">,
+): TMessage | undefined {
+  const identity = readTranscriptIdentityByEventId(database, scope.sessionId, eventId);
+  if (!identity) {
+    return undefined;
+  }
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", scope.sessionId)
+      .where("seq", "=", identity.seq),
+  );
+  if (!row) {
+    return undefined;
+  }
+  const event = JSON.parse(row.event_json) as Record<string, unknown>;
+  if (event.type !== "message") {
+    return undefined;
+  }
+  const previousKey = readMessageIdempotencyKey(event.message);
+  const finalMessage = redactTranscriptMessageForStorage(message, options);
+  if (readMessageIdempotencyKey(finalMessage) !== previousKey) {
+    throw new Error("Cannot change a transcript message idempotency key during in-place update");
+  }
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("transcript_events")
+      .set({ event_json: JSON.stringify({ ...event, message: finalMessage }) })
+      .where("session_id", "=", scope.sessionId)
+      .where("seq", "=", identity.seq),
+  );
+  touchTranscriptMutationInTransaction(database, scope.sessionId);
+  // Existing indexed text may have changed; reconcile owns active-branch resolution.
+  markSessionTranscriptIndexDirtyInTransaction(database.db, scope.sessionId);
+  return finalMessage;
 }
 
 function readTranscriptMessageByIdentity(

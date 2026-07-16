@@ -540,6 +540,12 @@ describe("user turn transcript persistence", () => {
           senderIsOwner: true,
           provenance,
           sender: { id: "user-42", name: "Ada" },
+          transport: {
+            channel: "reef",
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            messageId: "inbound-1",
+            replyToId: "outbound-1",
+          },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -551,6 +557,12 @@ describe("user turn transcript persistence", () => {
           senderIsOwner: true,
           provenance,
           sender: { id: "user-42", name: "Ada" },
+          transport: {
+            channel: "reef",
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            messageId: "inbound-1",
+            replyToId: "outbound-1",
+          },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -564,6 +576,12 @@ describe("user turn transcript persistence", () => {
           __openclaw: {
             hookOwned: true,
             senderIsOwner: true,
+            transport: {
+              channel: "reef",
+              conversationRef: "conv_0123456789abcdef0123456789abcdef",
+              messageId: "inbound-1",
+              replyToId: "outbound-1",
+            },
           },
         }),
       ]);

@@ -91,6 +91,7 @@ import {
 import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
+import type { OutboundMirror } from "./mirror.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -162,6 +163,14 @@ export type RunMessageActionParams = {
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
+  /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
+  suppressTranscriptMirror?: boolean;
+  /** @internal Explicit durable transcript destination owned by the caller. */
+  transcriptMirror?: OutboundMirror;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
+  gatewayOwnedDelivery?: boolean;
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -182,6 +191,8 @@ export type MessageActionRunResult =
       to: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
+      /** Exact text after prefixes, cross-context markers, and send-time normalization. */
+      sentText?: string;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;
       dryRun: boolean;
@@ -1384,6 +1395,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       to,
       handledBy: "plugin",
       payload,
+      sentText: sendPayload.message,
       dryRun,
     }),
   });
@@ -1433,16 +1445,24 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       toolContext: input.toolContext,
       deps: input.deps,
       dryRun,
+      preparedMessageId: input.preparedMessageId,
+      gatewayOwnedDelivery: input.gatewayOwnedDelivery,
       mirror:
-        outboundRoute && !dryRun
+        !dryRun && input.transcriptMirror
           ? {
-              sessionKey: outboundRoute.sessionKey,
-              agentId,
+              ...input.transcriptMirror,
               text: sendPayload.message,
               mediaUrls: sendPayload.mediaUrls,
-              idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
             }
-          : undefined,
+          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
+            ? {
+                sessionKey: outboundRoute.sessionKey,
+                agentId,
+                text: sendPayload.message,
+                mediaUrls: sendPayload.mediaUrls,
+                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+              }
+            : undefined,
       abortSignal,
       silent: sendPayload.silent ?? undefined,
     },
@@ -1470,6 +1490,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     to,
     handledBy: send.handledBy,
     payload: send.payload,
+    sentText: sendPayload.message,
     toolResult: send.toolResult,
     sendResult: send.sendResult,
     dryRun,

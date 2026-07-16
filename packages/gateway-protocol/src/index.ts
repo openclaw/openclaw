@@ -58,6 +58,11 @@ import {
   AgentsListParamsSchema,
   AgentsListResultSchema,
   AgentWaitParamsSchema,
+  ConversationTurnCancelParamsSchema,
+  ConversationTurnCancelResultSchema,
+  ConversationTurnParamsSchema,
+  ConversationTurnReplySchema,
+  ConversationTurnResultSchema,
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -566,6 +571,9 @@ export const validateResponseFrame = lazyCompile(ResponseFrameSchema);
 export const validateEventFrame = lazyCompile(EventFrameSchema);
 export const validateMessageActionParams = lazyCompile(MessageActionParamsSchema);
 export const validateSendParams = lazyCompile(SendParamsSchema);
+export const validateConversationTurnCancelParams = lazyCompile(ConversationTurnCancelParamsSchema);
+export const validateConversationTurnParams = lazyCompile(ConversationTurnParamsSchema);
+export const validateConversationTurnResult = lazyCompile(ConversationTurnResultSchema);
 export const validatePollParams = lazyCompile(PollParamsSchema);
 export const validateAgentParams = lazyCompile(AgentParamsSchema);
 export const validateAuditActivityListParams = lazyCompile<AuditActivityListParams>(
@@ -932,6 +940,11 @@ export {
   SystemInfoResultSchema,
   StateVersionSchema,
   AgentEventSchema,
+  ConversationTurnCancelParamsSchema,
+  ConversationTurnCancelResultSchema,
+  ConversationTurnParamsSchema,
+  ConversationTurnReplySchema,
+  ConversationTurnResultSchema,
   MessageActionParamsSchema,
   ChatEventSchema,
   SendParamsSchema,
@@ -1349,6 +1362,11 @@ export type {
   ErrorShape,
   StateVersion,
   AgentEvent,
+  ConversationTurnCancelParams,
+  ConversationTurnCancelResult,
+  ConversationTurnParams,
+  ConversationTurnReply,
+  ConversationTurnResult,
   AgentIdentityParams,
   AgentIdentityResult,
   AgentWaitParams,

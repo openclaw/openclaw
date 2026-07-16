@@ -51,10 +51,11 @@ export async function persistSessionTranscriptTurn(
     () => appendTranscriptTurnMessages(target, options),
   );
   const appendedCount = countAppendedTranscriptMessages(appendedMessages);
+  const mutatedCount = countMutatedTranscriptMessages(appendedMessages);
   const sessionEntry = await touchTranscriptTurnSessionEntry({
     scope,
     target,
-    shouldTouch: options.touchSessionEntry === true && appendedCount > 0,
+    shouldTouch: options.touchSessionEntry === true && mutatedCount > 0,
   });
   await publishTranscriptTurnUpdate({
     target,
@@ -126,6 +127,12 @@ function countAppendedTranscriptMessages(
   messages: readonly TranscriptMessageAppendResult<unknown>[],
 ): number {
   return messages.filter((message) => message.appended).length;
+}
+
+function countMutatedTranscriptMessages(
+  messages: readonly TranscriptMessageAppendResult<unknown>[],
+): number {
+  return messages.filter((message) => message.appended || message.updated === true).length;
 }
 
 async function persistExpectedSessionTranscriptTurn(
@@ -334,8 +341,10 @@ async function publishTranscriptTurnUpdate(params: {
   if (params.updateMode === "none") {
     return;
   }
-  const lastAppended = params.appendedMessages.findLast((message) => message.appended);
-  if (params.publishWhen === "when-appended" && !lastAppended) {
+  const lastMutation = params.appendedMessages.findLast(
+    (message) => message.appended || message.updated === true,
+  );
+  if (params.publishWhen === "when-appended" && !lastMutation) {
     return;
   }
   const target =
@@ -350,10 +359,10 @@ async function publishTranscriptTurnUpdate(params: {
     ...(params.target.sessionKey ? { sessionKey: params.target.sessionKey } : {}),
     ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
     ...(target ? { target } : {}),
-    ...(params.updateMode === "inline" && lastAppended
+    ...(params.updateMode === "inline" && lastMutation
       ? {
-          message: lastAppended.message,
-          messageId: lastAppended.messageId,
+          message: lastMutation.message,
+          messageId: lastMutation.messageId,
         }
       : {}),
     sessionFile: params.target.sessionFile,
