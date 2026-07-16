@@ -7,6 +7,11 @@ import { pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
+  isControlUiGeneratedI18nPath,
+  mergeControlUiTranslationMemory,
+  resolveControlUiGeneratedConflict,
+} from "../../scripts/control-ui-i18n-resolve-conflicts.ts";
+import {
   analyzeControlUiCatalogs,
   assertScopedCatalogFallbackUpdate,
   flattenControlUiCatalog,
@@ -59,6 +64,50 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("recognizes only generated conflict paths", () => {
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/catalog-fallbacks.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/raw-copy-baseline.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/de.meta.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/de.tm.jsonl")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/de.ts")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/glossary.de.json")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en.ts")).toBe(false);
+  });
+
+  it("merges translation memory by cache key with the replayed side winning", () => {
+    const ours = [
+      { cache_key: "b", translated: "upstream-only" },
+      { cache_key: "shared", translated: "upstream" },
+    ];
+    const theirs = [
+      { cache_key: "a", translated: "branch-only" },
+      { cache_key: "shared", translated: "branch" },
+    ];
+    const merged = mergeControlUiTranslationMemory(
+      `${ours.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      `${theirs.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { cache_key: string; translated: string });
+
+    expect(merged).toEqual([
+      { cache_key: "a", translated: "branch-only" },
+      { cache_key: "b", translated: "upstream-only" },
+      { cache_key: "shared", translated: "branch" },
+    ]);
+  });
+
+  it("preserves replayed-side generated-file deletion before regeneration", () => {
+    expect(
+      resolveControlUiGeneratedConflict(
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+        '{"cache_key":"stale"}\n',
+        null,
+      ),
+    ).toBeNull();
+  });
+
   it("builds a deterministic fallback list without accepting catalog drift", () => {
     const source = flattenControlUiCatalog(
       { group: { first: "First {count}", second: "Second" } },
