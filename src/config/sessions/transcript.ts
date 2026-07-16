@@ -69,16 +69,6 @@ export type SessionTranscriptDeliveryMirror =
       kind: "channel-final-suppressed";
       reason: "stale-foreground";
       sourceMessageId?: string;
-    }
-  | {
-      kind: "conversation-send";
-      channel: string;
-      conversationRef: string;
-      messageId?: string;
-      status: "delivered" | "pending";
-      /** The tool call lives elsewhere, so this outbound text remains model context here. */
-      replay?: "backing-session";
-      threadId?: string;
     };
 
 type InternalSessionTranscriptDeliveryMirror =
@@ -450,8 +440,6 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   mediaUrls?: string[];
   idempotencyKey?: string;
   deliveryMirror?: InternalSessionTranscriptDeliveryMirror;
-  /** Promotes a durable conversation-send intent without appending a second row. */
-  deliveryMirrorUpdateMode?: "marker-only" | "replace";
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
@@ -484,9 +472,6 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     updateMode: params.updateMode,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
-    ...(params.deliveryMirrorUpdateMode
-      ? { deliveryMirrorUpdateMode: params.deliveryMirrorUpdateMode }
-      : {}),
     message: {
       role: "assistant" as const,
       content: [{ type: "text", text: mirrorText }],
@@ -514,41 +499,6 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   });
 }
 
-function replaceExistingConversationDeliveryMirror(params: {
-  existing: unknown;
-  candidate: unknown;
-  mode: "marker-only" | "replace";
-}): unknown {
-  if (
-    !params.existing ||
-    typeof params.existing !== "object" ||
-    Array.isArray(params.existing) ||
-    !params.candidate ||
-    typeof params.candidate !== "object" ||
-    Array.isArray(params.candidate)
-  ) {
-    return undefined;
-  }
-  const existing = params.existing as SessionTranscriptAssistantMessage;
-  const candidate = params.candidate as SessionTranscriptAssistantMessage;
-  const existingMarker = existing.openclawDeliveryMirror;
-  const candidateMarker = candidate.openclawDeliveryMirror;
-  if (
-    existingMarker?.kind !== "conversation-send" ||
-    candidateMarker?.kind !== "conversation-send" ||
-    candidateMarker.status !== "delivered" ||
-    existingMarker.conversationRef !== candidateMarker.conversationRef ||
-    existingMarker.channel !== candidateMarker.channel
-  ) {
-    return undefined;
-  }
-  const replacement =
-    params.mode === "marker-only"
-      ? { ...existing, openclawDeliveryMirror: candidateMarker }
-      : candidate;
-  return JSON.stringify(replacement) === JSON.stringify(existing) ? undefined : replacement;
-}
-
 export async function appendExactAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
@@ -561,7 +511,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
-  deliveryMirrorUpdateMode?: "marker-only" | "replace";
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -670,16 +619,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
                       explicitIdempotencyKey,
                       agentId: transcriptAgentId,
                       sessionKey: resolved.normalizedKey,
-                    }),
-                }
-              : {}),
-            ...(explicitIdempotencyKey && params.deliveryMirrorUpdateMode
-              ? {
-                  replaceExistingMessage: (existing: unknown, candidate: unknown): unknown =>
-                    replaceExistingConversationDeliveryMirror({
-                      existing,
-                      candidate,
-                      mode: params.deliveryMirrorUpdateMode!,
                     }),
                 }
               : {}),
@@ -822,8 +761,7 @@ function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage):
     isRedundantDeliveryMirror(message) &&
     (marker?.kind === "channel-final" ||
       marker?.kind === "channel-final-suppressed" ||
-      marker?.kind === "message-tool-source-reply" ||
-      marker?.kind === "conversation-send")
+      marker?.kind === "message-tool-source-reply")
   );
 }
 

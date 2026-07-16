@@ -17,7 +17,7 @@ OpenClaw gives agents tools to work across sessions, inspect status, and orchest
 | `sessions_history`   | Read the transcript of a specific session                                   |
 | `sessions_send`      | Run another session on the same Gateway and optionally wait                 |
 | `conversations_list` | List stable external conversation addresses                                 |
-| `conversations_send` | Send to one exact external conversation without running its backing session |
+| `conversations_send` | Send to one exact external conversation without running a local session     |
 | `conversations_turn` | Send to one exact external conversation and wait for its correlated reply   |
 | `sessions_spawn`     | Spawn an isolated sub-agent session for background work                     |
 | `sessions_yield`     | End the current turn and wait for follow-up sub-agent results               |
@@ -65,7 +65,7 @@ If you need the exact raw transcript, inspect the scoped SQLite transcript rows 
 
 A **session** is local model context. A **conversation** is an exact external address such as one peer, channel, or thread. The two are linked, but they are not interchangeable: direct messages can share one `main` session while retaining separate conversation addresses.
 
-`conversations_list` returns opaque `conversationRef` values for the active agent. Conversation discovery and delivery are owner-only because they use the Gateway's channel credentials. Use `conversations_send` for fire-and-forget delivery. Use `conversations_turn` when the remote reply belongs to the current model turn: the Gateway reserves one transport message ID, sends one atomic message, persists both sides in the backing transcript, and returns the correlated reply from the tool instead of starting a second local agent turn. The Gateway owns the waiter so correlation shares a process with channel ingress. Unsolicited inbound messages continue through the normal channel dispatch path.
+`conversations_list` returns opaque `conversationRef` values for the active agent. Conversation discovery and delivery are owner-only because they use the Gateway's channel credentials. Use `conversations_send` for fire-and-forget delivery. Use `conversations_turn` when the remote reply belongs to the current model turn: the Gateway reserves one transport message ID, persists a delivery operation and queue intent before transport I/O, and returns the correlated reply from the tool instead of starting a second local agent turn. Delivery operations live outside model transcripts; a captured reply is retained only as a side artifact while the tool result owns model context. If the Gateway restarts after queueing, delivery can recover but a later reply follows ordinary inbound dispatch because the process-local waiter is gone. Unsolicited inbound messages always continue through the normal channel dispatch path.
 
 Use the shared `message` tool when you already have an explicit raw channel target or need a channel-specific action. Conversation references are scoped to the active agent and should be obtained through `conversations_list`, not constructed from session keys.
 

@@ -148,7 +148,6 @@ export const SendParamsSchema = closedObject({
 /** Gateway-owned request that sends and consumes one correlated external reply inline. */
 export const ConversationTurnParamsSchema = closedObject({
   agentId: NonEmptyString,
-  sourceSessionId: Type.Optional(NonEmptyString),
   sourceSessionKey: Type.Optional(NonEmptyString),
   turnId: NonEmptyString,
   conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
@@ -197,7 +196,12 @@ export const ConversationTurnResultSchema = Type.Union([
     channel: NonEmptyString,
     messageId: Type.Optional(NonEmptyString),
     correlationPersisted: Type.Boolean(),
-    status: Type.Literal("sent"),
+    status: Type.Union([
+      Type.Literal("sent"),
+      Type.Literal("queued"),
+      Type.Literal("suppressed"),
+      Type.Literal("unknown"),
+    ]),
     error: NonEmptyString,
   }),
 ]);

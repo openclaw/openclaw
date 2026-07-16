@@ -24,10 +24,7 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
-import {
-  isOpenClawDeliveryMirrorAssistantMessage,
-  isPendingOpenClawConversationDeliveryMessage,
-} from "../shared/transcript-only-openclaw-assistant.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import {
@@ -1674,9 +1671,6 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
 
 function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
   if (isDisplayHiddenProjectedMessage(message)) {
-    return true;
-  }
-  if (isPendingOpenClawConversationDeliveryMessage(message)) {
     return true;
   }
   if (isProjectedSessionsSendForwardedMessage(message)) {

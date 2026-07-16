@@ -2,13 +2,16 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import {
+  findConversationDeliveryByReplyTarget,
+  markConversationDeliveryReplied,
+  markConversationDeliverySent,
+} from "../../config/sessions/conversation-delivery-store.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   appendTranscriptEventSync,
-  appendTranscriptMessageSync,
   loadSessionEntry,
-  publishTranscriptUpdate,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -24,6 +27,27 @@ import type { FinalizedMsgContext } from "../templating.js";
 
 const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 const CONVERSATION_TURN_REPLY_CUSTOM_TYPE = "openclaw.conversation-turn-reply";
+
+function readPersistedReplyText(message: unknown): string | undefined {
+  const content = (message as { content?: unknown } | undefined)?.content;
+  if (typeof content === "string") {
+    return normalizeOptionalString(content);
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  return normalizeOptionalString(
+    content
+      .flatMap((part) => {
+        if (!part || typeof part !== "object") {
+          return [];
+        }
+        const record = part as Record<string, unknown>;
+        return record.type === "text" && typeof record.text === "string" ? [record.text] : [];
+      })
+      .join("\n"),
+  );
+}
 
 function normalizeTimestamp(value: unknown): number | undefined {
   const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -81,11 +105,10 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     return false;
   }
   const timestamp = normalizeTimestamp(params.ctx.Timestamp);
-  const transcriptText = normalizeOptionalString(params.ctx.RawBody)
-    ? params.ctx.RawBody
-    : replyText;
   const input: UserTurnInput = {
-    text: transcriptText,
+    // This is the model-facing reply returned by the tool, so its durable copy
+    // must pass through the same write hook and redaction policy as transcripts.
+    text: replyText,
     timestamp,
     idempotencyKey: `conversation-inbound:${conversation.conversationRef}:${messageId}`,
     ...(params.ctx.InputProvenance ? { provenance: params.ctx.InputProvenance } : {}),
@@ -127,6 +150,18 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     timestamp,
   });
   if (!claim) {
+    if (replyToId) {
+      const operation = findConversationDeliveryByReplyTarget(
+        { agentId, storePath },
+        { conversationRef: conversation.conversationRef, replyToId },
+      );
+      if (operation && operation.status !== "replied") {
+        // With no process-local waiter, ordinary inbound dispatch owns this
+        // reply. It proves the outbound send, but must not become replayable as
+        // an inline tool result on a later stable turn retry.
+        markConversationDeliverySent({ agentId, storePath }, operation.operationId, replyToId);
+      }
+    }
     return false;
   }
   try {
@@ -144,11 +179,32 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     if (!prepared) {
       throw new Error("captured conversation turn reply was blocked before persistence");
     }
-    if (claim.persistence === "tool-result") {
-      const artifactId = `conversation-turn-reply-${claim.turnId}`;
-      // A same-session user row would split the active tool call/result pair.
-      // Keep a redacted side artifact durable while the tool result owns model context.
-      const persisted = appendTranscriptEventSync(
+    const persistedMessage = redactTranscriptMessage(prepared, params.cfg);
+    const persistedReplyText = readPersistedReplyText(persistedMessage);
+    if (!persistedReplyText) {
+      throw new Error("captured conversation turn reply has no persistable text");
+    }
+    const artifactId = `conversation-turn-reply-${claim.turnId}`;
+    // Commit the replayable owner state before its optional audit artifact. A
+    // crash after this point can lose audit metadata, but never the claimed reply.
+    markConversationDeliveryReplied(
+      { agentId, storePath },
+      {
+        operationId: claim.turnId,
+        reply: {
+          messageId,
+          ...(replyToId ? { replyToId } : {}),
+          ...(threadId ? { threadId } : {}),
+          text: persistedReplyText,
+          timestamp: timestamp ?? Date.now(),
+        },
+      },
+    );
+    // The tool result owns model context. A side artifact keeps an audit trail
+    // without inserting a user row between an active tool call and its result.
+    let persisted = false;
+    try {
+      persisted = appendTranscriptEventSync(
         { agentId, sessionId: sessionEntry.sessionId, sessionKey, storePath },
         {
           type: "custom",
@@ -162,32 +218,17 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
             messageId,
             ...(replyToId ? { replyToId } : {}),
             ...(threadId ? { threadId } : {}),
-            message: redactTranscriptMessage(prepared, params.cfg),
+            message: persistedMessage,
           },
         },
       );
-      if (!persisted) {
-        throw new Error("captured conversation turn reply artifact was not persisted");
-      }
-      claim.complete({ transcriptArtifactId: artifactId });
-      return true;
+    } catch (error) {
+      logVerbose(`captured conversation turn reply audit persistence failed: ${String(error)}`);
     }
-    const persisted = appendTranscriptMessageSync(
-      { agentId, sessionId: sessionEntry.sessionId, sessionKey, storePath },
-      {
-        config: params.cfg,
-        idempotencyLookup: "scan",
-        message: prepared,
-      },
-    );
     if (!persisted) {
-      throw new Error("captured conversation turn reply was not persisted");
+      logVerbose("captured conversation turn reply audit artifact was not persisted");
     }
-    void publishTranscriptUpdate(
-      { agentId, sessionId: sessionEntry.sessionId, sessionKey, storePath },
-      { message: persisted.message, messageId: persisted.messageId },
-    );
-    claim.complete({ transcriptMessageId: persisted.messageId });
+    claim.complete(persisted ? { transcriptArtifactId: artifactId } : undefined);
     return true;
   } catch (error) {
     claim.release();

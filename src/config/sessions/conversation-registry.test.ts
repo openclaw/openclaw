@@ -52,4 +52,33 @@ describe("conversation registry", () => {
       peerA,
     );
   });
+
+  it("resolves historical addresses through the current session binding after reset", async () => {
+    const sessionKey = "agent:main:reef:direct:peer-a";
+    const scope = { agentId: "main", sessionKey, storePath };
+    await upsertSessionEntry(scope, {
+      sessionId: "old-session",
+      updatedAt: 100,
+      chatType: "direct",
+      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
+      origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-a" },
+    });
+    const [historical] = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    expect(historical?.sessionId).toBe("old-session");
+
+    await upsertSessionEntry(scope, {
+      sessionId: "current-session",
+      updatedAt: 200,
+      chatType: "direct",
+    });
+
+    expect(
+      resolveConversation({ agentId: "main", storePath }, historical?.conversationRef ?? "missing"),
+    ).toMatchObject({
+      conversationRef: historical?.conversationRef,
+      sessionId: "current-session",
+      sessionKey,
+      target: "reef:peer-a",
+    });
+  });
 });

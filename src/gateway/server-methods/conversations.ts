@@ -75,7 +75,6 @@ export function createConversationHandlers(
           const payload = await deps.runConversationTurn({
             config: resolveGatewayPluginConfig({ config: context.getRuntimeConfig() }),
             agentId: request.agentId,
-            ...(request.sourceSessionId ? { sourceSessionId: request.sourceSessionId } : {}),
             ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
             turnId: request.turnId,
             conversationRef: request.conversationRef,

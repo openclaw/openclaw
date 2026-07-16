@@ -152,7 +152,6 @@ describe("ConversationTurn schemas", () => {
     expect(
       Value.Check(ConversationTurnParamsSchema, {
         agentId: "main",
-        sourceSessionId: "operator-session",
         sourceSessionKey: "agent:main:telegram:direct:operator",
         turnId: "conversation-turn-1",
         conversationRef: "conv_0123456789abcdef0123456789abcdef",
@@ -183,5 +182,20 @@ describe("ConversationTurn schemas", () => {
       true,
     );
     expect(Value.Check(ConversationTurnCancelResultSchema, { cancelled: true })).toBe(true);
+  });
+
+  it("represents durable queued delivery without claiming an inline reply", () => {
+    const queued = {
+      status: "queued",
+      conversationRef: "conv_0123456789abcdef0123456789abcdef",
+      channel: "reef",
+      messageId: "01JZ0000000000000000000200",
+      correlationPersisted: true,
+      error: "Delivery is queued",
+    };
+    expect(Value.Check(ConversationTurnResultSchema, queued)).toBe(true);
+    expect(Value.Check(ConversationTurnResultSchema, { ...queued, status: "retrying" })).toBe(
+      false,
+    );
   });
 });

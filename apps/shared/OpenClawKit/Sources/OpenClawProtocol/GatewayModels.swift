@@ -1186,7 +1186,6 @@ public struct ConversationTurnCancelResult: Codable, Sendable {
 
 public struct ConversationTurnParams: Codable, Sendable {
     public let agentid: String
-    public let sourcesessionid: String?
     public let sourcesessionkey: String?
     public let turnid: String
     public let conversationref: String
@@ -1195,7 +1194,6 @@ public struct ConversationTurnParams: Codable, Sendable {
 
     public init(
         agentid: String,
-        sourcesessionid: String? = nil,
         sourcesessionkey: String? = nil,
         turnid: String,
         conversationref: String,
@@ -1203,7 +1201,6 @@ public struct ConversationTurnParams: Codable, Sendable {
         timeoutms: Int)
     {
         self.agentid = agentid
-        self.sourcesessionid = sourcesessionid
         self.sourcesessionkey = sourcesessionkey
         self.turnid = turnid
         self.conversationref = conversationref
@@ -1213,7 +1210,6 @@ public struct ConversationTurnParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
-        case sourcesessionid = "sourceSessionId"
         case sourcesessionkey = "sourceSessionKey"
         case turnid = "turnId"
         case conversationref = "conversationRef"

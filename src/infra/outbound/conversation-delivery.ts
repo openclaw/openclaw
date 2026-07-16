@@ -1,72 +1,60 @@
-/** Shared external-conversation delivery and transcript correlation helpers. */
+/** Durable external-conversation delivery independent from local model sessions. */
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
+import type { DurableMessageSendIntent } from "../../channels/message/types.js";
+import {
+  beginConversationDeliveryOperation,
+  getConversationDeliveryOperation,
+  markConversationDeliveryQueued,
+  markConversationDeliverySent,
+  markConversationDeliverySuppressed,
+  type ConversationDeliveryRecord,
+  type ConversationDeliveryStoreScope,
+} from "../../config/sessions/conversation-delivery-store.js";
 import type { ConversationRecord } from "../../config/sessions/conversation-registry.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  type SessionTranscriptAssistantMessage,
-  type SessionTranscriptDeliveryMirror,
-} from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runMessageAction, type MessageActionRunResult } from "./message-action-runner.js";
 
-type AppendAssistantMessageParams = Parameters<typeof appendAssistantMessageToSessionTranscript>[0];
-
 export type ConversationDeliveryDeps = {
-  appendAssistantMessage: typeof appendAssistantMessageToSessionTranscript;
-  beforeMessageWrite: NonNullable<AppendAssistantMessageParams["beforeMessageWrite"]>;
-  loadSessionEntry: typeof loadSessionEntry;
+  beginOperation: typeof beginConversationDeliveryOperation;
+  getOperation: typeof getConversationDeliveryOperation;
+  markQueued: typeof markConversationDeliveryQueued;
+  markSent: typeof markConversationDeliverySent;
+  markSuppressed: typeof markConversationDeliverySuppressed;
   runMessageAction: typeof runMessageAction;
+};
+
+export const defaultConversationDeliveryDeps: ConversationDeliveryDeps = {
+  beginOperation: beginConversationDeliveryOperation,
+  getOperation: getConversationDeliveryOperation,
+  markQueued: markConversationDeliveryQueued,
+  markSent: markConversationDeliverySent,
+  markSuppressed: markConversationDeliverySuppressed,
+  runMessageAction,
 };
 
 export type ConversationDeliveryContext = {
   agentId: string;
-  sourceSessionId?: string;
   sourceSessionKey?: string;
   config: OpenClawConfig;
   senderIsOwner?: boolean;
 };
 
-function buildConversationDeliveryMirror(params: {
-  context: ConversationDeliveryContext;
-  conversation: ConversationRecord;
+export type ConversationMessageDeliveryResult = {
+  deliveryStatus: "sent" | "suppressed" | "queued" | "unknown";
+  operation: ConversationDeliveryRecord;
   messageId?: string;
-  status: "delivered" | "pending";
-}): Extract<SessionTranscriptDeliveryMirror, { kind: "conversation-send" }> {
-  const replayInBackingSession = params.context.sourceSessionId !== params.conversation.sessionId;
-  return {
-    kind: "conversation-send",
-    status: params.status,
-    channel: params.conversation.channel,
-    conversationRef: params.conversation.conversationRef,
-    ...(params.messageId ? { messageId: params.messageId } : {}),
-    ...(replayInBackingSession ? { replay: "backing-session" } : {}),
-    ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
-  };
-}
+};
 
-function resolveConversationDeliveryContext(params: {
-  deps: ConversationDeliveryDeps;
-  context: ConversationDeliveryContext;
-}): ConversationDeliveryContext {
-  if (params.context.sourceSessionId || !params.context.sourceSessionKey) {
-    return params.context;
-  }
-  const configuredStore = params.context.config.session?.store;
-  const sourceSessionId = params.deps.loadSessionEntry({
-    agentId: params.context.agentId,
-    sessionKey: params.context.sourceSessionKey,
-    ...(configuredStore
-      ? {
-          storePath: resolveStorePath(configuredStore, {
-            agentId: params.context.agentId,
-          }),
-        }
-      : {}),
-    readConsistency: "latest",
-  })?.sessionId;
-  return sourceSessionId ? { ...params.context, sourceSessionId } : params.context;
+export function resolveConversationDeliveryStoreScope(
+  context: ConversationDeliveryContext,
+): ConversationDeliveryStoreScope {
+  return {
+    agentId: context.agentId,
+    // Recovery cannot serialize process.env. Persist the resolved marker path
+    // so it reopens the same per-agent SQLite database after restart.
+    storePath: resolveStorePath(context.config.session?.store, { agentId: context.agentId }),
+  };
 }
 
 function readMessageIdFromActionResult(result: MessageActionRunResult): string | undefined {
@@ -91,178 +79,142 @@ function readMessageIdFromActionResult(result: MessageActionRunResult): string |
   return undefined;
 }
 
-function resolveConversationDeliveryStatus(
-  action: Extract<MessageActionRunResult, { kind: "send" }>,
-  messageId: string | undefined,
-): "sent" | "suppressed" {
-  if (action.handledBy === "plugin") {
-    // A plugin action resolves only after its provider send completes; the
-    // plugin-owned mirror is written from that same success continuation.
-    return "sent";
+function resultFromExistingOperation(
+  operation: ConversationDeliveryRecord,
+): ConversationMessageDeliveryResult | undefined {
+  switch (operation.status) {
+    case "sent":
+    case "replied":
+      return {
+        deliveryStatus: "sent",
+        operation,
+        ...(operation.platformMessageId || operation.preparedMessageId
+          ? { messageId: operation.platformMessageId ?? operation.preparedMessageId }
+          : {}),
+      };
+    case "queued":
+      return {
+        deliveryStatus: "queued",
+        operation,
+        ...(operation.preparedMessageId ? { messageId: operation.preparedMessageId } : {}),
+      };
+    case "suppressed":
+      return { deliveryStatus: "suppressed", operation };
+    case "unknown":
+      return { deliveryStatus: "unknown", operation };
+    case "created":
+      return undefined;
   }
-  if (action.handledBy !== "core" || !action.sendResult) {
-    throw new Error("Conversation delivery did not return a platform send result");
-  }
-  if (action.sendResult.deliveryStatus === "sent") {
-    return "sent";
-  }
-  if (action.sendResult.deliveryStatus === "suppressed") {
-    return "suppressed";
-  }
-  // Gateway delivery predates the direct-path status field. Its response is
-  // authoritative only when it includes the platform message identity.
-  if (action.sendResult.via === "gateway" && messageId) {
-    return "sent";
-  }
-  throw new Error(
-    `Conversation delivery was not confirmed (${action.sendResult.deliveryStatus ?? "unknown"})`,
-  );
 }
 
+/**
+ * Sends one external message after a durable operation and queue intent exist.
+ * A retry with the same operation id observes prior state instead of re-sending.
+ */
 export async function sendConversationMessage(params: {
   deps: ConversationDeliveryDeps;
   context: ConversationDeliveryContext;
   conversation: ConversationRecord;
   message: string;
-  turnId: string;
+  operationId: string;
+  operation?: ConversationDeliveryRecord;
   preparedMessageId?: string;
-  gatewayOwnedDelivery?: boolean;
   signal?: AbortSignal;
-}): Promise<{
-  deliveryStatus: "sent" | "suppressed";
-  deliveredMessage?: string;
-  messageId?: string;
-}> {
-  const context = resolveConversationDeliveryContext({
-    deps: params.deps,
-    context: params.context,
-  });
-  const idempotencyKey = `conversation-outbound:${params.turnId}`;
-  const pendingMirror = buildConversationDeliveryMirror({
-    context,
-    conversation: params.conversation,
-    status: "pending",
-    ...(params.preparedMessageId ? { messageId: params.preparedMessageId } : {}),
-  });
-  // Persist recipient-visible intent first. A fast reply can now append after
-  // this stable row even when transport I/O outpaces the sender's promise.
-  const pending = await params.deps.appendAssistantMessage({
-    agentId: params.context.agentId,
-    sessionKey: params.conversation.sessionKey,
-    expectedSessionId: params.conversation.sessionId,
-    idempotencyKey,
-    config: params.context.config,
-    text: params.message,
-    deliveryMirror: pendingMirror,
-    beforeMessageWrite: (hookParams) => {
-      const nextMessage = params.deps.beforeMessageWrite(hookParams);
-      if (!nextMessage) {
-        return null;
-      }
-      return {
-        ...nextMessage,
-        openclawDeliveryMirror: pendingMirror,
-      } as SessionTranscriptAssistantMessage;
-    },
-  });
-  if (!pending.ok) {
-    throw new Error(`Conversation delivery intent was not persisted: ${pending.reason}`);
+}): Promise<ConversationMessageDeliveryResult> {
+  const scope = resolveConversationDeliveryStoreScope(params.context);
+  const begun = params.operation
+    ? { created: false, record: params.operation }
+    : params.deps.beginOperation(scope, {
+        operationId: params.operationId,
+        conversationRef: params.conversation.conversationRef,
+        message: params.message,
+        ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
+      });
+  const existing = resultFromExistingOperation(begun.record);
+  if (existing) {
+    return existing;
   }
-  const deliveredMirror = buildConversationDeliveryMirror({
-    context,
-    conversation: params.conversation,
-    status: "delivered",
-    ...(params.preparedMessageId ? { messageId: params.preparedMessageId } : {}),
-  });
-  const action = await params.deps.runMessageAction({
-    cfg: params.context.config,
-    action: "send",
-    params: {
-      channel: params.conversation.channel,
-      to: params.conversation.target,
-      accountId: params.conversation.accountId,
-      message: params.message,
-      ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
-      idempotencyKey: params.turnId,
-    },
-    defaultAccountId: params.conversation.accountId,
-    agentId: params.context.agentId,
-    sessionKey: params.context.sourceSessionKey,
-    senderIsOwner: params.context.senderIsOwner,
-    transcriptMirror: {
-      agentId: params.context.agentId,
-      sessionKey: params.conversation.sessionKey,
-      expectedSessionId: params.conversation.sessionId,
-      idempotencyKey,
-      deliveryMirror: deliveredMirror,
-      deliveryMirrorUpdateMode: "marker-only",
-    },
-    ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
-    ...(params.gatewayOwnedDelivery ? { gatewayOwnedDelivery: true } : {}),
-    skipDeliveryQueue: true,
-    ...(params.signal ? { abortSignal: params.signal } : {}),
-  });
-  if (action.kind !== "send") {
-    throw new Error(`Conversation delivery returned unexpected action: ${action.kind}`);
-  }
-  if (action.dryRun) {
-    throw new Error("Conversation delivery was only prepared; no message was sent");
-  }
-  const messageId = readMessageIdFromActionResult(action);
-  return {
-    deliveryStatus: resolveConversationDeliveryStatus(action, messageId),
-    ...(action.deliveredText ? { deliveredMessage: action.deliveredText } : {}),
-    ...(messageId ? { messageId } : {}),
-  };
-}
 
-export async function recordConversationDelivery(params: {
-  deps: ConversationDeliveryDeps;
-  context: ConversationDeliveryContext;
-  conversation: ConversationRecord;
-  message: string;
-  deliveredMessage?: string;
-  turnId: string;
-  outboundMessageId?: string;
-}): Promise<boolean> {
+  let latestOperation = begun.record;
+  const readAuthoritativeOperation = () =>
+    params.deps.getOperation(scope, begun.record.operationId) ?? latestOperation;
+  const onDeliveryIntent = (intent: DurableMessageSendIntent) => {
+    latestOperation = params.deps.markQueued(scope, begun.record.operationId, intent.id);
+  };
   try {
-    const context = resolveConversationDeliveryContext({
-      deps: params.deps,
-      context: params.context,
-    });
-    // Same-session sends are redundant with their tool call. Cross-session
-    // sends are the backing conversation's only outbound model context.
-    const deliveryMirror = buildConversationDeliveryMirror({
-      context,
-      conversation: params.conversation,
-      status: "delivered",
-      ...(params.outboundMessageId ? { messageId: params.outboundMessageId } : {}),
-    });
-    // Only direct core delivery can report post-normalization text exactly.
-    // Unknown plugin/gateway text keeps the durable intent and upgrades only its marker.
-    const result = await params.deps.appendAssistantMessage({
-      agentId: params.context.agentId,
-      sessionKey: params.conversation.sessionKey,
-      expectedSessionId: params.conversation.sessionId,
-      idempotencyKey: `conversation-outbound:${params.turnId}`,
-      config: params.context.config,
-      text: params.deliveredMessage ?? params.message,
-      deliveryMirror,
-      deliveryMirrorUpdateMode: params.deliveredMessage ? "replace" : "marker-only",
-      beforeMessageWrite: (hookParams) => {
-        const nextMessage = params.deps.beforeMessageWrite(hookParams);
-        if (!nextMessage) {
-          return null;
-        }
-        return {
-          ...nextMessage,
-          openclawDeliveryMirror: deliveryMirror,
-        } as SessionTranscriptAssistantMessage;
+    const action = await params.deps.runMessageAction({
+      cfg: params.context.config,
+      action: "send",
+      params: {
+        channel: params.conversation.channel,
+        to: params.conversation.target,
+        accountId: params.conversation.accountId,
+        message: params.message,
+        ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
+        idempotencyKey: params.operationId,
       },
+      defaultAccountId: params.conversation.accountId,
+      agentId: params.context.agentId,
+      sessionKey: params.context.sourceSessionKey,
+      senderIsOwner: params.context.senderIsOwner,
+      suppressTranscriptMirror: true,
+      forceCoreDelivery: true,
+      gatewayOwnedDelivery: true,
+      requireQueuePersistence: true,
+      deliveryIntentId: begun.record.operationId,
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: scope.agentId,
+        operationId: begun.record.operationId,
+        ...(scope.storePath ? { storePath: scope.storePath } : {}),
+      },
+      onDeliveryIntent,
+      ...(begun.record.preparedMessageId
+        ? { preparedMessageId: begun.record.preparedMessageId }
+        : {}),
+      ...(params.signal ? { abortSignal: params.signal } : {}),
     });
-    return result.ok;
-  } catch {
-    // Delivery has already happened. Never surface a bookkeeping failure as a retryable send.
-    return false;
+    if (action.kind !== "send") {
+      throw new Error(`Conversation delivery returned unexpected action: ${action.kind}`);
+    }
+    if (action.dryRun) {
+      throw new Error("Conversation delivery was only prepared; no message was sent");
+    }
+    if (action.handledBy !== "core" || !action.sendResult) {
+      throw new Error("Conversation delivery did not return a core platform send result");
+    }
+    const messageId = readMessageIdFromActionResult(action);
+    if (action.sendResult.deliveryStatus === "suppressed") {
+      const operation = params.deps.markSuppressed(scope, begun.record.operationId);
+      return { deliveryStatus: "suppressed", operation };
+    }
+    if (action.sendResult.deliveryStatus !== "sent") {
+      throw new Error(
+        `Conversation delivery was not confirmed (${action.sendResult.deliveryStatus ?? "unknown"})`,
+      );
+    }
+    const authoritativeOperation = readAuthoritativeOperation();
+    const operation =
+      authoritativeOperation.status === "sent" || authoritativeOperation.status === "replied"
+        ? authoritativeOperation
+        : params.deps.markSent(scope, begun.record.operationId, messageId);
+    const confirmedMessageId =
+      messageId ?? operation.platformMessageId ?? operation.preparedMessageId;
+    return {
+      deliveryStatus: "sent",
+      operation,
+      ...(confirmedMessageId ? { messageId: confirmedMessageId } : {}),
+    };
+  } catch (error) {
+    // The serialized queue owner may have completed after the intent callback,
+    // while this stack still holds its older queued snapshot.
+    const persisted = resultFromExistingOperation(readAuthoritativeOperation());
+    if (persisted) {
+      return persisted;
+    }
+    // Required queue delivery cannot cross platform I/O before the intent
+    // callback. Pre-queue errors remain retryable; a callback failure leaves
+    // the stable queue id in charge of dedupe.
+    throw error;
   }
 }

@@ -72,15 +72,17 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v11 = agent-scoped runtime leases. v10 added materialized active transcript paths.
-// v9 added SQLite STRICT tables.
+// v12 = durable delivery operations and canonical external conversation addresses.
+// v11 = agent-scoped runtime leases.
+// v10 = materialized active transcript paths.
+// v9 = SQLite STRICT tables.
 // v8 added per-transcript session provenance. v7 added per-entry lifecycle status projection.
 // v6 added session/transcript hot-path indexes.
 // v5 added transcript mutation watermarks.
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 11;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 12;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -731,14 +733,14 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
       migrateConversationDeliveryTargetColumn(db);
       migrateSessionTranscriptActiveProjection(db, previousVersion);
-      if (previousVersion < 10) {
+      if (previousVersion < 11) {
         migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_AGENT_SCHEMA_SQL, {
           databaseLabel: pathname,
         });
       }
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES);
       backfillOpenClawAgentSchema(db, previousVersion);
-      if (previousVersion < 10) {
+      if (previousVersion < 12) {
         backfillSessionConversations(db);
       }
       backfillSessionEntryProvenance(db, previousVersion);

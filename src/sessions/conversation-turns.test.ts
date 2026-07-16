@@ -15,11 +15,11 @@ function register(conversationRef = "conv_a", signal?: AbortSignal) {
 }
 
 describe("conversation turn correlation", () => {
-  it("classifies same-session aliases by canonical session id", async () => {
+  it("returns the stable operation id with an exact reply claim", async () => {
     const pending = registerPendingConversationTurn({
+      id: "turn-alias",
       conversationRef: "conv_alias",
       sessionId: "session-main",
-      sourceSessionId: "session-main",
       timeoutMs: 5_000,
     });
     pending.setOutboundMessageId("outbound-alias");
@@ -33,7 +33,7 @@ describe("conversation turn correlation", () => {
       text: "alias reply",
     });
 
-    expect(claim?.persistence).toBe("tool-result");
+    expect(claim?.turnId).toBe("turn-alias");
     claim?.complete();
     await expect(pending.wait()).resolves.toMatchObject({ text: "alias reply" });
   });

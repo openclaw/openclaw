@@ -21,6 +21,7 @@ import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-p
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
+import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -67,7 +68,9 @@ import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
+import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
@@ -171,8 +174,18 @@ export type RunMessageActionParams = {
   preparedMessageId?: string;
   /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
   gatewayOwnedDelivery?: boolean;
-  /** @internal Caller owns retry semantics and requires a synchronous platform outcome. */
-  skipDeliveryQueue?: boolean;
+  /** @internal Bypass provider-native action dispatch so core durable delivery owns the send. */
+  forceCoreDelivery?: boolean;
+  /** @internal Fail before platform I/O unless the core delivery queue persisted the intent. */
+  requireQueuePersistence?: boolean;
+  /** @internal Stable producer id for idempotent durable queue creation. */
+  deliveryIntentId?: string;
+  /** @internal Serializable owner state finalized by live send or recovery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Runs after queue persistence and before platform I/O. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** @internal Runs on identified platform evidence before queue acknowledgement. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -1380,26 +1393,28 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 
   // Gateway action ownership wins even when this process has a render-capable
   // outbound adapter; credentials and account selection may exist only remotely.
-  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
-    cfg,
-    params,
-    channel,
-    action,
-    accountId,
-    dryRun,
-    gateway,
-    input,
-    agentId,
-    result: (payload) => ({
-      kind: "send",
-      channel,
-      action,
-      to,
-      handledBy: "plugin",
-      payload,
-      dryRun,
-    }),
-  });
+  const gatewayPluginAction = input.forceCoreDelivery
+    ? null
+    : await runGatewayPluginMessageActionOrNull({
+        cfg,
+        params,
+        channel,
+        action,
+        accountId,
+        dryRun,
+        gateway,
+        input,
+        agentId,
+        result: (payload) => ({
+          kind: "send",
+          channel,
+          action,
+          to,
+          handledBy: "plugin",
+          payload,
+          dryRun,
+        }),
+      });
   if (gatewayPluginAction) {
     return gatewayPluginAction;
   }
@@ -1448,7 +1463,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
       preparedMessageId: input.preparedMessageId,
       gatewayOwnedDelivery: input.gatewayOwnedDelivery,
-      skipQueue: input.skipDeliveryQueue,
+      forceCoreDelivery: input.forceCoreDelivery,
+      requireQueuePersistence: input.requireQueuePersistence,
+      deliveryIntentId: input.deliveryIntentId,
+      deliveryCompletion: input.deliveryCompletion,
+      onDeliveryIntent: input.onDeliveryIntent,
+      onDeliveryResult: input.onDeliveryResult,
       mirror:
         !dryRun && input.transcriptMirror
           ? {

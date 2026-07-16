@@ -69,11 +69,17 @@ import {
   runOutboundDeliveryCommitHooks,
   type OutboundDeliveryCommitHook,
 } from "./delivery-commit-hooks.js";
+import {
+  completeDurableDelivery,
+  suppressDurableDelivery,
+  type DurableDeliveryCompletion,
+} from "./delivery-completion.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   enqueueDelivery,
+  enqueueDeliveryOnce,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
@@ -765,6 +771,10 @@ type DeliverOutboundPayloadsCoreParams = {
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
   /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
   deliveryQueueId?: string;
+  /** @internal Stable producer id used to make queue creation idempotent across crashes. */
+  deliveryIntentId?: string;
+  /** @internal Serializable owner state finalized after live or recovered delivery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
   preparedMessageId?: string;
   /** @internal Recheck the concrete post-hook send shape before platform I/O. */
@@ -1470,7 +1480,7 @@ export async function deliverOutboundPayloadsInternal(
   const renderedBatchPlan =
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
 
-  const stageAndEnqueueDelivery = async (): Promise<string | null> => {
+  const stageAndEnqueueDelivery = async (): Promise<{ id: string; created: boolean } | null> => {
     // Legacy `MEDIA:` text directives carry local media that only materializes
     // into structured fields at send time, so the spool (which reads structured
     // media) would skip it and a retry would read the vanished producer path.
@@ -1560,10 +1570,25 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
+        deliveryCompletion: params.deliveryCompletion,
       };
-      return staged.mediaStageId
+      if (params.deliveryIntentId) {
+        const queued = await enqueueDeliveryOnce(
+          delivery,
+          params.deliveryIntentId,
+          undefined,
+          staged.mediaStageId,
+        );
+        if (!queued.created) {
+          cancelDeliveryQueueMediaStage(staged.mediaStageId);
+          await releaseSpoolArtifacts(staged.artifacts);
+        }
+        return queued;
+      }
+      const id = staged.mediaStageId
         ? await enqueueDelivery(delivery, undefined, staged.mediaStageId)
         : await enqueueDelivery(delivery);
+      return { id, created: true };
     } catch (err) {
       cancelDeliveryQueueMediaStage(staged.mediaStageId);
       await releaseSpoolArtifacts(staged.artifacts);
@@ -1573,7 +1598,7 @@ export async function deliverOutboundPayloadsInternal(
 
   // Invocation authority is not queued; recovery must re-enter delegated after restart.
   // Write-ahead delivery queue: persist before sending, remove after success.
-  const queueId = params.skipQueue
+  const queued = params.skipQueue
     ? null
     : await stageAndEnqueueDelivery().catch((err: unknown) => {
         if (queuePolicy === "required") {
@@ -1583,6 +1608,7 @@ export async function deliverOutboundPayloadsInternal(
         return null;
       }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
 
+  const queueId = queued?.id ?? null;
   if (queueId) {
     params.onDeliveryIntent?.({
       id: queueId,
@@ -1591,6 +1617,12 @@ export async function deliverOutboundPayloadsInternal(
       ...(params.accountId ? { accountId: params.accountId } : {}),
       queuePolicy,
     });
+  }
+
+  // A prior producer already owns this stable intent. Recovery or the original
+  // live sender will finish it; a replay must not cross platform I/O again.
+  if (queued && !queued.created) {
+    throw new Error(`Stable delivery intent is already queued: ${queued.id}`);
   }
 
   if (!queueId) {
@@ -1737,6 +1769,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     deliveredResults = results;
     platformResultsReturned = true;
     if (!queueId) {
+      if (params.deliveryCompletion) {
+        if (results.length > 0) {
+          completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
+        } else {
+          suppressDurableDelivery(params.deliveryCompletion);
+        }
+      }
       if (!params.deferCommitHooks) {
         await runOutboundDeliveryCommitHooks(results);
       }
@@ -1791,6 +1830,13 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       } else {
+        if (params.deliveryCompletion) {
+          if (results.length > 0) {
+            completeDurableDelivery(params.deliveryCompletion, results.at(-1)!);
+          } else {
+            suppressDurableDelivery(params.deliveryCompletion);
+          }
+        }
         const postSendState =
           queuedPostSendState ??
           (results.length > 0 || queuedPreSendState === "marked"
@@ -2716,7 +2762,6 @@ async function deliverOutboundPayloadsCore(
           text: mirrorText,
           idempotencyKey: params.mirror.idempotencyKey,
           deliveryMirror: params.mirror.deliveryMirror,
-          deliveryMirrorUpdateMode: params.mirror.deliveryMirrorUpdateMode,
           config: params.cfg,
         });
         if (!mirrorResult.ok) {

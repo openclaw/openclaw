@@ -39,7 +39,6 @@ import {
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
   readTailAssistantTextFromSessionTranscript,
-  type SessionTranscriptDeliveryMirror,
 } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -838,99 +837,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     if (first.ok && replay.ok) {
       expect(replay.messageId).toBe(first.messageId);
     }
-  });
-
-  it("preserves repeated conversation sends while deduping an idempotent replay", async () => {
-    await writeTranscriptStore();
-    const append = async (turn: string, messageId: string) =>
-      await appendAssistantMessageToSessionTranscript({
-        sessionKey,
-        text: "Repeated peer message",
-        storePath: fixture.storePath(),
-        idempotencyKey: `conversation-outbound:${turn}`,
-        deliveryMirror: {
-          kind: "conversation-send",
-          status: "delivered",
-          channel: "reef",
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          messageId,
-        },
-      });
-
-    const first = await append("turn-1", "message-1");
-    const replay = await append("turn-1", "message-1");
-    const nextTurn = await append("turn-2", "message-2");
-
-    expect(first.ok).toBe(true);
-    expect(replay.ok).toBe(true);
-    expect(nextTurn.ok).toBe(true);
-    if (first.ok && replay.ok && nextTurn.ok) {
-      expect(replay.messageId).toBe(first.messageId);
-      expect(nextTurn.messageId).not.toBe(first.messageId);
-    }
-  });
-
-  it("promotes a pending conversation send in place without moving it after a fast reply", async () => {
-    await writeTranscriptStore();
-    const idempotencyKey = "conversation-outbound:fast-reply";
-    const baseMirror = {
-      kind: "conversation-send" as const,
-      channel: "reef",
-      conversationRef: "conv_0123456789abcdef0123456789abcdef",
-      replay: "backing-session" as const,
-    };
-    const pending = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "outbound intent",
-      storePath: fixture.storePath(),
-      idempotencyKey,
-      deliveryMirror: { ...baseMirror, status: "pending" },
-    });
-    await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "fast inbound reply",
-      storePath: fixture.storePath(),
-    });
-    const promoted = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "transport-normalized outbound",
-      storePath: fixture.storePath(),
-      idempotencyKey,
-      deliveryMirror: { ...baseMirror, status: "delivered", messageId: "message-1" },
-      deliveryMirrorUpdateMode: "marker-only",
-    });
-    const finalized = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "transport-normalized outbound",
-      storePath: fixture.storePath(),
-      idempotencyKey,
-      deliveryMirror: { ...baseMirror, status: "delivered", messageId: "message-1" },
-      deliveryMirrorUpdateMode: "replace",
-    });
-
-    expect(pending.ok).toBe(true);
-    expect(promoted.ok).toBe(true);
-    expect(finalized.ok).toBe(true);
-    if (pending.ok && promoted.ok && finalized.ok) {
-      expect(promoted.messageId).toBe(pending.messageId);
-      expect(finalized.messageId).toBe(pending.messageId);
-    }
-    const messages = (await loadFixtureMessages()).flatMap((entry) =>
-      entry.message ? [entry.message] : [],
-    ) as Array<{
-      content?: Array<{ type?: string; text?: string }>;
-      openclawDeliveryMirror?: SessionTranscriptDeliveryMirror;
-    }>;
-    expect(messages).toHaveLength(2);
-    expect(messages[0]).toMatchObject({
-      content: [{ type: "text", text: "transport-normalized outbound" }],
-      openclawDeliveryMirror: {
-        ...baseMirror,
-        status: "delivered",
-        messageId: "message-1",
-      },
-    });
-    expect(messages[1]?.content?.[0]?.text).toBe("fast inbound reply");
   });
 
   it("idempotently appends suppressed channel finals by key while preserving source ids", async () => {

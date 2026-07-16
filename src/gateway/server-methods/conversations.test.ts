@@ -5,7 +5,6 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const request = {
   agentId: "main",
-  sourceSessionId: "operator-session",
   sourceSessionKey: "agent:main:telegram:direct:operator",
   turnId: "conversation-turn-1",
   conversationRef: "conv_0123456789abcdef0123456789abcdef",

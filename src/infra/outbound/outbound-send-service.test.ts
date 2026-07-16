@@ -310,6 +310,41 @@ describe("executeSendAction", () => {
     expect(result.deliveredText).toBe("[Peer] hello");
   });
 
+  it("forces durable core delivery with a required queue and lifecycle callbacks", async () => {
+    const onDeliveryIntent = vi.fn();
+    const onDeliveryResult = vi.fn();
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+      deliveryStatus: "sent",
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+        forceCoreDelivery: true,
+        requireQueuePersistence: true,
+        onDeliveryIntent,
+        onDeliveryResult,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expectSingleCallFields(mocks.sendMessage, {
+      queuePolicy: "required",
+      requireUnknownSendReconciliation: false,
+      onDeliveryIntent,
+      onDeliveryResult,
+    });
+  });
+
   it("forwards requesterSenderId to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendMessage.mockResolvedValue({
@@ -1102,40 +1137,6 @@ describe("executeSendAction", () => {
       channel: "discord",
       queuePolicy: "required",
     });
-  });
-
-  it("forwards caller-owned retry semantics to core delivery", async () => {
-    const prepareSendPayload = vi.fn(({ payload }) => payload);
-    const plugin: ChannelPlugin = {
-      ...createChannelTestPluginBase({ id: "discord" }),
-      actions: {
-        describeMessageTool: () => ({ actions: ["send"] }),
-        prepareSendPayload,
-        handleAction: async () => ({ content: [], details: { ok: true } }),
-      },
-      outbound: { deliveryMode: "direct" },
-    };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
-    mocks.sendMessage.mockResolvedValue({
-      channel: "discord",
-      to: "channel:123",
-      via: "direct",
-      mediaUrl: null,
-    });
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "discord",
-        params: { to: "channel:123", message: "hello" },
-        dryRun: false,
-        skipQueue: true,
-      },
-      to: "channel:123",
-      message: "hello",
-    });
-
-    expectSingleCallFields(mocks.sendMessage, { skipQueue: true });
   });
 
   it("forwards poll args to sendPoll on core outbound path", async () => {

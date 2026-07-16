@@ -1,19 +1,10 @@
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  loadSessionEntry,
-  loadTranscriptEvents,
-  upsertSessionEntry,
-} from "../../config/sessions/session-accessor.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import type { ConversationDeliveryRecord } from "../../config/sessions/conversation-delivery-store.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../../security/dangerous-tools.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import {
   createConversationsListTool,
   createConversationsSendTool,
@@ -39,7 +30,7 @@ function sentResult(): Extract<MessageActionRunResult, { kind: "send" }> {
     channel: "reef",
     action: "send",
     to: "reef:peer-agent",
-    handledBy: "plugin",
+    handledBy: "core",
     payload: {},
     sendResult: {
       channel: "reef",
@@ -53,27 +44,36 @@ function sentResult(): Extract<MessageActionRunResult, { kind: "send" }> {
   };
 }
 
-function suppressedResult(): Extract<MessageActionRunResult, { kind: "send" }> {
-  return {
-    kind: "send",
-    channel: "reef",
-    action: "send",
-    to: "reef:peer-agent",
-    handledBy: "core",
-    payload: {},
-    sendResult: {
-      channel: "reef",
-      to: "reef:peer-agent",
-      via: "direct",
-      mediaUrl: null,
-      deliveryStatus: "suppressed",
-    },
-    dryRun: false,
-  };
-}
-
 function createDeps() {
-  const appendAssistantMessage = vi.fn<typeof appendAssistantMessageToSessionTranscript>();
+  const operations = new Map<string, ConversationDeliveryRecord>();
+  const update = (
+    operationId: string,
+    patch: Partial<ConversationDeliveryRecord>,
+  ): ConversationDeliveryRecord => {
+    const current = operations.get(operationId);
+    if (!current) {
+      throw new Error(`missing operation: ${operationId}`);
+    }
+    const next = { ...current, ...patch, updatedAt: current.updatedAt + 1 };
+    operations.set(operationId, next);
+    return next;
+  };
+  const runMessageAction = vi.fn(async (input: Record<string, unknown>) => {
+    const onDeliveryIntent = input.onDeliveryIntent as
+      | ((intent: { id: string; channel: string; to: string; durability: "required" }) => void)
+      | undefined;
+    onDeliveryIntent?.({
+      id: "queue-1",
+      channel: "reef",
+      to: "peer-agent",
+      durability: "required",
+    });
+    const onDeliveryResult = input.onDeliveryResult as
+      | ((result: { channel: "reef"; messageId: string }) => Promise<void> | void)
+      | undefined;
+    await onDeliveryResult?.({ channel: "reef", messageId: "reef-outbound-1" });
+    return sentResult();
+  });
   const callGatewayMock = vi.fn(async (_params: unknown) => ({
     status: "replied" as const,
     conversationRef: conversation.conversationRef,
@@ -88,20 +88,57 @@ function createDeps() {
       timestamp: 300,
     },
   }));
-  appendAssistantMessage.mockResolvedValue({
-    ok: true,
-    sessionFile: "sqlite:main:shared-main-session",
-    messageId: "transcript-outbound-1",
-  });
   return {
-    appendAssistantMessage,
-    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+    beginOperation: vi.fn(
+      (
+        _scope: unknown,
+        params: {
+          operationId: string;
+          conversationRef: string;
+          message: string;
+          preparedMessageId?: string;
+        },
+      ) => {
+        const existing = operations.get(params.operationId);
+        if (existing) {
+          return { created: false, record: existing };
+        }
+        const record: ConversationDeliveryRecord = {
+          operationId: params.operationId,
+          conversationRef: params.conversationRef,
+          messageHash: params.message,
+          status: "created",
+          ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
+          createdAt: 100,
+          updatedAt: 100,
+        };
+        operations.set(params.operationId, record);
+        return { created: true, record };
+      },
+    ),
+    getOperation: vi.fn((_scope: unknown, operationId: string) => operations.get(operationId)),
+    markQueued: vi.fn((_scope: unknown, operationId: string, queueId: string) =>
+      update(operationId, { status: "queued", queueId }),
+    ),
+    markSent: vi.fn((_scope: unknown, operationId: string, platformMessageId?: string) =>
+      update(operationId, {
+        status: "sent",
+        ...(platformMessageId ? { platformMessageId } : {}),
+      }),
+    ),
+    markSuppressed: vi.fn((_scope: unknown, operationId: string) =>
+      update(operationId, { status: "suppressed" }),
+    ),
+    markUnknown: vi.fn((_scope: unknown, operationId: string) =>
+      update(operationId, { status: "unknown" }),
+    ),
     callGateway: callGatewayMock as never,
     callGatewayMock,
     listConversations: vi.fn(() => [conversation]),
-    loadSessionEntry: vi.fn<typeof loadSessionEntry>(() => undefined),
     resolveConversation: vi.fn((): typeof conversation | undefined => conversation),
-    runMessageAction: vi.fn(async () => sentResult()),
+    runMessageAction: runMessageAction as never,
+    runMessageActionMock: runMessageAction,
+    operations,
   };
 }
 
@@ -129,327 +166,148 @@ describe("conversation tools", () => {
         },
       ],
     });
-    expect(result.details).not.toHaveProperty("conversations.0.sessionId");
-    expect(result.details).not.toHaveProperty("conversations.0.sessionKey");
   });
 
-  it("resolves conversation addresses from the configured agent store", async () => {
+  it("requires a durable core queue and does not re-send a replayed tool call", async () => {
     const deps = createDeps();
-    await createConversationsListTool(
-      {
-        agentId: "agent-b",
-        config: { session: { store: "/var/openclaw/{agentId}/sessions.json" } },
-      },
-      deps,
-    ).execute("list", {});
-
-    expect(deps.listConversations).toHaveBeenCalledWith(
-      { agentId: "agent-b", storePath: "/var/openclaw/agent-b/sessions.json" },
-      { limit: 50 },
-    );
-  });
-
-  it("sends to the exact channel target without invoking the backing session", async () => {
-    const deps = createDeps();
-    const result = await createConversationsSendTool(
+    const tool = createConversationsSendTool(
       { agentId: "main", agentSessionKey: "agent:main:telegram:direct:operator", config: {} },
       deps,
-    ).execute("send", {
+    );
+    const args = {
       conversationRef: conversation.conversationRef,
       message: "hello peer",
-    });
+    };
 
-    expect(deps.runMessageAction).toHaveBeenCalledWith(
+    const first = await tool.execute("tool-call-1", args);
+    const second = await tool.execute("tool-call-1", args);
+
+    expect(deps.runMessageActionMock).toHaveBeenCalledOnce();
+    expect(deps.runMessageActionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "send",
         agentId: "main",
-        skipDeliveryQueue: true,
         sessionKey: "agent:main:telegram:direct:operator",
-        transcriptMirror: expect.objectContaining({
-          expectedSessionId: conversation.sessionId,
-          sessionKey: conversation.sessionKey,
-          deliveryMirror: expect.objectContaining({
-            kind: "conversation-send",
-            status: "delivered",
-          }),
+        suppressTranscriptMirror: true,
+        forceCoreDelivery: true,
+        requireQueuePersistence: true,
+        deliveryIntentId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u),
+        deliveryCompletion: expect.objectContaining({
+          kind: "conversation",
+          agentId: "main",
+          operationId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u),
         }),
         params: expect.objectContaining({
           channel: "reef",
           to: "reef:peer-agent",
-          accountId: "default",
           message: "hello peer",
+          idempotencyKey: expect.stringMatching(/^convop_[a-f0-9]{32}$/u),
         }),
       }),
     );
-    expect(result.details).toMatchObject({
+    expect(first.details).toMatchObject({
       status: "sent",
       conversationRef: conversation.conversationRef,
       messageId: "reef-outbound-1",
-      correlationPersisted: true,
+      queueId: "queue-1",
     });
-    expect(deps.appendAssistantMessage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        expectedSessionId: conversation.sessionId,
-        sessionKey: conversation.sessionKey,
-        text: "hello peer",
-        deliveryMirror: {
-          kind: "conversation-send",
-          status: "pending",
-          channel: "reef",
-          conversationRef: conversation.conversationRef,
-          replay: "backing-session",
-        },
-      }),
-    );
-    expect(deps.appendAssistantMessage).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        expectedSessionId: conversation.sessionId,
-        sessionKey: conversation.sessionKey,
-        text: "hello peer",
-        deliveryMirror: {
-          kind: "conversation-send",
-          status: "delivered",
-          channel: "reef",
-          conversationRef: conversation.conversationRef,
-          messageId: "reef-outbound-1",
-          replay: "backing-session",
-        },
-        deliveryMirrorUpdateMode: "marker-only",
-      }),
-    );
+    expect(second.details).toEqual(first.details);
   });
 
-  it("keeps suppressed sends pending instead of recording delivery", async () => {
+  it("reports suppression without claiming delivery", async () => {
     const deps = createDeps();
-    deps.runMessageAction.mockResolvedValueOnce(suppressedResult());
-
-    const result = await createConversationsSendTool(
-      { agentId: "main", agentSessionKey: "agent:main:main", config: {} },
-      deps,
-    ).execute("send", {
-      conversationRef: conversation.conversationRef,
-      message: "suppressed hello",
+    deps.runMessageActionMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      const onDeliveryIntent = input.onDeliveryIntent as (intent: {
+        id: string;
+        channel: string;
+        to: string;
+        durability: "required";
+      }) => void;
+      onDeliveryIntent({
+        id: "queue-suppressed",
+        channel: "reef",
+        to: "peer-agent",
+        durability: "required",
+      });
+      const base = sentResult();
+      if (!base.sendResult) {
+        throw new Error("expected core send result");
+      }
+      return {
+        ...base,
+        sendResult: { ...base.sendResult, deliveryStatus: "suppressed" as const },
+      };
     });
+
+    const result = await createConversationsSendTool({ agentId: "main", config: {} }, deps).execute(
+      "suppressed-call",
+      {
+        conversationRef: conversation.conversationRef,
+        message: "suppressed hello",
+      },
+    );
 
     expect(result.details).toMatchObject({
       status: "suppressed",
       conversationRef: conversation.conversationRef,
-      correlationPersisted: false,
+      queueId: "queue-suppressed",
     });
-    expect(deps.appendAssistantMessage).toHaveBeenCalledTimes(1);
-    expect(deps.appendAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliveryMirror: expect.objectContaining({ status: "pending" }),
-      }),
-    );
   });
 
-  it("recognizes a same-session alias by canonical session id", async () => {
+  it("keeps a proven pre-queue failure retryable under the stable tool call id", async () => {
     const deps = createDeps();
-
-    await createConversationsSendTool(
-      {
-        agentId: "main",
-        agentSessionId: conversation.sessionId,
-        agentSessionKey: "agent:main:alias-for-main",
-        config: {},
-      },
-      deps,
-    ).execute("send", {
+    deps.runMessageActionMock.mockRejectedValueOnce(new Error("queue unavailable"));
+    const tool = createConversationsSendTool({ agentId: "main", config: {} }, deps);
+    const args = {
       conversationRef: conversation.conversationRef,
-      message: "same-session hello",
-    });
-
-    expect(deps.appendAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliveryMirror: {
-          kind: "conversation-send",
-          status: "delivered",
-          channel: "reef",
-          conversationRef: conversation.conversationRef,
-          messageId: "reef-outbound-1",
-        },
-      }),
-    );
-  });
-
-  it("resolves a key-only source alias before choosing transcript replay behavior", async () => {
-    const deps = createDeps();
-    deps.loadSessionEntry.mockReturnValue({ sessionId: conversation.sessionId } as never);
-
-    await createConversationsSendTool(
-      {
-        agentId: "main",
-        agentSessionKey: "agent:main:alias-for-main",
-        config: {},
-      },
-      deps,
-    ).execute("send", {
-      conversationRef: conversation.conversationRef,
-      message: "same-session hello",
-    });
-
-    expect(deps.loadSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:alias-for-main",
-      readConsistency: "latest",
-    });
-    expect(deps.appendAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliveryMirror: expect.not.objectContaining({ replay: "backing-session" }),
-      }),
-    );
-  });
-
-  it("persists the outbound text as a durable backing-conversation artifact", async () => {
-    await withTempDir({ prefix: "openclaw-conversation-outbound-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      try {
-        await upsertSessionEntry(
-          { agentId: "main", sessionKey: conversation.sessionKey, storePath },
-          {
-            sessionId: conversation.sessionId,
-            updatedAt: 100,
-            chatType: "direct",
-            deliveryContext: {
-              channel: "reef",
-              accountId: "default",
-              to: "reef:peer-agent",
-            },
-            origin: {
-              provider: "reef",
-              accountId: "default",
-              nativeDirectUserId: "peer-agent",
-            },
-          },
-        );
-        const deps = createDeps();
-        deps.appendAssistantMessage.mockImplementation(
-          async (params) => await appendAssistantMessageToSessionTranscript(params),
-        );
-
-        await createConversationsSendTool(
-          {
-            agentId: "main",
-            agentSessionKey: "agent:main:telegram:direct:operator",
-            config: { session: { store: storePath } },
-          },
-          deps,
-        ).execute("send", {
-          conversationRef: conversation.conversationRef,
-          message: "durable hello",
-        });
-
-        const messages = (
-          await loadTranscriptEvents({
-            agentId: "main",
-            sessionId: conversation.sessionId,
-            storePath,
-          })
-        ).flatMap((event) =>
-          event && typeof event === "object" && "message" in event ? [event.message] : [],
-        );
-        expect(messages).toContainEqual(
-          expect.objectContaining({
-            role: "assistant",
-            provider: "openclaw",
-            model: "delivery-mirror",
-            content: [{ type: "text", text: "durable hello" }],
-            openclawDeliveryMirror: {
-              kind: "conversation-send",
-              status: "delivered",
-              channel: "reef",
-              conversationRef: conversation.conversationRef,
-              messageId: "reef-outbound-1",
-              replay: "backing-session",
-            },
-          }),
-        );
-      } finally {
-        closeOpenClawAgentDatabasesForTest();
-      }
-    });
-  });
-
-  it("persists the exact transport-normalized text", async () => {
-    const deps = createDeps();
-    deps.runMessageAction.mockResolvedValueOnce({
-      ...sentResult(),
-      deliveredText: "[Peer] hello there",
-    });
-
-    await createConversationsSendTool({ agentId: "main", config: {} }, deps).execute("send", {
-      conversationRef: conversation.conversationRef,
-      message: "hello peer",
-    });
-
-    expect(deps.appendAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "[Peer] hello there",
-        deliveryMirrorUpdateMode: "replace",
-      }),
-    );
-  });
-
-  it("does not expose a message when its durable intent cannot be written", async () => {
-    const deps = createDeps();
-    deps.appendAssistantMessage.mockResolvedValueOnce({
-      ok: false,
-      reason: "session rebound",
-      code: "session-rebound",
-    });
-
-    await expect(
-      createConversationsSendTool({ agentId: "main", config: {} }, deps).execute("send", {
-        conversationRef: conversation.conversationRef,
-        message: "must stay local",
-      }),
-    ).rejects.toThrow("delivery intent was not persisted");
-    expect(deps.runMessageAction).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-send and dry-run results after persisting hidden delivery intent", async () => {
-    const nonSendDeps = {
-      ...createDeps(),
-      runMessageAction: vi.fn(
-        async (): Promise<MessageActionRunResult> => ({
-          kind: "action",
-          channel: "reef",
-          action: "react",
-          handledBy: "plugin",
-          payload: {},
-          dryRun: false,
-        }),
-      ),
+      message: "retry me",
     };
-    await expect(
-      createConversationsSendTool({ agentId: "main", config: {} }, nonSendDeps).execute("send", {
-        conversationRef: conversation.conversationRef,
-        message: "must really send",
-      }),
-    ).rejects.toThrow("unexpected action: action");
-    expect(nonSendDeps.appendAssistantMessage).toHaveBeenCalledOnce();
-    expect(nonSendDeps.appendAssistantMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliveryMirror: expect.objectContaining({ status: "pending" }),
-      }),
-    );
 
-    const dryRunDeps = createDeps();
-    dryRunDeps.runMessageAction.mockResolvedValueOnce({ ...sentResult(), dryRun: true });
-    await expect(
-      createConversationsSendTool({ agentId: "main", config: {} }, dryRunDeps).execute("send", {
-        conversationRef: conversation.conversationRef,
-        message: "must not be dry run",
-      }),
-    ).rejects.toThrow("no message was sent");
-    expect(dryRunDeps.appendAssistantMessage).toHaveBeenCalledOnce();
+    await expect(tool.execute("retryable-call", args)).rejects.toThrow("queue unavailable");
+    await expect(tool.execute("retryable-call", args)).resolves.toMatchObject({
+      details: { status: "sent", messageId: "reef-outbound-1" },
+    });
+    expect(deps.runMessageActionMock).toHaveBeenCalledTimes(2);
   });
 
-  it("returns the correlated peer reply inline", async () => {
+  it("reports authoritative sent state when post-send cleanup throws", async () => {
     const deps = createDeps();
-    const result = await createConversationsTurnTool(
+    deps.runMessageActionMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+      const completion = input.deliveryCompletion as { operationId: string };
+      const onDeliveryIntent = input.onDeliveryIntent as (intent: {
+        id: string;
+        channel: string;
+        to: string;
+        durability: "required";
+      }) => void;
+      onDeliveryIntent({
+        id: "queue-cleanup-failed",
+        channel: "reef",
+        to: "peer-agent",
+        durability: "required",
+      });
+      deps.markSent({}, completion.operationId, "reef-outbound-confirmed");
+      throw new Error("queue acknowledgement cleanup failed");
+    });
+
+    const result = await createConversationsSendTool({ agentId: "main", config: {} }, deps).execute(
+      "post-send-cleanup-call",
+      {
+        conversationRef: conversation.conversationRef,
+        message: "confirmed before cleanup",
+      },
+    );
+
+    expect(result.details).toMatchObject({
+      status: "sent",
+      messageId: "reef-outbound-confirmed",
+      queueId: "queue-cleanup-failed",
+    });
+  });
+
+  it("uses a stable operation id for correlated turns and cancels on abort", async () => {
+    const deps = createDeps();
+    const tool = createConversationsTurnTool(
       {
         agentId: "main",
         agentSessionId: "operator-session",
@@ -457,51 +315,37 @@ describe("conversation tools", () => {
         config: {},
       },
       deps,
-    ).execute("turn", {
+    );
+    await tool.execute("turn-call", {
+      conversationRef: conversation.conversationRef,
+      message: "please acknowledge",
+      timeoutSeconds: 12,
+    });
+    await tool.execute("turn-call", {
       conversationRef: conversation.conversationRef,
       message: "please acknowledge",
       timeoutSeconds: 12,
     });
 
-    expect(deps.callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "conversations.turn",
-        config: {},
-        timeoutMs: 32_000,
-        params: expect.objectContaining({
-          agentId: "main",
-          sourceSessionId: "operator-session",
-          sourceSessionKey: "agent:main:telegram:direct:operator",
-          turnId: expect.any(String),
-          conversationRef: conversation.conversationRef,
-          message: "please acknowledge",
-          timeoutMs: 12_000,
-        }),
-      }),
-    );
-    expect(deps.resolveConversation).not.toHaveBeenCalled();
-    expect(deps.runMessageAction).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({
-      status: "replied",
-      reply: { text: "peer acknowledged", replyToId: "reef-outbound-1" },
-    });
-
-    const call = deps.callGatewayMock.mock.calls[0]?.[0] as {
+    const first = deps.callGatewayMock.mock.calls[0]?.[0] as {
       onSignalAbort?: (
         request: (method: string, params: unknown, options: unknown) => Promise<unknown>,
       ) => Promise<void>;
-      params?: { turnId?: string };
+      params: { turnId: string };
     };
+    const second = deps.callGatewayMock.mock.calls[1]?.[0] as { params: { turnId: string } };
+    expect(first.params.turnId).toMatch(/^convop_[a-f0-9]{32}$/u);
+    expect(second.params.turnId).toBe(first.params.turnId);
     const request = vi.fn(async () => ({ cancelled: true }));
-    await call.onSignalAbort?.(request);
+    await first.onSignalAbort?.(request);
     expect(request).toHaveBeenCalledWith(
       "conversations.turn.cancel",
-      { turnId: call.params?.turnId },
+      { turnId: first.params.turnId },
       { timeoutMs: 5_000 },
     );
   });
 
-  it("rejects unknown conversation references before delivery", async () => {
+  it("rejects unknown references and non-owner access before delivery", async () => {
     const deps = createDeps();
     deps.resolveConversation.mockReturnValue(undefined);
     await expect(
@@ -510,53 +354,21 @@ describe("conversation tools", () => {
         message: "hello",
       }),
     ).rejects.toThrow("Conversation not found");
-    expect(deps.runMessageAction).not.toHaveBeenCalled();
-  });
 
-  it("rejects channels without correlated-turn support before delivery", async () => {
-    const deps = createDeps();
-    deps.callGatewayMock.mockRejectedValueOnce(
-      new Error("Channel matrix does not support correlated conversation turns"),
-    );
-
-    await expect(
-      createConversationsTurnTool({ agentId: "main", config: {} }, deps).execute("turn", {
-        conversationRef: conversation.conversationRef,
-        message: "must not send",
-      }),
-    ).rejects.toThrow("does not support correlated conversation turns");
-    expect(deps.callGatewayMock).toHaveBeenCalledOnce();
-    expect(deps.runMessageAction).not.toHaveBeenCalled();
-  });
-
-  it("keeps conversation discovery and delivery owner-only", async () => {
-    const deps = createDeps();
-    await expect(
-      createConversationsListTool({ agentId: "main", senderIsOwner: false }, deps).execute(
-        "list",
-        {},
-      ),
-    ).rejects.toThrow("require owner access");
-    await expect(
-      createConversationsSendTool(
-        { agentId: "main", senderIsOwner: false, config: {} },
-        deps,
-      ).execute("send", {
-        conversationRef: conversation.conversationRef,
-        message: "blocked",
-      }),
-    ).rejects.toThrow("require owner access");
-    await expect(
-      createConversationsTurnTool(
-        { agentId: "main", senderIsOwner: false, config: {} },
-        deps,
-      ).execute("turn", {
-        conversationRef: conversation.conversationRef,
-        message: "blocked",
-      }),
-    ).rejects.toThrow("require owner access");
-    expect(deps.listConversations).not.toHaveBeenCalled();
-    expect(deps.runMessageAction).not.toHaveBeenCalled();
+    for (const createTool of [
+      createConversationsListTool,
+      createConversationsSendTool,
+      createConversationsTurnTool,
+    ]) {
+      const tool = createTool({ agentId: "main", senderIsOwner: false, config: {} } as never, deps);
+      await expect(
+        tool.execute("blocked", {
+          conversationRef: conversation.conversationRef,
+          message: "blocked",
+        }),
+      ).rejects.toThrow("require owner access");
+    }
+    expect(deps.runMessageActionMock).not.toHaveBeenCalled();
     for (const name of ["conversations_list", "conversations_send", "conversations_turn"]) {
       expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain(name);
       expect(DEFAULT_GATEWAY_HTTP_TOOL_DENY).toContain(name);

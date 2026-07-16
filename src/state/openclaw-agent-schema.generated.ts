@@ -113,6 +113,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_conversations_identity
 CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated
   ON conversations(updated_at DESC, conversation_id);
 
+CREATE TABLE IF NOT EXISTS conversation_deliveries (
+  operation_id TEXT NOT NULL PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  message_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('created', 'queued', 'sent', 'suppressed', 'unknown', 'replied')),
+  prepared_message_id TEXT,
+  platform_message_id TEXT,
+  queue_id TEXT,
+  reply_message_id TEXT,
+  reply_to_id TEXT,
+  reply_thread_id TEXT,
+  reply_text TEXT,
+  reply_timestamp INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_reply
+  ON conversation_deliveries(conversation_id, platform_message_id, prepared_message_id)
+  WHERE status IN ('queued', 'sent', 'replied');
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_updated
+  ON conversation_deliveries(updated_at DESC, operation_id);
+
 CREATE TABLE IF NOT EXISTS session_conversations (
   session_id TEXT NOT NULL,
   conversation_id TEXT NOT NULL,

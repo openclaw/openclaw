@@ -11,8 +11,6 @@ export type OutboundMirror = {
   idempotencyKey?: string;
   expectedSessionId?: string;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
-  /** Updates a durable intent in place; marker-only is safe during queue recovery. */
-  deliveryMirrorUpdateMode?: "marker-only" | "replace";
 };
 
 /**

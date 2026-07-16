@@ -4,6 +4,7 @@ import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -26,7 +27,9 @@ import type { GatewayClientMode, GatewayClientName } from "../../utils/message-c
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { NormalizedOutboundPayload, OutboundSendDeps } from "./deliver.js";
+import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
@@ -77,8 +80,18 @@ type OutboundSendContext = {
   preparedMessageId?: string;
   /** The Gateway owns this call and may use its active gateway-mode adapter directly. */
   gatewayOwnedDelivery?: boolean;
-  /** Caller owns retry semantics and requires a synchronous platform outcome. */
-  skipQueue?: boolean;
+  /** Bypass provider-native actions so core durable delivery owns the send. */
+  forceCoreDelivery?: boolean;
+  /** Fail before platform I/O unless the core delivery queue persisted the intent. */
+  requireQueuePersistence?: boolean;
+  /** Stable producer id for idempotent durable queue creation. */
+  deliveryIntentId?: string;
+  /** Serializable owner state finalized by live send or recovery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
+  /** Runs after queue persistence and before platform I/O. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** Runs on identified platform evidence before queue acknowledgement. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
 
 type PluginHandledResult = {
@@ -165,7 +178,11 @@ async function sendCoreMessage(params: {
     mediaAccess: params.ctx.mediaAccess,
     preparedMessageId: params.ctx.preparedMessageId,
     gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
-    skipQueue: params.ctx.skipQueue,
+    deliveryIntentId: params.ctx.deliveryIntentId,
+    deliveryCompletion: params.ctx.deliveryCompletion,
+    requireUnknownSendReconciliation: params.ctx.requireQueuePersistence ? false : undefined,
+    onDeliveryIntent: params.ctx.onDeliveryIntent,
+    onDeliveryResult: params.ctx.onDeliveryResult,
     onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });
   const deliveredText =
@@ -330,22 +347,26 @@ export async function executeSendAction(params: {
     mediaUrls: params.mediaUrls,
     audioAsVoice: params.asVoice === true,
   };
-  const queuePolicy = params.bestEffort === false ? "required" : "best_effort";
-  const pluginPreparation = await preparePluginSendPayload({
-    ctx: params.ctx,
-    to: params.to,
-    payload: defaultPayload,
-    replyToId: params.replyToId,
-    replyToIdSource: params.replyToIdSource,
-    threadId: params.threadId,
-  });
+  const queuePolicy =
+    params.bestEffort === false || params.ctx.requireQueuePersistence ? "required" : "best_effort";
+  const pluginPreparation = params.ctx.forceCoreDelivery
+    ? ({ kind: "unavailable" } as const)
+    : await preparePluginSendPayload({
+        ctx: params.ctx,
+        to: params.to,
+        payload: defaultPayload,
+        replyToId: params.replyToId,
+        replyToIdSource: params.replyToIdSource,
+        threadId: params.threadId,
+      });
   const channelPlugin = resolveOutboundChannelPlugin({
     channel: params.ctx.channel,
     cfg: params.ctx.cfg,
   });
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
-  const corePayload =
-    pluginPreparation.kind === "prepared"
+  const corePayload = params.ctx.forceCoreDelivery
+    ? defaultPayload
+    : pluginPreparation.kind === "prepared"
       ? pluginPreparation.payload
       : pluginPreparation.kind === "unavailable" &&
           presentation &&
@@ -390,45 +411,46 @@ export async function executeSendAction(params: {
           ...params.ctx,
           params: { ...params.ctx.params, message: pluginMessage },
         };
-  const pluginHandled = await tryHandleWithPluginAction({
-    ctx: pluginCtx,
-    action: "send",
-    onHandled: async () => {
-      if (!params.ctx.mirror) {
-        return;
-      }
-      const materializedPresentationFallback = pluginMessage !== params.message;
-      const mirrorText = materializedPresentationFallback
-        ? pluginMessage
-        : params.ctx.mirror.text?.trim() || pluginMessage;
-      const mirrorMediaUrls =
-        params.ctx.mirror.mediaUrls ??
-        params.mediaUrls ??
-        (params.mediaUrl ? [params.mediaUrl] : undefined);
-      try {
-        const mirrorResult = await appendAssistantMessageToSessionTranscript({
-          agentId: params.ctx.mirror.agentId,
-          sessionKey: params.ctx.mirror.sessionKey,
-          expectedSessionId: params.ctx.mirror.expectedSessionId,
-          text: mirrorText,
-          mediaUrls: mirrorMediaUrls,
-          idempotencyKey: params.ctx.mirror.idempotencyKey,
-          deliveryMirror: params.ctx.mirror.deliveryMirror,
-          deliveryMirrorUpdateMode: params.ctx.mirror.deliveryMirrorUpdateMode,
-          config: params.ctx.cfg,
-        });
-        if (!mirrorResult.ok) {
-          log.warn(
-            `failed to mirror plugin-handled delivery; channel send already succeeded: ${mirrorResult.reason}`,
-          );
-        }
-      } catch (error) {
-        log.warn(
-          `failed to mirror plugin-handled delivery; channel send already succeeded: ${formatErrorMessage(error)}`,
-        );
-      }
-    },
-  });
+  const pluginHandled = params.ctx.forceCoreDelivery
+    ? null
+    : await tryHandleWithPluginAction({
+        ctx: pluginCtx,
+        action: "send",
+        onHandled: async () => {
+          if (!params.ctx.mirror) {
+            return;
+          }
+          const materializedPresentationFallback = pluginMessage !== params.message;
+          const mirrorText = materializedPresentationFallback
+            ? pluginMessage
+            : params.ctx.mirror.text?.trim() || pluginMessage;
+          const mirrorMediaUrls =
+            params.ctx.mirror.mediaUrls ??
+            params.mediaUrls ??
+            (params.mediaUrl ? [params.mediaUrl] : undefined);
+          try {
+            const mirrorResult = await appendAssistantMessageToSessionTranscript({
+              agentId: params.ctx.mirror.agentId,
+              sessionKey: params.ctx.mirror.sessionKey,
+              expectedSessionId: params.ctx.mirror.expectedSessionId,
+              text: mirrorText,
+              mediaUrls: mirrorMediaUrls,
+              idempotencyKey: params.ctx.mirror.idempotencyKey,
+              deliveryMirror: params.ctx.mirror.deliveryMirror,
+              config: params.ctx.cfg,
+            });
+            if (!mirrorResult.ok) {
+              log.warn(
+                `failed to mirror plugin-handled delivery; channel send already succeeded: ${mirrorResult.reason}`,
+              );
+            }
+          } catch (error) {
+            log.warn(
+              `failed to mirror plugin-handled delivery; channel send already succeeded: ${formatErrorMessage(error)}`,
+            );
+          }
+        },
+      });
   if (pluginHandled) {
     return pluginHandled;
   }

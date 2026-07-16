@@ -91,17 +91,3 @@ export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): bool
     entry.model === OPENCLAW_DELIVERY_MIRROR_MODEL
   );
 }
-
-export function isPendingOpenClawConversationDeliveryMessage(message: unknown): boolean {
-  if (!isOpenClawDeliveryMirrorAssistantMessage(message)) {
-    return false;
-  }
-  const marker = (message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
-  return (
-    Boolean(marker) &&
-    typeof marker === "object" &&
-    !Array.isArray(marker) &&
-    (marker as { kind?: unknown }).kind === "conversation-send" &&
-    (marker as { status?: unknown }).status === "pending"
-  );
-}

@@ -99,7 +99,7 @@ function captureSuppressedTranscriptMirror(params: {
     return undefined;
   }
   const deliveryMirror = params.metadata.deliveryMirror;
-  if (!deliveryMirror || deliveryMirror.kind === "conversation-send") {
+  if (!deliveryMirror) {
     return undefined;
   }
   const sourceMessageId = normalizeOptionalString(deliveryMirror.sourceMessageId);

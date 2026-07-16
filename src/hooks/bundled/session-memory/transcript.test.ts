@@ -86,26 +86,4 @@ describe("session-memory transcript extraction", () => {
       "assistant: Answer [REMOVED_SPECIAL_TOKEN]",
     );
   });
-
-  it("omits pending external delivery intents from durable memory", async () => {
-    const transcriptPath = await writeTranscript(
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "not actually sent" }],
-          openclawDeliveryMirror: {
-            kind: "conversation-send",
-            status: "pending",
-            channel: "reef",
-            conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          },
-        },
-      }),
-    );
-
-    await expect(getRecentSessionContentWithResetFallback(transcriptPath)).resolves.toBe("");
-  });
 });

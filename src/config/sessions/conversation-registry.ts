@@ -100,6 +100,9 @@ function selectConversationRows(
     .selectFrom("conversations as c")
     .innerJoin("session_conversations as sc", "sc.conversation_id", "c.conversation_id")
     .innerJoin("sessions as s", "s.session_id", "sc.session_id")
+    // Historical sessions retain address activity, while session_entries owns
+    // the current session binding after reset/rebind.
+    .innerJoin("session_entries as se", "se.session_key", "s.session_key")
     .select([
       "c.conversation_id",
       "c.channel",
@@ -115,8 +118,8 @@ function selectConversationRows(
       "sc.role",
       "sc.first_seen_at",
       "sc.last_seen_at",
-      "s.session_id",
-      "s.session_key",
+      "se.session_id",
+      "se.session_key",
     ]);
   const channel = normalizeOptionalLowercaseString(options.channel);
   if (channel) {
@@ -131,7 +134,7 @@ function selectConversationRows(
   }
   const rows = executeSqliteQuerySync(
     database.db,
-    query.orderBy("sc.last_seen_at", "desc").orderBy("s.updated_at", "desc"),
+    query.orderBy("sc.last_seen_at", "desc").orderBy("se.updated_at", "desc"),
   ).rows;
   const unique = new Map<string, ConversationRecord>();
   for (const row of rows) {

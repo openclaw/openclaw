@@ -3,10 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
-import {
-  isOpenClawDeliveryMirrorAssistantMessage,
-  isPendingOpenClawConversationDeliveryMessage,
-} from "../../../shared/transcript-only-openclaw-assistant.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 
 const SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX = String.raw`(?:(?:\|DSML\|)|(?:\uFF5CDSML\uFF5C))?`;
 const SESSION_MEMORY_TOOL_DIRECTIVE_KIND = String.raw`(?:tool_calls?|function_calls?|tool_use_error)`;
@@ -82,9 +79,6 @@ function renderSessionMemoryMessage(entry: unknown): RenderedSessionMemoryMessag
   }
   const role = record.message.role;
   if ((role !== "user" && role !== "assistant") || !("content" in record.message)) {
-    return undefined;
-  }
-  if (isPendingOpenClawConversationDeliveryMessage(record.message)) {
     return undefined;
   }
   if (role === "user" && hasInterSessionUserProvenance(record.message)) {

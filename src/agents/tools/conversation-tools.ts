@@ -10,18 +10,14 @@ import {
   type ConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import {
-  recordConversationDelivery,
+  defaultConversationDeliveryDeps,
   sendConversationMessage,
   type ConversationDeliveryDeps,
 } from "../../infra/outbound/conversation-delivery.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -74,13 +70,10 @@ type ConversationToolDeps = ConversationDeliveryDeps & {
 };
 
 const defaultDeps: ConversationToolDeps = {
-  appendAssistantMessage: appendAssistantMessageToSessionTranscript,
-  beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+  ...defaultConversationDeliveryDeps,
   callGateway,
   listConversations,
-  loadSessionEntry,
   resolveConversation,
-  runMessageAction,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -142,6 +135,23 @@ function presentConversation(conversation: ConversationRecord) {
   };
 }
 
+function buildConversationOperationId(params: {
+  options: ConversationToolOptions;
+  toolCallId: string;
+  toolName: "conversations_send" | "conversations_turn";
+  conversationRef: string;
+}): string {
+  const identity = [
+    resolveToolAgentId(params.options),
+    params.options.agentSessionId ?? "",
+    params.options.agentSessionKey ?? "",
+    params.toolName,
+    params.toolCallId,
+    params.conversationRef,
+  ].join("\u0000");
+  return `convop_${crypto.createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
+}
+
 /** Lists opaque, exact external addresses owned by the active agent. */
 export function createConversationsListTool(
   options: ConversationToolOptions = {},
@@ -183,7 +193,7 @@ export function createConversationsSendTool(
     description:
       "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
     parameters: ConversationsSendSchema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const conversation = requireConversation({
@@ -192,11 +202,15 @@ export function createConversationsSendTool(
         conversationRef: readStringParam(params, "conversationRef", { required: true }),
       });
       const message = readStringParam(params, "message", { required: true });
-      const turnId = crypto.randomUUID();
+      const operationId = buildConversationOperationId({
+        options,
+        toolCallId,
+        toolName: "conversations_send",
+        conversationRef: conversation.conversationRef,
+      });
       const config = options.config ?? getRuntimeConfig();
       const context = {
         agentId: resolveToolAgentId(options),
-        ...(options.agentSessionId ? { sourceSessionId: options.agentSessionId } : {}),
         ...(options.agentSessionKey ? { sourceSessionKey: options.agentSessionKey } : {}),
         config,
         ...(options.senderIsOwner !== undefined ? { senderIsOwner: options.senderIsOwner } : {}),
@@ -206,32 +220,15 @@ export function createConversationsSendTool(
         context,
         conversation,
         message,
-        turnId,
+        operationId,
         signal,
       });
-      if (sent.deliveryStatus !== "sent") {
-        return jsonResult({
-          status: sent.deliveryStatus,
-          conversationRef: conversation.conversationRef,
-          channel: conversation.channel,
-          correlationPersisted: false,
-        });
-      }
-      const correlationPersisted = await recordConversationDelivery({
-        deps,
-        context,
-        conversation,
-        message,
-        ...(sent.deliveredMessage ? { deliveredMessage: sent.deliveredMessage } : {}),
-        turnId,
-        outboundMessageId: sent.messageId,
-      });
       return jsonResult({
-        status: "sent",
+        status: sent.deliveryStatus,
         conversationRef: conversation.conversationRef,
         channel: conversation.channel,
         ...(sent.messageId ? { messageId: sent.messageId } : {}),
-        correlationPersisted,
+        ...(sent.operation.queueId ? { queueId: sent.operation.queueId } : {}),
       });
     },
   };
@@ -249,7 +246,7 @@ export function createConversationsTurnTool(
     description:
       "Send through a conversationRef and wait for its correlated inbound reply. The reply returns here instead of starting a second local agent turn; unsolicited messages still start normal turns.",
     parameters: ConversationsTurnSchema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
       const conversationRef = readConversationRef(
@@ -258,12 +255,16 @@ export function createConversationsTurnTool(
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readPositiveIntegerParam(params, "timeoutSeconds") ?? 30;
       const timeoutMs = timeoutSeconds * 1_000;
-      const turnId = crypto.randomUUID();
+      const turnId = buildConversationOperationId({
+        options,
+        toolCallId,
+        toolName: "conversations_turn",
+        conversationRef,
+      });
       const result = await deps.callGateway<ConversationTurnResult>({
         method: "conversations.turn",
         params: {
           agentId: resolveToolAgentId(options),
-          ...(options.agentSessionId ? { sourceSessionId: options.agentSessionId } : {}),
           ...(options.agentSessionKey ? { sourceSessionKey: options.agentSessionKey } : {}),
           turnId,
           conversationRef,

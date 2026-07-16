@@ -16,7 +16,6 @@ type PendingConversationTurn = {
   id: string;
   conversationRef: string;
   sessionId: string;
-  replyPersistence: "backing-session" | "tool-result";
   threadId?: string;
   createdAt: number;
   outboundMessageId?: string;
@@ -38,7 +37,6 @@ export type PendingConversationTurnHandle = {
 export type ConversationTurnReplyClaim = {
   turnId: string;
   sessionId: string;
-  persistence: "backing-session" | "tool-result";
   complete: (params?: { transcriptArtifactId?: string; transcriptMessageId?: string }) => void;
   release: () => void;
 };
@@ -59,7 +57,6 @@ export function registerPendingConversationTurn(params: {
   id?: string;
   conversationRef: string;
   sessionId: string;
-  sourceSessionId?: string;
   threadId?: string;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -113,10 +110,6 @@ export function registerPendingConversationTurn(params: {
     id,
     conversationRef: params.conversationRef,
     sessionId: params.sessionId,
-    replyPersistence:
-      normalize(params.sourceSessionId) === normalize(params.sessionId)
-        ? "tool-result"
-        : "backing-session",
     threadId: normalize(params.threadId),
     createdAt,
     correlationReady,
@@ -218,7 +211,6 @@ export async function claimPendingConversationTurnReply(params: {
   return {
     turnId: pending.id,
     sessionId: pending.sessionId,
-    persistence: pending.replyPersistence,
     complete: (completion = {}) => {
       pending.settle({
         ...reply,
