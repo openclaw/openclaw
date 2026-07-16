@@ -15,7 +15,7 @@ function findPowerShell(): string | null {
   const executable = process.platform === "win32" ? "pwsh.exe" : "pwsh";
   const candidates = [
     process.env.OPENCLAW_TEST_PWSH,
-    ...String(process.env.PATH ?? "")
+    ...(process.env.PATH ?? "")
       .split(path.delimiter)
       .filter(Boolean)
       .map((dir) => path.join(dir, executable)),
