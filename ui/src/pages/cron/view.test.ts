@@ -618,8 +618,8 @@ describe("cron view editor", () => {
     expect(onceText).toContain("2026");
   });
 
-  it("hides the schedule summary for nondecimal recurring amounts", () => {
-    for (const everyAmount of ["0x10", "1e3", "+1"]) {
+  it("hides the schedule summary for recurring amounts that cannot produce safe milliseconds", () => {
+    for (const everyAmount of ["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"]) {
       const container = renderView({
         createOpen: true,
         form: { ...DEFAULT_CRON_FORM, scheduleKind: "every", everyAmount },

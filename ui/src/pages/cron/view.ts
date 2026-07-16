@@ -26,7 +26,7 @@ import "../../components/web-awesome.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
-import { parseCronPositiveDecimal } from "../../lib/cron/decimal.ts";
+import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -1236,7 +1236,7 @@ function renderGeneralSection(props: CronProps) {
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    if (parseCronPositiveDecimal(amount) === undefined) {
+    if (parseCronEveryMs(amount, form.everyUnit) === undefined) {
       return null;
     }
     if (Number(amount) === 1) {

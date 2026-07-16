@@ -24,7 +24,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
-import { parseCronPositiveDecimal } from "./decimal.ts";
+import { parseCronEveryMs } from "./decimal.ts";
 import { loadCronFailingCount } from "./scope.ts";
 
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
@@ -294,7 +294,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
-    if (parseCronPositiveDecimal(form.everyAmount) === undefined) {
+    if (parseCronEveryMs(form.everyAmount, form.everyUnit) === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
     }
   } else if (form.scheduleKind === "cron") {
@@ -834,13 +834,11 @@ function buildCronSchedule(form: CronFormState) {
     return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
-    const amount = parseCronPositiveDecimal(form.everyAmount);
-    if (amount === undefined) {
+    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    if (everyMs === undefined) {
       throw new Error(t("cron.errors.invalidIntervalAmount"));
     }
-    const unit = form.everyUnit;
-    const mult = unit === "minutes" ? 60_000 : unit === "hours" ? 3_600_000 : 86_400_000;
-    return { kind: "every" as const, everyMs: amount * mult };
+    return { kind: "every" as const, everyMs };
   }
   const expr = form.cronExpr.trim();
   if (!expr) {

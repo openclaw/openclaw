@@ -1486,8 +1486,8 @@ describe("cron controller", () => {
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
 
-  it.each(["0x10", "1e3", "+1"])(
-    "rejects nondecimal recurring amounts before submit: %s",
+  it.each(["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"])(
+    "rejects invalid recurring amounts before submit: %s",
     async (everyAmount) => {
       const request = vi.fn(async (method: string) => {
         if (method === "cron.add") {
@@ -1517,6 +1517,51 @@ describe("cron controller", () => {
       expect(saved.saved).toBe(false);
       expect(state.cronFieldErrors.everyAmount).toBe("cron.errors.everyAmountInvalid");
       expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["1.5", "minutes", 90_000],
+    ["4.1", "minutes", 246_000],
+    ["0.1", "hours", 360_000],
+    ["0.000125", "hours", 450],
+    ["0.1", "days", 8_640_000],
+    ["0.0009765625", "days", 84_375],
+  ] as const)(
+    "converts %s %s to safe integer milliseconds",
+    async (everyAmount, everyUnit, expectedEveryMs) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.add") {
+          return { id: "job-decimal" };
+        }
+        if (method === "cron.list") {
+          return { jobs: [] };
+        }
+        if (method === "cron.status") {
+          return { enabled: true, jobs: 0, nextWakeAtMs: null };
+        }
+        return {};
+      });
+      const state = createState({
+        client: { request } as unknown as CronState["client"],
+        cronForm: {
+          ...DEFAULT_CRON_FORM,
+          name: "decimal interval",
+          everyAmount,
+          everyUnit,
+          payloadText: "run",
+          deliveryMode: "none",
+        },
+      });
+
+      const saved = await addCronJob(state);
+
+      expect(saved.saved).toBe(true);
+      const addCall = findRequestCall(request.mock.calls, "cron.add");
+      expect(requestPayload(addCall).schedule).toEqual({
+        kind: "every",
+        everyMs: expectedEveryMs,
+      });
     },
   );
 
