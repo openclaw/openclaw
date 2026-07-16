@@ -1,11 +1,14 @@
 // Memory Core tests cover manager embedding policy plugin behavior.
+import { createServer } from "node:http";
+import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
+  createMemoryEmbeddingRetryCooldown,
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
-  resolveMemoryEmbeddingRetryDelay,
+  resolveMemoryEmbeddingRetryAfterMs,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -66,6 +69,8 @@ describe("memory embedding policy", () => {
       },
       maxAttempts: 3,
       baseDelayMs: 500,
+      maxDelayMs: 8000,
+      random: () => 0.5,
     });
 
     expect(result).toBe("ok");
@@ -89,6 +94,7 @@ describe("memory embedding policy", () => {
         waitForRetry,
         maxAttempts: 3,
         baseDelayMs: 500,
+        maxDelayMs: 8000,
         signal: controller.signal,
       }),
     ).rejects.toThrow("memory embeddings query timed out after 60s");
@@ -139,6 +145,7 @@ describe("memory embedding policy", () => {
       waitForRetry: async () => {},
       maxAttempts: 3,
       baseDelayMs: 500,
+      maxDelayMs: 8000,
     });
 
     expect(result).toEqual([[97], [98], [99], [100]]);
@@ -168,6 +175,8 @@ describe("memory embedding policy", () => {
       },
       maxAttempts: 3,
       baseDelayMs: 500,
+      maxDelayMs: 8000,
+      random: () => 0.5,
     });
 
     expect(result).toBe("ok");
@@ -190,6 +199,8 @@ describe("memory embedding policy", () => {
         },
         maxAttempts: 3,
         baseDelayMs: 500,
+        maxDelayMs: 8000,
+        random: () => 0.5,
       }),
     ).rejects.toThrow("fetch failed");
 
@@ -217,6 +228,8 @@ describe("memory embedding policy", () => {
       },
       maxAttempts: 2,
       baseDelayMs: 500,
+      maxDelayMs: 8000,
+      random: () => 0.5,
       onSplit: ({ itemCount, splitAt }) => {
         splits.push(`${itemCount}:${splitAt}`);
       },
@@ -242,6 +255,7 @@ describe("memory embedding policy", () => {
         waitForRetry: async () => {},
         maxAttempts: 1,
         baseDelayMs: 500,
+        maxDelayMs: 8000,
       }),
     ).rejects.toThrow("429 rate limit");
     expect(run).toHaveBeenCalledTimes(1);
@@ -261,14 +275,214 @@ describe("memory embedding policy", () => {
         waitForRetry: async () => {},
         maxAttempts: 2,
         baseDelayMs: 500,
+        maxDelayMs: 8000,
+        random: () => 0.5,
       }),
     ).rejects.toThrow("ECONNREFUSED");
     expect(run).toHaveBeenCalledTimes(2);
   });
 
-  it("caps retry jittered delays", () => {
-    expect(resolveMemoryEmbeddingRetryDelay(500, 0, 8000)).toBe(500);
-    expect(resolveMemoryEmbeddingRetryDelay(500, 1, 8000)).toBe(600);
-    expect(resolveMemoryEmbeddingRetryDelay(10_000, 1, 8000)).toBe(8000);
+  it("reads finite non-negative provider retry delays", () => {
+    expect(resolveMemoryEmbeddingRetryAfterMs({ retryAfterMs: 1500 })).toBe(1500);
+    expect(resolveMemoryEmbeddingRetryAfterMs({ retryAfterMs: -1 })).toBeUndefined();
+    expect(resolveMemoryEmbeddingRetryAfterMs({ retryAfterMs: Number.NaN })).toBeUndefined();
+    expect(resolveMemoryEmbeddingRetryAfterMs(new Error("429"))).toBeUndefined();
+  });
+
+  it("honors bounded provider retry delays", async () => {
+    const run = vi.fn(async () => {
+      if (run.mock.calls.length === 1) {
+        throw Object.assign(new Error("gemini embeddings failed: 429"), {
+          retryAfterMs: 5000,
+        });
+      }
+      return "ok";
+    });
+    const waits: number[] = [];
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (delayMs) => {
+          waits.push(delayMs);
+        },
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        maxDelayMs: 8000,
+        retryAfterMs: resolveMemoryEmbeddingRetryAfterMs,
+        random: () => 0,
+      }),
+    ).resolves.toBe("ok");
+
+    expect(waits).toEqual([5000]);
+  });
+
+  it("waits for Google RetryInfo before retrying an HTTP request", async () => {
+    const requestTimes: number[] = [];
+    const server = createServer((_request, response) => {
+      requestTimes.push(Date.now());
+      if (requestTimes.length === 1) {
+        response.writeHead(429, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              message: "Quota exceeded",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                  retryDelay: "1s",
+                },
+              ],
+            },
+          }),
+        );
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("test server did not expose a TCP address");
+      }
+      const cooldown = createMemoryEmbeddingRetryCooldown();
+      const result = await runMemoryEmbeddingRetryLoop({
+        run: async () => {
+          const response = await fetch(`http://127.0.0.1:${address.port}/embed`);
+          if (!response.ok) {
+            throw await createProviderHttpError(response, "gemini embeddings failed");
+          }
+          return "ok";
+        },
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (delayMs) => await cooldown.wait(delayMs),
+        maxAttempts: 2,
+        baseDelayMs: 10,
+        maxDelayMs: 2000,
+        retryAfterMs: resolveMemoryEmbeddingRetryAfterMs,
+        onRetry: (error) => cooldown.publish(resolveMemoryEmbeddingRetryAfterMs(error)),
+        random: () => 0,
+      });
+
+      expect(result).toBe("ok");
+      expect(requestTimes).toHaveLength(2);
+      expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(1000);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("fails promptly when a provider retry delay exceeds the bounded wait", async () => {
+    const error = Object.assign(new Error("gemini embeddings failed: 429"), {
+      retryAfterMs: 120_000,
+    });
+    const run = vi.fn(async () => {
+      throw error;
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry,
+        maxAttempts: 7,
+        baseDelayMs: 1000,
+        maxDelayMs: 60_000,
+        retryAfterMs: resolveMemoryEmbeddingRetryAfterMs,
+      }),
+    ).rejects.toBe(error);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
+  it("extends concurrent waiters to the longest shared cooldown", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const cooldown = createMemoryEmbeddingRetryCooldown();
+      let firstFinished = false;
+      cooldown.publish(100);
+      const first = cooldown.wait(100).then(() => {
+        firstFinished = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      cooldown.publish(200);
+      const second = cooldown.wait(200);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(firstFinished).toBe(false);
+      await vi.advanceTimersByTimeAsync(150);
+      await Promise.all([first, second]);
+      expect(firstFinished).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gates new attempts behind a published cooldown", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const cooldown = createMemoryEmbeddingRetryCooldown();
+      cooldown.publish(200);
+      let started = false;
+      const attempt = cooldown.wait(0).then(() => {
+        started = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(199);
+      expect(started).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await attempt;
+      expect(started).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps per-waiter jitter independent when the provider gives no cooldown", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const cooldown = createMemoryEmbeddingRetryCooldown();
+      let firstFinished = false;
+      let secondFinished = false;
+      const first = cooldown.wait(100).then(() => {
+        firstFinished = true;
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      const second = cooldown.wait(200).then(() => {
+        secondFinished = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(firstFinished).toBe(true);
+      expect(secondFinished).toBe(false);
+      await vi.advanceTimersByTimeAsync(150);
+      await Promise.all([first, second]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts a shared cooldown wait with its caller", async () => {
+    const cooldown = createMemoryEmbeddingRetryCooldown();
+    const controller = new AbortController();
+    const waiting = cooldown.wait(60_000, controller.signal);
+
+    controller.abort(new Error("memory search cancelled"));
+
+    await expect(waiting).rejects.toThrow("aborted");
   });
 });

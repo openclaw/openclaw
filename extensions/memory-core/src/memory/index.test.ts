@@ -1701,7 +1701,11 @@ describe("memory index", () => {
           embedBatch: (texts: string[]) => Promise<number[][]>;
           close: () => Promise<void>;
         };
-        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+        waitForEmbeddingRetry: (
+          delayMs: number,
+          action: string,
+          signal?: AbortSignal,
+        ) => Promise<void>;
       }
     ).provider = {
       id: "mock",
@@ -1718,7 +1722,11 @@ describe("memory index", () => {
     };
     (
       manager as unknown as {
-        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+        waitForEmbeddingRetry: (
+          delayMs: number,
+          action: string,
+          signal?: AbortSignal,
+        ) => Promise<void>;
       }
     ).waitForEmbeddingRetry = async () => {};
 
@@ -1758,7 +1766,11 @@ describe("memory index", () => {
     };
     (
       manager as unknown as {
-        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+        waitForEmbeddingRetry: (
+          delayMs: number,
+          action: string,
+          signal?: AbortSignal,
+        ) => Promise<void>;
       }
     ).waitForEmbeddingRetry = async () => {};
 

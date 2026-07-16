@@ -218,4 +218,42 @@ describe("Gemini embedding provider", () => {
       "gemini embeddings failed: malformed JSON response",
     );
   });
+
+  it("preserves Gemini retry timing on rate-limit errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 429,
+                status: "RESOURCE_EXHAUSTED",
+                message: "Quota exceeded",
+                details: [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    retryDelay: "42s",
+                  },
+                ],
+              },
+            }),
+            { status: 429 },
+          ),
+      ),
+    );
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "placeholder" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embedQuery("test query")).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 429,
+      retryAfterMs: 42_000,
+    });
+  });
 });

@@ -1,5 +1,7 @@
 // Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 type MemoryEmbeddingTextPart = {
   type: "text";
@@ -105,43 +107,89 @@ export function isRetryableMemoryEmbeddingError(message: string): boolean {
   );
 }
 
-export function resolveMemoryEmbeddingRetryDelay(
-  delayMs: number,
-  randomValue: number,
-  maxDelayMs: number,
-): number {
-  return Math.min(maxDelayMs, Math.round(delayMs * (1 + randomValue * 0.2)));
+export function resolveMemoryEmbeddingRetryAfterMs(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
+  return typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0
+    ? retryAfterMs
+    : undefined;
+}
+
+export function createMemoryEmbeddingRetryCooldown(): {
+  publish: (retryAfterMs: number | undefined) => void;
+  wait: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+} {
+  let retryNotBeforeMs = 0;
+  return {
+    publish: (retryAfterMs) => {
+      if (retryAfterMs !== undefined) {
+        retryNotBeforeMs = Math.max(retryNotBeforeMs, Date.now() + retryAfterMs);
+      }
+    },
+    wait: async (delayMs, signal) => {
+      const waiterNotBeforeMs = Date.now() + delayMs;
+      while (true) {
+        signal?.throwIfAborted();
+        const remainingMs = Math.max(0, Math.max(waiterNotBeforeMs, retryNotBeforeMs) - Date.now());
+        if (remainingMs === 0) {
+          return;
+        }
+        // Re-check after sleeping because another concurrent batch may publish a
+        // longer provider cooldown while this waiter is already paused.
+        await sleepWithAbort(remainingMs, signal);
+      }
+    },
+  };
 }
 
 export async function runMemoryEmbeddingRetryLoop<T>(params: {
   run: () => Promise<T>;
   isRetryable: (message: string) => boolean;
-  waitForRetry: (delayMs: number) => Promise<void>;
+  waitForRetry: (delayMs: number, error: unknown) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
+  maxDelayMs: number;
+  retryAfterMs?: (error: unknown) => number | undefined;
+  onRetry?: (error: unknown) => void;
+  random?: () => number;
   /** Caller-owned cancellation; an aborted caller stops the retry loop. */
   signal?: AbortSignal;
 }): Promise<T> {
-  const attempts = Math.max(1, params.maxAttempts);
-  for (const attempt of Array.from({ length: attempts }, (_, index) => index + 1)) {
-    const delayMs = params.baseDelayMs * 2 ** (attempt - 1);
-    try {
-      return await params.run();
-    } catch (err) {
+  let retryError: unknown;
+  return await retryAsync(params.run, {
+    attempts: params.maxAttempts,
+    minDelayMs: params.baseDelayMs,
+    maxDelayMs: params.maxDelayMs,
+    retryAfterMaxDelayMs: params.maxDelayMs,
+    retryAfterMs: params.retryAfterMs,
+    jitter: 0.2,
+    random: params.random,
+    shouldRetry: (err) => {
       // Abort must win over retryable-looking failures: abort reasons often
       // carry "timed out" messages that match the retryable transport
       // patterns and would otherwise keep retrying for an absent caller.
       if (params.signal?.aborted) {
-        throw err;
+        return false;
       }
       const message = formatErrorMessage(err);
-      if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
-        throw err;
+      if (!params.isRetryable(message)) {
+        return false;
       }
-      await params.waitForRetry(delayMs);
-    }
-  }
-  throw new Error("retry loop exhausted");
+      const retryAfterMs = params.retryAfterMs?.(err);
+      return retryAfterMs === undefined || retryAfterMs <= params.maxDelayMs;
+    },
+    onRetry: ({ err }) => {
+      retryError = err;
+      params.onRetry?.(err);
+    },
+    sleep: async (delayMs) => {
+      const error = retryError;
+      retryError = undefined;
+      await params.waitForRetry(delayMs, error);
+    },
+  });
 }
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
@@ -149,9 +197,13 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   run: (items: TInput[]) => Promise<TOutput[]>;
   isRetryable: (message: string) => boolean;
   isSplittable: (message: string) => boolean;
-  waitForRetry: (delayMs: number) => Promise<void>;
+  waitForRetry: (delayMs: number, error: unknown) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
+  maxDelayMs: number;
+  retryAfterMs?: (error: unknown) => number | undefined;
+  onRetry?: (error: unknown) => void;
+  random?: () => number;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
   try {
@@ -161,6 +213,10 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
       waitForRetry: params.waitForRetry,
       maxAttempts: params.maxAttempts,
       baseDelayMs: params.baseDelayMs,
+      maxDelayMs: params.maxDelayMs,
+      retryAfterMs: params.retryAfterMs,
+      onRetry: params.onRetry,
+      random: params.random,
     });
   } catch (err) {
     const message = formatErrorMessage(err);

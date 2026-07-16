@@ -8,6 +8,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import { readResponseTextPrefix, readResponseWithLimit } from "../infra/http-body.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import { redactSensitiveText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -128,30 +129,86 @@ type ProviderHttpErrorInfo = {
   type?: string;
   body?: string;
   requestId?: string;
+  retryAfterMs?: number;
 };
+
+const GOOGLE_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
+const PROTOBUF_DURATION_RE = /^(\d+)(?:\.(\d{1,9}))?s$/;
+
+function parseProtobufDurationMs(value: unknown): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = PROTOBUF_DURATION_RE.exec(value.trim());
+  if (!match) {
+    return undefined;
+  }
+  const seconds = Number(match[1]);
+  const fraction = Number(`0.${match[2] ?? "0"}`);
+  const milliseconds = (seconds + fraction) * 1000;
+  return Number.isSafeInteger(Math.ceil(milliseconds)) ? Math.ceil(milliseconds) : undefined;
+}
+
+function extractPayloadRetryAfterMs(payload: unknown): number | undefined {
+  const root = asObject(payload);
+  const error = asObject(root?.error) ?? root;
+  if (!Array.isArray(error?.details)) {
+    return undefined;
+  }
+  for (const detailValue of error.details) {
+    const detail = asObject(detailValue);
+    if (detail?.["@type"] !== GOOGLE_RETRY_INFO_TYPE) {
+      continue;
+    }
+    const retryAfterMs = parseProtobufDurationMs(detail.retryDelay);
+    if (retryAfterMs !== undefined) {
+      return retryAfterMs;
+    }
+  }
+  return undefined;
+}
+
+function extractResponseRetryAfterMs(response: Response, payload?: unknown): number | undefined {
+  const headerSeconds = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
+  const headerMs = headerSeconds === undefined ? undefined : Math.ceil(headerSeconds * 1000);
+  const payloadMs = extractPayloadRetryAfterMs(payload);
+  if (headerMs === undefined) {
+    return payloadMs;
+  }
+  return payloadMs === undefined ? headerMs : Math.max(headerMs, payloadMs);
+}
 
 /** Extracts normalized provider error metadata while keeping the raw body bounded and redacted. */
 async function extractProviderErrorInfo(response: Response): Promise<ProviderHttpErrorInfo> {
   const rawBody = trimToUndefined(await readResponseTextLimited(response).catch(() => ""));
   const requestId = extractProviderRequestId(response);
   if (!rawBody) {
-    return requestId ? { requestId } : {};
+    const retryAfterMs = extractResponseRetryAfterMs(response);
+    return {
+      ...(requestId ? { requestId } : {}),
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    };
   }
   const body = redactProviderErrorBody(rawBody);
   try {
-    const metadata = extractProviderErrorPayloadMetadata(JSON.parse(rawBody));
+    const payload: unknown = JSON.parse(rawBody);
+    const metadata = extractProviderErrorPayloadMetadata(payload);
+    const retryAfterMs = extractResponseRetryAfterMs(response, payload);
     return {
       ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
       ...(metadata.code ? { code: metadata.code } : {}),
       ...(metadata.type ? { type: metadata.type } : {}),
       body,
       ...(requestId ? { requestId } : {}),
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
     };
   } catch {
+    const retryAfterMs = extractResponseRetryAfterMs(response);
     return {
       detail: body,
       body,
       ...(requestId ? { requestId } : {}),
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
     };
   }
 }
@@ -178,6 +235,7 @@ export class ProviderHttpError extends Error {
   readonly errorType?: string;
   readonly errorBody?: string;
   readonly requestId?: string;
+  readonly retryAfterMs?: number;
 
   constructor(
     message: string,
@@ -187,6 +245,7 @@ export class ProviderHttpError extends Error {
       type?: string;
       body?: string;
       requestId?: string;
+      retryAfterMs?: number;
     },
   ) {
     super(message);
@@ -198,6 +257,9 @@ export class ProviderHttpError extends Error {
     this.errorType = params.type;
     this.errorBody = params.body;
     this.requestId = params.requestId;
+    if (params.retryAfterMs !== undefined) {
+      this.retryAfterMs = params.retryAfterMs;
+    }
   }
 }
 
@@ -238,6 +300,7 @@ export async function createProviderHttpError(
       type: info.type,
       body: info.body,
       requestId: info.requestId,
+      retryAfterMs: info.retryAfterMs,
     },
   );
 }

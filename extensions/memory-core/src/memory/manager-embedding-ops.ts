@@ -39,10 +39,11 @@ import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.
 import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
+  createMemoryEmbeddingRetryCooldown,
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
-  resolveMemoryEmbeddingRetryDelay,
+  resolveMemoryEmbeddingRetryAfterMs,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -60,9 +61,10 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
-const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
-const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
-const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+// Six bounded waits span a minute-scale quota window. Longer provider hints
+// fail promptly so daily or account quota exhaustion does not stall indexing.
+const EMBEDDING_INDEX_RETRY = { attempts: 7, minDelayMs: 1250, maxDelayMs: 60_000 } as const;
+const EMBEDDING_QUERY_RETRY = { attempts: 3, minDelayMs: 500, maxDelayMs: 8000 } as const;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
@@ -215,6 +217,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
   protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
+  private readonly embeddingRetryCooldown = createMemoryEmbeddingRetryCooldown();
 
   protected pruneEmbeddingCacheIfNeeded(): void {
     if (!this.cache.enabled) {
@@ -413,6 +416,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return await runMemoryEmbeddingBatchRetryWithSplit({
         items: texts,
         run: async (batchTexts) => {
+          await this.embeddingRetryCooldown.wait(0);
           const timeoutMs = this.resolveEmbeddingTimeout("batch");
           log.debug("memory embeddings: batch start", {
             provider: provider.id,
@@ -435,8 +439,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         waitForRetry: async (delayMs) => {
           await this.waitForEmbeddingRetry(delayMs, "retrying");
         },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        maxAttempts: EMBEDDING_INDEX_RETRY.attempts,
+        baseDelayMs: EMBEDDING_INDEX_RETRY.minDelayMs,
+        maxDelayMs: EMBEDDING_INDEX_RETRY.maxDelayMs,
+        retryAfterMs: resolveMemoryEmbeddingRetryAfterMs,
+        onRetry: (error) => {
+          this.embeddingRetryCooldown.publish(resolveMemoryEmbeddingRetryAfterMs(error));
+        },
         onSplit: ({ itemCount, splitAt }) => {
           log.warn(
             `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
@@ -470,6 +479,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return await runMemoryEmbeddingBatchRetryWithSplit({
         items: inputs,
         run: async (batchInputs) => {
+          await this.embeddingRetryCooldown.wait(0);
           const timeoutMs = this.resolveEmbeddingTimeout("batch");
           log.debug("memory embeddings: structured batch start", {
             provider: provider.id,
@@ -487,8 +497,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         waitForRetry: async (delayMs) => {
           await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
         },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        maxAttempts: EMBEDDING_INDEX_RETRY.attempts,
+        baseDelayMs: EMBEDDING_INDEX_RETRY.minDelayMs,
+        maxDelayMs: EMBEDDING_INDEX_RETRY.maxDelayMs,
+        retryAfterMs: resolveMemoryEmbeddingRetryAfterMs,
+        onRetry: (error) => {
+          this.embeddingRetryCooldown.publish(resolveMemoryEmbeddingRetryAfterMs(error));
+        },
         onSplit: ({ itemCount, splitAt }) => {
           log.warn(
             `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
@@ -505,16 +520,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
-    const waitMs = resolveMemoryEmbeddingRetryDelay(
-      delayMs,
-      Math.random(),
-      EMBEDDING_RETRY_MAX_DELAY_MS,
-    );
-    log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
-    await new Promise((resolve) => {
-      setTimeout(resolve, waitMs);
-    });
+  private async waitForEmbeddingRetry(
+    delayMs: number,
+    action: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    log.warn(`memory embeddings retryable error; ${action} in at least ${delayMs}ms`);
+    await this.embeddingRetryCooldown.wait(delayMs, signal);
   }
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
@@ -535,6 +547,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return await runMemoryEmbeddingRetryLoop({
         run: async () => {
           signal?.throwIfAborted();
+          await this.embeddingRetryCooldown.wait(0, signal);
           const timeoutMs = this.resolveEmbeddingTimeout("query");
           log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
           return await runEmbeddingOperationWithTimeout({
@@ -547,10 +560,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         signal,
         isRetryable: isRetryableMemoryEmbeddingError,
         waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying query");
+          await this.waitForEmbeddingRetry(delayMs, "retrying query", signal);
         },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        maxAttempts: EMBEDDING_QUERY_RETRY.attempts,
+        baseDelayMs: EMBEDDING_QUERY_RETRY.minDelayMs,
+        maxDelayMs: EMBEDDING_QUERY_RETRY.maxDelayMs,
+        retryAfterMs: resolveMemoryEmbeddingRetryAfterMs,
+        onRetry: (error) => {
+          this.embeddingRetryCooldown.publish(resolveMemoryEmbeddingRetryAfterMs(error));
+        },
       });
     } catch (err) {
       this.markLocalEmbeddingProviderDegraded(err);

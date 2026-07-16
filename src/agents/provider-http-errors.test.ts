@@ -273,6 +273,66 @@ describe("provider error utils", () => {
     );
   });
 
+  it("attaches the longest trustworthy provider retry delay", async () => {
+    const response = new Response(
+      JSON.stringify({
+        error: {
+          code: 429,
+          status: "RESOURCE_EXHAUSTED",
+          message: "Quota exceeded",
+          details: [
+            {
+              "@type": "type.googleapis.com/google.rpc.RetryInfo",
+              retryDelay: "12.345678901s",
+            },
+          ],
+        },
+      }),
+      {
+        status: 429,
+        headers: { "retry-after": "10" },
+      },
+    );
+
+    const error = await createProviderHttpError(response, "Provider API error");
+
+    expect(error).toMatchObject({
+      name: "ProviderHttpError",
+      retryAfterMs: 12_346,
+    } satisfies Partial<ProviderHttpError>);
+  });
+
+  it("keeps Retry-After metadata when the provider body is empty", async () => {
+    const response = new Response(null, {
+      status: 503,
+      headers: { "retry-after": "7" },
+    });
+
+    const error = await createProviderHttpError(response, "Provider API error");
+
+    expect(error).toMatchObject({ retryAfterMs: 7_000 } satisfies Partial<ProviderHttpError>);
+  });
+
+  it("ignores malformed provider retry metadata", async () => {
+    const response = new Response(
+      JSON.stringify({
+        error: {
+          details: [
+            {
+              "@type": "type.googleapis.com/google.rpc.RetryInfo",
+              retryDelay: "-1s",
+            },
+          ],
+        },
+      }),
+      { status: 429, headers: { "retry-after": "tomorrow" } },
+    );
+
+    const error = await createProviderHttpError(response, "Provider API error");
+
+    expect(error).not.toHaveProperty("retryAfterMs");
+  });
+
   it("wraps malformed successful JSON responses with provider labels", async () => {
     const response = new Response("{ nope", {
       status: 200,
