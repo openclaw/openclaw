@@ -602,8 +602,7 @@ function generateFishCompletion(program: Command): string {
           buildFishOptionCompletionLine({
             rootCmd,
             condition,
-            shortFlag: opt.short,
-            longFlag: opt.long,
+            flags: completionFlags(opt),
             description: opt.description,
           }),
         );

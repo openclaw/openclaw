@@ -16,17 +16,13 @@ export function buildFishSubcommandCompletionLine(params: {
 export function buildFishOptionCompletionLine(params: {
   rootCmd: string;
   condition: string;
-  shortFlag?: string;
-  longFlag?: string;
+  flags: readonly string[];
   description: string;
 }): string {
   const desc = escapeFishDescription(params.description);
   let line = `complete -c ${params.rootCmd} -n "${params.condition}"`;
-  if (params.shortFlag) {
-    line += ` -s ${params.shortFlag.slice(1)}`;
-  }
-  if (params.longFlag) {
-    line += ` -l ${params.longFlag.slice(2)}`;
+  for (const flag of params.flags) {
+    line += flag.startsWith("--") ? ` -l ${flag.slice(2)}` : ` -s ${flag.slice(1)}`;
   }
   line += ` -d '${desc}'\n`;
   return line;
