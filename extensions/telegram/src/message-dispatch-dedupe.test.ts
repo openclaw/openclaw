@@ -42,20 +42,30 @@ function storedReplayKey(accountId: string, msg: Message): string {
 
 function createTestReplayGuard(
   params: {
-    commit?: TelegramMessageDispatchReplayGuard["commit"];
-    forget?: TelegramMessageDispatchReplayGuard["forget"];
-    release?: TelegramMessageDispatchReplayGuard["release"];
+    commit?: (
+      key: string,
+      options?: Parameters<TelegramMessageDispatchReplayGuard["commit"]>[1],
+    ) => Promise<boolean>;
+    forget?: (
+      key: string,
+      options?: Parameters<TelegramMessageDispatchReplayGuard["forget"]>[1],
+    ) => Promise<boolean>;
+    release?: (
+      key: string,
+      options?: Parameters<TelegramMessageDispatchReplayGuard["release"]>[1],
+    ) => void;
   } = {},
 ): TelegramMessageDispatchReplayGuard {
+  const eventKey = (event: Parameters<TelegramMessageDispatchReplayGuard["commit"]>[0]): string =>
+    "keys" in event ? (event.keys?.[0] ?? "") : "";
   return {
-    claim: async () => ({ kind: "claimed" }),
-    commit: params.commit ?? (async () => true),
-    forget: params.forget ?? (async () => true),
-    hasRecent: async () => false,
+    claim: async () => ({ kind: "claimed", keys: ["claimed"] }),
+    commit: async (event, options) =>
+      await (params.commit ?? (async () => true))(eventKey(event), options),
+    forget: async (event, options) =>
+      await (params.forget ?? (async () => true))(eventKey(event), options),
     warmup: async () => 0,
-    clearMemory: () => {},
-    memorySize: () => 0,
-    release: params.release ?? (() => {}),
+    release: (event, options) => (params.release ?? (() => {}))(eventKey(event), options),
   };
 }
 

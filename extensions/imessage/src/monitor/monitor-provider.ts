@@ -86,14 +86,11 @@ import {
 } from "./group-allowlist-warnings.js";
 import {
   buildIMessageInboundReplayKey,
-  claimIMessageInboundReplay,
-  commitIMessageInboundReplay,
   createIMessageInboundReplayGuard,
   IMESSAGE_RECOVERY_MAX_AGE_MS,
   IMESSAGE_RECOVERY_MAX_ROWS,
   IMESSAGE_STALE_INBOUND_THRESHOLD_MS,
   isStaleIMessageBacklog,
-  releaseIMessageInboundReplay,
 } from "./inbound-dedupe.js";
 import {
   buildDirectIMessageReplyTarget,
@@ -754,20 +751,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           .filter((key): key is string => key !== null);
         try {
           await handleMessageNow(message);
-          await commitIMessageInboundReplay({
-            guard: inboundReplayGuard,
+          await inboundReplayGuard.commit({
             accountId: accountInfo.accountId,
             keys,
           });
           advanceRecoveryCursorAfterHandled(unitEntries);
         } catch (err) {
           holdRecoveryCursorBeforeFailedRows(unitEntries);
-          releaseIMessageInboundReplay({
-            guard: inboundReplayGuard,
-            accountId: accountInfo.accountId,
-            keys,
-            error: err,
-          });
+          inboundReplayGuard.release(
+            {
+              accountId: accountInfo.accountId,
+              keys,
+            },
+            { error: err },
+          );
           runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
         }
       };
@@ -1587,8 +1584,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         message,
       });
       if (suppressedKey) {
-        await commitIMessageInboundReplay({
-          guard: inboundReplayGuard,
+        await inboundReplayGuard.commit({
           accountId: accountInfo.accountId,
           keys: [suppressedKey],
         });
@@ -1606,19 +1602,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // transient dispatch failure (see handleMessageNow) so a failed message can
     // still retry on a later re-emit. Claimed only once we will actually enqueue
     // so a dropped row never leaks an uncommitted claim.
-    const replay = await claimIMessageInboundReplay({
-      guard: inboundReplayGuard,
+    const replay = await inboundReplayGuard.claim({
       accountId: accountInfo.accountId,
       message: repairedMessage,
     });
-    if (!replay.claimed) {
+    if (replay.kind === "duplicate" || replay.kind === "inflight") {
       logVerbose(
         `imessage: dropping duplicate inbound notification account=${accountInfo.accountId}`,
       );
       return;
     }
     trackPendingRecoveryReplayRow(repairedMessage);
-    await inboundDebouncer.enqueue({ message: repairedMessage, replayKey: replay.key });
+    await inboundDebouncer.enqueue({
+      message: repairedMessage,
+      replayKey: replay.kind === "claimed" ? (replay.keys[0] ?? null) : null,
+    });
   };
 
   await waitForTransportReady({

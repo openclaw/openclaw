@@ -1,13 +1,11 @@
 // Discord plugin module implements message run queue behavior.
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
-  commitDiscordInboundReplay,
   createDiscordInboundReplayGuard,
+  type DiscordInboundReplayGuard,
   DiscordRetryableInboundError,
-  releaseDiscordInboundReplay,
 } from "./inbound-dedupe.js";
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
@@ -19,7 +17,7 @@ type DiscordMessageRunQueueParams = {
   runtime: RuntimeEnv;
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  replayGuard?: ClaimableDedupe;
+  replayGuard?: DiscordInboundReplayGuard;
   testing?: DiscordMessageRunQueueTestingHooks;
 };
 
@@ -41,7 +39,7 @@ const loadMessageProcessRuntime = createLazyRuntimeModule(
 async function processDiscordQueuedMessage(params: {
   job: DiscordInboundJob;
   lifecycleSignal?: AbortSignal;
-  replayGuard: ClaimableDedupe;
+  replayGuard: DiscordInboundReplayGuard;
   testing?: DiscordMessageRunQueueTestingHooks;
 }) {
   const processDiscordMessageImpl =
@@ -53,22 +51,12 @@ async function processDiscordQueuedMessage(params: {
       : (params.job.runtime.abortSignal ?? params.lifecycleSignal);
   try {
     await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
-    await commitDiscordInboundReplay({
-      replayKeys: params.job.replayKeys,
-      replayGuard: params.replayGuard,
-    });
+    await params.replayGuard.commit(params.job.replayKeys);
   } catch (error) {
     if (error instanceof DiscordRetryableInboundError) {
-      releaseDiscordInboundReplay({
-        replayKeys: params.job.replayKeys,
-        error,
-        replayGuard: params.replayGuard,
-      });
+      params.replayGuard.release(params.job.replayKeys, { error });
     } else {
-      await commitDiscordInboundReplay({
-        replayKeys: params.job.replayKeys,
-        replayGuard: params.replayGuard,
-      });
+      await params.replayGuard.commit(params.job.replayKeys);
     }
     throw error;
   }
@@ -76,13 +64,17 @@ async function processDiscordQueuedMessage(params: {
 
 function cleanupSkippedDiscordQueuedMessage(params: {
   job: DiscordInboundJob;
-  replayGuard: ClaimableDedupe;
+  replayGuard: DiscordInboundReplayGuard;
 }) {
-  releaseDiscordInboundReplay({
-    replayKeys: params.job.replayKeys,
-    error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
-    replayGuard: params.replayGuard,
-  });
+  try {
+    // Skipped jobs never reach processDiscordMessage's finally block.
+    // Clean carried typing here before reopening the replay key for retry.
+    params.job.runtime.replyTypingFeedback?.onCleanup?.();
+  } finally {
+    params.replayGuard.release(params.job.replayKeys, {
+      error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
+    });
+  }
 }
 
 export function createDiscordMessageRunQueue(

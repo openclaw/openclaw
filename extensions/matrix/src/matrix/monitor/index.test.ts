@@ -50,9 +50,9 @@ const hoisted = vi.hoisted(() => {
     dm: {},
   };
   const inboundDeduper = {
-    claimEvent: vi.fn(async () => true),
-    commitEvent: vi.fn(async () => undefined),
-    releaseEvent: vi.fn(),
+    claim: vi.fn(async () => ({ kind: "claimed" as const, keys: ["test"] as [string] })),
+    commit: vi.fn(async () => true),
+    release: vi.fn(),
   };
   const createMatrixInboundEventDeduper = vi.fn(() => inboundDeduper);
   const client = Object.assign(createEmitter(), {
@@ -471,9 +471,11 @@ describe("monitorMatrixProvider", () => {
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
     hoisted.client.stopSyncWithoutPersist.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.claimEvent.mockReset().mockResolvedValue(true);
-    hoisted.inboundDeduper.commitEvent.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.releaseEvent.mockReset();
+    hoisted.inboundDeduper.claim
+      .mockReset()
+      .mockResolvedValue({ kind: "claimed" as const, keys: ["test"] as [string] });
+    hoisted.inboundDeduper.commit.mockReset().mockResolvedValue(true);
+    hoisted.inboundDeduper.release.mockReset();
     hoisted.createMatrixInboundEventDeduper.mockReset().mockReturnValue(hoisted.inboundDeduper);
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);

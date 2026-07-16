@@ -212,7 +212,7 @@ type MatrixMonitorHandlerParams = {
   startupMs: number;
   startupGraceMs: number;
   dropPreStartupMessages: boolean;
-  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claimEvent" | "commitEvent" | "releaseEvent">;
+  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim" | "commit" | "release">;
   directTracker: {
     isDirectMessage: (params: {
       roomId: string;
@@ -617,7 +617,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (!claimedInboundEvent || !inboundDeduper || !eventId) {
           return;
         }
-        await inboundDeduper.commitEvent({ roomId, eventId });
+        await inboundDeduper.commit({ roomId, eventId });
         claimedInboundEvent = false;
       };
       const readIngressPrefix = async () => {
@@ -664,7 +664,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return undefined;
         }
         if (eventId && inboundDeduper) {
-          claimedInboundEvent = await inboundDeduper.claimEvent({ roomId, eventId });
+          const claim = await inboundDeduper.claim({ roomId, eventId });
+          // Missing identifiers fail open; committed and in-flight events do not.
+          claimedInboundEvent = claim.kind === "claimed" || claim.kind === "invalid";
           if (!claimedInboundEvent) {
             logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
             return undefined;
@@ -2591,7 +2593,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
       if (claimedInboundEvent && inboundDeduper && eventId) {
-        inboundDeduper.releaseEvent({ roomId, eventId });
+        inboundDeduper.release({ roomId, eventId });
       }
     }
   };

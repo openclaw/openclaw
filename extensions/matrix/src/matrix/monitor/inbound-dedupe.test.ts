@@ -27,61 +27,38 @@ describe("Matrix inbound event dedupe", () => {
   const auth = { accountId: "ops" } as const;
   const event = { roomId: "!room:example.org", eventId: "$event-1" } as const;
 
-  it("drops a duplicate event after commit", async () => {
-    const deduper = createMatrixInboundEventDeduper({ auth, env: createStateEnv() });
-
-    await expect(deduper.claimEvent(event)).resolves.toBe(true);
-    await deduper.commitEvent(event);
-    await expect(deduper.claimEvent(event)).resolves.toBe(false);
-  });
-
-  it("reports an in-flight claim as a duplicate", async () => {
-    const deduper = createMatrixInboundEventDeduper({ auth, env: createStateEnv() });
-
-    await expect(deduper.claimEvent(event)).resolves.toBe(true);
-    await expect(deduper.claimEvent(event)).resolves.toBe(false);
-  });
-
   it("persists committed events across restarts", async () => {
     const env = createStateEnv();
     const first = createMatrixInboundEventDeduper({ auth, env });
-    await expect(first.claimEvent(event)).resolves.toBe(true);
-    await first.commitEvent(event);
+    await expect(first.claim(event)).resolves.toMatchObject({ kind: "claimed" });
+    await first.commit(event);
 
     // A fresh instance has an empty memory layer, so the duplicate verdict
     // must come from the persisted plugin-state SQLite rows.
     const second = createMatrixInboundEventDeduper({ auth, env });
-    await expect(second.claimEvent(event)).resolves.toBe(false);
-  });
-
-  it("lets a released claim retry, including after a restart", async () => {
-    const env = createStateEnv();
-    const first = createMatrixInboundEventDeduper({ auth, env });
-    await expect(first.claimEvent(event)).resolves.toBe(true);
-    first.releaseEvent(event);
-    await expect(first.claimEvent(event)).resolves.toBe(true);
-    first.releaseEvent(event);
-
-    const second = createMatrixInboundEventDeduper({ auth, env });
-    await expect(second.claimEvent(event)).resolves.toBe(true);
+    await expect(second.claim(event)).resolves.toEqual({ kind: "duplicate" });
   });
 
   it("scopes dedupe state per account", async () => {
     const env = createStateEnv();
     const ops = createMatrixInboundEventDeduper({ auth: { accountId: "ops" }, env });
-    await expect(ops.claimEvent(event)).resolves.toBe(true);
-    await ops.commitEvent(event);
+    await expect(ops.claim(event)).resolves.toMatchObject({ kind: "claimed" });
+    await ops.commit(event);
 
     const home = createMatrixInboundEventDeduper({ auth: { accountId: "home" }, env });
-    await expect(home.claimEvent(event)).resolves.toBe(true);
+    await expect(home.claim(event)).resolves.toMatchObject({ kind: "claimed" });
   });
 
   it("fails open for events without usable identifiers", async () => {
     const deduper = createMatrixInboundEventDeduper({ auth, env: createStateEnv() });
 
-    await expect(deduper.claimEvent({ roomId: " ", eventId: "$x" })).resolves.toBe(true);
-    await expect(deduper.claimEvent({ roomId: " ", eventId: "$x" })).resolves.toBe(true);
-    await expect(deduper.commitEvent({ roomId: "!r:x", eventId: "" })).resolves.toBeUndefined();
+    await expect(deduper.claim({ roomId: " ", eventId: "$x" })).resolves.toEqual({
+      kind: "invalid",
+    });
+    await expect(deduper.claim({ roomId: " ", eventId: "$x" })).resolves.toEqual({
+      kind: "invalid",
+    });
+    await expect(deduper.commit({ roomId: "!r:x", eventId: "" })).resolves.toBe(false);
   });
 
   it("keeps committed events in memory when plugin-state persistence fails", async () => {
@@ -95,9 +72,9 @@ describe("Matrix inbound event dedupe", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(filePath, "nested") },
     });
 
-    await expect(deduper.claimEvent(event)).resolves.toBe(true);
-    await expect(deduper.commitEvent(event)).resolves.toBeUndefined();
-    await expect(deduper.claimEvent(event)).resolves.toBe(false);
+    await expect(deduper.claim(event)).resolves.toMatchObject({ kind: "claimed" });
+    await expect(deduper.commit(event)).resolves.toBe(true);
+    await expect(deduper.claim(event)).resolves.toEqual({ kind: "duplicate" });
     expect(warnSpy).toHaveBeenCalledWith(
       "MatrixInboundDedupe",
       "Matrix inbound dedupe persistence failed:",

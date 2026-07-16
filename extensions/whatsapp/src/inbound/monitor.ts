@@ -58,12 +58,10 @@ import {
   requireWhatsAppInboundAdmission,
 } from "./admission.js";
 import {
-  claimRecentInboundMessageDelivery,
-  commitRecentInboundMessage,
   isRecentOutboundMessage,
-  releaseRecentInboundMessage,
   rememberRecentOutboundMessage,
   WhatsAppRetryableInboundError,
+  whatsAppInboundReplayGuard,
 } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
@@ -516,7 +514,7 @@ export async function attachWebInboxToSocket(
     );
     const retryableError = resolveRetryableWhatsAppInboundError(error);
     if (retryableError) {
-      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, retryableError));
+      whatsAppInboundReplayGuard.release(dedupeKeys, { error: retryableError });
       await Promise.all(
         durableEntries.map((entry) =>
           durableInboundJournal.release(entry.durableId, {
@@ -527,7 +525,7 @@ export async function attachWebInboxToSocket(
       return;
     }
     await Promise.all([
-      ...dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)),
+      whatsAppInboundReplayGuard.commit(dedupeKeys),
       ...durableEntries.map((entry) =>
         durableInboundJournal.complete(
           entry.durableId,
@@ -1235,9 +1233,11 @@ export async function attachWebInboxToSocket(
     }
 
     const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
-    const dedupeClaim = dedupeKey ? await claimRecentInboundMessageDelivery(dedupeKey) : "claimed";
-    if (dedupeClaim !== "claimed") {
-      if (dedupeClaim === "duplicate") {
+    const dedupeClaim = dedupeKey
+      ? await whatsAppInboundReplayGuard.claim(dedupeKey)
+      : ({ kind: "invalid" } as const);
+    if (dedupeClaim.kind === "duplicate" || dedupeClaim.kind === "inflight") {
+      if (dedupeClaim.kind === "duplicate") {
         await completeUndeliverableDurableInbound(durableId, durableMetadata);
         await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
       }

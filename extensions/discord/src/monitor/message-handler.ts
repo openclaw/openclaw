@@ -9,11 +9,8 @@ import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runti
 import type { Client } from "../internal/discord.js";
 import {
   buildDiscordInboundReplayKey,
-  claimDiscordInboundReplay,
-  commitDiscordInboundReplay,
   createDiscordInboundReplayGuard,
   DiscordRetryableInboundError,
-  releaseDiscordInboundReplay,
 } from "./inbound-dedupe.js";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
@@ -125,11 +122,7 @@ export function createDiscordMessageHandler(
       const replayKeys = entries.map((entry) => entry.replayKey).filter(isNonEmptyString);
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
-        releaseDiscordInboundReplay({
-          replayKeys,
-          error: abortSignal.reason,
-          replayGuard,
-        });
+        replayGuard.release(replayKeys, { error: abortSignal.reason });
         return;
       }
       try {
@@ -146,7 +139,7 @@ export function createDiscordMessageHandler(
             client: last.client,
           });
           if (!ctx) {
-            await commitDiscordInboundReplay({ replayKeys, replayGuard });
+            await replayGuard.commit(replayKeys);
             return;
           }
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
@@ -195,7 +188,7 @@ export function createDiscordMessageHandler(
           client: last.client,
         });
         if (!ctx) {
-          await commitDiscordInboundReplay({ replayKeys, replayGuard });
+          await replayGuard.commit(replayKeys);
           return;
         }
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
@@ -215,9 +208,9 @@ export function createDiscordMessageHandler(
         messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {
-          releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
+          replayGuard.release(replayKeys, { error });
         } else {
-          await commitDiscordInboundReplay({ replayKeys, replayGuard });
+          await replayGuard.commit(replayKeys);
         }
         throw error;
       }
@@ -245,12 +238,8 @@ export function createDiscordMessageHandler(
         accountId: params.accountId,
         data,
       });
-      if (
-        !(await claimDiscordInboundReplay({
-          replayKey,
-          replayGuard,
-        }))
-      ) {
+      const replayClaim = await replayGuard.claim(replayKey);
+      if (replayClaim.kind !== "claimed" && replayClaim.kind !== "invalid") {
         return;
       }
 

@@ -8,6 +8,11 @@ import {
   createPluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import type { PluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.types.js";
+import {
+  createChannelReplayGuardWithDedupe,
+  type ChannelReplayGuard,
+  type ChannelReplayGuardParams,
+} from "./channel-replay-guard.js";
 import type { FileLockOptions } from "./file-lock.js";
 
 const LEGACY_PATH_OWNER_ID = "core:persistent-dedupe";
@@ -770,4 +775,11 @@ export function createClaimableDedupe(
     },
     memorySize: () => persistent?.memorySize() ?? memory.size(),
   };
+}
+
+/** Create an event-keyed replay guard with shared claim, commit, and release orchestration. */
+export function createChannelReplayGuard<TEvent>(
+  params: ChannelReplayGuardParams<TEvent>,
+): ChannelReplayGuard<TEvent> {
+  return createChannelReplayGuardWithDedupe(params, createClaimableDedupe(params.dedupe));
 }
