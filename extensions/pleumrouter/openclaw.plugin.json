@@ -1,0 +1,123 @@
+{
+  "id": "pleumrouter",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["pleumrouter", "pleum", "pleum-router"],
+  "providerAuthAliases": {
+    "pleum": "pleumrouter",
+    "pleum-router": "pleumrouter"
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "pleumrouter-native",
+      "hosts": ["router.pleum.ai", "apirouter.pleum.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "pleumrouter": { "family": "pleumrouter" },
+      "pleum": { "family": "pleumrouter" },
+      "pleum-router": { "family": "pleumrouter" }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "pleumrouter",
+        "envVars": ["PLEUMROUTER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "pleumrouter",
+      "method": "api-key",
+      "choiceId": "pleumrouter-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "PleumRouter API key",
+      "choiceHint": "Korea-region OpenAI-compatible multi-provider gateway",
+      "groupId": "pleumrouter",
+      "groupLabel": "PleumRouter",
+      "groupHint": "Korea-region OpenAI-compatible multi-provider gateway",
+      "optionKey": "pleumrouterApiKey",
+      "cliFlag": "--pleumrouter-api-key",
+      "cliOption": "--pleumrouter-api-key <key>",
+      "cliDescription": "PleumRouter API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "aliases": {
+      "pleum": { "provider": "pleumrouter" },
+      "pleum-router": { "provider": "pleumrouter" }
+    },
+    "providers": {
+      "pleumrouter": {
+        "baseUrl": "https://router.pleum.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "glm-5.1",
+            "name": "GLM 5.1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 200000,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "qwen3-max",
+            "name": "Qwen3 Max",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-5.5",
+            "name": "GPT-5.5",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1050000,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "gemini-2.5-pro",
+            "name": "Gemini 2.5 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          }
+        ]
+      }
+    }
+  }
+}
