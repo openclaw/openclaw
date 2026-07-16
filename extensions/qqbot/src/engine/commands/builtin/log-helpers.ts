@@ -262,6 +262,7 @@ function tailFileLines(
     fs.closeSync(fd);
   }
 }
+export const testing = { tailFileLines };
 export { testing as __testing };
 
 /**
