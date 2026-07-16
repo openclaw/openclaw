@@ -51,7 +51,10 @@ internal object ChatWidgetUrlResolver {
     refreshNodeSurface: suspend (String?) -> ChatWidgetSurface?,
   ): ChatWidgetResource? {
     val observed = currentSurfaceUrls()
-    resolvePreferred(observed, target, excluding = failedResource)?.let { return it }
+    observed.node
+      ?.let { resolve(it, target) }
+      ?.takeIf { isReplacement(it, failedResource) }
+      ?.let { return it }
     val refreshed = refreshNodeSurface(observed.node?.url)?.let { resolve(it, target) }
     if (refreshed != null && isReplacement(refreshed, failedResource)) return refreshed
 

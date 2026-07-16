@@ -70,6 +70,7 @@ import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.j
 import type { NodeSession } from "../node-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
+  hasAuthorizedClientPluginNodeCapabilityUrl,
   pluginNodeCapabilityScopedHostUrlsConflict,
   refreshClientPluginNodeCapability,
 } from "../plugin-node-capability.js";
@@ -211,10 +212,19 @@ function respondRefreshedPluginSurface(params: {
   respond: RespondFn;
 }) {
   const currentUrl = params.client?.pluginSurfaceUrls?.[params.surface];
+  const capabilitySurface = params.client?.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
+    surface: params.surface,
+  };
   if (
+    params.client &&
     currentUrl &&
     params.observedUrl &&
-    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, params.observedUrl)
+    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, params.observedUrl) &&
+    hasAuthorizedClientPluginNodeCapabilityUrl({
+      client: params.client,
+      surface: capabilitySurface,
+      url: currentUrl,
+    })
   ) {
     // A prior in-flight request already rotated this capability. Return its
     // result instead of invalidating it with a second rotation.
@@ -231,9 +241,7 @@ function respondRefreshedPluginSurface(params: {
   const refreshed = params.client
     ? refreshClientPluginNodeCapability({
         client: params.client,
-        surface: params.client.pluginNodeCapabilitySurfaces?.[params.surface] ?? {
-          surface: params.surface,
-        },
+        surface: capabilitySurface,
       })
     : undefined;
   if (!refreshed) {

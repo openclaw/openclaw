@@ -50,14 +50,15 @@ public enum OpenClawChatWidgetURLResolver {
         -> OpenClawChatWidgetResource?
     {
         let observed = await currentSurfaceRoutes()
-        if let current = resolvePreferred(
-            surfaces: observed,
-            target: target,
-            excluding: failedResource)
-        {
-            return current
+        guard let failedResource else {
+            return self.resolvePreferred(surfaces: observed, target: target, excluding: nil)
         }
-        guard failedResource != nil else { return nil }
+        if let nodeSurface = observed.node,
+           let currentNode = self.resolve(surface: nodeSurface, target: target),
+           self.isReplacement(currentNode, for: failedResource)
+        {
+            return currentNode
+        }
 
         if let refreshedSurface = await refreshNodeSurfaceRoute(observed.node),
            let refreshed = resolve(surface: refreshedSurface, target: target),

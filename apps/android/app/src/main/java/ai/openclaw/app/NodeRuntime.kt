@@ -4131,8 +4131,8 @@ class NodeRuntime private constructor(
         operator = operatorSession.currentWidgetSurface(),
       )
 
-    val current = ChatWidgetUrlResolver.resolvePreferred(currentSurfaceUrls(), path, excluding = failedResource)
-    if (failedResource == null || current != null) return current
+    // Initial loads may use the operator fallback; failures refresh the node under the mutex.
+    if (failedResource == null) return ChatWidgetUrlResolver.resolvePreferred(currentSurfaceUrls(), path, excluding = null)
     return inlineWidgetRefreshMutex.withLock {
       // Rotation is node-role only; a second rotation would also invalidate a sibling's token.
       ChatWidgetUrlResolver.resolveAfterFailure(

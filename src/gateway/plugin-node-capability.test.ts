@@ -3,6 +3,7 @@
 import { describe, expect, test } from "vitest";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
+  hasAuthorizedClientPluginNodeCapabilityUrl,
   hasAuthorizedPluginNodeCapability,
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
@@ -70,6 +71,42 @@ describe("plugin node capability helpers", () => {
       ),
     ).toBe(true);
     expect(pluginNodeCapabilityScopedHostUrlsConflict("not-a-url", "also-not-a-url")).toBe(false);
+  });
+
+  test("validates a current scoped URL without extending its authorization", () => {
+    const client = makeClient({
+      pluginNodeCapabilities: {
+        canvas: { capability: "current-token", expiresAtMs: 1_500 },
+      },
+    });
+    const params = {
+      client,
+      surface: { surface: "canvas" },
+      url: "https://gateway.example/__openclaw__/cap/current-token",
+      nowMs: 1_000,
+    };
+
+    expect(hasAuthorizedClientPluginNodeCapabilityUrl(params)).toBe(true);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        url: "https://gateway.example/__openclaw__/cap/other-token",
+      }),
+    ).toBe(false);
+    expect(hasAuthorizedClientPluginNodeCapabilityUrl({ ...params, nowMs: 1_500 })).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        client: makeClient(),
+      }),
+    ).toBe(false);
+    expect(
+      hasAuthorizedClientPluginNodeCapabilityUrl({
+        ...params,
+        surface: { surface: "canvas", scopeKey: "other-plugin:canvas" },
+      }),
+    ).toBe(false);
   });
 
   test("treats the scoped path capability as authoritative over a stale query", () => {

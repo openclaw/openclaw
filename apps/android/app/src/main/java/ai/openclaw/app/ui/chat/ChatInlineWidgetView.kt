@@ -10,6 +10,7 @@ import ai.openclaw.app.ui.design.ClawTheme
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
+import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -68,10 +69,46 @@ internal fun ChatInlineWidget(
   var unavailable by remember(preview.path) { mutableStateOf(false) }
   var didRefresh by remember(preview.path) { mutableStateOf(false) }
   var refreshInFlight by remember(preview.path) { mutableStateOf(false) }
+  var refreshRequestId by remember(preview.path) { mutableStateOf<UUID?>(null) }
   val scope = rememberCoroutineScope()
   val isolatedProfileSupported = remember { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) }
 
+  fun handleFailure(
+    resource: ChatWidgetResource,
+    rendererGone: Boolean,
+  ) {
+    if (resolvedResource != resource) return
+    if (rendererGone) {
+      // onRenderProcessGone destroys the unusable WebView immediately. Drop
+      // Compose's resource reference even when its replacement is in flight.
+      resolvedResource = null
+      unavailable = false
+    }
+    if (refreshInFlight) return
+    if (didRefresh) {
+      refreshRequestId = null
+      resolvedResource = null
+      unavailable = true
+      return
+    }
+
+    didRefresh = true
+    refreshInFlight = true
+    val requestId = UUID.randomUUID()
+    refreshRequestId = requestId
+    scope.launch {
+      val replacement = resolveResource(preview.path, resource)
+      if (refreshRequestId != requestId) return@launch
+      refreshRequestId = null
+      resolvedResource = replacement
+      unavailable = replacement == null
+      refreshInFlight = false
+    }
+  }
+
   LaunchedEffect(preview.path, resolverReady) {
+    refreshRequestId = null
+    refreshInFlight = false
     if (!resolverReady) return@LaunchedEffect
     resolvedResource = resolveResource(preview.path, null)
     unavailable = resolvedResource == null
@@ -91,6 +128,7 @@ internal fun ChatInlineWidget(
       resolvedResource != null && isolatedProfileSupported -> {
         val resource = checkNotNull(resolvedResource)
         val allowsScripts = preview.sandbox == "scripts"
+        // Resource identity owns the WebView, isolated profile, and cleanup handle together.
         key(resource, allowsScripts) {
           Surface(
             modifier = Modifier.fillMaxWidth().height(preview.height.dp),
@@ -101,29 +139,8 @@ internal fun ChatInlineWidget(
             InlineWidgetWebView(
               resource = resource,
               allowsScripts = allowsScripts,
-              onFailure = {
-                // A released WebView can deliver one final failure callback. It
-                // must not discard the replacement route installed by its retry.
-                if (resolvedResource == resource && !refreshInFlight) {
-                  if (!didRefresh) {
-                    didRefresh = true
-                    refreshInFlight = true
-                    scope.launch {
-                      val replacement = resolveResource(preview.path, resource)
-                      if (resolvedResource != resource) {
-                        refreshInFlight = false
-                        return@launch
-                      }
-                      resolvedResource = replacement
-                      unavailable = replacement == null
-                      refreshInFlight = false
-                    }
-                  } else {
-                    resolvedResource = null
-                    unavailable = true
-                  }
-                }
-              },
+              onFailure = { handleFailure(resource, rendererGone = false) },
+              onRendererGone = { handleFailure(resource, rendererGone = true) },
             )
           }
         }
@@ -149,8 +166,10 @@ private fun InlineWidgetWebView(
   resource: ChatWidgetResource,
   allowsScripts: Boolean,
   onFailure: () -> Unit,
+  onRendererGone: () -> Unit,
 ) {
   val profileName = remember(resource, allowsScripts) { "$INLINE_WIDGET_PROFILE_PREFIX${UUID.randomUUID()}" }
+  val handle = remember(profileName) { InlineWidgetWebViewHandle() }
   AndroidView(
     modifier = Modifier.fillMaxWidth(),
     factory = { context ->
@@ -161,6 +180,13 @@ private fun InlineWidgetWebView(
       } else {
         error("isolated WebView profiles are unavailable")
       }
+      val client =
+        InlineWidgetWebViewClient(
+          resource = resource,
+          onFailure = onFailure,
+          onRendererGone = onRendererGone,
+        )
+      handle.bind(client)
       webView.apply {
         settings.setAllowContentAccess(false)
         settings.setAllowFileAccess(false)
@@ -174,19 +200,28 @@ private fun InlineWidgetWebView(
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.setSupportMultipleWindows(false)
         isHorizontalScrollBarEnabled = false
-        webViewClient = InlineWidgetWebViewClient(resource = resource, onFailure = onFailure)
+        webViewClient = client
         loadUrl(resource.url)
       }
     },
     onRelease = { webView ->
-      webView.stopLoading()
-      (webView.webViewClient as? InlineWidgetWebViewClient)?.close()
-      webView.webViewClient = WebViewClient()
-      webView.removeAllViews()
-      webView.destroy()
+      handle.release(webView)
       deleteInlineWidgetProfile(profileName)
     },
   )
+}
+
+private class InlineWidgetWebViewHandle {
+  private var client: InlineWidgetWebViewClient? = null
+
+  fun bind(client: InlineWidgetWebViewClient) {
+    this.client = client
+  }
+
+  fun release(view: WebView) {
+    client?.release(view)
+    client = null
+  }
 }
 
 private fun pruneStaleInlineWidgetProfiles() {
@@ -214,10 +249,33 @@ private fun deleteInlineWidgetProfile(profileName: String) {
 private class InlineWidgetWebViewClient(
   private val resource: ChatWidgetResource,
   private val onFailure: () -> Unit,
+  private val onRendererGone: () -> Unit,
 ) : WebViewClient() {
   private val pinnedClient = resource.tlsFingerprintSha256?.let(::buildPinnedWidgetClient)
+  private var released = false
 
-  fun close() {
+  fun release(view: WebView) {
+    if (released) return
+    released = true
+    view.stopLoading()
+    closePinnedClient()
+    view.webViewClient = WebViewClient()
+    view.removeAllViews()
+    view.destroy()
+  }
+
+  private fun releaseAfterRendererGone(view: WebView): Boolean {
+    if (released) return false
+    released = true
+    // A renderer-less WebView is unusable. Remove and destroy it before
+    // starting asynchronous route recovery; onRelease becomes a no-op.
+    (view.parent as? ViewGroup)?.removeView(view)
+    closePinnedClient()
+    view.destroy()
+    return true
+  }
+
+  private fun closePinnedClient() {
     pinnedClient?.dispatcher?.cancelAll()
     pinnedClient?.connectionPool?.evictAll()
   }
@@ -274,7 +332,7 @@ private class InlineWidgetWebViewClient(
     view: WebView,
     detail: RenderProcessGoneDetail,
   ): Boolean {
-    onFailure()
+    if (releaseAfterRendererGone(view)) onRendererGone()
     return true
   }
 }

@@ -95,6 +95,30 @@ struct ChatInlineWidgetTests {
         #expect(await probe.refreshCount == 1)
     }
 
+    @Test func `refreshes node before trying the operator fallback`() async throws {
+        let target = "/__openclaw__/canvas/documents/widget-1/index.html"
+        let oldSurface = "https://gateway.example/__openclaw__/cap/old"
+        let newSurface = "https://gateway.example/__openclaw__/cap/new"
+        let fallbackSurface = "https://operator.example/__openclaw__/cap/fallback"
+        let failedURL = try #require(OpenClawChatWidgetURLResolver.resolve(
+            surfaceURL: oldSurface,
+            target: target))
+        let failedResource = OpenClawChatWidgetResource(url: failedURL)
+        let probe = ChatWidgetRouteReconnectProbe(
+            route: GatewayCanvasHostRoute(url: oldSurface, tlsFingerprintSHA256: nil),
+            replacement: GatewayCanvasHostRoute(url: newSurface, tlsFingerprintSHA256: nil),
+            operatorRoute: GatewayCanvasHostRoute(url: fallbackSurface, tlsFingerprintSHA256: nil))
+
+        let resolved = await OpenClawChatWidgetURLResolver.resolveResource(
+            target: target,
+            replacing: failedResource,
+            currentSurfaceRoutes: { await probe.current() },
+            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) })
+
+        #expect(resolved?.url == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
+        #expect(await probe.refreshCount == 1)
+    }
+
     @Test func `rejects a TLS pin on a cleartext widget route`() async {
         let target = "/__openclaw__/canvas/documents/widget-1/index.html"
         let route = GatewayCanvasHostRoute(
@@ -135,15 +159,21 @@ struct ChatInlineWidgetTests {
 private actor ChatWidgetRouteReconnectProbe {
     private var route: GatewayCanvasHostRoute?
     private let replacement: GatewayCanvasHostRoute
+    private let operatorRoute: GatewayCanvasHostRoute?
     private(set) var refreshCount = 0
 
-    init(route: GatewayCanvasHostRoute, replacement: GatewayCanvasHostRoute) {
+    init(
+        route: GatewayCanvasHostRoute,
+        replacement: GatewayCanvasHostRoute,
+        operatorRoute: GatewayCanvasHostRoute? = nil)
+    {
         self.route = route
         self.replacement = replacement
+        self.operatorRoute = operatorRoute
     }
 
     func current() -> (node: GatewayCanvasHostRoute?, operatorSurface: GatewayCanvasHostRoute?) {
-        (node: self.route, operatorSurface: nil)
+        (node: self.route, operatorSurface: self.operatorRoute)
     }
 
     func reconnect(observed _: GatewayCanvasHostRoute?) -> GatewayCanvasHostRoute? {

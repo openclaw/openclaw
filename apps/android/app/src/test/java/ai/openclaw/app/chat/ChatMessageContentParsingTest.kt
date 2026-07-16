@@ -108,6 +108,21 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
+  fun initialResolutionUsesOperatorFallbackWhenNodeUnavailable() {
+    val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+    val fallbackSurface = "https://operator.example/__openclaw__/cap/fallback"
+    val surfaces =
+      ChatWidgetSurfaceUrls(
+        node = null,
+        operator = ChatWidgetSurface(url = fallbackSurface, tlsFingerprintSha256 = null),
+      )
+
+    val resolved = ChatWidgetUrlResolver.resolvePreferred(surfaces, target, excluding = null)
+
+    assertEquals(ChatWidgetUrlResolver.resolve(fallbackSurface, target), resolved?.url)
+  }
+
+  @Test
   fun usesReplacementRouteAfterCapabilityRefreshLosesItsLease() =
     runTest {
       val target = "/__openclaw__/canvas/documents/widget-1/index.html"
@@ -174,6 +189,38 @@ class ChatMessageContentParsingTest {
 
       assertEquals(url, resolved?.url)
       assertEquals(newPin, resolved?.tlsFingerprintSha256)
+    }
+
+  @Test
+  fun refreshesNodeBeforeTryingOperatorFallback() =
+    runTest {
+      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+      val oldSurface = "https://gateway.example/__openclaw__/cap/old"
+      val newSurface = "https://gateway.example/__openclaw__/cap/new"
+      val fallbackSurface = "https://operator.example/__openclaw__/cap/fallback"
+      val failedUrl = requireNotNull(ChatWidgetUrlResolver.resolve(oldSurface, target))
+      val failedResource = ChatWidgetResource(url = failedUrl, tlsFingerprintSha256 = null)
+      var refreshCount = 0
+      var current =
+        ChatWidgetSurfaceUrls(
+          node = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = null),
+          operator = ChatWidgetSurface(url = fallbackSurface, tlsFingerprintSha256 = null),
+        )
+
+      val resolved =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = failedResource,
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = {
+            refreshCount += 1
+            current = current.copy(node = ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = null))
+            null
+          },
+        )
+
+      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
+      assertEquals(1, refreshCount)
     }
 
   @Test

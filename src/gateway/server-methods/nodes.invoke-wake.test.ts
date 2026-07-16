@@ -462,6 +462,10 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
 }
 
 describe("node plugin surface refresh", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("refreshes generic plugin surface capability urls", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -512,6 +516,8 @@ describe("node plugin surface refresh", () => {
   });
 
   it("reuses a capability rotated after the caller observed its surface", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const respond = vi.fn();
     const currentUrl = "http://127.0.0.1:18789/__openclaw__/cap/current-token";
     const client = {
@@ -521,6 +527,9 @@ describe("node plugin surface refresh", () => {
       pluginSurfaceUrls: { canvas: currentUrl },
       pluginNodeCapabilitySurfaces: {
         canvas: { surface: "canvas", ttlMs: 100 },
+      },
+      pluginNodeCapabilities: {
+        canvas: { capability: "current-token", expiresAtMs: 1_100 },
       },
     };
 
@@ -547,7 +556,55 @@ describe("node plugin surface refresh", () => {
       pluginSurfaceUrls: { canvas: currentUrl },
     });
     expect(client.pluginSurfaceUrls.canvas).toBe(currentUrl);
-    expect(client).not.toHaveProperty("pluginNodeCapabilities");
+    expect(client.pluginNodeCapabilities.canvas).toEqual({
+      capability: "current-token",
+      expiresAtMs: 1_100,
+    });
+  });
+
+  it("rotates a conflicting current URL after its authorization expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const respond = vi.fn();
+    const currentUrl = "http://127.0.0.1:18789/__openclaw__/cap/current-token";
+    const client = {
+      connect: {
+        client: { id: "node-1", mode: "node" },
+      },
+      pluginSurfaceUrls: { canvas: currentUrl },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+      pluginNodeCapabilities: {
+        canvas: { capability: "current-token", expiresAtMs: 999 },
+      },
+    };
+
+    await expectDefined(
+      nodeHandlers["node.pluginSurface.refresh"],
+      'nodeHandlers["node.pluginSurface.refresh"] test invariant',
+    )({
+      req: { type: "req", id: "r3", method: "node.pluginSurface.refresh", params: {} },
+      params: {
+        surface: "canvas",
+        observedUrl: "https://gateway.example/__openclaw__/cap/old-token",
+      },
+      client: client as never,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    const payload = requireRecord(call[1], "refresh payload");
+    expect(payload.expiresAtMs).toBe(1_100);
+    const pluginSurfaceUrls = requireRecord(payload.pluginSurfaceUrls, "refresh surface urls");
+    const canvasUrl = requireString(pluginSurfaceUrls.canvas, "refresh canvas url");
+    expect(canvasUrl).not.toBe(currentUrl);
+    expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
+    expect(client.pluginNodeCapabilities.canvas.capability).not.toBe("current-token");
+    expect(client.pluginNodeCapabilities.canvas.expiresAtMs).toBe(1_100);
   });
 });
 

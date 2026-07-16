@@ -11379,7 +11379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 133,
+      "line": 150,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatInlineWidgetView.kt",
       "source": "Widget unavailable",
       "surface": "android",
@@ -36195,7 +36195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 229,
+      "line": 230,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
       "source": "Widget unavailable",
       "surface": "apple",
