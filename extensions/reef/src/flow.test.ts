@@ -1,12 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
@@ -23,43 +14,19 @@ import {
   allow,
   config,
   envelope,
+  flowStores,
   guard,
   peerTrust,
   reefKeys,
+  resetFlowStoresForTests,
   transport,
   trust,
 } from "./flow.test-helpers.js";
-import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";
 
-const stateDirs: string[] = [];
-
-beforeEach(() => {
-  resetPluginStateStoreForTests();
-});
-
-afterEach(() => {
-  resetPluginStateStoreForTests();
-  for (const stateDir of stateDirs.splice(0)) {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
-});
-
-function flowStores() {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-flow-"));
-  stateDirs.push(stateDir);
-  const runtime = createPluginRuntimeMock();
-  runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateSyncKeyedStoreForTests<T>("reef", {
-      ...options,
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-  return {
-    reviews: new ReviewApprovalStore(runtime),
-    delivered: new ReefDeliveredStore(runtime),
-  };
-}
+beforeEach(resetFlowStoresForTests);
+afterEach(resetFlowStoresForTests);
 
 describe("ReefMessageFlow inbound", () => {
   it("delivers and persists before ack, then acks duplicate redelivery without delivering twice", async () => {
