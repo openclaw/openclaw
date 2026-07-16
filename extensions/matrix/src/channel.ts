@@ -85,7 +85,6 @@ import {
 import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
-
 const loadMatrixSetupWizard = createLazyRuntimeNamedExport(
   () => import("./setup-surface.js"),
   "matrixSetupWizard",
@@ -341,6 +340,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+  pollMaxOptions: 20,
   deliveryCapabilities: {
     durableFinal: {
       text: true,
