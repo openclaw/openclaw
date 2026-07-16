@@ -344,7 +344,9 @@ describe("memory embedding policy", () => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ ok: true }));
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
 
     try {
       const address = server.address();
@@ -375,7 +377,13 @@ describe("memory embedding policy", () => {
       expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(1000);
     } finally {
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
       });
     }
   });
