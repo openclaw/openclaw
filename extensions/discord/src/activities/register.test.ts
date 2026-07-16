@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerDiscordActivities } from "./register.js";
 import { getDiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
@@ -32,7 +33,7 @@ function createApi(config: Record<string, unknown>) {
 describe("Discord Activities registration", () => {
   it("requires atomic plugin state updates", () => {
     const openKeyedStore = <T>() => {
-      const store = createMemoryKeyedStore<T>();
+      const store: PluginStateKeyedStore<T> = createMemoryKeyedStore<T>();
       store.update = undefined;
       return store;
     };
