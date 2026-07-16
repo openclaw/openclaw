@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
+  getActiveSecretsRuntimeConfigSnapshotMock,
   listWebSearchProvidersMock,
   loadModelCatalogMock,
   loadRunCronIsolatedAgentTurn,
@@ -175,6 +176,32 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
           toolName: "web_search",
         },
       ]);
+    },
+  );
+
+  it(
+    "uses active secrets config for plugin-owned web_search auto-detection",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const runtimeConfig = {
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: { webSearch: { apiKey: "brave-test-key" } },
+            },
+          },
+        },
+      };
+      getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue({ config: runtimeConfig });
+
+      const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
+
+      expect(result.diagnostics).toBeUndefined();
+      expect(listWebSearchProvidersMock).toHaveBeenCalledWith({ config: runtimeConfig });
+      expect(resolveWebSearchProviderIdMock).toHaveBeenCalledWith(
+        expect.objectContaining({ config: runtimeConfig }),
+      );
     },
   );
 

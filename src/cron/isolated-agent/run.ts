@@ -38,6 +38,7 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -390,12 +391,15 @@ async function createCronToolsAllowPreflightDiagnostics(params: {
       return undefined;
     }
     const { listWebSearchProviders, resolveWebSearchProviderId } = await loadWebSearchRuntime();
-    const webSearchProviders = listWebSearchProviders({ config: params.cfg });
+    // Match agent-side web_search: plugin-owned credentials live in the active
+    // secrets snapshot and may be absent from the general runtime config.
+    const webSearchConfig = getActiveSecretsRuntimeConfigSnapshot()?.config ?? params.cfg;
+    const webSearchProviders = listWebSearchProviders({ config: webSearchConfig });
     return createCronRunDiagnosticsFromMissingWebSearchProvider({
       toolsAllow,
       hasWebSearchProvider: Boolean(
         resolveWebSearchProviderId({
-          config: params.cfg,
+          config: webSearchConfig,
           agentDir: params.agentDir,
           providers: webSearchProviders,
         }),

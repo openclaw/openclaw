@@ -95,6 +95,7 @@ export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
 export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
+export const getActiveSecretsRuntimeConfigSnapshotMock = createMock();
 export const listWebSearchProvidersMock = createMock();
 export const resolveWebSearchProviderIdMock = createMock();
 export const classifyEmbeddedAgentRunResultForModelFallbackMock = createMock();
@@ -184,6 +185,10 @@ vi.mock("./run-model-catalog.runtime.js", () => ({
 
 vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
+}));
+
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: getActiveSecretsRuntimeConfigSnapshotMock,
 }));
 
 vi.mock("../../web-search/runtime.js", () => ({
@@ -814,6 +819,8 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   setSessionRuntimeModelMock.mockReturnValue(undefined);
   logWarnMock.mockReset();
   ensureRuntimePluginsLoadedMock.mockReset();
+  getActiveSecretsRuntimeConfigSnapshotMock.mockReset();
+  getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue(null);
   listWebSearchProvidersMock.mockReset();
   listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
   resolveWebSearchProviderIdMock.mockReset();
