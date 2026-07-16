@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
@@ -67,6 +68,45 @@ struct ChatInlineWidgetTests {
         #expect(await probe.refreshCount == 1)
     }
 
+    @Test func `accepts a same URL widget route when its TLS pin changed`() async throws {
+        let target = "/__openclaw__/canvas/documents/widget-1/index.html"
+        let surface = "https://gateway.example/__openclaw__/cap/token"
+        let oldPin = String(repeating: "aa", count: 32)
+        let newPin = String(repeating: "bb", count: 32)
+        let failedURL = try #require(OpenClawChatWidgetURLResolver.resolve(
+            surfaceURL: surface,
+            target: target))
+        let failedResource = OpenClawChatWidgetResource(url: failedURL, tlsFingerprintSHA256: oldPin)
+        let probe = ChatWidgetRouteReconnectProbe(
+            route: GatewayCanvasHostRoute(url: surface, tlsFingerprintSHA256: oldPin),
+            replacement: GatewayCanvasHostRoute(url: surface, tlsFingerprintSHA256: newPin))
+
+        let resolved = await OpenClawChatWidgetURLResolver.resolveResource(
+            target: target,
+            replacing: failedResource,
+            currentSurfaceRoutes: { await probe.current() },
+            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) })
+
+        #expect(resolved?.url == failedURL)
+        #expect(resolved?.tlsFingerprintSHA256 == newPin)
+        #expect(await probe.refreshCount == 1)
+    }
+
+    @Test func `rejects a TLS pin on a cleartext widget route`() async {
+        let target = "/__openclaw__/canvas/documents/widget-1/index.html"
+        let route = GatewayCanvasHostRoute(
+            url: "http://gateway.example/__openclaw__/cap/token",
+            tlsFingerprintSHA256: String(repeating: "aa", count: 32))
+
+        let resolved = await OpenClawChatWidgetURLResolver.resolveResource(
+            target: target,
+            replacing: nil,
+            currentSurfaceRoutes: { (node: route, operatorSurface: nil) },
+            refreshNodeSurfaceRoute: { _ in nil })
+
+        #expect(resolved == nil)
+    }
+
     #if canImport(WebKit) && (os(iOS) || os(macOS))
     @Test func `bounds WebKit content process recovery per document`() {
         var recovery = ChatInlineWidgetContentProcessRecovery()
@@ -78,7 +118,36 @@ struct ChatInlineWidgetTests {
         recovery.reset()
         #expect(recovery.nextAction() == .reload)
     }
+
+    @Test func `normalizes exact SHA-256 widget certificate pins`() {
+        let fingerprint = String(repeating: "aB", count: 32)
+        #expect(ChatInlineWidgetTLSPin.normalize("SHA-256: \(fingerprint)") == fingerprint.lowercased())
+        #expect(ChatInlineWidgetTLSPin.normalize("abc") == nil)
+        #expect(ChatInlineWidgetTLSPin.fingerprint(certificateData: Data("abc".utf8)) ==
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
     #endif
+}
+
+private actor ChatWidgetRouteReconnectProbe {
+    private var route: GatewayCanvasHostRoute?
+    private let replacement: GatewayCanvasHostRoute
+    private(set) var refreshCount = 0
+
+    init(route: GatewayCanvasHostRoute, replacement: GatewayCanvasHostRoute) {
+        self.route = route
+        self.replacement = replacement
+    }
+
+    func current() -> (node: GatewayCanvasHostRoute?, operatorSurface: GatewayCanvasHostRoute?) {
+        (node: self.route, operatorSurface: nil)
+    }
+
+    func reconnect(observed _: GatewayCanvasHostRoute?) -> GatewayCanvasHostRoute? {
+        self.refreshCount += 1
+        self.route = self.replacement
+        return nil
+    }
 }
 
 private actor ChatWidgetReconnectProbe {

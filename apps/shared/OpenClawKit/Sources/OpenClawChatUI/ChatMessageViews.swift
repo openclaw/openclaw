@@ -214,7 +214,9 @@ struct ChatMessageBubble: View {
     let isClean: Bool
     let contextWindowTokens: Int?
     let inlineWidgetResolverReady: Bool
-    let inlineWidgetURLResolver: @MainActor @Sendable (String, URL?) async -> URL?
+    let inlineWidgetResourceResolver: @MainActor @Sendable (
+        String,
+        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
     var body: some View {
         if self.isUser {
@@ -255,7 +257,7 @@ struct ChatMessageBubble: View {
             isClean: self.isClean,
             contextWindowTokens: self.contextWindowTokens,
             inlineWidgetResolverReady: self.inlineWidgetResolverReady,
-            inlineWidgetURLResolver: self.inlineWidgetURLResolver)
+            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver)
     }
 }
 
@@ -271,7 +273,9 @@ private struct ChatMessageBody: View {
     let isClean: Bool
     let contextWindowTokens: Int?
     let inlineWidgetResolverReady: Bool
-    let inlineWidgetURLResolver: @MainActor @Sendable (String, URL?) async -> URL?
+    let inlineWidgetResourceResolver: @MainActor @Sendable (
+        String,
+        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
     var body: some View {
         let text = self.primaryText
@@ -335,7 +339,7 @@ private struct ChatMessageBody: View {
                 ChatInlineWidgetView(
                     preview: self.inlineWidgets[idx],
                     resolverReady: self.inlineWidgetResolverReady,
-                    resolveURL: self.inlineWidgetURLResolver)
+                    resolveResource: self.inlineWidgetResourceResolver)
             }
 
             if self.showsAssistantTrace, !self.toolCalls.isEmpty {

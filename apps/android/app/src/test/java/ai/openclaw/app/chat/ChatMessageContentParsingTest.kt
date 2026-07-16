@@ -1,13 +1,29 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.chat.readBoundedWidgetDocument
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import okio.Buffer
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ChatMessageContentParsingTest {
+  @Test
+  fun boundedWidgetDocumentReadAcceptsAtMostLimitAndRejectsOverflow() {
+    assertArrayEquals(
+      byteArrayOf(1, 2),
+      readBoundedWidgetDocument(Buffer().write(byteArrayOf(1, 2)), maxBytes = 3),
+    )
+    assertArrayEquals(
+      byteArrayOf(1, 2, 3),
+      readBoundedWidgetDocument(Buffer().write(byteArrayOf(1, 2, 3)), maxBytes = 3),
+    )
+    assertNull(readBoundedWidgetDocument(Buffer().write(byteArrayOf(1, 2, 3, 4)), maxBytes = 3))
+  }
+
   @Test
   fun dropsInternalToolBlocksFromDisplayHistory() {
     val content =
@@ -97,21 +113,67 @@ class ChatMessageContentParsingTest {
       val target = "/__openclaw__/canvas/documents/widget-1/index.html"
       val oldSurface = "https://gateway.example/__openclaw__/cap/old"
       val newSurface = "https://gateway.example/__openclaw__/cap/new"
+      val oldPin = "aa".repeat(32)
+      val newPin = "bb".repeat(32)
       val failedUrl = ChatWidgetUrlResolver.resolve(oldSurface, target)
-      var current = ChatWidgetSurfaceUrls(node = oldSurface, operator = null)
+      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin)
+      var current =
+        ChatWidgetSurfaceUrls(
+          node = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = oldPin),
+          operator = null,
+        )
 
       val resolved =
         ChatWidgetUrlResolver.resolveAfterFailure(
           target = target,
-          failedUrl = requireNotNull(failedUrl),
+          failedResource = failedResource,
           currentSurfaceUrls = { current },
-          refreshNodeSurfaceUrl = {
-            current = ChatWidgetSurfaceUrls(node = newSurface, operator = null)
+          refreshNodeSurface = {
+            current =
+              ChatWidgetSurfaceUrls(
+                node = ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = newPin),
+                operator = null,
+              )
             null
           },
         )
 
-      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved)
+      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
+      assertEquals(newPin, resolved?.tlsFingerprintSha256)
+    }
+
+  @Test
+  fun acceptsSameUrlReplacementWhenTlsPinChanged() =
+    runTest {
+      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+      val surface = "https://gateway.example/__openclaw__/cap/token"
+      val oldPin = "aa".repeat(32)
+      val newPin = "bb".repeat(32)
+      val url = requireNotNull(ChatWidgetUrlResolver.resolve(surface, target))
+      val failedResource = ChatWidgetResource(url = url, tlsFingerprintSha256 = oldPin)
+      var current =
+        ChatWidgetSurfaceUrls(
+          node = ChatWidgetSurface(url = surface, tlsFingerprintSha256 = oldPin),
+          operator = null,
+        )
+
+      val resolved =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = failedResource,
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = {
+            current =
+              ChatWidgetSurfaceUrls(
+                node = ChatWidgetSurface(url = surface, tlsFingerprintSha256 = newPin),
+                operator = null,
+              )
+            null
+          },
+        )
+
+      assertEquals(url, resolved?.url)
+      assertEquals(newPin, resolved?.tlsFingerprintSha256)
     }
 
   @Test

@@ -299,21 +299,30 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
     }
 
-    func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL? {
+    func resolveInlineWidgetResource(
+        path: String,
+        replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    {
         let gateway = self.gateway
         let widgetGateway = self.widgetGateway
-        return await OpenClawChatWidgetURLResolver.resolve(
+        return await OpenClawChatWidgetURLResolver.resolveResource(
             target: path,
-            replacing: failedURL,
-            currentSurfaceURLs: {
-                let node = await widgetGateway?.currentCanvasHostUrl()
-                let operatorSurface = await gateway.currentCanvasHostUrl()
+            replacing: failedResource,
+            currentSurfaceRoutes: {
+                let node = await widgetGateway?.currentCanvasHostRoute()
+                let operatorSurface = await gateway.currentCanvasHostRoute()
                 return (node: node, operatorSurface: operatorSurface)
             },
             // Only node-role sessions may rotate plugin-surface capabilities.
-            refreshNodeSurfaceURL: { observed in
-                await widgetGateway?.refreshCanvasHostUrl(replacing: observed)
+            refreshNodeSurfaceRoute: { observed in
+                await widgetGateway?.refreshCanvasHostRoute(replacing: observed?.url)
             })
+    }
+
+    func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL? {
+        await self.resolveInlineWidgetResource(
+            path: path,
+            replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) })?.url
     }
 
     func requestHistory(

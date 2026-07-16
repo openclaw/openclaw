@@ -419,7 +419,9 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 }
 
-private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked Sendable {
+private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMetadataProviding,
+    @unchecked Sendable
+{
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
     private let helloMethods: [String]
@@ -427,6 +429,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
     private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
+    let effectiveTLSFingerprintSHA256: String?
     private var tasks: [FakeGatewayWebSocketTask] = []
     private var requests: [URLRequest] = []
     private var makeCount = 0
@@ -437,7 +440,8 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
         helloSessionDefaults: [String: Any]? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
-        cancelGate: FirstCancelGate? = nil)
+        cancelGate: FirstCancelGate? = nil,
+        effectiveTLSFingerprintSHA256: String? = nil)
     {
         self.helloAuth = helloAuth
         self.helloMethods = helloMethods
@@ -445,6 +449,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
         self.cancelGate = cancelGate
+        self.effectiveTLSFingerprintSHA256 = effectiveTLSFingerprintSHA256
     }
 
     func snapshotMakeCount() -> Int {
@@ -623,7 +628,8 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
     @Test func `canvas surface refresh is shared across callers with different timeouts`() async throws {
-        let session = FakeGatewayWebSocketSession()
+        let expectedFingerprint = String(repeating: "ab", count: 32)
+        let session = FakeGatewayWebSocketSession(effectiveTLSFingerprintSHA256: expectedFingerprint)
         let gateway = GatewayNodeSession()
         let options = GatewayConnectOptions(
             role: "node",
@@ -667,6 +673,9 @@ struct GatewayNodeSessionTests {
         #expect(values.0 == values.2)
         #expect(values.0?.hasSuffix("/new-token") == true)
         #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
+        let route = try #require(await gateway.currentCanvasHostRoute())
+        #expect(route.url == values.0)
+        #expect(route.tlsFingerprintSHA256 == expectedFingerprint)
         await gateway.disconnect()
     }
 

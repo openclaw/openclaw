@@ -13,6 +13,8 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.ChatWidgetResource
+import ai.openclaw.app.chat.ChatWidgetSurface
 import ai.openclaw.app.chat.ChatWidgetSurfaceUrls
 import ai.openclaw.app.chat.ChatWidgetUrlResolver
 import ai.openclaw.app.chat.MainSessionBinding
@@ -4111,25 +4113,40 @@ class NodeRuntime private constructor(
 
   fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
 
-  suspend fun resolveInlineWidgetUrl(
+  internal suspend fun resolveInlineWidgetResource(
     path: String,
-    failedUrl: String?,
-  ): String? {
+    failedResource: ChatWidgetResource?,
+  ): ChatWidgetResource? {
+    fun GatewaySession.currentWidgetSurface(): ChatWidgetSurface? =
+      currentCanvasHostRoute()?.let { route ->
+        ChatWidgetSurface(
+          url = route.url,
+          tlsFingerprintSha256 = route.tlsFingerprintSha256,
+        )
+      }
+
     fun currentSurfaceUrls(): ChatWidgetSurfaceUrls =
       ChatWidgetSurfaceUrls(
-        node = nodeSession.currentCanvasHostUrl(),
-        operator = operatorSession.currentCanvasHostUrl(),
+        node = nodeSession.currentWidgetSurface(),
+        operator = operatorSession.currentWidgetSurface(),
       )
 
-    val current = ChatWidgetUrlResolver.resolvePreferred(currentSurfaceUrls(), path, excluding = failedUrl)
-    if (failedUrl == null || current != null) return current
+    val current = ChatWidgetUrlResolver.resolvePreferred(currentSurfaceUrls(), path, excluding = failedResource)
+    if (failedResource == null || current != null) return current
     return inlineWidgetRefreshMutex.withLock {
       // Rotation is node-role only; a second rotation would also invalidate a sibling's token.
       ChatWidgetUrlResolver.resolveAfterFailure(
         target = path,
-        failedUrl = failedUrl,
+        failedResource = failedResource,
         currentSurfaceUrls = ::currentSurfaceUrls,
-        refreshNodeSurfaceUrl = nodeSession::refreshCanvasHostUrlIfCurrent,
+        refreshNodeSurface = { observedUrl ->
+          nodeSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
+            ChatWidgetSurface(
+              url = route.url,
+              tlsFingerprintSha256 = route.tlsFingerprintSha256,
+            )
+          }
+        },
       )
     }
   }

@@ -8,6 +8,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
@@ -895,10 +896,10 @@ class MainViewModel private constructor(
 
   fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = ensureRuntime().isTrustedCanvasActionUrl(rawUrl)
 
-  suspend fun resolveInlineWidgetUrl(
+  internal suspend fun resolveInlineWidgetResource(
     path: String,
-    failedUrl: String?,
-  ): String? = ensureRuntime().resolveInlineWidgetUrl(path, failedUrl)
+    failedResource: ChatWidgetResource?,
+  ) = ensureRuntime().resolveInlineWidgetResource(path, failedResource)
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)

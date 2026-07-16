@@ -437,8 +437,8 @@ public struct OpenClawChatView: View {
             isClean: self.composerChrome == .clean,
             contextWindowTokens: contextWindowTokens,
             inlineWidgetResolverReady: self.viewModel.healthOK,
-            inlineWidgetURLResolver: { [weak viewModel] path, failedURL in
-                await viewModel?.resolveInlineWidgetURL(path: path, replacing: failedURL)
+            inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
+                await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
             })
             .frame(
                 maxWidth: .infinity,

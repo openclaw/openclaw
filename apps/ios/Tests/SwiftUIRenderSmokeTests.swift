@@ -253,7 +253,7 @@ struct SwiftUIRenderSmokeTests {
                 isClean: false,
                 contextWindowTokens: 1_000_000,
                 inlineWidgetResolverReady: true,
-                inlineWidgetURLResolver: { _, _ in nil })
+                inlineWidgetResourceResolver: { _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))

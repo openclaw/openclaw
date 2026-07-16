@@ -160,6 +160,11 @@ internal enum class NodeEventSendOutcome {
   FAILED,
 }
 
+internal data class GatewayCanvasHostRoute(
+  val url: String,
+  val tlsFingerprintSha256: String?,
+)
+
 /**
  * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
  */
@@ -390,9 +395,30 @@ class GatewaySession(
 
   internal fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
 
+  internal fun currentCanvasHostRoute(): GatewayCanvasHostRoute? =
+    synchronized(lifecycleLock) {
+      val connection = readyConnection() ?: return@synchronized null
+      val url = pluginSurfaceUrls["canvas"] ?: return@synchronized null
+      // TOFU can learn the certificate during the WebSocket handshake. Read
+      // the live TLS config so the widget document inherits that exact trust.
+      val fingerprint =
+        connection.tlsConfig
+          ?.effectiveFingerprintSha256
+          ?.let(::normalizeGatewayTlsFingerprint)
+          ?.takeIf { it.length == 64 }
+      GatewayCanvasHostRoute(url = url, tlsFingerprintSha256 = fingerprint)
+    }
+
   internal suspend fun refreshCanvasHostUrl(): String? = refreshCanvasHostUrl(observedSurfaceUrl = null, requireObservedMatch = false)
 
   internal suspend fun refreshCanvasHostUrlIfCurrent(observedSurfaceUrl: String?): String? = refreshCanvasHostUrl(observedSurfaceUrl = observedSurfaceUrl, requireObservedMatch = true)
+
+  internal suspend fun refreshCanvasHostRouteIfCurrent(observedSurfaceUrl: String?): GatewayCanvasHostRoute? {
+    refreshCanvasHostUrlIfCurrent(observedSurfaceUrl)
+    // Pair the URL with the currently installed connection after suspension;
+    // a reconnect can replace both the capability and its certificate pin.
+    return currentCanvasHostRoute()
+  }
 
   private suspend fun refreshCanvasHostUrl(
     observedSurfaceUrl: String?,
@@ -693,6 +719,10 @@ class GatewaySession(
 
     @Volatile
     private var connectRequestId: String? = null
+    val tlsConfig: GatewayTlsConfig? =
+      buildGatewayTlsConfig(tls) { fingerprint ->
+        onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
+      }
     private val client: OkHttpClient = buildClient()
     private val listener = Listener()
     private var socket: WebSocket? = null
@@ -897,10 +927,6 @@ class GatewaySession(
           .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
           .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
           .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
-      val tlsConfig =
-        buildGatewayTlsConfig(tls) { fingerprint ->
-          onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
-        }
       if (tlsConfig != null) {
         builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
         builder.hostnameVerifier(tlsConfig.hostnameVerifier)

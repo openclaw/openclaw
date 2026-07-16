@@ -1,9 +1,22 @@
+import CryptoKit
 import Foundation
+import OpenClawKit
 import SwiftUI
 
 #if canImport(WebKit) && (os(iOS) || os(macOS))
+import Security
 import WebKit
 #endif
+
+public struct OpenClawChatWidgetResource: Sendable, Equatable {
+    public let url: URL
+    public let tlsFingerprintSHA256: String?
+
+    public init(url: URL, tlsFingerprintSHA256: String? = nil) {
+        self.url = url
+        self.tlsFingerprintSHA256 = tlsFingerprintSHA256
+    }
+}
 
 public enum OpenClawChatWidgetURLResolver {
     private static let documentsPath = "/__openclaw__/canvas/documents"
@@ -33,29 +46,58 @@ public enum OpenClawChatWidgetURLResolver {
         currentSurfaceURLs: @Sendable () async -> (node: String?, operatorSurface: String?),
         refreshNodeSurfaceURL: @Sendable (String?) async -> String?) async -> URL?
     {
-        let observed = await currentSurfaceURLs()
-        if let current = self.resolvePreferred(
+        await self.resolveResource(
+            target: target,
+            replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) },
+            currentSurfaceRoutes: {
+                let surfaces = await currentSurfaceURLs()
+                return (
+                    node: surfaces.node.map {
+                        GatewayCanvasHostRoute(url: $0, tlsFingerprintSHA256: nil)
+                    },
+                    operatorSurface: surfaces.operatorSurface.map {
+                        GatewayCanvasHostRoute(url: $0, tlsFingerprintSHA256: nil)
+                    })
+            },
+            refreshNodeSurfaceRoute: { observed in
+                await refreshNodeSurfaceURL(observed?.url).map {
+                    GatewayCanvasHostRoute(url: $0, tlsFingerprintSHA256: observed?.tlsFingerprintSHA256)
+                }
+            })?.url
+    }
+
+    public static func resolveResource(
+        target: String,
+        replacing failedResource: OpenClawChatWidgetResource?,
+        currentSurfaceRoutes: @Sendable () async -> (
+            node: GatewayCanvasHostRoute?,
+            operatorSurface: GatewayCanvasHostRoute?),
+        refreshNodeSurfaceRoute: @Sendable (GatewayCanvasHostRoute?) async -> GatewayCanvasHostRoute?) async
+        -> OpenClawChatWidgetResource?
+    {
+        let observed = await currentSurfaceRoutes()
+        if let current = resolvePreferred(
             surfaces: observed,
             target: target,
-            excluding: failedURL)
+            excluding: failedResource)
         {
             return current
         }
-        guard let failedURL else { return nil }
+        guard failedResource != nil else { return nil }
 
-        if let refreshedSurface = await refreshNodeSurfaceURL(observed.node),
-           let refreshed = self.resolve(surfaceURL: refreshedSurface, target: target),
-           refreshed != failedURL
+        if let refreshedSurface = await refreshNodeSurfaceRoute(observed.node),
+           let refreshed = resolve(surface: refreshedSurface, target: target),
+           self.isReplacement(refreshed, for: failedResource)
         {
             return refreshed
         }
 
         // A nil refresh can mean its route lease lost a reconnect race. Re-read
-        // both roles so a replacement connection wins over the stale observation.
+        // both roles so a replacement connection and its TLS pin win together.
         return await self.resolvePreferred(
-            surfaces: currentSurfaceURLs(),
+            surfaces: currentSurfaceRoutes(),
             target: target,
-            excluding: failedURL)
+            excluding: failedResource)
     }
 
     private static func relativeWidgetTarget(_ rawTarget: String) -> URLComponents? {
@@ -93,15 +135,39 @@ public enum OpenClawChatWidgetURLResolver {
         return components
     }
 
+    private static func resolve(
+        surface: GatewayCanvasHostRoute,
+        target: String) -> OpenClawChatWidgetResource?
+    {
+        guard let url = resolve(surfaceURL: surface.url, target: target) else { return nil }
+        let resource = OpenClawChatWidgetResource(
+            url: url,
+            tlsFingerprintSHA256: surface.tlsFingerprintSHA256)
+        return resource.hasValidTLSBinding ? resource : nil
+    }
+
     private static func resolvePreferred(
-        surfaces: (node: String?, operatorSurface: String?),
+        surfaces: (node: GatewayCanvasHostRoute?, operatorSurface: GatewayCanvasHostRoute?),
         target: String,
-        excluding failedURL: URL?) -> URL?
+        excluding failedResource: OpenClawChatWidgetResource?) -> OpenClawChatWidgetResource?
     {
         [surfaces.node, surfaces.operatorSurface]
             .lazy
-            .compactMap { self.resolve(surfaceURL: $0, target: target) }
-            .first { $0 != failedURL }
+            .compactMap { $0.flatMap { self.resolve(surface: $0, target: target) } }
+            .first { self.isReplacement($0, for: failedResource) }
+    }
+
+    private static func isReplacement(
+        _ candidate: OpenClawChatWidgetResource,
+        for failedResource: OpenClawChatWidgetResource?) -> Bool
+    {
+        guard let failedResource else { return true }
+        // Legacy URL-only callers cannot express trust identity, so retain
+        // their URL-only exclusion while resource-aware callers compare both.
+        if failedResource.tlsFingerprintSHA256 == nil {
+            return candidate.url != failedResource.url
+        }
+        return candidate != failedResource
     }
 
     private static func isWebURL(_ components: URLComponents) -> Bool {
@@ -140,9 +206,11 @@ public enum OpenClawChatWidgetURLResolver {
 struct ChatInlineWidgetView: View {
     let preview: OpenClawChatCanvasPreview
     let resolverReady: Bool
-    let resolveURL: @MainActor @Sendable (String, URL?) async -> URL?
+    let resolveResource: @MainActor @Sendable (
+        String,
+        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
-    @State private var resolvedURL: URL?
+    @State private var resolvedResource: OpenClawChatWidgetResource?
     @State private var didRefresh = false
     @State private var refreshInFlight = false
     @State private var unavailable = false
@@ -158,12 +226,16 @@ struct ChatInlineWidgetView: View {
             }
 
             #if canImport(WebKit) && (os(iOS) || os(macOS))
-            if let resolvedURL {
+            if let resolvedResource {
                 ChatInlineWidgetWebView(
-                    url: resolvedURL,
+                    resource: resolvedResource,
                     allowsScripts: self.preview.sandbox == "scripts",
-                    onFailure: { self.handleLoadFailure(url: resolvedURL) })
-                    .id("\(resolvedURL.absoluteString)\u{0}\(self.preview.sandbox ?? "")")
+                    onFailure: { self.handleLoadFailure(resource: resolvedResource) })
+                    .id([
+                        resolvedResource.url.absoluteString,
+                        resolvedResource.tlsFingerprintSHA256 ?? "",
+                        self.preview.sandbox ?? "",
+                    ].joined(separator: "\u{0}"))
                     .frame(height: self.preview.inlineWidgetHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay {
@@ -207,40 +279,70 @@ struct ChatInlineWidgetView: View {
 
     private func reset(path: String?) {
         self.activePath = path
-        self.resolvedURL = nil
+        self.resolvedResource = nil
         self.didRefresh = false
         self.refreshInFlight = false
         self.unavailable = false
     }
 
-    private func load(path: String, replacing failedURL: URL?) async {
-        let url = await self.resolveURL(path, failedURL)
+    private func load(path: String, replacing failedResource: OpenClawChatWidgetResource?) async {
+        let candidate = await self.resolveResource(path, failedResource)
         guard !Task.isCancelled, self.activePath == path else { return }
-        self.resolvedURL = url
-        self.unavailable = url == nil
+        let resource = candidate?.hasValidTLSBinding == true ? candidate : nil
+        self.resolvedResource = resource
+        self.unavailable = resource == nil
     }
 
-    private func handleLoadFailure(url: URL) {
-        guard self.resolvedURL == url,
+    private func handleLoadFailure(resource: OpenClawChatWidgetResource) {
+        guard self.resolvedResource == resource,
               let path = self.activePath,
               !self.refreshInFlight
         else { return }
         guard !self.didRefresh else {
-            self.resolvedURL = nil
+            self.resolvedResource = nil
             self.unavailable = true
             return
         }
         self.didRefresh = true
         self.refreshInFlight = true
         Task { @MainActor in
-            await self.load(path: path, replacing: url)
+            await self.load(path: path, replacing: resource)
             guard self.activePath == path else { return }
             self.refreshInFlight = false
         }
     }
 }
 
+extension OpenClawChatWidgetResource {
+    fileprivate var hasValidTLSBinding: Bool {
+        self.tlsFingerprintSHA256 == nil || self.url.scheme?.lowercased() == "https"
+    }
+}
+
 #if canImport(WebKit) && (os(iOS) || os(macOS))
+enum ChatInlineWidgetTLSPin {
+    static func normalize(_ raw: String) -> String? {
+        let stripped = raw.replacingOccurrences(
+            of: #"(?i)^sha-?256\s*:?\s*"#,
+            with: "",
+            options: .regularExpression)
+        let normalized = stripped.lowercased().filter(\.isHexDigit)
+        return normalized.count == 64 ? normalized : nil
+    }
+
+    static func fingerprint(certificateData: Data) -> String {
+        SHA256.hash(data: certificateData).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func matches(_ expected: String, trust: SecTrust) -> Bool {
+        guard let expected = normalize(expected),
+              let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let certificate = chain.first
+        else { return false }
+        return self.fingerprint(certificateData: SecCertificateCopyData(certificate) as Data) == expected
+    }
+}
+
 struct ChatInlineWidgetContentProcessRecovery {
     enum Action: Equatable {
         case reload
@@ -262,9 +364,9 @@ struct ChatInlineWidgetContentProcessRecovery {
 
 @MainActor
 private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDelegate {
-    var expectedURL: URL {
+    var resource: OpenClawChatWidgetResource {
         didSet {
-            if self.expectedURL != oldValue {
+            if self.resource != oldValue {
                 self.contentProcessRecovery.reset()
             }
         }
@@ -273,8 +375,8 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
     let onFailure: @MainActor @Sendable () -> Void
     private var contentProcessRecovery = ChatInlineWidgetContentProcessRecovery()
 
-    init(expectedURL: URL, onFailure: @escaping @MainActor @Sendable () -> Void) {
-        self.expectedURL = expectedURL
+    init(resource: OpenClawChatWidgetResource, onFailure: @escaping @MainActor @Sendable () -> Void) {
+        self.resource = resource
         self.onFailure = onFailure
     }
 
@@ -321,30 +423,62 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         self.onFailure()
     }
 
+    func webView(
+        _: WKWebView,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @MainActor @Sendable (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?) -> Void)
+    {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let expectedFingerprint = resource.tlsFingerprintSHA256
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard self.matchesExpectedProtectionSpace(challenge.protectionSpace),
+              let trust = challenge.protectionSpace.serverTrust,
+              ChatInlineWidgetTLSPin.matches(expectedFingerprint, trust: trust)
+        else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            self.onFailure()
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // One same-document recovery handles incidental process loss. A second
         // termination enters the view's bounded capability-refresh/failure path.
         switch self.contentProcessRecovery.nextAction() {
         case .reload:
-            webView.load(URLRequest(url: self.expectedURL, cachePolicy: .reloadIgnoringLocalCacheData))
+            webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
         case .fail:
             self.onFailure()
         }
     }
 
     private func matchesExpectedDocument(_ candidate: URL) -> Bool {
-        guard var expected = URLComponents(url: self.expectedURL, resolvingAgainstBaseURL: false),
+        guard var expected = URLComponents(url: self.resource.url, resolvingAgainstBaseURL: false),
               var candidate = URLComponents(url: candidate, resolvingAgainstBaseURL: false)
         else { return false }
         expected.fragment = nil
         candidate.fragment = nil
         return expected == candidate
     }
+
+    private func matchesExpectedProtectionSpace(_ protectionSpace: URLProtectionSpace) -> Bool {
+        guard let expectedHost = self.resource.url.host,
+              protectionSpace.host.caseInsensitiveCompare(expectedHost) == .orderedSame
+        else { return false }
+        let expectedPort = self.resource.url.port ?? (self.resource.url.scheme?.lowercased() == "https" ? 443 : 80)
+        return protectionSpace.port == expectedPort
+    }
 }
 
 @MainActor
 private func makeChatInlineWidgetWebView(
-    url: URL,
+    resource: OpenClawChatWidgetResource,
     allowsScripts: Bool,
     coordinator: ChatInlineWidgetNavigationDelegate) -> WKWebView
 {
@@ -355,31 +489,31 @@ private func makeChatInlineWidgetWebView(
     let webView = WKWebView(frame: .zero, configuration: configuration)
     webView.navigationDelegate = coordinator
     webView.allowsLinkPreview = false
-    webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+    webView.load(URLRequest(url: resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
     return webView
 }
 
 #if os(iOS)
 private struct ChatInlineWidgetWebView: UIViewRepresentable {
-    let url: URL
+    let resource: OpenClawChatWidgetResource
     let allowsScripts: Bool
     let onFailure: @MainActor @Sendable () -> Void
 
     func makeCoordinator() -> ChatInlineWidgetNavigationDelegate {
-        ChatInlineWidgetNavigationDelegate(expectedURL: self.url, onFailure: self.onFailure)
+        ChatInlineWidgetNavigationDelegate(resource: self.resource, onFailure: self.onFailure)
     }
 
     func makeUIView(context: Context) -> WKWebView {
         makeChatInlineWidgetWebView(
-            url: self.url,
+            resource: self.resource,
             allowsScripts: self.allowsScripts,
             coordinator: context.coordinator)
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.expectedURL != self.url else { return }
-        context.coordinator.expectedURL = self.url
-        webView.load(URLRequest(url: self.url, cachePolicy: .reloadIgnoringLocalCacheData))
+        guard context.coordinator.resource != self.resource else { return }
+        context.coordinator.resource = self.resource
+        webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {
@@ -389,25 +523,25 @@ private struct ChatInlineWidgetWebView: UIViewRepresentable {
 }
 #elseif os(macOS)
 private struct ChatInlineWidgetWebView: NSViewRepresentable {
-    let url: URL
+    let resource: OpenClawChatWidgetResource
     let allowsScripts: Bool
     let onFailure: @MainActor @Sendable () -> Void
 
     func makeCoordinator() -> ChatInlineWidgetNavigationDelegate {
-        ChatInlineWidgetNavigationDelegate(expectedURL: self.url, onFailure: self.onFailure)
+        ChatInlineWidgetNavigationDelegate(resource: self.resource, onFailure: self.onFailure)
     }
 
     func makeNSView(context: Context) -> WKWebView {
         makeChatInlineWidgetWebView(
-            url: self.url,
+            resource: self.resource,
             allowsScripts: self.allowsScripts,
             coordinator: context.coordinator)
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.expectedURL != self.url else { return }
-        context.coordinator.expectedURL = self.url
-        webView.load(URLRequest(url: self.url, cachePolicy: .reloadIgnoringLocalCacheData))
+        guard context.coordinator.resource != self.resource else { return }
+        context.coordinator.resource = self.resource
+        webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {

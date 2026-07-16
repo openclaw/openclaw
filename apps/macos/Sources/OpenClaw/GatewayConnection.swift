@@ -1146,6 +1146,13 @@ extension GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    func canvasPluginSurfaceRoute() async -> GatewayCanvasHostRoute? {
+        guard let url = await canvasPluginSurfaceUrl() else { return nil }
+        // The macOS operator channel uses platform trust. Pinned remote routes
+        // are owned by MacNodeModeCoordinator and arrive through its node session.
+        return GatewayCanvasHostRoute(url: url, tlsFingerprintSHA256: nil)
+    }
+
     func controlUiAutoAuthToken(config: Config) async -> String? {
         guard let endpoint = try? await currentEndpoint(),
               endpoint.config.url == config.url,

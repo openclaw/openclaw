@@ -27,29 +27,49 @@ internal object ChatWidgetUrlResolver {
 
   fun supportsTarget(target: String): Boolean = parseRelativeTarget(target) != null
 
+  private fun resolve(
+    surface: ChatWidgetSurface,
+    target: String,
+  ): ChatWidgetResource? =
+    resolve(surface.url, target)?.let { url ->
+      ChatWidgetResource(url = url, tlsFingerprintSha256 = surface.tlsFingerprintSha256)
+    }
+
   fun resolvePreferred(
     surfaces: ChatWidgetSurfaceUrls,
     target: String,
-    excluding: String?,
-  ): String? =
+    excluding: ChatWidgetResource?,
+  ): ChatWidgetResource? =
     sequenceOf(surfaces.node, surfaces.operator)
-      .mapNotNull { resolve(it, target) }
-      .firstOrNull { it != excluding }
+      .mapNotNull { it?.let { surface -> resolve(surface, target) } }
+      .firstOrNull { isReplacement(it, excluding) }
 
   suspend fun resolveAfterFailure(
     target: String,
-    failedUrl: String,
+    failedResource: ChatWidgetResource,
     currentSurfaceUrls: () -> ChatWidgetSurfaceUrls,
-    refreshNodeSurfaceUrl: suspend (String?) -> String?,
-  ): String? {
+    refreshNodeSurface: suspend (String?) -> ChatWidgetSurface?,
+  ): ChatWidgetResource? {
     val observed = currentSurfaceUrls()
-    resolvePreferred(observed, target, excluding = failedUrl)?.let { return it }
-    val refreshed = resolve(refreshNodeSurfaceUrl(observed.node), target)
-    if (refreshed != null && refreshed != failedUrl) return refreshed
+    resolvePreferred(observed, target, excluding = failedResource)?.let { return it }
+    val refreshed = refreshNodeSurface(observed.node?.url)?.let { resolve(it, target) }
+    if (refreshed != null && isReplacement(refreshed, failedResource)) return refreshed
 
     // A nil refresh can mean its route lease lost a reconnect race. Re-read
     // both roles so a replacement connection wins over the stale observation.
-    return resolvePreferred(currentSurfaceUrls(), target, excluding = failedUrl)
+    return resolvePreferred(currentSurfaceUrls(), target, excluding = failedResource)
+  }
+
+  private fun isReplacement(
+    candidate: ChatWidgetResource,
+    failedResource: ChatWidgetResource?,
+  ): Boolean {
+    if (failedResource == null) return true
+    return if (failedResource.tlsFingerprintSha256 == null) {
+      candidate.url != failedResource.url
+    } else {
+      candidate != failedResource
+    }
   }
 
   private fun parseCapabilitySurface(raw: String?): URI? {
@@ -97,6 +117,16 @@ internal object ChatWidgetUrlResolver {
 }
 
 internal data class ChatWidgetSurfaceUrls(
-  val node: String?,
-  val operator: String?,
+  val node: ChatWidgetSurface?,
+  val operator: ChatWidgetSurface?,
+)
+
+internal data class ChatWidgetSurface(
+  val url: String,
+  val tlsFingerprintSha256: String?,
+)
+
+internal data class ChatWidgetResource(
+  val url: String,
+  val tlsFingerprintSha256: String?,
 )

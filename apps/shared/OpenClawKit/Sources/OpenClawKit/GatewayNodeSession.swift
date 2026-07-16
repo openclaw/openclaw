@@ -55,6 +55,17 @@ public struct GatewayNodeSessionRoute: Sendable, Equatable {
     fileprivate let socketGeneration: UInt64
 }
 
+/// One capability-scoped Canvas URL and the transport trust bound to its route.
+public struct GatewayCanvasHostRoute: Sendable, Equatable {
+    public let url: String
+    public let tlsFingerprintSHA256: String?
+
+    public init(url: String, tlsFingerprintSHA256: String?) {
+        self.url = url
+        self.tlsFingerprintSHA256 = tlsFingerprintSHA256
+    }
+}
+
 /// A route lease became stale before its request touched the channel. Unlike
 /// a socket cancellation, this proves the payload was never dispatched.
 public enum GatewayNodeSessionRequestError: Error, Sendable {
@@ -158,6 +169,7 @@ public actor GatewayNodeSession {
     private var activeSessionIdentity: ObjectIdentifier?
     private var channelGeneration: UInt64 = 0
     private var admissionGeneration: UInt64 = 0
+    private var activeTLSRouteMetadataProvider: GatewayTLSRouteMetadataProviding?
     // A delayed push keeps its physical socket epoch. Once disconnect cleanup
     // retires that epoch, it cannot adopt the replacement route's admission.
     private var activeSocketGeneration: UInt64?
@@ -360,6 +372,7 @@ public actor GatewayNodeSession {
     {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let nextSessionIdentity = sessionBox.map { ObjectIdentifier($0.session) }
+        let nextTLSRouteMetadataProvider = sessionBox?.session as? GatewayTLSRouteMetadataProviding
         let shouldReconnect = self.activeURL != url ||
             self.activeCredentials != credentials ||
             self.activeConnectOptionsKey != nextOptionsKey ||
@@ -432,6 +445,7 @@ public actor GatewayNodeSession {
             self.activeCredentials = credentials
             self.activeConnectOptionsKey = nextOptionsKey
             self.activeSessionIdentity = nextSessionIdentity
+            self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
         } else {
             channelGeneration = self.channelGeneration
             self.connectOptions = connectOptions
@@ -532,6 +546,7 @@ public actor GatewayNodeSession {
         self.activeCredentials = nil
         self.activeConnectOptionsKey = nil
         self.activeSessionIdentity = nil
+        self.activeTLSRouteMetadataProvider = nil
         self.connectOptions = nil
         self.onConnected = nil
         self.onDisconnected = nil
@@ -624,6 +639,21 @@ public actor GatewayNodeSession {
 
     public func currentCanvasHostUrl() -> String? {
         self.pluginSurfaceUrls["canvas"]
+    }
+
+    public func currentCanvasHostRoute() -> GatewayCanvasHostRoute? {
+        guard let url = currentCanvasHostUrl() else { return nil }
+        return GatewayCanvasHostRoute(
+            url: url,
+            tlsFingerprintSHA256: self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256)
+    }
+
+    @discardableResult
+    public func refreshCanvasHostRoute(replacing observedURL: String?) async -> GatewayCanvasHostRoute? {
+        _ = await self.refreshCanvasHostUrl(replacing: observedURL)
+        // Re-read after the refresh suspension. A reconnect may have installed
+        // both a replacement capability and a different certificate pin.
+        return self.currentCanvasHostRoute()
     }
 
     @discardableResult
