@@ -122,8 +122,8 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       proposal_content: Type.Optional(
         Type.String({
           description: proposalOnly
-            ? "Complete final skill body for action=create or action=revise. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes."
-            : "Complete final skill body for action=create, action=update, or action=revise. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. For update/revise, reproduce all existing sections with modifications applied. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
+            ? "Complete final skill body for action=create or action=revise. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes."
+            : "Complete final skill body for action=create, action=update, or action=revise. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
         }),
       ),
       support_files: Type.Optional(
