@@ -22,6 +22,9 @@ const DISCORD_API_RETRY_DEFAULTS = {
 const DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS = 60;
 const DISCORD_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const DISCORD_API_RESPONSE_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
+// Bound post-header success-body stalls when callers omit timeoutMs (probe/REST
+// siblings already pass an idle budget through readResponseWithLimit).
+const DISCORD_API_RESPONSE_IDLE_TIMEOUT_MS = 30_000;
 export const DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS = 10_000;
 
 type DiscordApiErrorPayload = {
@@ -208,13 +211,22 @@ export async function requestDiscord<T>(
             retryAfter,
           );
         }
+        const idleTimeoutMs =
+          typeof options?.timeoutMs === "number"
+            ? resolveTimerTimeoutMs(options.timeoutMs, 1)
+            : DISCORD_API_RESPONSE_IDLE_TIMEOUT_MS;
         const responseBody = await readResponseWithLimit(
           res,
           DISCORD_API_RESPONSE_BODY_LIMIT_BYTES,
           {
+            chunkTimeoutMs: idleTimeoutMs,
             onOverflow: ({ size, maxBytes }) =>
               new Error(
                 `Discord API ${path} response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+              ),
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(
+                `Discord API ${path} response stalled: no data received for ${chunkTimeoutMs}ms`,
               ),
           },
         );

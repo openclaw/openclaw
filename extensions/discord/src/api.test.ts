@@ -322,6 +322,37 @@ describe("fetchDiscord", () => {
     expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[0]?.value);
   });
 
+  it("times out when a successful Discord API response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = withFetchPreconnect(async () => {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"id":'));
+              // Leave the stream open so only the idle timeout can finish the read.
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      });
+
+      const rejection = expect(
+        requestDiscord<{ id: string }>("/channels/c/messages", "test", {
+          fetcher,
+          retry: { attempts: 1 },
+          timeoutMs: 50,
+        }),
+      ).rejects.toThrow(
+        "Discord API /channels/c/messages response stalled: no data received for 50ms",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("throws DiscordApiError on malformed JSON success response body", async () => {
     const fetcher = withFetchPreconnect(async () => new Response("NOT JSON {{{", { status: 200 }));
 
