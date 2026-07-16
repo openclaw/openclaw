@@ -11,8 +11,8 @@ scenario:
     providerMode: mock-openai
     timeoutMs: 75000
     retryCount: 0
+    driver: live
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         agentDefaults:
           blockStreamingChunk:

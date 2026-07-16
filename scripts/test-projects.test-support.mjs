@@ -51,8 +51,10 @@ import {
   toolingIsolatedTestFiles,
 } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import {
+  getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
   getUnitFastTimerTestFiles,
+  resolveUnitFastIsolatedTestIncludePattern,
   resolveUnitFastTestIncludePattern,
   resolveUnitFastTimerTestIncludePattern,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
@@ -164,6 +166,7 @@ const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.conf
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
+const UNIT_FAST_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.unit-fast-isolated.config.ts";
 const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
@@ -201,6 +204,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.tasks.config.ts", 165],
   [CHANNEL_VITEST_CONFIG, 164],
   [UNIT_FAST_VITEST_CONFIG, 160],
+  [UNIT_FAST_ISOLATED_VITEST_CONFIG, 159],
   [AUTO_REPLY_REPLY_VITEST_CONFIG, 155],
   [INFRA_VITEST_CONFIG, 145],
   ["test/vitest/vitest.secrets.config.ts", 140],
@@ -385,6 +389,7 @@ const VITEST_CONFIG_BY_KIND = {
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
+  unitFastIsolated: UNIT_FAST_ISOLATED_VITEST_CONFIG,
   unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
@@ -682,6 +687,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [
     ".github/actions/setup-node-env/action.yml",
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
+    ".github/actions/setup-node-env/sticky-importers.sh",
+    ["test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
     ".github/actions/setup-pnpm-store-cache/action.yml",
@@ -1053,6 +1062,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/mobile-release-ref.ts", ["test/scripts/mobile-release-ref.test.ts"]],
   ["scripts/apple-release-source-check.sh", ["test/scripts/apple-release-source-check.test.ts"]],
+  ["scripts/compare-release-evidence-zip.py", ["test/scripts/package-acceptance-workflow.test.ts"]],
   ["scripts/android-release.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
   ["scripts/android-release-signing.mjs", ["test/scripts/android-release-signing.test.ts"]],
   ["scripts/android-release-upload.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
@@ -1087,6 +1097,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/release-workflow-matrix-plan.test.ts"],
   ],
   ["scripts/release-fast-pretag-check.sh", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  ["scripts/openclaw-npm-resume-run.mjs", ["test/scripts/openclaw-npm-resume-run.test.ts"]],
   ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
   ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
   ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
@@ -2103,6 +2114,7 @@ const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
+  ["scripts/openclaw-npm-resume-run.d.mts", "scripts/openclaw-npm-resume-run.mjs"],
   ["scripts/periphery-intersection.d.mts", "scripts/periphery-intersection.mjs"],
   [
     "scripts/lib/bundled-plugin-build-entries.d.mts",
@@ -2565,7 +2577,10 @@ function listToolingFullSuiteTestTargets(cwd) {
 
 function listUnitFastFullSuiteTestTargets() {
   const timerTargets = new Set(getUnitFastTimerTestFiles());
-  return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
+  const isolatedTargets = new Set(getUnitFastIsolatedTestFiles());
+  return getUnitFastTestFiles().filter(
+    (file) => !timerTargets.has(file) && !isolatedTargets.has(file),
+  );
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd) {
@@ -3798,6 +3813,9 @@ function classifyTarget(arg, cwd) {
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
+  if (resolveUnitFastIsolatedTestIncludePattern(relative)) {
+    return "unitFastIsolated";
+  }
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
@@ -3991,6 +4009,10 @@ function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
     const includePattern = resolveUnitFastTimerTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;
   }
+  if (kind === "unitFastIsolated") {
+    const includePattern = resolveUnitFastIsolatedTestIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
   if (kind === "pluginSdkLight") {
     const includePattern = resolvePluginSdkLightIncludePattern(relative);
     return includePattern ? [includePattern] : null;
@@ -4170,6 +4192,7 @@ export function buildVitestRunPlans(
 
   const orderedKinds = [
     "unitFast",
+    "unitFastIsolated",
     "unitFastFakeTimers",
     "default",
     "boundary",

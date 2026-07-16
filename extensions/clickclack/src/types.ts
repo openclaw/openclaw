@@ -9,6 +9,7 @@ export type ClickClackAccountConfig = {
   enabled?: boolean;
   baseUrl?: string;
   token?: unknown;
+  tokenFile?: string;
   workspace?: string;
   botUserId?: string;
   agentId?: string;

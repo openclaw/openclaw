@@ -142,7 +142,7 @@ describe("mantis Slack desktop smoke runtime", () => {
           expect(outputDir).toBeTypeOf("string");
           await fs.mkdir(outputDir as string, { recursive: true });
           if (String(outputDir).endsWith("slack-qa/")) {
-            await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+            await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
           } else {
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
@@ -235,9 +235,9 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("MANTIS_REMOTE_HEARTBEAT");
     expect(remoteScript).toContain("qa_status=$?");
     expect(remoteScript).toContain("MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN");
-    expect(remoteScript).toContain("$out/slack-qa/slack-qa-report.md");
-    expect(remoteScript).toContain("$out/slack-qa/slack-qa-summary.json");
-    expect(remoteScript).toContain("$out/slack-qa/slack-qa-observed-messages.json");
+    expect(remoteScript).toContain("$out/slack-qa/qa-suite-report.md");
+    expect(remoteScript).toContain("$out/slack-qa/qa-suite-summary.json");
+    expect(remoteScript).toContain("$out/slack-qa/qa-evidence.json");
     expect(remoteScript).toContain('tail -n 200 "$diagnostic_file"');
     expect(remoteScript).toContain("Slack desktop screenshot is missing or empty");
     expect(remoteScript).not.toContain('test -s "$out/slack-desktop-smoke.png"');
@@ -306,7 +306,7 @@ describe("mantis Slack desktop smoke runtime", () => {
         const outputDir = args.at(-1);
         await fs.mkdir(outputDir as string, { recursive: true });
         if (String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+          await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
         } else {
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
           await fs.writeFile(
@@ -878,7 +878,7 @@ describe("mantis Slack desktop smoke runtime", () => {
         const outputDir = args.at(-1);
         await fs.mkdir(outputDir as string, { recursive: true });
         if (String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+          await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
         } else {
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
           await fs.writeFile(
@@ -1046,7 +1046,7 @@ describe("mantis Slack desktop smoke runtime", () => {
         const outputDir = args.at(-1);
         await fs.mkdir(outputDir as string, { recursive: true });
         if (String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+          await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
         } else {
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");

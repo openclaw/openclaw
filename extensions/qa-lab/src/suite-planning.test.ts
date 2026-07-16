@@ -685,10 +685,10 @@ describe("qa suite planning helpers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("qa-channel-only", {
-        config: { requiredChannelDriver: "qa-channel" },
+        driver: "qa-channel",
       }),
       makeQaSuiteTestScenario("crabline-only", {
-        config: { requiredChannelDriver: "crabline" },
+        driver: "crabline",
       }),
     ];
 
@@ -714,7 +714,7 @@ describe("qa suite planning helpers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("qa-channel-only", {
-        config: { requiredChannelDriver: "qa-channel" },
+        driver: "qa-channel",
       }),
     ];
 

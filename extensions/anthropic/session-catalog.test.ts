@@ -17,11 +17,30 @@ import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
-  listClaudeSessionCatalog,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
   registerClaudeSessionCatalog,
 } from "./session-catalog.js";
+
+function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider {
+  let provider: SessionCatalogProvider | undefined;
+  const runtimeWithSession = {
+    ...runtime,
+    agent: runtime.agent ?? { session: { listSessionEntries: () => [] } },
+  } as PluginRuntime;
+  registerClaudeSessionCatalog({
+    id: "anthropic",
+    config: {},
+    runtime: runtimeWithSession,
+    registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+      provider = candidate;
+    },
+  } as unknown as OpenClawPluginApi);
+  if (!provider) {
+    throw new Error("expected Anthropic session catalog registration");
+  }
+  return provider;
+}
 
 const homes: string[] = [];
 const originalHome = process.env.HOME;
@@ -1163,11 +1182,9 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:healthy", "node:failed"] },
-    });
-    expect(result.hosts).toEqual([
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:healthy", "node:failed"] });
+    expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:failed", error: expect.any(Object) }),
       expect.objectContaining({ hostId: "node:healthy", sessions: [] }),
     ]);
@@ -1180,12 +1197,10 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:registry"] },
-    });
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:registry"] });
 
-    expect(result.hosts).toEqual([
+    expect(hosts).toEqual([
       expect.objectContaining({
         hostId: "node:registry",
         error: {
@@ -1226,11 +1241,9 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:malformed"] },
-    });
-    expect(result.hosts).toEqual([
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:malformed"] });
+    expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:malformed", error: expect.any(Object) }),
     ]);
   });

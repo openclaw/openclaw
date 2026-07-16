@@ -117,9 +117,19 @@ function relayChildStream(stream, label) {
   };
 }
 
+export function resolveShardChildCommand(args, nodeExecPath = process.execPath) {
+  return {
+    command: nodeExecPath,
+    args: ["scripts/test-projects.mjs", ...args],
+  };
+}
+
 function runChild(args, childEnv, label) {
   return new Promise((resolve) => {
-    const child = spawn("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...args], {
+    // Use Node directly. `pnpm exec node` may reconcile the workspace before
+    // tests, which destroys the sticky dependency fast path.
+    const childCommand = resolveShardChildCommand(args);
+    const child = spawn(childCommand.command, childCommand.args, {
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
