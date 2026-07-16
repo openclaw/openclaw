@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Guided local inference discovery:** share fresh-setup detection between the CLI and macOS app, auto-test already installed tool-capable Ollama and LM Studio models on the Gateway host, and report Gemini CLI or Antigravity installs without executing an unsafe tool-enabled probe.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
 - **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
