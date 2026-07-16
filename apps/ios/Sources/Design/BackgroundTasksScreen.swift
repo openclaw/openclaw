@@ -366,7 +366,7 @@ private struct BackgroundTaskDetailScreen: View {
     private func loadDetail() async {
         self.loading = true
         do {
-            let params = MobileBackgroundTaskGetParams(taskId: self.task.taskId ?? self.task.id)
+            let params = MobileBackgroundTaskGetParams(taskId: self.task.id)
             let payload = try JSONEncoder().encode(params)
             guard let paramsJSON = String(data: payload, encoding: .utf8) else {
                 throw CocoaError(.fileReadCorruptFile)

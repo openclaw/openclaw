@@ -71,11 +71,11 @@ internal fun BackgroundTasksSheet(
   }
 
   LaunchedEffect(agentId) { loadTasks() }
-  LaunchedEffect(selectedTask?.taskId) {
+  LaunchedEffect(selectedTask?.id) {
     val task = selectedTask ?: return@LaunchedEffect
     detailLoading = true
     error = null
-    runCatching { viewModel.getBackgroundTask(task.taskId) }
+    runCatching { viewModel.getBackgroundTask(task.id) }
       .onSuccess { selectedTask = it }
       .onFailure {
         if (it is CancellationException) throw it
@@ -259,11 +259,12 @@ private fun BackgroundTaskDetail(
         Column(modifier = Modifier.weight(1f)) {
           Text(task.displayTitle, style = ClawTheme.type.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
           Text(
-            text = nativeString(
-              "\${task.statusLabel} · \${task.runtime}",
-              task.statusLabel,
-              task.runtime,
-            ),
+            text =
+              nativeString(
+                "\${task.statusLabel} · \${task.runtime}",
+                task.statusLabel,
+                task.runtime,
+              ),
             style = ClawTheme.type.caption,
             color = ClawTheme.colors.textMuted,
           )

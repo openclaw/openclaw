@@ -61,6 +61,34 @@ class BackgroundTaskTest {
     }
 
   @Test
+  fun requestsTaskDetailsByCanonicalLedgerId() =
+    runTest {
+      var requestedParams: String? = null
+      val controller =
+        ChatController(
+          scope = backgroundScope,
+          json = json,
+          requestGateway = { method, params ->
+            assertEquals("tasks.get", method)
+            requestedParams = params
+            """{"task":{"id":"ledger-1","taskId":"runtime-1","status":"completed","runtime":"cli"}}"""
+          },
+        )
+
+      val task = controller.getBackgroundTask("ledger-1")
+
+      assertEquals("ledger-1", task.id)
+      assertEquals(
+        "ledger-1",
+        json
+          .parseToJsonElement(requestedParams.orEmpty())
+          .jsonObject["taskId"]
+          ?.jsonPrimitive
+          ?.content,
+      )
+    }
+
+  @Test
   fun newestTaskSnapshotWinsDuplicateAndGroupsActiveFirst() {
     val finished = sampleTask(id = "same", status = "completed", endedAtMs = 2000)
     val running = sampleTask(id = "same", status = "running", endedAtMs = 3000)

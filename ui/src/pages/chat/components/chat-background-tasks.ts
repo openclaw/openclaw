@@ -240,11 +240,14 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
   if (!taskMatchesAgentScope(event.task, state.agentId)) {
     return;
   }
-  state.tasks = sortTasks([event.task, ...state.tasks.filter((task) => task.id !== event.task.id)]);
+  const current = state.tasks.find((task) => task.id === event.task.id);
   const detail = state.taskDetails.get(event.task.id);
+  let newest = current ? newestTaskSnapshot(current, event.task) : event.task;
+  newest = newestTaskSnapshot(newest, detail);
+  state.tasks = sortTasks([newest, ...state.tasks.filter((task) => task.id !== event.task.id)]);
   if (detail) {
     state.taskDetails = new Map(state.taskDetails).set(event.task.id, {
-      ...event.task,
+      ...newest,
       ...(detail.prompt ? { prompt: detail.prompt } : {}),
     });
   }
@@ -272,15 +275,26 @@ async function loadBackgroundTaskDetail(
   state.taskDetailErrors = nextErrors;
   host.requestUpdate?.();
   try {
-    const payload = await client.request("tasks.get", { taskId: task.taskId });
+    const payload = await client.request("tasks.get", { taskId: rowId });
     if (getBackgroundTasksState(host) !== state) {
       return;
     }
     const detail = normalizeTasksGetResult(payload);
-    if (!detail) {
+    if (!detail || detail.id !== rowId) {
       throw new Error(t("chat.backgroundTasks.detailFailed"));
     }
-    state.taskDetails = new Map(state.taskDetails).set(rowId, detail);
+    const current = state.tasks?.find((candidate) => candidate.id === rowId);
+    const newest = current ? newestTaskSnapshot(current, detail) : detail;
+    state.taskDetails = new Map(state.taskDetails).set(rowId, {
+      ...newest,
+      ...(detail.prompt ? { prompt: detail.prompt } : {}),
+    });
+    if (state.tasks) {
+      state.tasks = sortTasks([
+        newest,
+        ...state.tasks.filter((candidate) => candidate.id !== rowId),
+      ]);
+    }
   } catch (error) {
     if (getBackgroundTasksState(host) === state) {
       const message =

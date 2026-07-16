@@ -142,7 +142,11 @@ describe("background tasks rail state", () => {
   });
 
   it("loads the bounded prompt when a task is opened", async () => {
-    const running = makeTask({ id: "task-1", progressSummary: "Reading files" });
+    const running = makeTask({
+      id: "task-1",
+      taskId: "runtime-task-1",
+      progressSummary: "Reading files",
+    });
     const { host, request } = createHost({
       request: (method) =>
         method === "tasks.get"
@@ -159,6 +163,32 @@ describe("background tasks rail state", () => {
     const props = createBackgroundTasksProps(host, openSession);
     expect(props.selectedTaskId).toBe("task-1");
     expect(props.taskDetails.get("task-1")?.prompt).toBe("Audit the background task UI");
+  });
+
+  it("promotes a newer detail snapshot into the grouped task list", async () => {
+    const running = makeTask({ id: "task-1", status: "running", updatedAt: 2_000 });
+    const completed = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 3_000,
+      terminalSummary: "Finished in lookup",
+      prompt: "Review the task",
+    });
+    const { host } = createHost({
+      request: (method) =>
+        method === "tasks.get"
+          ? Promise.resolve({ task: completed })
+          : Promise.resolve({ tasks: [running] }),
+    });
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+
+    createBackgroundTasksProps(host, openSession).onToggleTask(running);
+    await flushAsync();
+
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.tasks?.map((task) => [task.id, task.status])).toEqual([["task-1", "completed"]]);
+    expect(props.taskDetails.get("task-1")?.terminalSummary).toBe("Finished in lookup");
   });
 });
 
@@ -223,6 +253,40 @@ describe("background tasks rail events", () => {
     await flushAsync();
 
     expect(request.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it("does not replace a newer lookup snapshot with a stale event", async () => {
+    const running = makeTask({ id: "task-1", status: "running", updatedAt: 1_000 });
+    const completed = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 3_000,
+      terminalSummary: "Lookup completed",
+      prompt: "Review the task",
+    });
+    const { host } = createHost({
+      request: (method) =>
+        method === "tasks.get"
+          ? Promise.resolve({ task: completed })
+          : Promise.resolve({ tasks: [running] }),
+    });
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+    createBackgroundTasksProps(host, openSession).onToggleTask(running);
+    await flushAsync();
+
+    handleBackgroundTasksEvent(host, {
+      action: "upserted",
+      task: makeTask({ id: "task-1", status: "running", updatedAt: 2_000 }),
+    });
+
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.tasks?.[0]?.status).toBe("completed");
+    expect(props.taskDetails.get("task-1")).toMatchObject({
+      status: "completed",
+      prompt: "Review the task",
+      terminalSummary: "Lookup completed",
+    });
   });
 });
 
