@@ -208,6 +208,34 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun rejectedSendRestoresOnlyIntoItsOriginalOwner() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
+    val attachment = pendingAttachment("voice")
+    val rejected = RejectedChatComposerDraft(owner = owner, message = "failed", attachments = listOf(attachment))
+
+    assertEquals(
+      null,
+      mergeRejectedChatComposerDraft(
+        draft = rejected,
+        currentOwner = owner.copy(sessionKey = "session-b"),
+        currentInput = "replacement",
+        currentAttachments = emptyList(),
+      ),
+    )
+    val restored =
+      checkNotNull(
+        mergeRejectedChatComposerDraft(
+          draft = rejected,
+          currentOwner = owner,
+          currentInput = "new text",
+          currentAttachments = emptyList(),
+        ),
+      )
+    assertEquals("new text\n\nfailed", restored.input)
+    assertEquals(listOf(attachment), restored.attachments)
+  }
+
+  @Test
   fun stagedShareRejectsAReplacementComposerOwner() {
     val share = ChatShareDraft(id = 7, text = "share", imageUris = emptyList(), droppedImageCount = 0)
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
@@ -230,6 +258,7 @@ class ChatComposerDraftTest {
         pendingRunCount = 0,
         hasContent = true,
         shareStaging = true,
+        sendInFlight = false,
       ),
     )
     assertTrue(
@@ -238,6 +267,16 @@ class ChatComposerDraftTest {
         pendingRunCount = 0,
         hasContent = true,
         shareStaging = false,
+        sendInFlight = false,
+      ),
+    )
+    assertFalse(
+      chatComposerSendEnabled(
+        voiceNoteState = VoiceNoteRecorderState.Idle,
+        pendingRunCount = 0,
+        hasContent = true,
+        shareStaging = false,
+        sendInFlight = true,
       ),
     )
   }

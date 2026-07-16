@@ -49,6 +49,7 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun rememberVoiceNoteRecorderController(
   viewModel: MainViewModel,
+  ownerKey: ChatComposerOwner,
   canCommit: () -> Boolean,
   onFinished: (PendingAttachment) -> Unit,
 ): VoiceNoteRecorderController {
@@ -59,7 +60,7 @@ internal fun rememberVoiceNoteRecorderController(
   val currentOnFinished by rememberUpdatedState(onFinished)
   lateinit var controller: VoiceNoteRecorderController
   controller =
-    remember(context, viewModel, scope) {
+    remember(context, viewModel, scope, ownerKey) {
       VoiceNoteRecorderController(
         scope = scope,
         outputDirectory = context.cacheDir,

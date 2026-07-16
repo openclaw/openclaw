@@ -97,6 +97,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -218,11 +219,15 @@ fun ChatScreen(
   val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
-  val attachments = remember { mutableStateListOf<PendingAttachment>() }
   var input by rememberSaveable { mutableStateOf("") }
-  var shareImportNoticeVisible by rememberSaveable { mutableStateOf(false) }
-  var imagePickerOwner by remember { mutableStateOf<ChatComposerOwner?>(null) }
-  var voiceNoteOwner by remember { mutableStateOf<ChatComposerOwner?>(null) }
+  val attachments = remember(composerOwner) { mutableStateListOf<PendingAttachment>() }
+  var shareImportNoticeVisible by remember(composerOwner) { mutableStateOf(false) }
+  var imagePickerOwner by remember(composerOwner) { mutableStateOf<ChatComposerOwner?>(null) }
+  var voiceNoteOwner by remember(composerOwner) { mutableStateOf<ChatComposerOwner?>(null) }
+  // Refusal races stay with their owner until that composer returns; the Activity owns this
+  // transient map, and restoring an entry removes it immediately.
+  val rejectedSends = remember { mutableStateMapOf<ChatComposerOwner, RejectedChatComposerDraft>() }
+  var sendInFlight by remember { mutableStateOf(false) }
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
 
   DisposableEffect(viewModel) {
@@ -245,6 +250,7 @@ fun ChatScreen(
   val voiceNoteRecorder =
     rememberVoiceNoteRecorderController(
       viewModel = viewModel,
+      ownerKey = composerOwner,
       canCommit = {
         val ownerSnapshot = voiceNoteOwner
         ownerSnapshot != null && canCommitComposerResult(ownerSnapshot, currentComposerOwner)
@@ -282,14 +288,6 @@ fun ChatScreen(
       }
     }
 
-  LaunchedEffect(composerOwner) {
-    imagePickerOwner = null
-    voiceNoteOwner = null
-    voiceNoteRecorder.cancel()
-    attachments.clear()
-    shareImportNoticeVisible = false
-  }
-
   LaunchedEffect(Unit) {
     val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
     if (loadSessionKey != null) {
@@ -323,6 +321,29 @@ fun ChatScreen(
   LaunchedEffect(chatDraft) {
     input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
     viewModel.clearChatDraft()
+  }
+
+  val restoreRejectedSend: (RejectedChatComposerDraft) -> Unit = { rejected ->
+    val restored =
+      checkNotNull(
+        mergeRejectedChatComposerDraft(
+          draft = rejected,
+          currentOwner = composerOwner,
+          currentInput = input,
+          currentAttachments = attachments,
+        ),
+      )
+    input = restored.input
+    attachments.clear()
+    attachments.addAll(restored.attachments)
+    shareImportNoticeVisible = shareImportNoticeVisible || restored.droppedImageCount > 0
+  }
+
+  val rejectedSend = rejectedSends[composerOwner]
+  LaunchedEffect(composerOwner, rejectedSend) {
+    val rejected = rejectedSend ?: return@LaunchedEffect
+    restoreRejectedSend(rejected)
+    rejectedSends.remove(composerOwner)
   }
 
   // An owner change cancels stale staging and retries the same queue head for the new composer.
@@ -481,6 +502,7 @@ fun ChatScreen(
       offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
       shareStaging = chatShareDraft != null,
+      sendInFlight = sendInFlight,
       shareImportNotice = shareImportNotice,
       onDismissShareImportNotice = { shareImportNoticeVisible = false },
       commands = chatCommands,
@@ -494,7 +516,7 @@ fun ChatScreen(
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
       voiceNoteLevel = voiceNoteLevel,
-      recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive,
+      recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive && !sendInFlight,
       onStartVoiceNote = {
         scope.launch {
           val ownerSnapshot = currentComposerOwner
@@ -525,22 +547,25 @@ fun ChatScreen(
       onAbort = viewModel::abortChat,
       onSend = {
         // Re-read the ViewModel so a stale click callback cannot beat StateFlow recomposition.
-        if (viewModel.chatShareDraft.value != null) return@ChatComposer
+        if (viewModel.chatShareDraft.value != null || sendInFlight) return@ChatComposer
         val message = input.trim()
         if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
         shareImportNoticeVisible = false
         val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
         val pendingAttachments = attachments.toList()
         val ownerSnapshot = currentComposerOwner
+        sendInFlight = true
         input = ""
         attachments.clear()
         scope.launch {
-          val accepted = viewModel.sendChatAwaitAcceptance(message = message, thinking = thinkingLevel, attachments = outgoing)
-          if (!accepted && canCommitComposerResult(ownerSnapshot, currentComposerOwner)) {
-            // Refused sends (offline queue full, enqueue failure) must not eat the draft;
-            // restore it unless the user already started typing something new.
-            if (input.isEmpty()) input = message
-            if (attachments.isEmpty()) attachments.addAll(pendingAttachments)
+          try {
+            val accepted = viewModel.sendChatAwaitAcceptance(message = message, thinking = thinkingLevel, attachments = outgoing)
+            if (!accepted) {
+              val rejected = RejectedChatComposerDraft(ownerSnapshot, message, pendingAttachments)
+              rejectedSends[ownerSnapshot] = rejected
+            }
+          } finally {
+            sendInFlight = false
           }
         }
       },
@@ -1377,6 +1402,7 @@ private fun ChatComposer(
   offlineStatus: String,
   pendingRunCount: Int,
   shareStaging: Boolean,
+  sendInFlight: Boolean,
   shareImportNotice: NativeText?,
   onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
@@ -1414,6 +1440,7 @@ private fun ChatComposer(
       pendingRunCount = pendingRunCount,
       hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty(),
       shareStaging = shareStaging,
+      sendInFlight = sendInFlight,
     )
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {

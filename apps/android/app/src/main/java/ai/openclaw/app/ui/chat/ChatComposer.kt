@@ -14,10 +14,36 @@ internal data class ChatComposerOwner(
   val sessionKey: String,
 )
 
+internal data class RejectedChatComposerDraft(
+  val owner: ChatComposerOwner,
+  val message: String,
+  val attachments: List<PendingAttachment>,
+)
+
 internal fun canCommitComposerResult(
   ownerSnapshot: ChatComposerOwner,
   currentOwner: ChatComposerOwner,
 ): Boolean = ownerSnapshot == currentOwner
+
+internal fun mergeRejectedChatComposerDraft(
+  draft: RejectedChatComposerDraft,
+  currentOwner: ChatComposerOwner,
+  currentInput: String,
+  currentAttachments: List<PendingAttachment>,
+): ChatShareComposerMerge? {
+  if (!canCommitComposerResult(draft.owner, currentOwner)) return null
+  return mergeStagedChatShare(
+    staged =
+      StagedChatShare(
+        text = draft.message,
+        attachments = draft.attachments,
+        failedImageCount = 0,
+        droppedImageCount = 0,
+      ),
+    currentInput = currentInput,
+    currentAttachments = currentAttachments,
+  )
+}
 
 internal fun mergeChatDraft(
   draft: ChatDraft?,
@@ -159,8 +185,10 @@ internal fun chatComposerSendEnabled(
   pendingRunCount: Int,
   hasContent: Boolean,
   shareStaging: Boolean,
+  sendInFlight: Boolean = false,
 ): Boolean =
   !shareStaging &&
+    !sendInFlight &&
     voiceNoteState !is VoiceNoteRecorderState.Recording &&
     voiceNoteState !is VoiceNoteRecorderState.Preparing &&
     pendingRunCount == 0 &&
