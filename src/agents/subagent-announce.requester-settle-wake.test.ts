@@ -434,7 +434,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("replays an ambiguous transport failure with the same idempotency key", async () => {
-    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
+    const firstChild = makeSettledChild({ runId: "run-a" });
+    const secondChild = makeSettledChild({ runId: "run-b" });
+    const children = [firstChild, secondChild];
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     deliverSpy.mockRejectedValueOnce(new Error("connection lost after admission"));
 
@@ -442,9 +444,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     vi.setSystemTime(0);
     try {
       expect(
-        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
       ).toBe(false);
-      expect(children[0].requesterSettleWake).toMatchObject({
+      expect(firstChild.requesterSettleWake).toMatchObject({
         status: "dispatching",
         attemptCount: 1,
         replayCount: 1,
@@ -454,7 +456,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
       await vi.advanceTimersByTimeAsync(30_000);
       expect(
-        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
       ).toBe(true);
       expect(deliverSpy).toHaveBeenCalledTimes(2);
       expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
@@ -467,7 +469,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("defers a retry when the requester spawned another active descendant", async () => {
-    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
+    const firstChild = makeSettledChild({ runId: "run-a" });
+    const secondChild = makeSettledChild({ runId: "run-b" });
+    const children = [firstChild, secondChild];
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     registryRuntimeMock.hasDescendantRunAwaitingSettle
       .mockReturnValueOnce(false)
@@ -479,16 +483,16 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     vi.setSystemTime(0);
     try {
       expect(
-        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
       ).toBe(false);
       expect(deliverSpy).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(30_000);
       expect(
-        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: secondChild })),
       ).toBe(false);
       expect(deliverSpy).toHaveBeenCalledTimes(1);
-      expect(children[0].requesterSettleWake?.status).toBe("pending");
+      expect(firstChild.requesterSettleWake?.status).toBe("pending");
     } finally {
       vi.useRealTimers();
     }
@@ -625,8 +629,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         attemptCount: 1,
         batchRunIds: ["run-a", "run-b"],
       };
+      const firstChild = makeSettledChild({
+        runId: "run-a",
+        requesterSettleWake: { ...state },
+      });
       const children = [
-        makeSettledChild({ runId: "run-a", requesterSettleWake: { ...state } }),
+        firstChild,
         makeSettledChild({ runId: "run-b", requesterSettleWake: { ...state } }),
         makeSettledChild({
           runId: "run-new",
@@ -641,12 +649,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       vi.setSystemTime(0);
       try {
         expect(
-          await maybeWakeRequesterAfterAllChildrenSettled(
-            wakeParams({ settledEntry: children[0] }),
-          ),
+          await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: firstChild })),
         ).toBe(false);
         expect(deliverSpy).not.toHaveBeenCalled();
-        expect(children[0].requesterSettleWake).toMatchObject({
+        expect(firstChild.requesterSettleWake).toMatchObject({
           ...state,
           nextAttemptAt: 30_000,
         });
