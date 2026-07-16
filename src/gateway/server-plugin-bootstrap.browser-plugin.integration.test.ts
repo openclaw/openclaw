@@ -162,11 +162,7 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
       const allowed = loaded.pluginRegistry.plugins.find(
         (plugin) => plugin.id === "allowed-fixture",
       );
-      expect(denied).toMatchObject({
-        id: "denied-fixture",
-        enabled: false,
-        status: "disabled",
-      });
+      expect(denied).toBeUndefined();
       expect(allowed).toMatchObject({
         id: "allowed-fixture",
         enabled: true,
