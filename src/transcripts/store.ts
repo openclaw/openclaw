@@ -4,16 +4,23 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import type { DatabaseSync } from "node:sqlite";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import {
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
 
 /**
- * File-backed transcript session store.
+ * Transcript session store backed by filesystem or shared SQLite state DB.
  *
- * Sessions are stored by date/session id with metadata JSON, append-only
- * utterance JSONL, and rendered summary artifacts.
+ * When an optional `OpenClawStateDatabase` handle is supplied, the store
+ * prefers SQLite for session metadata and utterances. File-based paths
+ * remain available for callers that need directory access and the rendered
+ * markdown summary is still written to disk as a user-visible artifact.
  */
 /** Stored session metadata plus the resolved session directory. */
 export type TranscriptsSessionEntry = {
@@ -22,7 +29,6 @@ export type TranscriptsSessionEntry = {
 };
 
 function safeSegment(value: string): string {
-  // Session ids can come from external providers; path segments stay conservative.
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
 }
 
@@ -49,9 +55,149 @@ function sameSessionIdentity(
   return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
 }
 
+function toSqlValue(value: unknown): import("node:sqlite").SQLInputValue {
+  return (value === undefined ? null : value) as import("node:sqlite").SQLInputValue;
+}
+
+function nowMs(): number {
+  return Date.now();
+}
+
+// ── SQLite row mapping ─────────────────────────────────────────
+
+function sessionFromRow(row: Record<string, unknown>): TranscriptSessionDescriptor {
+  const sourceJson =
+    typeof row.source_json === "string"
+      ? (JSON.parse(row.source_json) as Record<string, unknown>)
+      : undefined;
+  const source = sourceJson ?? {
+    providerId: row.provider_id as string,
+    ...(row.account_id ? { accountId: row.account_id as string } : {}),
+    ...(row.guild_id ? { guildId: row.guild_id as string } : {}),
+    ...(row.channel_id ? { channelId: row.channel_id as string } : {}),
+    ...(row.meeting_url ? { meetingUrl: row.meeting_url as string } : {}),
+    ...(row.thread_ts ? { threadTs: row.thread_ts as string } : {}),
+    ...(row.file_id ? { fileId: row.file_id as string } : {}),
+  };
+  return {
+    sessionId: row.session_id as string,
+    source: source as TranscriptSessionDescriptor["source"],
+    startedAt: row.started_at as string,
+    ...(row.title ? { title: row.title as string } : {}),
+    ...(row.stopped_at ? { stoppedAt: row.stopped_at as string } : {}),
+    ...(row.metadata_json
+      ? { metadata: JSON.parse(row.metadata_json as string) as Record<string, unknown> }
+      : {}),
+  };
+}
+
+function rowFromSession(session: TranscriptSessionDescriptor): Record<string, unknown> {
+  const source = session.source;
+  return {
+    session_id: session.sessionId,
+    provider_id: source.providerId,
+    title: session.title ?? null,
+    account_id: source.accountId ?? null,
+    guild_id: source.guildId ?? null,
+    channel_id: source.channelId ?? null,
+    meeting_url: source.meetingUrl ?? null,
+    thread_ts: source.threadTs ?? null,
+    file_id: source.fileId ?? null,
+    source_json: JSON.stringify(source),
+    started_at: session.startedAt,
+    stopped_at: session.stoppedAt ?? null,
+    metadata_json: session.metadata ? JSON.stringify(session.metadata) : null,
+  };
+}
+
+function utteranceFromRow(row: Record<string, unknown>): TranscriptUtterance {
+  return {
+    id: row.utterance_id as string | undefined,
+    sessionId: row.session_id as string,
+    text: row.text as string,
+    startedAt: row.started_at as string | undefined,
+    endedAt: row.ended_at as string | undefined,
+    final: (row.final as number) === 1,
+    ...(row.speaker_label
+      ? {
+          speaker: {
+            label: row.speaker_label as string,
+            ...(row.speaker_id ? { id: row.speaker_id as string } : {}),
+          },
+        }
+      : {}),
+    ...(row.metadata_json
+      ? { metadata: JSON.parse(row.metadata_json as string) as Record<string, unknown> }
+      : {}),
+  };
+}
+
 /** Durable transcript store rooted at a caller-provided directory. */
 export class TranscriptsStore {
-  constructor(private readonly rootDir: string) {}
+  private readonly stateDb: OpenClawStateDatabase | undefined;
+
+  constructor(
+    private readonly rootDir: string,
+    stateDb?: OpenClawStateDatabase,
+  ) {
+    this.stateDb = stateDb;
+  }
+
+  private dbExec(sql: string, params: import("node:sqlite").SQLInputValue[]): unknown[] {
+    if (!this.stateDb) {
+      throw new Error("TranscriptsStore SQLite operations require an OpenClawStateDatabase handle");
+    }
+    const stmt = this.stateDb.db.prepare(sql);
+    return stmt.all(...params);
+  }
+
+  private dbRun(sql: string, params: import("node:sqlite").SQLInputValue[]): void {
+    if (!this.stateDb) {
+      throw new Error("TranscriptsStore SQLite operations require an OpenClawStateDatabase handle");
+    }
+    const stmt = this.stateDb.db.prepare(sql);
+    stmt.run(...params);
+  }
+
+  private dbGet(
+    sql: string,
+    params: import("node:sqlite").SQLInputValue[],
+  ): Record<string, unknown> | undefined {
+    if (!this.stateDb) {
+      throw new Error("TranscriptsStore SQLite operations require an OpenClawStateDatabase handle");
+    }
+    const stmt = this.stateDb.db.prepare(sql);
+    return stmt.get(...params) as Record<string, unknown> | undefined;
+  }
+
+  private writeSessionSql(session: TranscriptSessionDescriptor): void {
+    const ts = nowMs();
+    const row = rowFromSession(session);
+    this.dbRun(
+      `INSERT OR REPLACE INTO transcript_sessions
+       (session_id, provider_id, title, account_id, guild_id, channel_id, meeting_url,
+        thread_ts, file_id, source_json,
+        started_at, stopped_at, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        toSqlValue(row.session_id),
+        toSqlValue(row.provider_id),
+        toSqlValue(row.title),
+        toSqlValue(row.account_id),
+        toSqlValue(row.guild_id),
+        toSqlValue(row.channel_id),
+        toSqlValue(row.meeting_url),
+        toSqlValue(row.thread_ts),
+        toSqlValue(row.file_id),
+        toSqlValue(row.source_json),
+        toSqlValue(row.started_at),
+        toSqlValue(row.stopped_at),
+        toSqlValue(row.metadata_json),
+        toSqlValue(ts),
+        toSqlValue(ts),
+      ],
+    );
+  }
 
   /** Resolve the dated directory for a transcript session. */
   sessionDir(session: TranscriptSessionDescriptor): string {
@@ -112,7 +258,6 @@ export class TranscriptsStore {
       }
     }
     if (matches.length > 1) {
-      // Ambiguous bare ids require an explicit date prefix to avoid reading the wrong session.
       throw new Error(
         `multiple transcripts sessions match ${selector}; use a YYYY-MM-DD/${selector} selector`,
       );
@@ -122,6 +267,12 @@ export class TranscriptsStore {
 
   /** Persist transcript session metadata. */
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
+    if (this.stateDb) {
+      runOpenClawStateWriteTransaction(() => {
+        this.writeSessionSql(session);
+      });
+      return;
+    }
     const dir = this.sessionDir(session);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "metadata.json"), `${JSON.stringify(session, null, 2)}\n`);
@@ -134,6 +285,30 @@ export class TranscriptsStore {
 
   /** Read one session descriptor plus its directory. */
   async readSessionEntry(sessionId: string): Promise<TranscriptsSessionEntry | undefined> {
+    if (this.stateDb) {
+      const qualified = sessionId.match(/^(\d{4}-\d{2}-\d{2})\/(.+)$/);
+      if (qualified?.[1] && qualified[2]) {
+        const row = this.dbGet(
+          `SELECT * FROM transcript_sessions
+           WHERE session_id = ? AND started_at LIKE ?`,
+          [toSqlValue(qualified[2]), toSqlValue(`${qualified[1]}T%`)],
+        );
+        if (!row) {
+          return undefined;
+        }
+        const session = sessionFromRow(row);
+        return { session, sessionDir: this.sessionDir(session) };
+      }
+      const row = this.dbGet(
+        "SELECT * FROM transcript_sessions WHERE session_id = ? ORDER BY started_at DESC LIMIT 1",
+        [toSqlValue(sessionId)],
+      );
+      if (!row) {
+        return undefined;
+      }
+      const session = sessionFromRow(row);
+      return { session, sessionDir: this.sessionDir(session) };
+    }
     const dir = await this.findSessionDir(sessionId);
     if (!dir) {
       return undefined;
@@ -149,6 +324,31 @@ export class TranscriptsStore {
     session: TranscriptSessionDescriptor,
     utterance: TranscriptUtterance,
   ): Promise<void> {
+    if (this.stateDb) {
+      const ts = nowMs();
+      runOpenClawStateWriteTransaction(() => {
+        this.dbRun(
+          `INSERT INTO transcript_utterances
+           (session_id, session_started, utterance_id, speaker_label, speaker_id, text, started_at, ended_at,
+            final, metadata_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            toSqlValue(session.sessionId),
+            toSqlValue(session.startedAt),
+            toSqlValue(utterance.id),
+            toSqlValue(utterance.speaker?.label),
+            toSqlValue(utterance.speaker?.id),
+            toSqlValue(utterance.text),
+            toSqlValue(utterance.startedAt),
+            toSqlValue(utterance.endedAt),
+            toSqlValue(utterance.final !== false ? 1 : 0),
+            toSqlValue(utterance.metadata ? JSON.stringify(utterance.metadata) : null),
+            toSqlValue(ts),
+          ],
+        );
+      });
+      return;
+    }
     const dir = await this.findSessionDirForSession(session);
     await this.appendUtteranceToDir(dir, session.sessionId, utterance);
   }
@@ -170,6 +370,9 @@ export class TranscriptsStore {
     session: TranscriptSessionDescriptor,
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
+    if (this.stateDb) {
+      return await this.readUtterancesFromSqlite(session.sessionId, session.startedAt, options);
+    }
     return await this.readUtterancesFromDir(await this.findSessionDirForSession(session), options);
   }
 
@@ -178,7 +381,57 @@ export class TranscriptsStore {
     sessionDir: string,
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
+    if (this.stateDb) {
+      const dirName = path.basename(sessionDir);
+      const parentDir = path.basename(path.dirname(sessionDir));
+      const datePrefix = /^\d{4}-\d{2}-\d{2}$/.test(parentDir) ? parentDir : undefined;
+      if (dirName) {
+        const rows = await this.readUtterancesFromSqlite(
+          dirName,
+          datePrefix ? `${datePrefix}T` : undefined,
+          options,
+        );
+        if (rows.length > 0) {
+          return rows;
+        }
+      }
+    }
     return await this.readUtterancesFromDir(sessionDir, options);
+  }
+
+  private async readUtterancesFromSqlite(
+    sessionId: string,
+    sessionStarted: string | undefined,
+    options: { maxUtterances?: number },
+  ): Promise<TranscriptUtterance[]> {
+    const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
+    const scoped = sessionStarted !== undefined;
+    if (maxUtterances !== undefined) {
+      const sql = scoped
+        ? `SELECT * FROM transcript_utterances
+           WHERE session_id = ? AND session_started LIKE ?
+           ORDER BY id DESC LIMIT ?`
+        : `SELECT * FROM transcript_utterances
+           WHERE session_id = ?
+           ORDER BY id DESC LIMIT ?`;
+      const params: import("node:sqlite").SQLInputValue[] = scoped
+        ? [toSqlValue(sessionId), toSqlValue(sessionStarted + "%"), toSqlValue(maxUtterances)]
+        : [toSqlValue(sessionId), toSqlValue(maxUtterances)];
+      const rows = this.dbExec(sql, params);
+      return (rows as Record<string, unknown>[]).toReversed().map(utteranceFromRow);
+    }
+    const sql = scoped
+      ? `SELECT * FROM transcript_utterances
+         WHERE session_id = ? AND session_started LIKE ?
+         ORDER BY id ASC`
+      : `SELECT * FROM transcript_utterances
+         WHERE session_id = ?
+         ORDER BY id ASC`;
+    const params: import("node:sqlite").SQLInputValue[] = scoped
+      ? [toSqlValue(sessionId), toSqlValue(sessionStarted + "%")]
+      : [toSqlValue(sessionId)];
+    const rows = this.dbExec(sql, params);
+    return (rows as Record<string, unknown>[]).map(utteranceFromRow);
   }
 
   private async readUtterancesFromDir(
@@ -249,7 +502,6 @@ export class TranscriptsStore {
             return;
           }
           if (utterances.length > maxUtterances) {
-            // Stream and keep only the tail so large transcripts do not require full-file memory.
             utterances.shift();
           }
         });
@@ -272,6 +524,35 @@ export class TranscriptsStore {
 
   /** Mark a transcript session as stopped when metadata exists. */
   async updateStopped(sessionId: string, stoppedAt: string): Promise<void> {
+    if (this.stateDb) {
+      const qualified = sessionId.match(/^(\d{4}-\d{2}-\d{2})\/(.+)$/);
+      if (qualified?.[1] && qualified[2]) {
+        runOpenClawStateWriteTransaction(() => {
+          this.dbRun(
+            `UPDATE transcript_sessions SET stopped_at = ?, updated_at = ?
+             WHERE session_id = ? AND started_at LIKE ?`,
+            [
+              toSqlValue(stoppedAt),
+              toSqlValue(nowMs()),
+              toSqlValue(qualified[2]),
+              toSqlValue(`${qualified[1]}T%`),
+            ],
+          );
+        });
+        return;
+      }
+      runOpenClawStateWriteTransaction(() => {
+        this.dbRun(
+          `UPDATE transcript_sessions SET stopped_at = ?, updated_at = ?
+           WHERE id = (
+             SELECT id FROM transcript_sessions
+             WHERE session_id = ? ORDER BY started_at DESC LIMIT 1
+           )`,
+          [toSqlValue(stoppedAt), toSqlValue(nowMs()), toSqlValue(sessionId)],
+        );
+      });
+      return;
+    }
     const dir = await this.findSessionDir(sessionId);
     if (!dir) {
       return;
@@ -295,7 +576,9 @@ export class TranscriptsStore {
   ): Promise<string> {
     const dir =
       session !== undefined
-        ? await this.findSessionDirForSession(session)
+        ? this.stateDb
+          ? this.sessionDir(session)
+          : await this.findSessionDirForSession(session)
         : ((await this.findSessionDir(summary.sessionId)) ??
           path.join(this.rootDir, dateSegment(summary.sessionId), safeSegment(summary.sessionId)));
     return await this.writeSummaryToDir(summary, dir);

@@ -55,7 +55,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  * migrations/backups that operate on local state.
  */
 // v3 rebuilds every OpenClaw-owned table with SQLite STRICT type enforcement.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 3;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 4;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;

@@ -1830,3 +1830,51 @@ CREATE TABLE IF NOT EXISTS fleet_cells (
   container_name TEXT NOT NULL,
   data_dir TEXT NOT NULL
 ) STRICT;
+
+-- Meeting-capture transcripts (real-time voice/caption recordings), separate
+-- from agent session transcripts which live in the agent DB.
+CREATE TABLE IF NOT EXISTS transcript_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  title TEXT,
+  account_id TEXT,
+  guild_id TEXT,
+  channel_id TEXT,
+  meeting_url TEXT,
+  thread_ts TEXT,
+  file_id TEXT,
+  source_json TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  stopped_at TEXT,
+  metadata_json TEXT,
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transcript_sessions_session_started
+  ON transcript_sessions(session_id, started_at);
+
+CREATE INDEX IF NOT EXISTS idx_transcript_sessions_provider
+  ON transcript_sessions(provider_id, started_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS transcript_utterances (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  session_started TEXT NOT NULL,
+  utterance_id TEXT,
+  speaker_label TEXT,
+  speaker_id TEXT,
+  text TEXT NOT NULL,
+  started_at TEXT,
+  ended_at TEXT,
+  final INTEGER NOT NULL DEFAULT 1 CHECK (final IN (0, 1)),
+  metadata_json TEXT,
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  FOREIGN KEY (session_id, session_started)
+    REFERENCES transcript_sessions(session_id, started_at)
+    ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_transcript_utterances_session
+  ON transcript_utterances(session_id, session_started, id);

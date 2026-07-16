@@ -1248,6 +1248,40 @@ export interface Worktrees {
   snapshot_ref: string | null;
 }
 
+export interface TranscriptSessions {
+  id: Generated<number>;
+  session_id: string;
+  provider_id: string;
+  title: string | null;
+  account_id: string | null;
+  guild_id: string | null;
+  channel_id: string | null;
+  meeting_url: string | null;
+  thread_ts: string | null;
+  file_id: string | null;
+  source_json: string;
+  started_at: string;
+  stopped_at: string | null;
+  metadata_json: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TranscriptUtterances {
+  id: Generated<number>;
+  session_id: string;
+  session_started: string;
+  utterance_id: string | null;
+  speaker_label: string | null;
+  speaker_id: string | null;
+  text: string;
+  started_at: string | null;
+  ended_at: string | null;
+  final: Generated<number>;
+  metadata_json: string | null;
+  created_at: number;
+}
+
 export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
@@ -1337,4 +1371,6 @@ export interface DB {
   worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_setup_state: WorkspaceSetupState;
   worktrees: Worktrees;
+  transcript_sessions: TranscriptSessions;
+  transcript_utterances: TranscriptUtterances;
 }
