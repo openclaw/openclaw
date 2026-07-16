@@ -81,6 +81,7 @@
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/arcee/**",
+    "!dist/extensions/baseten/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/chutes/**",
