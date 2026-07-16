@@ -366,47 +366,6 @@
       }
     },
     {
-      "name": "@openclaw/codex",
-      "description": "OpenClaw Codex harness and model provider plugin",
-      "source": "official",
-      "kind": "provider",
-      "openclaw": {
-        "plugin": {
-          "id": "codex",
-          "label": "Codex"
-        },
-        "contracts": {
-          "migrationProviders": ["codex"]
-        },
-        "providers": [
-          {
-            "id": "codex",
-            "name": "Codex",
-            "docs": "/providers/models",
-            "categories": ["cloud", "llm"],
-            "authChoices": [
-              {
-                "method": "app-server",
-                "choiceId": "codex",
-                "choiceLabel": "Codex app-server",
-                "choiceHint": "Keep using your Codex CLI or ChatGPT app sign-in via the Codex app-server runtime.",
-                "assistantPriority": -40,
-                "groupId": "codex",
-                "groupLabel": "Codex",
-                "groupHint": "Codex app-server model provider",
-                "onboardingScopes": ["text-inference"]
-              }
-            ]
-          }
-        ],
-        "install": {
-          "npmSpec": "@openclaw/codex",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.5.1-beta.1"
-        }
-      }
-    },
-    {
       "name": "@openclaw/deepinfra-provider",
       "description": "OpenClaw DeepInfra provider plugin.",
       "source": "official",

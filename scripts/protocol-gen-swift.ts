@@ -104,6 +104,9 @@ function swiftStoredPropertyName(structName: string, key: string): string {
   if (structName === "ChatSendParams" && key === "fastMode") {
     return "fastmodevalue";
   }
+  if (structName === "AgentsUpdateParams" && key === "model") {
+    return "modelvalue";
+  }
   if (structName === "ChatSendParams" && key === "fast_seconds") {
     return "fastseconds";
   }
@@ -114,6 +117,9 @@ function swiftInitializerName(structName: string, key: string): string {
   if (structName === "ChatSendParams" && key === "fastMode") {
     return "fastmodevalue";
   }
+  if (structName === "AgentsUpdateParams" && key === "model") {
+    return "modelvalue";
+  }
   if (structName === "ChatSendParams" && key === "fast_seconds") {
     return "fastseconds";
   }
@@ -123,6 +129,9 @@ function swiftInitializerName(structName: string, key: string): string {
 function swiftCompatibilityPropertyLines(structName: string, key: string): string[] {
   if (structName === "ChatSendParams" && key === "fastMode") {
     return ["    public var fastmode: Bool? { fastmodevalue?.value as? Bool }"];
+  }
+  if (structName === "AgentsUpdateParams" && key === "model") {
+    return ["    public var model: String? { modelvalue?.value as? String }"];
   }
   return [];
 }
@@ -412,6 +421,11 @@ function emitStruct(name: string, schema: JsonSchema): string {
         .map(([key, prop]) => {
           const propName = swiftInitializerName(name, key);
           const req = required.has(key);
+          if (name === "AgentsUpdateParams" && key === "model") {
+            // Keep the raw nullable value explicit so the source-compatible initializer stays
+            // unambiguous when callers omit model.
+            return "        modelvalue: AnyCodable?";
+          }
           return `        ${swiftInitializerParam({
             name: propName,
             schema: prop,
@@ -433,10 +447,51 @@ function emitStruct(name: string, schema: JsonSchema): string {
       "\n\n" +
       "    private enum CodingKeys: String, CodingKey {\n" +
       codingKeys.join("\n") +
-      "\n    }\n}",
+      "\n    }" +
+      emitStructCustomCodable(name, props, required) +
+      "\n}",
   );
   lines.push("");
   return lines.join("\n");
+}
+
+function emitStructCustomCodable(
+  name: string,
+  props: Record<string, JsonSchema>,
+  required: Set<string>,
+): string {
+  if (name !== "AgentsUpdateParams" || !props.model) {
+    return "";
+  }
+  const decodedProperties = Object.entries(props).map(([key, propSchema]) => {
+    const propName = swiftStoredPropertyName(name, key);
+    if (key === "model") {
+      // decodeIfPresent collapses an explicit JSON null into nil. Presence-aware decoding
+      // preserves the Gateway patch distinction between clearing and omitting the model.
+      return `        self.${propName} = container.contains(.${propName})\n            ? try container.decode(AnyCodable.self, forKey: .${propName})\n            : nil`;
+    }
+    if (required.has(key)) {
+      return `        self.${propName} = try container.decode(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
+    }
+    return `        self.${propName} = try container.decodeIfPresent(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
+  });
+  const encodedProperties = Object.keys(props).map((key) => {
+    const propName = swiftStoredPropertyName(name, key);
+    if (required.has(key)) {
+      return `        try container.encode(${propName}, forKey: .${propName})`;
+    }
+    return `        try container.encodeIfPresent(${propName}, forKey: .${propName})`;
+  });
+  return (
+    "\n\n    public init(from decoder: Decoder) throws {\n" +
+    "        let container = try decoder.container(keyedBy: CodingKeys.self)\n" +
+    decodedProperties.join("\n") +
+    "\n    }\n\n" +
+    "    public func encode(to encoder: Encoder) throws {\n" +
+    "        var container = encoder.container(keyedBy: CodingKeys.self)\n" +
+    encodedProperties.join("\n") +
+    "\n    }"
+  );
 }
 
 function emitStructCompatibilityInitializer(
@@ -444,6 +499,36 @@ function emitStructCompatibilityInitializer(
   props: Record<string, JsonSchema>,
   required: Set<string>,
 ): string {
+  if (name === "AgentsUpdateParams" && props.model) {
+    const initializerParams = Object.entries(props).map(([key, prop]) => {
+      const propName = swiftInitializerName(name, key);
+      if (key === "model") {
+        return "        model: String? = nil";
+      }
+      return `        ${swiftInitializerParam({
+        name: propName,
+        schema: prop,
+        required: required.has(key),
+      })}`;
+    });
+    const delegatedArgs = Object.keys(props).map((key) => {
+      const propName = swiftInitializerName(name, key);
+      if (key === "model") {
+        return "            modelvalue: model.map { AnyCodable($0) }";
+      }
+      return `            ${propName}: ${propName}`;
+    });
+    return (
+      "\n\n    public init(\n" +
+      initializerParams.join(",\n") +
+      ")\n" +
+      "    {\n" +
+      "        self.init(\n" +
+      delegatedArgs.join(",\n") +
+      ")\n" +
+      "    }"
+    );
+  }
   if (name !== "ChatSendParams" || !props.fastMode) {
     return "";
   }

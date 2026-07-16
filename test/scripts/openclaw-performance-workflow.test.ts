@@ -102,6 +102,9 @@ describe("OpenClaw performance workflow", () => {
       installRun.indexOf('npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund'),
     ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
     expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
+    expect(workflow).toContain(
+      "KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}",
+    );
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 

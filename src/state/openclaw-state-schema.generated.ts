@@ -631,6 +631,7 @@ CREATE TABLE IF NOT EXISTS apns_registrations (
   relay_handle TEXT,
   send_grant TEXT,
   installation_id TEXT,
+  relay_origin TEXT,
   topic TEXT NOT NULL,
   environment TEXT NOT NULL,
   distribution TEXT,
@@ -640,6 +641,11 @@ CREATE TABLE IF NOT EXISTS apns_registrations (
 
 CREATE INDEX IF NOT EXISTS idx_apns_registrations_updated
   ON apns_registrations(updated_at_ms DESC, node_id);
+
+CREATE TABLE IF NOT EXISTS apns_registration_tombstones (
+  node_id TEXT NOT NULL PRIMARY KEY,
+  deleted_at_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS node_host_config (
   config_key TEXT NOT NULL PRIMARY KEY,
