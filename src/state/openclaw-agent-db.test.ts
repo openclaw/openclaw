@@ -532,6 +532,9 @@ describe("openclaw agent database", () => {
       DROP TABLE memory_index_sources_strict;
       INSERT INTO memory_index_sources (path, source, hash, mtime, size)
       VALUES ('MEMORY.md', 'memory', 'legacy-hash', 10.75, 20);
+      DROP TABLE session_transcript_active_events;
+      ALTER TABLE session_transcript_index_state DROP COLUMN active_event_count;
+      ALTER TABLE session_transcript_index_state DROP COLUMN active_message_count;
       PRAGMA user_version = 8;
       UPDATE schema_meta SET schema_version = 8 WHERE meta_key = 'primary';
     `);
@@ -553,6 +556,19 @@ describe("openclaw agent database", () => {
         .prepare("SELECT mtime, typeof(mtime) AS storage_type FROM memory_index_sources")
         .get(),
     ).toEqual({ mtime: 10.75, storage_type: "real" });
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT strict FROM pragma_table_list WHERE name = 'session_transcript_active_events'",
+        )
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(
+      migrated.db
+        .prepare("PRAGMA table_info(session_transcript_index_state)")
+        .all()
+        .map((column) => (column as { name: string }).name),
+    ).toEqual(expect.arrayContaining(["active_event_count", "active_message_count"]));
     expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
     expect(
       migrated.db

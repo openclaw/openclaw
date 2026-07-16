@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS session_transcript_active_events (
   message_position INTEGER CHECK (message_position IS NULL OR message_position >= 0),
   PRIMARY KEY (session_id, active_position),
   FOREIGN KEY (session_id, event_seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_event_seq
   ON session_transcript_active_events(session_id, event_seq);
