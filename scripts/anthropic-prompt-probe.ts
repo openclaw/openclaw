@@ -397,6 +397,7 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
               ? undefined
               : Uint8Array.from(requestBody),
           duplex: "half",
+          signal: AbortSignal.timeout(params.timeoutMs ?? 60_000),
         } as RequestInit & { duplex: "half" };
         const upstreamRes = await fetch(upstreamUrl, upstreamInit);
         const responseHeaders: Record<string, string> = {};
