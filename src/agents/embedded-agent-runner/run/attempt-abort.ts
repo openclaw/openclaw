@@ -58,9 +58,7 @@ export function abortEmbeddedAttemptForStuckRecovery(input: {
   runId: string;
   state: Pick<
     EmbeddedAttemptAbortStatePort,
-    | "markIdleTimedOut"
-    | "markTimedOutDuringCompaction"
-    | "markTimedOutDuringToolExecution"
+    "markIdleTimedOut" | "markTimedOutDuringCompaction" | "markTimedOutDuringToolExecution"
   >;
 }): boolean {
   const classification = classifyStuckRecoveryAbort({
