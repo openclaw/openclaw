@@ -9,7 +9,6 @@ import {
   drainPendingDeliveries,
   enqueueDelivery,
   failDelivery,
-  isRecoveryEntryInProgress,
   markDeliveryPlatformOutcomeUnknown,
   type RecoveryLogger,
   recoverPendingDeliveries,
@@ -580,10 +579,8 @@ describe("drainPendingDeliveries for reconnect", () => {
       expect(result.skippedInProgress).toBe(1);
       expect(result.drained).toBe(0);
       expect(result.skippedEntryIds).toEqual([id]);
-      expect(isRecoveryEntryInProgress(id)).toBe(true);
     });
     expect(claimResult.status).toBe("claimed");
-    expect(isRecoveryEntryInProgress(id)).toBe(false);
   });
 
   it("returns drain result with drained count for recovered entries", async () => {

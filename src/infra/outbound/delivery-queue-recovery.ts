@@ -109,10 +109,6 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
 
-/** Check whether a recovery entry is currently claimed by an in-flight delivery. */
-export function isRecoveryEntryInProgress(entryId: string): boolean {
-  return entriesInProgress.has(entryId);
-}
 const recoveryReplayPacer = createRecoveryReplayPacer();
 
 function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
