@@ -62,12 +62,14 @@ export function getCodexAppServerClientInstanceId(client: object): string {
 export class CodexAppServerRpcError extends Error {
   readonly code?: number;
   readonly data?: JsonValue;
+  readonly method: string;
 
   constructor(error: { code?: number; message: string; data?: JsonValue }, method: string) {
     super(formatCodexAppServerRpcErrorMessage(error, method));
     this.name = "CodexAppServerRpcError";
     this.code = error.code;
     this.data = error.data;
+    this.method = method;
   }
 }
 
@@ -76,12 +78,35 @@ class CodexAppServerLocalRequestCancellationError extends Error {
 
   constructor(
     method: string,
-    reason: "aborted" | "timed out",
+    readonly reason: "aborted" | "timed out",
     readonly mayHaveWritten: boolean,
   ) {
     super(`${method} ${reason}`);
     this.name = "CodexAppServerLocalRequestCancellationError";
   }
+}
+
+export function isCodexAppServerRequestTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
+    "reason" in error &&
+    error.reason === "timed out"
+  );
+}
+
+export function isCodexAppServerBrokenPipeError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if ("code" in current && current.code === "EPIPE") {
+      return true;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 class CodexAppServerIndeterminateTransportError extends Error {

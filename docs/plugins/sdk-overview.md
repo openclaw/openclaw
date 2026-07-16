@@ -209,6 +209,27 @@ advertised node command.
 | `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
 
+#### Post-ack webhook work
+
+Webhook routes that acknowledge a request before processing finishes must move
+that detached work onto its own tracked admission root:
+
+```typescript
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+
+void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
+  runtime.error?.(`webhook dispatch failed: ${String(error)}`);
+});
+```
+
+Call `runDetachedWebhookWork(...)` synchronously while the HTTP request is still
+admitted. The helper reserves an independent root immediately, then starts the
+callback in the next microtask so the request handler can write its
+acknowledgement first. The returned promise adopts the callback result; callers
+still own rejection handling. This keeps post-ack queue work accepted and makes
+restart or suspension drains wait for it. Handlers that await all processing
+before returning do not need this helper.
+
 #### Requester-scoped MCP connections
 
 Keep the MCP server **identity** static (name, tool filter) in `mcp.servers` or a

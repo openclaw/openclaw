@@ -13,6 +13,7 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -1060,7 +1061,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  static override styles = [terminalPanelStyles, terminalPanelUploadStyles];
+  static override styles = [panelTabStripStyles, terminalPanelStyles, terminalPanelUploadStyles];
 }
 
 declare global {

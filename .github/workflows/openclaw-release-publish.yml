@@ -1290,7 +1290,7 @@ jobs:
 
           resolve_openclaw_npm_publish_state() {
             local artifact_name manifest_dir manifest_path manifest_sha manifest_tarball_sha published_sha published_tarball_path published_tarball_url release_version
-            local canonical_workflow_id resume_branch resume_compare_status resume_conclusion resume_event resume_jobs resume_json resume_path resume_path_trusted resume_sha resume_tag_commit_sha resume_tag_json resume_tag_object_sha resume_tag_verified resume_url resume_workflow_id
+            local resume_state resume_url
 
             openclaw_npm_already_published="false"
             if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
@@ -1323,7 +1323,14 @@ jobs:
             fi
             published_tarball_url="$(npm view "openclaw@${release_version}" dist.tarball)"
             published_tarball_path="${manifest_dir}/published.tgz"
-            curl -fsSL --retry 3 -o "${published_tarball_path}" "${published_tarball_url}"
+            # Keep registry identity verification bounded if a connected
+            # tarball endpoint stops transferring during a release resume.
+            curl -fsSL \
+              --connect-timeout 10 \
+              --max-time 120 \
+              --retry 3 \
+              --retry-max-time 180 \
+              -o "${published_tarball_path}" "${published_tarball_url}"
             published_sha="$(sha256sum "${published_tarball_path}" | awk '{print $1}')"
             if [[ "${published_sha}" != "${manifest_tarball_sha}" ]]; then
               {
@@ -1339,59 +1346,12 @@ jobs:
               echo "openclaw@${release_version} is already published; openclaw_npm_resume_run_id is required to bind postpublish proof to the original workflow identity." >&2
               exit 1
             fi
-            resume_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${OPENCLAW_NPM_RESUME_RUN_ID}")"
-            canonical_workflow_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/openclaw-npm-release.yml" --jq '.id')"
-            resume_branch="$(printf '%s' "${resume_json}" | jq -er '.head_branch | select(type == "string" and length > 0)')"
-            resume_sha="$(printf '%s' "${resume_json}" | jq -er '.head_sha | select(test("^[a-f0-9]{40}$"))')"
-            resume_conclusion="$(printf '%s' "${resume_json}" | jq -er '.conclusion')"
-            resume_event="$(printf '%s' "${resume_json}" | jq -er '.event')"
-            resume_path="$(printf '%s' "${resume_json}" | jq -er '.path')"
-            resume_workflow_id="$(printf '%s' "${resume_json}" | jq -er '.workflow_id')"
-            resume_url="$(printf '%s' "${resume_json}" | jq -er '.html_url')"
-            if [[ ! "${resume_branch}" =~ ^release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
-              echo "OpenClaw npm resume run has an untrusted workflow ref: ${resume_url}" >&2
-              exit 1
-            fi
-            resume_path_trusted="false"
-            case "${resume_path}" in
-              ".github/workflows/openclaw-npm-release.yml" | \
-                ".github/workflows/openclaw-npm-release.yml@${resume_branch}" | \
-                ".github/workflows/openclaw-npm-release.yml@refs/tags/${resume_branch}")
-                resume_path_trusted="true"
-                ;;
-            esac
-            if [[ "${resume_conclusion}" != "success" ||
-              "${resume_event}" != "workflow_dispatch" ||
-              "${resume_path_trusted}" != "true" ||
-              "${resume_workflow_id}" != "${canonical_workflow_id}" ||
-              "${resume_sha:0:12}" != "${BASH_REMATCH[1]}" ]]; then
-              echo "OpenClaw npm resume run has an untrusted workflow identity: ${resume_url}" >&2
-              exit 1
-            fi
-            resume_tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${resume_branch}")"
-            resume_tag_object_sha="$(printf '%s' "${resume_tag_json}" | jq -er '.object.sha | select(test("^[a-f0-9]{40}$"))')"
-            if [[ "$(printf '%s' "${resume_tag_json}" | jq -er '.object.type')" != "tag" ]]; then
-              echo "OpenClaw npm resume run tooling ref is not a signed annotated tag: ${resume_url}" >&2
-              exit 1
-            fi
-            resume_tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${resume_tag_object_sha}")"
-            resume_tag_commit_sha="$(printf '%s' "${resume_tag_json}" | jq -er '.object.sha | select(test("^[a-f0-9]{40}$"))')"
-            resume_tag_verified="$(printf '%s' "${resume_tag_json}" | jq -er '.verification.verified')"
-            resume_compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${resume_sha}...main" --jq '.status')"
-            if [[ "$(printf '%s' "${resume_tag_json}" | jq -er '.object.type')" != "commit" ||
-              "${resume_tag_commit_sha}" != "${resume_sha}" ||
-              "${resume_tag_verified}" != "true" ||
-              ( "${resume_compare_status}" != "ahead" && "${resume_compare_status}" != "identical" ) ]]; then
-              echo "OpenClaw npm resume run is not bound to a real, main-reachable protected tooling tag: ${resume_url}" >&2
-              exit 1
-            fi
-            resume_jobs="$(gh run view "${OPENCLAW_NPM_RESUME_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --json jobs --jq '.jobs')"
-            if ! printf '%s' "${resume_jobs}" | jq -e '.[] | select(.name == "validate_publish_request" and .conclusion == "success")' >/dev/null; then
-              echo "OpenClaw npm resume run lacks successful parent release approval validation: ${resume_url}" >&2
-              exit 1
-            fi
-            openclaw_npm_expected_workflow_ref="refs/tags/${resume_branch}"
-            openclaw_npm_expected_workflow_sha="${resume_sha}"
+            resume_state="$(node "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mjs" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --run-id "${OPENCLAW_NPM_RESUME_RUN_ID}")"
+            resume_url="$(printf '%s' "${resume_state}" | jq -er '.url')"
+            openclaw_npm_expected_workflow_ref="$(printf '%s' "${resume_state}" | jq -er '.workflowRef')"
+            openclaw_npm_expected_workflow_sha="$(printf '%s' "${resume_state}" | jq -er '.workflowSha')"
 
             openclaw_npm_already_published="true"
             echo "openclaw@${release_version} is already published on npm with this tag's preflight tarball; resuming from ${resume_url}."
@@ -1791,17 +1751,35 @@ jobs:
 
             (
               cd "${download_dir}"
+              export TZ=UTC
+              find dependency-evidence -type f -exec touch -t 198001010000 {} +
               find dependency-evidence -type f -print | LC_ALL=C sort | zip -X -q "${asset_path}" -@
             )
-            attach_or_verify_release_asset "${asset_path}" "${asset_name}"
+            attach_or_verify_release_asset "${asset_path}" "${asset_name}" zip-tree
             echo "- Dependency evidence asset: \`${asset_name}\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          release_evidence_zip_trees_match() {
+            local source_path="$1"
+            local existing_path="$2"
+            python3 "${GITHUB_WORKSPACE}/.release-harness/scripts/compare-release-evidence-zip.py" \
+              "${source_path}" "${existing_path}"
           }
 
           attach_or_verify_release_asset() {
             local source_path="$1"
             local asset_name="$2"
+            local comparison_mode="${3:-exact}"
             local existing_dir="${RUNNER_TEMP}/openclaw-release-existing-assets/${asset_name}"
             local existing_path="${existing_dir}/${asset_name}"
+
+            case "${comparison_mode}" in
+              exact | zip-tree) ;;
+              *)
+                echo "Unknown release evidence comparison mode: ${comparison_mode}" >&2
+                exit 1
+                ;;
+            esac
 
             if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets |
               jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' >/dev/null; then
@@ -1809,11 +1787,15 @@ jobs:
               mkdir -p "${existing_dir}"
               gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
                 --pattern "${asset_name}" --dir "${existing_dir}"
-              cmp --silent "${source_path}" "${existing_path}" || {
-                echo "Existing release evidence asset ${asset_name} differs from this release run." >&2
-                exit 1
-              }
-              return
+              if cmp --silent "${source_path}" "${existing_path}"; then
+                return
+              fi
+              if [[ "${comparison_mode}" == "zip-tree" ]] &&
+                release_evidence_zip_trees_match "${source_path}" "${existing_path}"; then
+                return
+              fi
+              echo "Existing release evidence asset ${asset_name} differs from this release run." >&2
+              exit 1
             fi
 
             gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
@@ -1918,17 +1900,17 @@ jobs:
             fi
 
             if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}" \
-                OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${openclaw_npm_expected_workflow_sha}" \
-                node --import tsx \
-                "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts" \
-                "${release_version}"
-              verify_args+=(--skip-postpublish)
+              verify_args+=(
+                --postpublish-verifier
+                "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts"
+              )
             fi
 
-            node --import tsx \
-              "${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts" \
-              "${verify_args[@]}"
+            OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}" \
+              OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${openclaw_npm_expected_workflow_sha}" \
+              node --import tsx \
+                "${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts" \
+                "${verify_args[@]}"
 
             # Resolve already validated this exact v3 run before mutation. Append
             # its immutable tuple here so frozen targets need no new CLI option.

@@ -6,7 +6,6 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
@@ -21,8 +20,6 @@ import type { AnyAgentTool } from "./tools/common.js";
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  currentChannelId?: string;
-  currentMessagingTarget?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   sandboxRoot?: string;
@@ -46,13 +43,6 @@ export function resolveOpenClawPluginToolsForOptions(params: {
   if (params.options?.disablePluginTools) {
     return [];
   }
-
-  const deliveryContext = normalizeDeliveryContext({
-    channel: params.options?.agentChannel,
-    to: params.options?.agentTo,
-    accountId: params.options?.agentAccountId,
-    threadId: params.options?.agentThreadId,
-  });
 
   const resolveCurrentRuntimeConfig = () => {
     // Re-resolve on demand so auth/profile lookups see the active runtime config
@@ -121,6 +111,6 @@ export function resolveOpenClawPluginToolsForOptions(params: {
 
   return applyPluginToolDeliveryDefaults({
     tools: pluginTools,
-    deliveryContext,
+    deliveryContext: pluginToolInputs.context.deliveryContext,
   });
 }

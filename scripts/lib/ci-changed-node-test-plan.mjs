@@ -35,13 +35,23 @@ function isTestOnlyPath(changedPath) {
   return isTestFileTarget(changedPath) || changedPath.startsWith("test/");
 }
 
+// Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
+// the build pipeline itself (mirrors the build-all cache key in ci.yml).
+// Paths outside this set — repo scripts, workflows, qa scenarios, docs mixes —
+// cannot change dist or bundled plugin asset bytes.
+const BUILD_INPUT_RE =
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|write-plugin-sdk-entry-dts\.ts|copy-export-html-templates\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mjs)$/u;
+
 /**
- * True when any changed path can influence built dist/packaging bytes.
- * Test-only diffs cannot change what `build:ci-artifacts` produces, so the
- * manifest may skip the build-artifacts lane for them.
+ * True when a changed path can influence built dist/packaging bytes: a
+ * non-test build-input source or the build pipeline itself. Diffs entirely
+ * outside that set (tests, repo scripts, workflows, qa scenarios) let the
+ * manifest skip the build-artifacts lane.
  */
 export function hasBuildArtifactAffectingChange(changedPaths) {
-  return changedPaths.some((changedPath) => !isTestOnlyPath(changedPath));
+  return changedPaths.some(
+    (changedPath) => BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath),
+  );
 }
 
 // Surfaces the CI smoke scenarios exercise outside the core runtime import

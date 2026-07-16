@@ -2,11 +2,17 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  assertWidgetHtmlSize,
+  isCompleteHtmlDocument,
+  WidgetHtmlInputError,
+} from "openclaw/plugin-sdk/widget-html";
 import { Type } from "typebox";
 import { resolveDiscordAccount } from "../accounts.js";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
 import { Button, Row } from "../internal/discord.js";
 import { sendMessageDiscord } from "../send.js";
+import { resolveDiscordChannelId as resolveDiscordTargetChannelId } from "../target-parsing.js";
 import type { DiscordActivitiesRuntime } from "./runtime.js";
 
 const DISCORD_WIDGET_HTML_MAX_BYTES = 48 * 1024;
@@ -16,13 +22,6 @@ const DiscordWidgetParameters = Type.Object({
   title: Type.String({ minLength: 1, maxLength: 80 }),
   button_label: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
-
-class DiscordWidgetInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolInputError";
-  }
-}
 
 class DiscordWidgetLaunchButton extends Button {
   constructor(
@@ -47,12 +46,15 @@ function resolveDiscordChannelId(context: OpenClawPluginToolContext): string | u
   if (!raw) {
     return undefined;
   }
-  const normalized = raw.replace(/^channel:/i, "");
-  return /^\d+$/.test(normalized) ? normalized : undefined;
+  try {
+    return resolveDiscordTargetChannelId(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 function buildDiscordWidgetDocument(title: string, html: string): string {
-  if (/^(?:<!doctype\s+html\b|<html\b)/i.test(html.trimStart())) {
+  if (isCompleteHtmlDocument(html)) {
     return html;
   }
   return `<!doctype html>
@@ -94,22 +96,18 @@ export function createDiscordWidgetTool(
       const title = readStringParam(params, "title", { required: true });
       const buttonLabel = readStringParam(params, "button_label") || "Open widget";
       if (!html.trim()) {
-        throw new DiscordWidgetInputError("html is required");
+        throw new WidgetHtmlInputError("html is required");
       }
-      if (Buffer.byteLength(html, "utf8") > DISCORD_WIDGET_HTML_MAX_BYTES) {
-        throw new DiscordWidgetInputError(
-          `html exceeds maximum size (${DISCORD_WIDGET_HTML_MAX_BYTES} bytes)`,
-        );
-      }
+      assertWidgetHtmlSize(html, DISCORD_WIDGET_HTML_MAX_BYTES);
       if (title.length > 80) {
-        throw new DiscordWidgetInputError("title must be 80 characters or fewer");
+        throw new WidgetHtmlInputError("title must be 80 characters or fewer");
       }
       if (!buttonLabel.trim() || buttonLabel.length > 80) {
-        throw new DiscordWidgetInputError("button_label must be 1 to 80 characters");
+        throw new WidgetHtmlInputError("button_label must be 1 to 80 characters");
       }
       const channelId = resolveDiscordChannelId(context);
       if (!channelId) {
-        throw new DiscordWidgetInputError(
+        throw new WidgetHtmlInputError(
           "discord_widget requires a concrete Discord channel in the current session",
         );
       }

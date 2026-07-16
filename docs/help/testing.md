@@ -140,7 +140,7 @@ When debugging real providers/models (requires real creds):
     `openclaw setup` CLI fails closed without inference. It then
     tests and activates fake Claude through the packaged activation module.
     Only afterward does a fuzzy packaged CLI request reach the planner and
-    resolve to typed setup, followed by one-shot model, agent, Discord plugin,
+    resolve to typed setup, followed by one-shot model, agent, Discord config,
     and SecretRef operations. It validates config and audit entries. This is
     supporting gate/operation evidence, not an interactive onboarding or
     OpenClaw agent/tool/approval proof. The same lane is exposed in QA Lab by
@@ -276,9 +276,8 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
-    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts a comma-separated list of
-    Telegram QA check IDs to sample; when unset, the default RTT-capable
-    check is `telegram-mentioned-message-reply`.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` selects the Telegram QA scenario to
+    sample; the supported RTT target is `channel-canary`.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
@@ -441,7 +440,7 @@ set. Maintainers can start it from the Actions UI through `Mantis Scenario`
 ```text
 @openclaw-mantis telegram
 @openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+@openclaw-mantis telegram scenarios=telegram-status-command,channel-canary
 ```
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
