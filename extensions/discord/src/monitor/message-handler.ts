@@ -4,16 +4,14 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Client } from "../internal/discord.js";
 import {
   buildDiscordInboundReplayKey,
-  claimDiscordInboundReplay,
-  commitDiscordInboundReplay,
   createDiscordInboundReplayGuard,
   DiscordRetryableInboundError,
-  releaseDiscordInboundReplay,
 } from "./inbound-dedupe.js";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
@@ -76,7 +74,6 @@ export function createDiscordMessageHandler(
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
-    replayGuard,
     testing: params.testing,
   });
 
@@ -84,7 +81,7 @@ export function createDiscordMessageHandler(
     data: DiscordMessageEvent;
     client: Client;
     abortSignal?: AbortSignal;
-    replayKey?: string;
+    replayClaim?: ChannelReplayClaimHandle;
   }>({
     cfg: params.cfg,
     channel: "discord",
@@ -122,14 +119,14 @@ export function createDiscordMessageHandler(
       if (!last) {
         return;
       }
-      const replayKeys = entries.map((entry) => entry.replayKey).filter(isNonEmptyString);
+      const replayClaims = entries
+        .map((entry) => entry.replayClaim)
+        .filter((claim): claim is ChannelReplayClaimHandle => claim !== undefined);
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
-        releaseDiscordInboundReplay({
-          replayKeys,
-          error: abortSignal.reason,
-          replayGuard,
-        });
+        for (const claim of replayClaims) {
+          claim.release({ error: abortSignal.reason });
+        }
         return;
       }
       try {
@@ -146,11 +143,11 @@ export function createDiscordMessageHandler(
             client: last.client,
           });
           if (!ctx) {
-            await commitDiscordInboundReplay({ replayKeys, replayGuard });
+            await Promise.all(replayClaims.map((claim) => claim.commit()));
             return;
           }
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayClaims }));
           return;
         }
         const combinedBaseText = entries
@@ -195,7 +192,7 @@ export function createDiscordMessageHandler(
           client: last.client,
         });
         if (!ctx) {
-          await commitDiscordInboundReplay({ replayKeys, replayGuard });
+          await Promise.all(replayClaims.map((claim) => claim.commit()));
           return;
         }
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
@@ -212,12 +209,14 @@ export function createDiscordMessageHandler(
             ctxBatch.MessageSidLast = ids[ids.length - 1];
           }
         }
-        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayClaims }));
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {
-          releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
+          for (const claim of replayClaims) {
+            claim.release({ error });
+          }
         } else {
-          await commitDiscordInboundReplay({ replayKeys, replayGuard });
+          await Promise.all(replayClaims.map((claim) => claim.commit()));
         }
         throw error;
       }
@@ -245,12 +244,8 @@ export function createDiscordMessageHandler(
         accountId: params.accountId,
         data,
       });
-      if (
-        !(await claimDiscordInboundReplay({
-          replayKey,
-          replayGuard,
-        }))
-      ) {
+      const replayClaim = await replayGuard.claim(replayKey);
+      if (replayClaim.kind !== "claimed" && replayClaim.kind !== "invalid") {
         return;
       }
 
@@ -258,7 +253,7 @@ export function createDiscordMessageHandler(
         data,
         client,
         abortSignal: options?.abortSignal,
-        replayKey: replayKey ?? undefined,
+        ...(replayClaim.kind === "claimed" ? { replayClaim: replayClaim.handle } : {}),
       });
     } catch (err) {
       params.runtime.error(danger(`handler failed: ${String(err)}`));

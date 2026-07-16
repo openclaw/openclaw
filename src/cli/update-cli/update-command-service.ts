@@ -11,7 +11,6 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveGatewayPort } from "../../config/config.js";
@@ -880,7 +879,6 @@ export function resolvePostInstallDoctorEnv(params?: {
 }): NodeJS.ProcessEnv {
   const resolvedEnv: NodeJS.ProcessEnv = {
     ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
-    [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
   };
   if (!params?.serviceEnv) {
     return resolvedEnv;
@@ -1436,7 +1434,6 @@ export async function maybeRestartService(params: {
             process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
-            crossStateDirImports: false,
           });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));

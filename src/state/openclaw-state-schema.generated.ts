@@ -495,6 +495,34 @@ CREATE TABLE IF NOT EXISTS workspace_setup_state (
 CREATE INDEX IF NOT EXISTS idx_workspace_setup_state_path
   ON workspace_setup_state(workspace_path);
 
+CREATE TABLE IF NOT EXISTS workspace_path_aliases (
+  alias_key TEXT NOT NULL PRIMARY KEY,
+  alias_path TEXT NOT NULL,
+  workspace_key TEXT NOT NULL,
+  workspace_path TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_workspace_path_aliases_workspace
+  ON workspace_path_aliases(workspace_key);
+
+CREATE TABLE IF NOT EXISTS workspace_attestations (
+  workspace_key TEXT NOT NULL PRIMARY KEY,
+  attested_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_workspace_attestations_attested
+  ON workspace_attestations(attested_at_ms DESC, workspace_key);
+
+CREATE TABLE IF NOT EXISTS workspace_generated_bootstrap_hashes (
+  workspace_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (workspace_key, filename),
+  FOREIGN KEY (workspace_key) REFERENCES workspace_attestations(workspace_key) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (
   relay_id TEXT NOT NULL PRIMARY KEY,
   pid INTEGER NOT NULL,
@@ -1541,6 +1569,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
   owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
   owner_id TEXT,
   snapshot_ref TEXT,
+  provisioned_paths_json TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER
@@ -1551,6 +1580,14 @@ CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
   ON worktrees(removed_at);
+
+CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
+  worktree_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+  data BLOB NOT NULL,
+  PRIMARY KEY (worktree_id, path, chunk_index)
+) STRICT;
 
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only

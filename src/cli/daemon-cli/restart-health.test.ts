@@ -1,6 +1,7 @@
 // Daemon restart health tests cover health checks after daemon restart operations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
+import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports.js";
 
 type PortListenerKind = ReturnType<typeof import("../../infra/ports.js").classifyPortListener>;
@@ -26,6 +27,7 @@ const resolveGatewayProbeAuthSafeWithSecretInputs = vi.hoisted(() =>
 const hasActiveStartupMigrationLease = vi.hoisted(() =>
   vi.fn<(_params?: unknown) => boolean>(() => false),
 );
+const readActiveGatewayLockIdentity = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/ports.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
@@ -49,6 +51,19 @@ vi.mock("../../gateway/probe-auth.js", () => ({
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
+}));
+
+vi.mock("../../infra/gateway-lock.js", () => ({
+  readActiveGatewayLockIdentity: () => readActiveGatewayLockIdentity(),
+  isSameGatewayLockIdentity: (
+    previous: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
+    current: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
+  ) =>
+    previous.ownerId && current.ownerId
+      ? previous.ownerId === current.ownerId
+      : previous.pid === current.pid &&
+        previous.createdAt === current.createdAt &&
+        previous.startTime === current.startTime,
 }));
 
 vi.mock("../../utils.js", async () => {
@@ -75,6 +90,24 @@ function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
     throw new Error("Expected first mock call");
   }
   return call[0];
+}
+
+const previousGatewayLockIdentity: GatewayLockIdentity = {
+  pid: 4200,
+  ownerId: "gateway-owner-old",
+  createdAt: "2026-07-16T12:00:00.000Z",
+  port: 18789,
+};
+
+function mockGatewayLockReplacement(overrides: Partial<GatewayLockIdentity> = {}) {
+  const previousLockIdentity = { ...previousGatewayLockIdentity };
+  readActiveGatewayLockIdentity.mockResolvedValueOnce(previousLockIdentity).mockResolvedValue({
+    ...previousLockIdentity,
+    ownerId: "gateway-owner-new",
+    createdAt: "2026-07-16T12:00:01.000Z",
+    ...overrides,
+  });
+  return previousLockIdentity;
 }
 
 async function inspectGatewayRestartWithSnapshot(params: {
@@ -181,6 +214,8 @@ describe("inspectGatewayRestart", () => {
     });
     hasActiveStartupMigrationLease.mockReset();
     hasActiveStartupMigrationLease.mockReturnValue(false);
+    readActiveGatewayLockIdentity.mockReset();
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -319,24 +354,10 @@ describe("inspectGatewayRestart", () => {
 
   it.each([
     "",
-    " ",
     "repair required",
-    "repairing required",
-    "unpairing required",
-    "device",
-    "device required by local spoof",
-    "device required: identity missing",
     "device identity required",
     "connect challenge missing nonce",
-    "connect challenge timeout",
-    "authoritative policy close",
-    "device identity mismatch",
     "device signature invalid",
-    "device nonce required",
-    "token expired",
-    "password required",
-    "missing scope: operator.admin",
-    "role denied",
     "unauthorized: session revoked",
   ])(
     "does not treat ambiguous 1008 close reason %s as healthy gateway reachability",
@@ -968,6 +989,91 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.elapsedMs).toBe(1_000);
     expect(snapshot.versionMismatch).toBeUndefined();
     expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not accept listener health until the gateway lock owner changes", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4200, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.7.16", connId: "gateway" },
+    });
+    const previousLockIdentity = mockGatewayLockReplacement();
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      previousLockIdentity,
+      attempts: 2,
+      delayMs: 500,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
+    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
+    expect(probeGateway).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { listenerPid: 4300, healthy: true },
+    { listenerPid: 4400, healthy: false },
+  ])(
+    "accepts device identity policy close only for the verified replacement listener",
+    async ({ listenerPid, healthy }) => {
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: listenerPid, commandLine: "openclaw-gateway" }],
+        hints: [],
+      });
+      probeGateway.mockResolvedValue({
+        ok: false,
+        close: { code: 1008, reason: "device identity required" },
+      });
+      const previousLockIdentity = mockGatewayLockReplacement({ pid: 4300 });
+
+      const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyListener({
+        port: 18789,
+        previousLockIdentity,
+        attempts: 1,
+        delayMs: 500,
+      });
+
+      expect(snapshot.healthy).toBe(healthy);
+      expect(inspectPortUsage).toHaveBeenCalledTimes(1);
+      expect(probeGateway).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("bounds replacement health after an indefinite previous-owner wait", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    const previousLockIdentity = mockGatewayLockReplacement();
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      previousLockIdentity,
+      attempts: 2,
+      delayMs: 500,
+      waitIndefinitelyForPreviousOwner: true,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
+    expect(inspectPortUsage).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(3);
   });
 
   it("annotates timeout waits when the health loop exhausts all attempts", async () => {

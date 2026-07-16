@@ -167,6 +167,7 @@ class AppSidebar extends AppSidebarSessionListElement {
           <div class="sidebar-shell__footer">
             <openclaw-sidebar-attention
               .onNavigate=${(routeId: NavigationRouteId) => this.onNavigate?.(routeId)}
+              .onOpenApprovals=${() => this.onOpenApprovals?.()}
             ></openclaw-sidebar-attention>
             <openclaw-sidebar-update-card
               .updateAvailable=${this.updateAvailable}

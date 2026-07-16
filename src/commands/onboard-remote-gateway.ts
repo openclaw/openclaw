@@ -244,6 +244,7 @@ export async function runRemoteGatewayInferenceOnboarding(
   await runGuidedOnboarding({}, runtime, {
     detect,
     activate,
+    runSetupMemoryImportStep: async () => {},
     ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
     runSystemAgentChat: async () => {
       const prompter = await (deps.createPrompter?.() ??

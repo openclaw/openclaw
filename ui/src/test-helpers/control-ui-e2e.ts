@@ -61,6 +61,7 @@ export type ControlUiMockGatewayScenario = {
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
+  /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
   models?: Array<{
     id: string;
@@ -305,6 +306,9 @@ function installControlUiMockGateway(input: {
   type BrowserMethodResponseCases = {
     cases?: BrowserMethodResponseCase[];
   };
+  type BrowserMethodResponseSequence = {
+    sequence?: unknown[];
+  };
   type DeferredResponse = {
     id: string;
     method: string;
@@ -352,6 +356,7 @@ function installControlUiMockGateway(input: {
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
+  const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const sockets: Array<{ readonly url: string }> = [];
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
@@ -520,6 +525,14 @@ function installControlUiMockGateway(input: {
     return Array.isArray(maybeCases) ? maybeCases : null;
   }
 
+  function responseSequence(value: unknown): unknown[] | null {
+    if (!isRecord(value)) {
+      return null;
+    }
+    const maybeSequence = (value as BrowserMethodResponseSequence).sequence;
+    return Array.isArray(maybeSequence) ? maybeSequence : null;
+  }
+
   function configuredResponse(
     method: string,
     params: unknown,
@@ -528,6 +541,16 @@ function installControlUiMockGateway(input: {
       return { found: false };
     }
     const configured = scenario.methodResponses[method];
+    const sequence = responseSequence(configured);
+    if (sequence) {
+      if (sequence.length === 0) {
+        return { found: false };
+      }
+      const index = methodResponseSequenceIndexes.get(method) ?? 0;
+      methodResponseSequenceIndexes.set(method, index + 1);
+      // Keep the final response stable so harmless UI retries remain deterministic.
+      return { found: true, value: sequence[Math.min(index, sequence.length - 1)] };
+    }
     const cases = responseCases(configured);
     if (!cases) {
       return { found: true, value: configured };
@@ -1072,6 +1095,7 @@ function installControlUiMockGateway(input: {
     },
     setMethodResponse(method, payload) {
       scenario.methodResponses[method] = payload;
+      methodResponseSequenceIndexes.delete(method);
       methodResponseOverrides[method] = payload;
       try {
         window.sessionStorage.setItem(

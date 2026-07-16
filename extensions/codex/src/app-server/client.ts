@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
@@ -1002,7 +1002,7 @@ function redactCodexAppServerLinePreview(value: string): string {
 
 function appendBoundedTail(current: string, next: string, maxLength: number): string {
   const combined = `${current}${next}`;
-  return combined.length > maxLength ? combined.slice(combined.length - maxLength) : combined;
+  return combined.length > maxLength ? sliceUtf16Safe(combined, -maxLength) : combined;
 }
 
 function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail: string): Error {
