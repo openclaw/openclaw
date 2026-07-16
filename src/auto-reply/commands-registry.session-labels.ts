@@ -3,6 +3,7 @@ import type {
   CommandCategory,
   CommandTier,
 } from "./commands-registry.types.js";
+import { buildMarkCommand } from "../../extensions/mark/command-definition.js";
 
 type DefineChatCommandInput = {
   key: string;
@@ -39,31 +40,6 @@ export function buildSessionLabelCommands(
         },
       ],
     }),
-    defineChatCommand({
-      key: "mark",
-      nativeName: "mark",
-      description: "Mark the current session with a preset symbol.",
-      textAlias: "/mark",
-      acceptsArgs: true,
-      category: "session",
-      tier: "standard",
-      args: [
-        {
-          name: "mark",
-          description: "Choose a mark or clear it",
-          type: "string",
-          choices: [
-            { value: "in-progress", label: "🚧 In progress" },
-            { value: "completed", label: "✅ Completed" },
-            { value: "paused", label: "⏸️ Paused" },
-            { value: "urgent", label: "🔥 Urgent" },
-            { value: "keep", label: "📌 Keep" },
-            { value: "idea", label: "💡 Idea" },
-            { value: "clear", label: "Clear mark" },
-          ],
-        },
-      ],
-      argsMenu: "auto",
-    }),
+    buildMarkCommand(defineChatCommand),
   ];
 }

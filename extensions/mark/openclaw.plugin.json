@@ -1,0 +1,13 @@
+{
+  "id": "mark",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Session Mark",
+  "description": "Mark sessions with preset symbols (🚧 ✅ ⏸️ 🔥 📌 💡) via the /mark slash command with sub-menu.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
