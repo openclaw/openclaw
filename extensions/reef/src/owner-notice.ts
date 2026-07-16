@@ -5,14 +5,14 @@ type ResolveAgentRouteParams = Parameters<
   PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
 >[0];
 
-export interface ReefOwnerNotice {
+interface ReefOwnerNotice {
   text: string;
   contextKey: string;
   peer?: string;
   wakeAgent?: boolean;
 }
 
-export interface ReefRejectionNotice {
+interface ReefRejectionNotice {
   text: string;
   peer: string;
   messageId: string;
@@ -30,7 +30,7 @@ interface ReefReceiptNotifierOptions {
   onError?: (error: unknown, receiptId: string) => void;
 }
 
-export interface ReefRejectionNoticeStore {
+interface ReefRejectionNoticeStore {
   loadState(peer: string): ReefRejectionNoticeState | undefined;
   reserve(
     rejection: ReefDeliveryRejection,

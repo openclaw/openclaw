@@ -5,8 +5,6 @@ import {
   createReefOwnerNoticeHandler,
   processReefInboxEntriesInOrder,
   ReefReceiptNotifier,
-  type ReefRejectionNotice,
-  type ReefRejectionNoticeStore,
 } from "./owner-notice.js";
 import type { InboxEntry, ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
@@ -20,7 +18,7 @@ function rejection(peer: string, id: string, category = "guard_deny"): ReefDeliv
   return { peer, id, recipient, category };
 }
 
-async function consumeNotice(_notice: ReefRejectionNotice): Promise<void> {}
+async function consumeNotice(): Promise<void> {}
 
 function createNoticeStore() {
   const records = new Map<
@@ -28,7 +26,7 @@ function createNoticeStore() {
     { peer: string; phase: "reserved" | "consumed"; state: ReefRejectionNoticeState }
   >();
   const key = (value: ReefDeliveryRejection) => `${value.peer}:${value.id}`;
-  const store: ReefRejectionNoticeStore = {
+  const store: ConstructorParameters<typeof ReefReceiptNotifier>[1] = {
     loadState: (peer) => {
       let latest: ReefRejectionNoticeState | undefined;
       for (const record of records.values()) {

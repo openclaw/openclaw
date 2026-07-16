@@ -56,7 +56,7 @@ const ReefPeerStateSchema = z
   .strict();
 
 type ReefPeerStateSnapshot = z.infer<typeof ReefPeerStateSchema>;
-export type ReefOutboundDeliveryBinding = z.infer<typeof ReefOutboundDeliveryBindingSchema>;
+type ReefOutboundDeliveryBinding = z.infer<typeof ReefOutboundDeliveryBindingSchema>;
 type ReefOutboundDelivery = z.infer<typeof ReefOutboundDeliverySchema>;
 
 type ReefTrustStores = {
