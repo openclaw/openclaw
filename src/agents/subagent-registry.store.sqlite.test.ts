@@ -88,8 +88,9 @@ describe("subagent registry sqlite store", () => {
         terminalOwner: "interrupted-recovery",
         completion: { required: true, resultText: null, capturedAt: 250 },
         requesterSettleWake: {
-          status: "pending",
+          status: "dispatching",
           attemptCount: 1,
+          replayCount: 1,
           nextAttemptAt: 30_000,
           batchRunIds: ["run-one", "run-two"],
           lastError: "provider timeout",

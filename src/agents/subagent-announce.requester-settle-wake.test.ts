@@ -272,6 +272,29 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(message).toContain("charlie findings");
   });
 
+  it("keeps capacity-queued siblings in the same spawned wave", async () => {
+    const first = makeSettledChild({
+      runId: "run-first",
+      createdAt: 1_000,
+      startedAt: 1_000,
+      endedAt: 2_000,
+    });
+    const queued = makeSettledChild({
+      runId: "run-queued",
+      createdAt: 1_500,
+      startedAt: 3_000,
+      endedAt: 4_000,
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([first, queued]);
+
+    expect(
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: queued })),
+    ).toBe(true);
+    expect(deliveredCallArg().directIdempotencyKey).toBe(
+      `announce:requester-settle:${REQUESTER}:run-first,run-queued`,
+    );
+  });
+
   it("ignores long-settled children from earlier non-overlapping spawns", async () => {
     // A one-off completion after an old fan-out must not re-wake the requester
     // about the historical batch: the old children ended before this one began.
@@ -408,6 +431,65 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     }
   });
 
+  it("replays an ambiguous transport failure with the same idempotency key", async () => {
+    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    deliverSpy.mockRejectedValueOnce(new Error("connection lost after admission"));
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const wakePromise = maybeWakeRequesterAfterAllChildrenSettled(
+        wakeParams({ settledEntry: children[1] }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(children[0].requesterSettleWake).toMatchObject({
+        status: "dispatching",
+        attemptCount: 1,
+        replayCount: 1,
+        nextAttemptAt: 30_000,
+        lastError: "connection lost after admission",
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await wakePromise).toBe(true);
+      expect(deliverSpy).toHaveBeenCalledTimes(2);
+      expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
+        `announce:requester-settle:${REQUESTER}:run-a,run-b`,
+        `announce:requester-settle:${REQUESTER}:run-a,run-b`,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers a retry when the requester spawned another active descendant", async () => {
+    const children = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    registryRuntimeMock.hasDescendantRunAwaitingSettle
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    deliverSpy.mockResolvedValueOnce({ delivered: false, path: "direct" });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const wakePromise = maybeWakeRequesterAfterAllChildrenSettled(
+        wakeParams({ settledEntry: children[1] }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(deliverSpy).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await wakePromise).toBe(false);
+      expect(deliverSpy).toHaveBeenCalledTimes(1);
+      expect(children[0].requesterSettleWake?.status).toBe("pending");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gives up after bounded retries when the wake keeps failing", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-a" }),
@@ -512,6 +594,42 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(deliveredCallArg().directIdempotencyKey).toBe(
         `announce:requester-settle:${REQUESTER}:run-a,run-b`,
       );
+    });
+
+    it("defers a frozen batch replay until a newer descendant settles", async () => {
+      const state = {
+        status: "dispatching" as const,
+        attemptCount: 1,
+        batchRunIds: ["run-a", "run-b"],
+      };
+      const children = [
+        makeSettledChild({ runId: "run-a", requesterSettleWake: { ...state } }),
+        makeSettledChild({ runId: "run-b", requesterSettleWake: { ...state } }),
+        makeSettledChild({
+          runId: "run-new",
+          endedAt: undefined,
+          requesterSettleWake: undefined,
+        }),
+      ];
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+      registryRuntimeMock.hasDescendantRunAwaitingSettle.mockReturnValue(true);
+
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      try {
+        expect(
+          await maybeWakeRequesterAfterAllChildrenSettled(
+            wakeParams({ settledEntry: children[0] }),
+          ),
+        ).toBe(false);
+        expect(deliverSpy).not.toHaveBeenCalled();
+        expect(children[0].requesterSettleWake).toMatchObject({
+          ...state,
+          nextAttemptAt: 30_000,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("coalesces concurrent row restores for one persisted batch", async () => {

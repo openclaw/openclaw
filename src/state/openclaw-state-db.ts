@@ -1544,6 +1544,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "task_name TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_status TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_attempt_count INTEGER");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_replay_count INTEGER");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_next_attempt_at INTEGER");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_batch_run_ids_json TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_last_error TEXT");

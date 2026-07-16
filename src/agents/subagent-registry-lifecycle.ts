@@ -204,6 +204,7 @@ export function createSubagentRegistryLifecycleController(params: {
 }) {
   const scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
   const scheduledRequesterSettleWakeRuns = new Set<string>();
+  const scheduledRequesterSettleWakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const terminalCompletionLocks = new Map<string, Promise<void>>();
   const terminalGenerations = new WeakMap<SubagentRunRecord, number>();
   const cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
@@ -280,6 +281,10 @@ export function createSubagentRegistryLifecycleController(params: {
       clearTimeout(timer);
     }
     scheduledResumeTimers.clear();
+    for (const timer of scheduledRequesterSettleWakeTimers.values()) {
+      clearTimeout(timer);
+    }
+    scheduledRequesterSettleWakeTimers.clear();
   };
 
   const runDetachedCleanupAttempt = (args: {
@@ -815,6 +820,11 @@ export function createSubagentRegistryLifecycleController(params: {
       throw error;
     }
     for (const [runId, entry] of entries) {
+      const retryTimer = scheduledRequesterSettleWakeTimers.get(runId);
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        scheduledRequesterSettleWakeTimers.delete(runId);
+      }
       if (entry.requesterSettleWake === undefined || !params.runs.has(runId)) {
         params.resumedRuns.delete(runId);
         params.clearPendingLifecycleError(runId);
@@ -835,6 +845,7 @@ export function createSubagentRegistryLifecycleController(params: {
     entry.requesterSettleWake = {
       status: existing?.status ?? "pending",
       attemptCount: existing?.attemptCount ?? 0,
+      ...(existing?.replayCount !== undefined ? { replayCount: existing.replayCount } : {}),
       ...(existing?.nextAttemptAt !== undefined ? { nextAttemptAt: existing.nextAttemptAt } : {}),
       ...(existing?.batchRunIds ? { batchRunIds: [...existing.batchRunIds] } : {}),
       ...(existing?.lastError !== undefined ? { lastError: existing.lastError } : {}),
@@ -870,9 +881,40 @@ export function createSubagentRegistryLifecycleController(params: {
   // cleanup parent reserves the root synchronously, so restart or suspend
   // cannot reach quiescence between scheduling and the wake's gateway turn.
   // Failures are logged only.
+  function scheduleRequesterSettleWakeRetry(runId: string, entry: SubagentRunRecord): void {
+    const nextAttemptAt = entry.requesterSettleWake?.nextAttemptAt;
+    if (
+      nextAttemptAt === undefined ||
+      nextAttemptAt <= Date.now() ||
+      scheduledRequesterSettleWakeTimers.has(runId)
+    ) {
+      return;
+    }
+    const timer = setTimeout(
+      () => {
+        scheduledRequesterSettleWakeTimers.delete(runId);
+        const current = params.runs.get(runId);
+        if (current === entry && current.requesterSettleWake) {
+          scheduleRequesterSettleWake(runId, current);
+        }
+      },
+      Math.max(0, nextAttemptAt - Date.now()),
+    );
+    timer.unref?.();
+    scheduledRequesterSettleWakeTimers.set(runId, timer);
+  }
+
   function scheduleRequesterSettleWake(runId: string, entry: SubagentRunRecord): void {
     const requesterSessionKey = entry.requesterSessionKey?.trim();
-    if (!requesterSessionKey || scheduledRequesterSettleWakeRuns.has(runId)) {
+    if (
+      !requesterSessionKey ||
+      scheduledRequesterSettleWakeRuns.has(runId) ||
+      scheduledRequesterSettleWakeTimers.has(runId)
+    ) {
+      return;
+    }
+    if ((entry.requesterSettleWake?.nextAttemptAt ?? 0) > Date.now()) {
+      scheduleRequesterSettleWakeRetry(runId, entry);
       return;
     }
     scheduledRequesterSettleWakeRuns.add(runId);
@@ -894,6 +936,10 @@ export function createSubagentRegistryLifecycleController(params: {
       })
       .finally(() => {
         scheduledRequesterSettleWakeRuns.delete(runId);
+        const current = params.runs.get(runId);
+        if (current === entry && current.requesterSettleWake) {
+          scheduleRequesterSettleWakeRetry(runId, current);
+        }
       });
   }
 
@@ -1161,18 +1207,21 @@ export function createSubagentRegistryLifecycleController(params: {
         });
       });
     }
+    if (cleanupParams.provisionalKill) {
+      // The provider result or bounded kill reconciliation owns terminal settle.
+      // Waking here could tell the requester to finalize while the child still runs.
+      return;
+    }
     if (cleanupParams.cleanup === "delete") {
       params.clearPendingLifecycleError(cleanupParams.runId);
-      if (!cleanupParams.provisionalKill) {
-        runCleanupTail("context-engine cleanup", async () => {
-          await params.notifyContextEngineSubagentEnded({
-            childSessionKey: cleanupParams.entry.childSessionKey,
-            reason: "deleted",
-            agentDir: cleanupParams.entry.agentDir,
-            workspaceDir: cleanupParams.entry.workspaceDir,
-          });
+      runCleanupTail("context-engine cleanup", async () => {
+        await params.notifyContextEngineSubagentEnded({
+          childSessionKey: cleanupParams.entry.childSessionKey,
+          reason: "deleted",
+          agentDir: cleanupParams.entry.agentDir,
+          workspaceDir: cleanupParams.entry.workspaceDir,
         });
-      }
+      });
       if (cleanupParams.skipRequesterSettleWake) {
         params.runs.delete(cleanupParams.runId);
         params.persist();
@@ -1187,16 +1236,14 @@ export function createSubagentRegistryLifecycleController(params: {
       scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry);
       return;
     }
-    if (!cleanupParams.provisionalKill) {
-      runCleanupTail("context-engine cleanup", async () => {
-        await params.notifyContextEngineSubagentEnded({
-          childSessionKey: cleanupParams.entry.childSessionKey,
-          reason: "completed",
-          agentDir: cleanupParams.entry.agentDir,
-          workspaceDir: cleanupParams.entry.workspaceDir,
-        });
+    runCleanupTail("context-engine cleanup", async () => {
+      await params.notifyContextEngineSubagentEnded({
+        childSessionKey: cleanupParams.entry.childSessionKey,
+        reason: "completed",
+        agentDir: cleanupParams.entry.agentDir,
+        workspaceDir: cleanupParams.entry.workspaceDir,
       });
-    }
+    });
     if (
       cleanupParams.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       cleanupParams.entry.suppressAnnounceReason !== "killed"
@@ -1220,12 +1267,10 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (!cleanupParams.skipRequesterSettleWake) {
       persistRequesterSettleWakePending(cleanupParams.entry, {
-        cleanupCompletedAt: cleanupParams.provisionalKill ? undefined : cleanupParams.completedAt,
+        cleanupCompletedAt: cleanupParams.completedAt,
       });
     } else {
-      if (!cleanupParams.provisionalKill) {
-        cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
-      }
+      cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
       params.persist();
     }
     retryDeferredCompletedAnnounces(cleanupParams.runId);

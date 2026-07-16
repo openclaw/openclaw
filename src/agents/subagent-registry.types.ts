@@ -90,6 +90,8 @@ export type RequesterSettleWakeState = {
   status: "pending" | "dispatching";
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
+  /** Ambiguous transport replays made with the current idempotency key. */
+  replayCount?: number;
   /** Persisted retry deadline; restore waits until this instant. */
   nextAttemptAt?: number;
   /** Frozen wave membership once the first delivery attempt is admitted. */

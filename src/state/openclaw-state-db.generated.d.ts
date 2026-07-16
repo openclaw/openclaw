@@ -990,6 +990,7 @@ export interface SubagentRuns {
   requester_settle_wake_batch_run_ids_json: string | null;
   requester_settle_wake_last_error: string | null;
   requester_settle_wake_next_attempt_at: number | null;
+  requester_settle_wake_replay_count: number | null;
   requester_settle_wake_retire_after: number | null;
   requester_settle_wake_status: string | null;
   run_id: string;

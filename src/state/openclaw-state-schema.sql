@@ -1404,6 +1404,7 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   wake_on_descendant_settle INTEGER,
   requester_settle_wake_status TEXT,
   requester_settle_wake_attempt_count INTEGER,
+  requester_settle_wake_replay_count INTEGER,
   requester_settle_wake_next_attempt_at INTEGER,
   requester_settle_wake_batch_run_ids_json TEXT,
   requester_settle_wake_last_error TEXT,

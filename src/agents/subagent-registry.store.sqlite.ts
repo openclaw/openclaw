@@ -130,6 +130,11 @@ function createRequesterSettleWakeFromTypedColumns(
     status,
     attemptCount:
       normalizeFiniteNumber(row.requester_settle_wake_attempt_count) ?? fallback?.attemptCount ?? 0,
+    ...(normalizeFiniteNumber(row.requester_settle_wake_replay_count) !== undefined
+      ? { replayCount: row.requester_settle_wake_replay_count ?? undefined }
+      : fallback?.replayCount !== undefined
+        ? { replayCount: fallback.replayCount }
+        : {}),
     ...(normalizeFiniteNumber(row.requester_settle_wake_next_attempt_at) !== undefined
       ? { nextAttemptAt: row.requester_settle_wake_next_attempt_at ?? undefined }
       : fallback?.nextAttemptAt !== undefined
@@ -277,6 +282,7 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     wake_on_descendant_settle: boolToSqlite(normalized.wakeOnDescendantSettle),
     requester_settle_wake_status: requesterSettleWake?.status ?? null,
     requester_settle_wake_attempt_count: requesterSettleWake?.attemptCount ?? null,
+    requester_settle_wake_replay_count: requesterSettleWake?.replayCount ?? null,
     requester_settle_wake_next_attempt_at: requesterSettleWake?.nextAttemptAt ?? null,
     requester_settle_wake_batch_run_ids_json: jsonStringify(requesterSettleWake?.batchRunIds),
     requester_settle_wake_last_error: requesterSettleWake?.lastError ?? null,

@@ -3617,6 +3617,125 @@ describe("requester settle wake trigger", () => {
     expect(settleWake).not.toHaveBeenCalled();
   });
 
+  it("does not settle or schedule a provisional kill", () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      killReconciliation: { killedAt: 4_000 },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+      provisionalKill: true,
+    });
+
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(settleWake).not.toHaveBeenCalled();
+  });
+
+  it("re-arms a deferred frozen batch at its persisted retry deadline", async () => {
+    const entry = createRunEntry({ endedAt: 4_000 });
+    let invocation = 0;
+    const settleWake = vi.fn(
+      async (
+        params: Parameters<
+          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+        >[0],
+      ) => {
+        invocation += 1;
+        if (invocation === 1) {
+          params.transitionBatch([entry.runId], {
+            status: "pending",
+            attemptCount: 0,
+            nextAttemptAt: 30_000,
+            batchRunIds: [entry.runId],
+          });
+        } else {
+          params.completeBatch([entry.runId]);
+        }
+        return false;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      controller.completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: "keep",
+        completedAt: 5_000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settleWake).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(settleWake).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settleWake).toHaveBeenCalledTimes(2);
+      expect(entry.requesterSettleWake).toBeUndefined();
+    } finally {
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-arm coalesced batch rows whose retry deadline already passed", async () => {
+    const state = {
+      status: "pending" as const,
+      attemptCount: 1,
+      nextAttemptAt: 5_000,
+      batchRunIds: ["run-a", "run-b"],
+    };
+    const first = createRunEntry({
+      runId: "run-a",
+      endedAt: 4_000,
+      requesterSettleWake: { ...state },
+    });
+    const second = createRunEntry({
+      runId: "run-b",
+      endedAt: 4_000,
+      requesterSettleWake: { ...state },
+    });
+    const runs = new Map([
+      [first.runId, first],
+      [second.runId, second],
+    ]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry: first,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    try {
+      controller.resumeRequesterSettleWake(first.runId, first);
+      controller.resumeRequesterSettleWake(second.runId, second);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(settleWake).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("fires the settle wake when an announce give-up suspends the delivery", async () => {
     // Suspension leaves cleanup incomplete and nothing retries it, so it is
     // the child's terminal settle for requester-drain purposes.
