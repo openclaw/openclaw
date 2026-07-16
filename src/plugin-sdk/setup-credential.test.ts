@@ -28,7 +28,7 @@ function patchDemoConfig(params: {
 }
 
 describe("defineTokenCredential", () => {
-  const credential = defineTokenCredential({
+  const definition = defineTokenCredential({
     inputKey: "token",
     configKey: "token",
     configuredFields: ["token", "tokenFile"],
@@ -47,7 +47,7 @@ describe("defineTokenCredential", () => {
 
   it("inspects configured fields and resolved/env values", () => {
     expect(
-      credential.inspect({
+      definition.inspect({
         cfg: { channels: { demo: { tokenFile: "/tmp/token" } } } as OpenClawConfig,
         accountId: "default",
       }),
@@ -63,17 +63,17 @@ describe("defineTokenCredential", () => {
     const cfg = {
       channels: { demo: { token: "old", tokenFile: "/tmp/token", baseUrl: "https://demo" } },
     } as OpenClawConfig;
-    const envConfig = await credential.applyUseEnv?.({ cfg, accountId: "default" });
+    const envConfig = await definition.applyUseEnv?.({ cfg, accountId: "default" });
     expect(envConfig?.channels?.demo).toEqual({ baseUrl: "https://demo" });
 
-    const setConfig = await credential.applySet?.({
+    const setConfig = await definition.applySet?.({
       cfg,
       accountId: "default",
       credentialValues: {},
       value: "raw",
-      resolvedValue: "resolved",
+      resolvedValue: "redacted",
     });
-    expect(setConfig?.channels?.demo).toEqual({ token: "resolved", baseUrl: "https://demo" });
+    expect(setConfig?.channels?.demo).toEqual({ token: "redacted", baseUrl: "https://demo" });
   });
 });
 
