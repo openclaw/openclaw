@@ -16,6 +16,7 @@ import {
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
+import { isLaunchctlNotLoaded } from "../daemon/launchd.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { readWindowsStartupFallbackRuntimeForUpdate } from "../daemon/schtasks.js";
@@ -108,8 +109,27 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
-const runLaunchctlQuietly = (args: string[]) =>
-  runExec("launchctl", args, { logOutput: false }).catch(() => undefined);
+const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
+type LaunchctlCleanupAttempt =
+  | { status: "succeeded"; stdout: string; stderr: string }
+  | { status: "failed"; stdout: string; stderr: string };
+
+const runLaunchctlQuietly = async (args: string[]): Promise<LaunchctlCleanupAttempt> => {
+  try {
+    const output = await runExec("launchctl", args, {
+      logOutput: false,
+      timeoutMs: DOCTOR_LAUNCHCTL_TIMEOUT_MS,
+    });
+    return { status: "succeeded", ...output };
+  } catch (error) {
+    const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+    return {
+      status: "failed",
+      stdout: typeof record.stdout === "string" ? record.stdout : "",
+      stderr: typeof record.stderr === "string" ? record.stderr : "",
+    };
+  }
+};
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
@@ -343,10 +363,21 @@ export function extraGatewayServiceToRepairEffects(
 async function cleanupLegacyLaunchdService(params: {
   label: string;
   plistPath: string;
-}): Promise<string | null> {
+}): Promise<{ status: "removed"; destination?: string } | { status: "failed"; reason: string }> {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
-  await runLaunchctlQuietly(["unload", params.plistPath]);
+  const bootout = await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
+  const unload = await runLaunchctlQuietly(["unload", params.plistPath]);
+
+  // A timeout only proves launchctl was killed. Keep the plist unless one command
+  // succeeded or launchctl explicitly confirmed that the job was already absent.
+  const confirmedUnloaded =
+    bootout.status === "succeeded" ||
+    unload.status === "succeeded" ||
+    isLaunchctlNotLoaded(bootout) ||
+    isLaunchctlNotLoaded(unload);
+  if (!confirmedUnloaded) {
+    return { status: "failed", reason: "launchctl could not confirm unload" };
+  }
 
   const trashDir = path.join(os.homedir(), ".Trash");
   try {
@@ -357,16 +388,19 @@ async function cleanupLegacyLaunchdService(params: {
 
   try {
     await fs.access(params.plistPath);
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: "removed" };
+    }
+    return { status: "failed", reason: "could not inspect plist" };
   }
 
   const dest = path.join(trashDir, `${params.label}-${Date.now()}.plist`);
   try {
     await fs.rename(params.plistPath, dest);
-    return dest;
+    return { status: "removed", destination: dest };
   } catch {
-    return null;
+    return { status: "failed", reason: "could not move plist" };
   }
 }
 
@@ -416,11 +450,15 @@ async function cleanupLegacyDarwinServices(
       failed.push(`${svc.label} (missing plist path)`);
       continue;
     }
-    const dest = await cleanupLegacyLaunchdService({
+    const result = await cleanupLegacyLaunchdService({
       label: svc.label,
       plistPath,
     });
-    removed.push(dest ? `${svc.label} -> ${dest}` : svc.label);
+    if (result.status === "removed") {
+      removed.push(result.destination ? `${svc.label} -> ${result.destination}` : svc.label);
+    } else {
+      failed.push(`${svc.label} (${result.reason})`);
+    }
   }
 
   return { removed, failed };
