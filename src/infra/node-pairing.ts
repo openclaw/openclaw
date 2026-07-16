@@ -559,6 +559,22 @@ export async function rejectNodePairing(
   });
 }
 
+/** Return the owning node id for a pending node pairing request, or null if none. */
+export async function getPendingNodePairing(
+  requestId: string,
+  baseDir?: string,
+): Promise<{ requestId: string; nodeId: string } | null> {
+  return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+    const device = Object.values(pairedByDeviceId).find(
+      (entry) => entry.pendingNodeSurface?.requestId === requestId,
+    );
+    if (!device?.pendingNodeSurface) {
+      return { value: null, persist: false };
+    }
+    return { value: { requestId, nodeId: device.deviceId }, persist: false };
+  });
+}
+
 /** Update runtime node-surface metadata (connect stamps, remote skill bins). */
 export async function updatePairedNodeMetadata(
   nodeId: string,

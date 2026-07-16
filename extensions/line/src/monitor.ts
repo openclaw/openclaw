@@ -32,7 +32,6 @@ import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
-  createImageMessage,
   createLocationMessage,
   createQuickReplyItems,
   createTextMessageWithQuickReplies,
@@ -232,7 +231,6 @@ export async function monitorLineProvider(
                       createTextMessageWithQuickReplies,
                       pushMessagesLine,
                       createFlexMessage,
-                      createImageMessage,
                       buildMediaMessage: buildLineMediaMessage,
                       createLocationMessage,
                       onReplyError: (replyErr) => {

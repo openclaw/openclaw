@@ -751,8 +751,32 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     writeFileSync(
       preloadPath,
       [
-        "const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);",
-        "AbortSignal.timeout = () => nativeTimeout(50);",
+        "const nativeFetch = globalThis.fetch;",
+        "let timeoutController;",
+        "let timeoutWatchdog;",
+        "AbortSignal.timeout = () => {",
+        "  timeoutController = new AbortController();",
+        "  timeoutWatchdog = setTimeout(() => process.exit(86), 5_000);",
+        "  timeoutWatchdog.unref();",
+        "  return timeoutController.signal;",
+        "};",
+        "globalThis.fetch = async (...args) => {",
+        "  const response = await nativeFetch(...args);",
+        "  let firstChunk = true;",
+        "  const body = response.body.pipeThrough(",
+        "    new TransformStream({",
+        "      transform(chunk, controller) {",
+        "        controller.enqueue(chunk);",
+        "        if (firstChunk) {",
+        "          firstChunk = false;",
+        "          clearTimeout(timeoutWatchdog);",
+        '          queueMicrotask(() => timeoutController.abort(new DOMException("timeout", "TimeoutError")));',
+        "        }",
+        "      },",
+        "    }),",
+        "  );",
+        "  return new Response(body, response);",
+        "};",
         "",
       ].join("\n"),
       "utf8",
@@ -761,7 +785,10 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
 
     const upstream = createServer((_request, response) => {
       upstreamHits += 1;
-      response.writeHead(200, { "content-type": "application/json" });
+      response.writeHead(200, {
+        "content-length": "1024",
+        "content-type": "application/json",
+      });
       response.write('{"partial":');
     });
     await new Promise<void>((resolve) => {
