@@ -6,6 +6,7 @@
  */
 
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { extractProviderErrorDetail } from "openclaw/plugin-sdk/provider-http";
 import {
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
@@ -41,6 +42,8 @@ const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const SCOPE = "openid profile email offline_access";
 const OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES = 1 * 1024 * 1024;
+/** Bounded read cap for failed OAuth token responses (#103578, #103567). */
+const OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
 type TokenFailure = { type: "failed"; message: string; status?: number };
@@ -180,16 +183,17 @@ async function postTokenForm(
     auditContext: "openai-chatgpt-oauth-token",
   });
   try {
-    const responseBody = await readResponseWithLimit(
-      response,
-      OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES,
-      {
-        onOverflow: ({ size, maxBytes }) =>
-          new Error(
-            `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
-          ),
-      },
-    );
+    // Bound error responses before buffering the full body so oversized
+    // provider error payloads cannot exhaust memory (#103578, #103567).
+    const readLimit = response.ok
+      ? OAUTH_TOKEN_RESPONSE_BODY_LIMIT_BYTES
+      : OAUTH_TOKEN_ERROR_BODY_LIMIT_BYTES;
+    const responseBody = await readResponseWithLimit(response, readLimit, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `OpenAI Codex OAuth token response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    });
     return new Response(new Uint8Array(responseBody), {
       status: response.status,
       statusText: response.statusText,
@@ -227,11 +231,11 @@ async function exchangeAuthorizationCode(
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    const detail = await extractProviderErrorDetail(response).catch(() => "");
     return {
       type: "failed",
       status: response.status,
-      message: `OpenAI Codex token exchange failed (${response.status}): ${text || response.statusText}`,
+      message: `OpenAI Codex token exchange failed (${response.status}): ${detail || response.statusText}`,
     };
   }
 
@@ -269,11 +273,11 @@ async function refreshAccessToken(
     );
 
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const detail = await extractProviderErrorDetail(response).catch(() => "");
       return {
         type: "failed",
         status: response.status,
-        message: `OpenAI Codex token refresh failed (${response.status}): ${text || response.statusText}`,
+        message: `OpenAI Codex token refresh failed (${response.status}): ${detail || response.statusText}`,
       };
     }
 

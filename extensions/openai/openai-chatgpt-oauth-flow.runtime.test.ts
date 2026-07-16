@@ -274,4 +274,105 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       await closeServer(server);
     }
   });
+
+  it("bounds non-ok token response bodies before buffering (#103578)", async () => {
+    const oversizedSuffix = "x".repeat(32 * 1024);
+    const body = `${JSON.stringify({ error: "invalid_grant" })}${oversizedSuffix}`;
+
+    const server = createServer((_req, res) => {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(body);
+    });
+    const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
+
+    try {
+      ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
+        const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
+          ...init,
+          signal,
+        });
+        return { response, release };
+      });
+
+      const result = await testing.refreshAccessToken("old-refresh-token", {
+        timeoutMs: 5000,
+      });
+
+      // The 32KB error body exceeds the 16KB bound applied in postTokenForm
+      // for non-ok responses.  readResponseWithLimit rejects it with an
+      // overflow error before buffering the full payload.
+      expect(result).toMatchObject({ type: "failed" });
+      const message = (result as { type: "failed"; message: string }).message;
+      expect(message).toContain("too large");
+      expect(message).toContain("32793");
+      expect(message).toContain("16384");
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("still reads non-ok bodies within the error limit", async () => {
+    const body = JSON.stringify({ error: "invalid_grant", error_description: "Bad token" });
+
+    const server = createServer((_req, res) => {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(body);
+    });
+    const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
+
+    try {
+      ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
+        const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
+          ...init,
+          signal,
+        });
+        return { response, release };
+      });
+
+      const result = await testing.refreshAccessToken("old-refresh-token", {
+        timeoutMs: 5000,
+      });
+
+      // Normal-sized error bodies are still read and surfaced.
+      expect(result).toMatchObject({ type: "failed" });
+      const message = (result as { type: "failed"; message: string }).message;
+      expect(message).toContain("invalid_grant");
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("still reads full ok response bodies up to the normal limit", async () => {
+    const body = JSON.stringify({ access_token: "tk", refresh_token: "rt", expires_in: 3600 });
+
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(body);
+    });
+    const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
+
+    try {
+      ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
+        const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
+          ...init,
+          signal,
+        });
+        return { response, release };
+      });
+
+      const result = await testing.refreshAccessToken("old-refresh-token", {
+        timeoutMs: 5000,
+      });
+
+      expect(result).toMatchObject({ type: "success" });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
