@@ -2746,8 +2746,18 @@ jobs:
           echo "checkout failed after 5 attempts" >&2
           exit 1
 
+      - name: Checkout CI Android toolchain action
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: .github/actions/setup-android-toolchain
+          persist-credentials: false
+
       - name: Setup Android toolchain
-        uses: ./.github/actions/setup-android-toolchain
+        # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
+        # workflow-owned as before. Load them from the workflow revision so old targets work.
+        uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android

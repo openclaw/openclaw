@@ -1488,16 +1488,20 @@ describe("ci workflow guards", () => {
     const action = readAndroidToolchainAction();
     const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
     const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
-    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
     const packageId = `platforms;android-${appCompileSdk}.0`;
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
-    for (const job of sdkJobs) {
-      const toolchainSteps = job.steps.filter(
+    expect(
+      workflow.jobs.android.steps.filter(
+        (step: WorkflowStep) =>
+          step.uses === "./.ci-workflow/.github/actions/setup-android-toolchain",
+      ),
+    ).toHaveLength(1);
+    expect(
+      releaseWorkflow.jobs.publish_signed_android_apk.steps.filter(
         (step: WorkflowStep) => step.uses === "./.github/actions/setup-android-toolchain",
-      );
-      expect(toolchainSteps).toHaveLength(1);
-    }
+      ),
+    ).toHaveLength(1);
 
     const cacheStep = expectDefined(
       action.runs.steps.find((step: WorkflowStep) => step.name === "Cache Android SDK"),
@@ -1523,6 +1527,26 @@ describe("ci workflow guards", () => {
     );
     expect(cacheStep.with?.key).toContain(`platform-${appCompileSdk}.0-`);
     expect(installStep.run).toContain(`"${packageId}"`);
+  });
+
+  it("loads Android CI setup from the workflow revision for frozen targets", () => {
+    const steps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const checkoutIndex = steps.findIndex((step) => step.name === "Checkout");
+    const actionCheckoutIndex = steps.findIndex(
+      (step) => step.name === "Checkout CI Android toolchain action",
+    );
+    const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
+    const actionCheckout = expectDefined(steps[actionCheckoutIndex], "Android action checkout");
+
+    expect(actionCheckout.uses).toBe(CHECKOUT_V6);
+    expect(actionCheckout.with).toMatchObject({
+      path: ".ci-workflow",
+      "persist-credentials": false,
+      ref: "${{ github.workflow_sha }}",
+      "sparse-checkout": ".github/actions/setup-android-toolchain",
+    });
+    expect(checkoutIndex).toBeLessThan(actionCheckoutIndex);
+    expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
   it("bounds Android SDK command-line tools downloads", () => {
