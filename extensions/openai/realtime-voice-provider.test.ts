@@ -1101,7 +1101,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
-  it("cancels a pending reconnect when the bridge closes", async () => {
+  it("cancels a pending reconnect and allows a later explicit connect", async () => {
     vi.useFakeTimers();
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
@@ -1133,6 +1133,21 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(onError).not.toHaveBeenCalled();
+
+    const reconnecting = bridge.connect();
+    const reconnectedSocket = FakeWebSocket.instances[1];
+    if (!reconnectedSocket) {
+      throw new Error("expected bridge to reconnect after close");
+    }
+    reconnectedSocket.readyState = FakeWebSocket.OPEN;
+    reconnectedSocket.emit("open");
+    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
+    bridge.close();
   });
 
   it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
