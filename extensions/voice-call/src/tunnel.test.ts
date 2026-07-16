@@ -1,7 +1,6 @@
 // Voice Call tests cover tunnel plugin behavior.
 import type { ChildProcessByStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
-import os from "node:os";
 import { PassThrough, type Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -100,12 +99,6 @@ function emitNgrokUrl(proc: FakeChildProcess, url: string): void {
   proc.stdout.write(`${JSON.stringify({ msg: "started tunnel", url })}\n`);
 }
 
-function writeUtf8Chunks(stream: PassThrough, text: string, firstBytes: number): void {
-  const bytes = Buffer.from(text, "utf8");
-  stream.write(bytes.subarray(0, firstBytes));
-  stream.write(bytes.subarray(firstBytes));
-}
-
 function midEmojiSplit(text: string): { bytes: Buffer; splitAt: number } {
   const bytes = Buffer.from(text, "utf8");
   const splitAt = bytes.indexOf(Buffer.from("😀", "utf8")) + 2;
@@ -119,7 +112,7 @@ function mockSpawnUtf8SplitChild(params: {
   text: string;
   splitAt: number;
   delayMs?: number;
-}): { getChild: () => RealPipeChild } {
+}): void {
   const delayMs = params.delayMs ?? 40;
   const script = [
     `const bytes=Buffer.from(${JSON.stringify(params.text)},"utf8");`,
@@ -128,37 +121,15 @@ function mockSpawnUtf8SplitChild(params: {
     `stream.write(bytes.subarray(0,split));`,
     `setTimeout(()=>stream.write(bytes.subarray(split),()=>{}),${delayMs});`,
   ].join("");
-  let child: RealPipeChild | undefined;
   mocks.spawn.mockImplementationOnce(() => {
     const spawnReal = mocks.realSpawn;
     if (!spawnReal) {
       throw new Error("expected real child_process.spawn from importOriginal");
     }
-    child = spawnReal(process.execPath, ["-e", script], {
+    return spawnReal(process.execPath, ["-e", script], {
       stdio: ["ignore", "pipe", "pipe"],
-    });
-    return child;
+    }) as RealPipeChild;
   });
-  return {
-    getChild: () => {
-      if (!child) {
-        throw new Error("expected spawn mock to return a child process");
-      }
-      return child;
-    },
-  };
-}
-
-function logUtf8LiveProof(params: {
-  stream: "stdout" | "stderr";
-  childPid: number | undefined;
-  elapsedMs: number;
-  ok: boolean;
-}): void {
-  // CI/Evidence scrapes this line as L3 whole-path proof (real pipes, not PassThrough).
-  console.log(
-    `[voice-call ngrok utf8 live proof] host=${os.hostname()} pid=${process.pid} child_pid=${params.childPid ?? "n/a"} stream=${params.stream} elapsed_ms=${params.elapsedMs} ok=${params.ok}`,
-  );
 }
 
 function commandResult(overrides: Record<string, unknown> = {}) {
@@ -280,66 +251,22 @@ describe("voice-call tunnels", () => {
     await expect(result).rejects.toThrow("ngrok error: xERR_NGROK_108: invalid tunnel config");
   });
 
-  it("preserves UTF-8 split across ngrok stderr chunks in ERR_NGROK text", async () => {
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
-    // Marker must not appear in the first decoded string, or startup rejects
-    // before the held UTF-8 continuation bytes arrive.
+  it("preserves UTF-8 across real child stderr pipe chunks", async () => {
     const message = "bad 😀 ERR_NGROK_3200: invalid token";
     const { splitAt } = midEmojiSplit(message);
-
-    writeUtf8Chunks(proc.stderr, message, splitAt);
-
-    await expect(result).rejects.toThrow(`ngrok error: ${message}`);
-  });
-
-  it("preserves UTF-8 split across ngrok stdout log chunks", async () => {
-    const proc = nextProcess();
-    const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
-    // Keep URL ASCII; embed a real multibyte code point so the chunk cut is
-    // inside UTF-8 (JSON.stringify would escape emoji to \\u sequences).
-    const line = '{"msg":"started tunnel","url":"https://utf8.ngrok.io","info":"😀"}\n';
-    const { splitAt } = midEmojiSplit(line);
-
-    expect(Buffer.from(line, "utf8")[splitAt]).toBe(0x98);
-    writeUtf8Chunks(proc.stdout, line, splitAt);
-
-    const tunnel = await result;
-    expect(tunnel.publicUrl).toBe("https://utf8.ngrok.io/voice/webhook");
-  });
-
-  it("L3: preserves UTF-8 across real child stderr pipe chunks", async () => {
-    const message = "bad 😀 ERR_NGROK_3200: invalid token";
-    const { splitAt } = midEmojiSplit(message);
-    const spawned = mockSpawnUtf8SplitChild({ stream: "stderr", text: message, splitAt });
-    const startedAt = Date.now();
+    mockSpawnUtf8SplitChild({ stream: "stderr", text: message, splitAt });
     const result = startNgrokTunnel({ port: 3334, path: "/hook" });
 
     await expect(result).rejects.toThrow(`ngrok error: ${message}`);
-    const child = spawned.getChild();
-    logUtf8LiveProof({
-      stream: "stderr",
-      childPid: child.pid ?? undefined,
-      elapsedMs: Date.now() - startedAt,
-      ok: true,
-    });
   });
 
-  it("L3: preserves UTF-8 across real child stdout pipe chunks", async () => {
+  it("preserves UTF-8 across real child stdout pipe chunks", async () => {
     const line = '{"msg":"started tunnel","url":"https://utf8.ngrok.io","info":"😀"}\n';
     const { splitAt } = midEmojiSplit(line);
-    const spawned = mockSpawnUtf8SplitChild({ stream: "stdout", text: line, splitAt });
-    const startedAt = Date.now();
+    mockSpawnUtf8SplitChild({ stream: "stdout", text: line, splitAt });
     const tunnel = await startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
-    const child = spawned.getChild();
 
     expect(tunnel.publicUrl).toBe("https://utf8.ngrok.io/voice/webhook");
-    logUtf8LiveProof({
-      stream: "stdout",
-      childPid: child.pid ?? undefined,
-      elapsedMs: Date.now() - startedAt,
-      ok: true,
-    });
     await tunnel.stop();
   });
 
