@@ -161,7 +161,7 @@ function readSqliteMessageRecordsSync(target: ResolvedTranscriptReadTarget): Sql
   );
 }
 
-export async function readSqliteMessageRecords(
+async function readSqliteMessageRecords(
   target: ResolvedTranscriptReadTarget,
 ): Promise<SqliteMessageRecord[]> {
   return extractMessageRecordsFromEventEntries(
@@ -211,7 +211,7 @@ function readRecentSqliteUsageMessages(
   return extractMessageRecordsFromEventEntries(page.events).map((record) => record.message);
 }
 
-export function sqliteRecordMessageWithSeq(record: {
+function sqliteRecordMessageWithSeq(record: {
   id?: string;
   message: unknown;
   recordTimestampMs?: number;

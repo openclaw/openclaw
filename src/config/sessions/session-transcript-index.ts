@@ -126,7 +126,7 @@ function extractTranscriptIndexEntry(
   };
 }
 
-export function readSessionTranscriptProjectionState(
+function readSessionTranscriptProjectionState(
   db: DatabaseSync,
   sessionId: string,
 ): SessionTranscriptProjectionState | undefined {
