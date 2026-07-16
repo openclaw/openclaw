@@ -42,15 +42,18 @@ final class ConnectionModeCoordinator {
                 GatewayProcessManager.shared.setActive(true)
                 await GatewayProcessManager.shared.waitForStartupAttempt()
                 guard self.applyGeneration == applyGeneration else { return }
+                var launchAgentInstalled = false
                 if GatewayAutostartPolicy.shouldEnsureLaunchAgent(
                     mode: .local,
                     paused: paused)
                 {
-                    await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
+                    launchAgentInstalled = await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
                 }
+                guard self.applyGeneration == applyGeneration else { return }
                 // Always finish the generation-aware health audit after persistence work. A newer
                 // inactive lifecycle makes this return false without touching its repair marker.
-                _ = await GatewayProcessManager.shared.waitForGatewayReady()
+                _ = await GatewayProcessManager.shared.waitForGatewayReady(
+                    launchAgentInstalled: launchAgentInstalled)
                 guard self.applyGeneration == applyGeneration else { return }
             } else {
                 GatewayProcessManager.shared.stop()
