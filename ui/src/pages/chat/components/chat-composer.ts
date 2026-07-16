@@ -1683,7 +1683,7 @@ function renderContextNotice(
         <summary
           class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
           aria-label=${summary}
-          title=${t("chat.composer.contextUsage.open")}
+          title=${`${summary}\n${t("chat.composer.contextUsage.open")}`}
         >
           <svg
             class="context-ring__dial"
