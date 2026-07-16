@@ -2025,6 +2025,24 @@ describe("openclaw state database", () => {
     );
   });
 
+  it("adds relay origins to existing APNs registration tables", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE apns_registrations DROP COLUMN relay_origin");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db.prepare("PRAGMA table_info(apns_registrations)").all() as Array<{
+      name?: unknown;
+    }>;
+    expect(columns).toContainEqual(expect.objectContaining({ name: "relay_origin" }));
+  });
+
   it("serializes concurrent additive schema upgrades across processes", () => {
     const rootDir = createTempStateDir();
     const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
