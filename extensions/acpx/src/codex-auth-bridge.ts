@@ -232,7 +232,7 @@ function buildAdapterWrapperScript(params: {
   stderrLogFileNamePrefix?: string;
 }): string {
   return `#!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
@@ -401,6 +401,9 @@ function stripOpenClawWrapperArgs(args) {
 
 const rawConfiguredArgs = process.argv.slice(2);
 const stderrLogPath = resolveStderrLogPath(rawConfiguredArgs);
+if (stderrLogPath) {
+  rmSync(stderrLogPath, { force: true });
+}
 
 const configuredArgs = stripOpenClawWrapperArgs(rawConfiguredArgs);
 
