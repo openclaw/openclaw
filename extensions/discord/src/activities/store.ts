@@ -12,6 +12,7 @@ type DiscordActivityWidget = {
   channelId: string;
   accountId: string;
   createdAt: number;
+  deliveredAt?: number | null;
 };
 
 type DiscordActivitySession = {
@@ -62,6 +63,7 @@ export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): Disco
 
 export class DiscordActivityStore {
   private lastWidgetCreatedAt = 0;
+  private lastWidgetDeliveredAt = 0;
 
   constructor(private readonly stores: DiscordActivityStores) {}
 
@@ -69,8 +71,16 @@ export class DiscordActivityStore {
     const id = randomBytes(16).toString("base64url");
     const createdAt = Math.max(value.createdAt, this.lastWidgetCreatedAt + 1);
     this.lastWidgetCreatedAt = createdAt;
-    await this.stores.widgets.register(id, { ...value, createdAt });
+    await this.stores.widgets.register(id, { ...value, createdAt, deliveredAt: null });
     return id;
+  }
+
+  async markWidgetDelivered(id: string, deliveredAt: number): Promise<void> {
+    const orderedDeliveredAt = Math.max(deliveredAt, this.lastWidgetDeliveredAt + 1);
+    this.lastWidgetDeliveredAt = orderedDeliveredAt;
+    await this.stores.widgets.update(id, (widget) =>
+      widget ? { ...widget, deliveredAt: orderedDeliveredAt } : undefined,
+    );
   }
 
   async deleteWidget(id: string): Promise<void> {
@@ -81,7 +91,7 @@ export class DiscordActivityStore {
     return await this.stores.widgets.lookup(id);
   }
 
-  async latestWidgetForChannel(
+  async latestDeliveredWidgetForChannel(
     accountId: string,
     channelId: string,
   ): Promise<{
@@ -89,16 +99,22 @@ export class DiscordActivityStore {
     widget: DiscordActivityWidget;
   } | null> {
     const entries = await this.stores.widgets.entries();
-    let match: (typeof entries)[number] | undefined;
+    let match: { entry: (typeof entries)[number]; deliveredAt: number } | undefined;
     for (const entry of entries) {
       if (entry.value.accountId !== accountId || entry.value.channelId !== channelId) {
         continue;
       }
-      if (!match || entry.value.createdAt > match.value.createdAt) {
-        match = entry;
+      // Pre-tracking records have no marker and were only retained after a successful send.
+      // New pending records use null so they cannot replace the newest visible button.
+      const deliveredAt = entry.value.deliveredAt ?? entry.value.createdAt;
+      if (entry.value.deliveredAt === null) {
+        continue;
+      }
+      if (!match || deliveredAt > match.deliveredAt) {
+        match = { entry, deliveredAt };
       }
     }
-    return match ? { id: match.key, widget: match.value } : null;
+    return match ? { id: match.entry.key, widget: match.entry.value } : null;
   }
 
   async createSession(value: DiscordActivitySession): Promise<string> {

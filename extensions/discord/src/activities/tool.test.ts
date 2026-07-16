@@ -72,6 +72,7 @@ describe("discord_widget", () => {
       channelId: "987654321",
       accountId: "default",
       createdAt: 7,
+      deliveredAt: 7,
     });
     expect(stored?.html).toContain("<!doctype html>");
     expect(stored?.html).toContain("<button");
@@ -177,6 +178,7 @@ describe("discord_widget", () => {
       accountId: "default",
       createdAt: 1,
     });
+    await runtime.store.markWidgetDelivered(existingId, 1);
     const failure = new Error("send failed");
     const send = vi.fn(async () => {
       throw failure;
@@ -190,8 +192,47 @@ describe("discord_widget", () => {
       tool.execute("failed-send", { html: "<p>temporary</p>", title: "Temporary" }),
     ).rejects.toBe(failure);
     await expect(
-      runtime.store.latestWidgetForChannel("default", "987654321"),
+      runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
     ).resolves.toMatchObject({ id: existingId, widget: { title: "Existing" } });
+  });
+
+  it("orders missing-ID fallback by successful delivery", async () => {
+    const runtime = createActivityTestRuntime();
+    type SendResult = Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
+    const pending = new Map<string, (result: SendResult) => void>();
+    const send = vi.fn(
+      async (...args: Parameters<typeof sendDiscordComponentMessage>) =>
+        await new Promise<SendResult>((resolve) => {
+          pending.set(args[1].text ?? "", resolve);
+        }),
+    ) as unknown as typeof sendDiscordComponentMessage;
+    let timestamp = 0;
+    const tool = createDiscordWidgetTool(discordContext(), {
+      runtime,
+      sendComponentMessage: send,
+      now: () => ++timestamp,
+    });
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+
+    const first = tool.execute("first", { html: "<p>first</p>", title: "First" });
+    await vi.waitFor(() => expect(pending.has("First")).toBe(true));
+    const second = tool.execute("second", { html: "<p>second</p>", title: "Second" });
+    await vi.waitFor(() => expect(pending.has("Second")).toBe(true));
+
+    pending.get("Second")?.({ messageId: "second", channelId: "987654321", receipt: {} });
+    const secondDetails = (await second).details as { widgetId: string };
+    await expect(
+      runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
+    ).resolves.toMatchObject({ id: secondDetails.widgetId, widget: { title: "Second" } });
+    pending.get("First")?.({ messageId: "first", channelId: "987654321", receipt: {} });
+    const firstDetails = (await first).details as { widgetId: string };
+
+    expect(firstDetails.widgetId).not.toBe(secondDetails.widgetId);
+    await expect(
+      runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
+    ).resolves.toMatchObject({ id: firstDetails.widgetId, widget: { title: "First" } });
   });
 
   it("keeps a widget when component bookkeeping fails after delivery", async () => {
@@ -223,6 +264,46 @@ describe("discord_widget", () => {
     expect(details.messageId).toBe("delivered-message");
     await expect(runtime.store.lookupWidget(details.widgetId)).resolves.toMatchObject({
       title: "Delivered",
+      deliveredAt: expect.any(Number),
+    });
+    await expect(
+      runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
+    ).resolves.toMatchObject({ id: details.widgetId });
+  });
+
+  it("surfaces delivery-state failures without deleting the delivered widget", async () => {
+    const runtime = createActivityTestRuntime();
+    const createWidget = vi.spyOn(runtime.store, "createWidget");
+    vi.spyOn(runtime.store, "markWidgetDelivered").mockRejectedValueOnce(
+      new Error("state unavailable"),
+    );
+    const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
+      messageId: "delivered-message",
+      channelId: "987654321",
+      receipt: {},
+    }));
+    const tool = createDiscordWidgetTool(discordContext(), {
+      runtime,
+      sendComponentMessage: send as unknown as typeof sendDiscordComponentMessage,
+    });
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+
+    await expect(
+      tool.execute("delivery-state-failure", {
+        html: "<p>delivered</p>",
+        title: "Delivered",
+      }),
+    ).rejects.toThrow("Discord widget was delivered, but its delivery state could not be saved");
+    const widgetIdPromise = createWidget.mock.results[0]?.value;
+    if (!widgetIdPromise) {
+      throw new Error("expected widget creation");
+    }
+    const widgetId = await widgetIdPromise;
+    await expect(runtime.store.lookupWidget(widgetId)).resolves.toMatchObject({
+      title: "Delivered",
+      deliveredAt: null,
     });
   });
 

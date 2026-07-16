@@ -97,13 +97,15 @@ async function createWidget(
   runtime: DiscordActivitiesRuntime,
   params?: { createdAt?: number; channelId?: string; accountId?: string },
 ) {
+  const createdAt = params?.createdAt ?? 1;
   const widgetId = await runtime.store.createWidget({
     html: "<!doctype html><html><body><script>document.body.dataset.ready='yes'</script></body></html>",
     title: "Activity status",
     channelId: params?.channelId ?? "777",
     accountId: params?.accountId ?? "default",
-    createdAt: params?.createdAt ?? 1,
+    createdAt,
   });
+  await runtime.store.markWidgetDelivered(widgetId, createdAt);
   return widgetId;
 }
 
