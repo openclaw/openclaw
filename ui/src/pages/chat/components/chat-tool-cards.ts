@@ -144,7 +144,7 @@ const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
 /** Bubbling DOM event re-dispatched from the widget iframe once a prompt passes validation. */
 export const WIDGET_PROMPT_EVENT = "openclaw-widget-prompt";
 export type WidgetPromptEventDetail = { text: string };
-export const WIDGET_PROMPT_MAX_CHARS = 4_000;
+const WIDGET_PROMPT_MAX_CHARS = 4_000;
 const WIDGET_PROMPT_RATE_WINDOW_MS = 60_000;
 const WIDGET_PROMPT_RATE_MAX = 10;
 const WIDGET_FRAME_MIN_HEIGHT = 160;
@@ -183,7 +183,7 @@ function registerWidgetFrame(event: Event) {
  * commands. Widget code is agent-authored, so accepting a command here would
  * let a widget approve its own pending actions; plain conversational text only.
  */
-export function resolveWidgetPromptText(raw: unknown): string | null {
+function resolveWidgetPromptText(raw: unknown): string | null {
   if (typeof raw !== "string") {
     return null;
   }
@@ -198,7 +198,7 @@ export function resolveWidgetPromptText(raw: unknown): string | null {
 // a widget cannot reset its budget and the map stays bounded like the heights map.
 const widgetPromptTimestampsBySrc = new Map<string, number[]>();
 
-export function allowWidgetPrompt(src: string, nowMs: number): boolean {
+function allowWidgetPrompt(src: string, nowMs: number): boolean {
   const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
   const timestamps = (widgetPromptTimestampsBySrc.get(src) ?? []).filter((ts) => ts > cutoff);
   if (
@@ -293,9 +293,10 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
   }
   adoptedWidgetPromptFrames.add(frame);
   pendingWidgetPromptPorts.delete(source);
-  port.onmessage = (message: MessageEvent) => {
+  port.addEventListener("message", (message: MessageEvent) => {
     handleWidgetPromptMessage(frame, message.data);
-  };
+  });
+  port.start();
 }
 
 function installWidgetPromptOfferListener() {

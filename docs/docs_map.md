@@ -10059,7 +10059,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /tools/show-widget
 - Headings:
+  - H2: How widgets work
   - H2: Use the tool
+  - H2: Interactive widgets
   - H2: Security and storage
   - H2: Related
 
