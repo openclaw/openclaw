@@ -556,7 +556,6 @@ describe("debug proxy runtime", () => {
       const headers = new Headers(
         contentLength === undefined ? undefined : { "content-length": contentLength },
       );
-      const arrayBuffer = vi.fn(async () => new Uint8Array(32 * ONE_MIB).buffer);
       captureHttpExchange(
         {
           url: "https://api.example.test/streamless",
@@ -564,8 +563,7 @@ describe("debug proxy runtime", () => {
           response: {
             status: 200,
             headers,
-            arrayBuffer,
-            clone: () => ({ body: null, headers, arrayBuffer }),
+            clone: () => ({ body: null, headers }),
           } as unknown as Response,
         },
         settings,
@@ -579,7 +577,6 @@ describe("debug proxy runtime", () => {
         bodyCapture: "unavailable",
       });
       expect(response).not.toHaveProperty("dataText");
-      expect(arrayBuffer).not.toHaveBeenCalled();
       expect(events.some((event) => event.kind === "error")).toBe(false);
     },
   );
