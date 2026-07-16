@@ -201,6 +201,57 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
     );
   });
 
+  it("denies the denied directory itself, not just paths under it", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["/**"],
+        denyPaths: ["**/.ssh/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), ".ssh"),
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
+  });
+
+  it("denies a trailing-separator form of the denied directory", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["/**"],
+        denyPaths: ["**/.ssh/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: `${path.join(os.homedir(), ".ssh")}/`,
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
+  });
+
+  it("keeps allowing sibling paths that only share the denied directory prefix", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["/**"],
+        denyPaths: ["**/.ssh/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), ".sshrc"),
+      }),
+      { ok: true },
+    );
+  });
+
   it("denies even with ask=always (denyPaths is hard)", () => {
     withConfig({
       n1: {
