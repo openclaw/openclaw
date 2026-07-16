@@ -82,7 +82,7 @@ describe("install.sh", () => {
     }
   });
 
-  it("bounds curl downloads and propagates timeout failures", () => {
+  it("bounds stalled curl downloads and propagates timeout failures", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
@@ -97,7 +97,8 @@ describe("install.sh", () => {
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("--connect-timeout 10 --speed-limit 1 --speed-time 30");
+    expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
+    expect(result.stdout).not.toContain("--connect-timeout");
     expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
     expect(result.stdout).toContain("status=28");
   });

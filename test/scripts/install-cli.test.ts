@@ -41,7 +41,7 @@ function linkRequiredShellTools(bin: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
-  it("bounds curl downloads and propagates timeout failures", () => {
+  it("bounds stalled curl downloads and propagates timeout failures", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
@@ -56,7 +56,8 @@ describe("install-cli.sh", () => {
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("--connect-timeout 10 --speed-limit 1 --speed-time 30");
+    expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
+    expect(result.stdout).not.toContain("--connect-timeout");
     expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
     expect(result.stdout).toContain("status=28");
   });
