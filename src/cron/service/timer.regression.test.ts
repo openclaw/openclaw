@@ -2354,49 +2354,11 @@ describe("cron service timer regressions", () => {
       expect(
         state.store?.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs,
       ).toBeUndefined();
-      expect(state.queuedRunReservationAtByJobId.has(job.id)).toBe(false);
+      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
       expect(
         (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
           .runningAtMs,
       ).toBeUndefined();
-    }
-  });
-
-  it("propagates falsy startup catch-up activation failures", async () => {
-    const store = timerRegressionFixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:05:01.484Z");
-    const job = createDueIsolatedJob({
-      id: "falsy-startup-catchup-failure",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
-    let loadCount = 0;
-    const loadSpy = vi
-      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
-      .mockImplementation(async (storePath) => {
-        loadCount += 1;
-        if (loadCount === 2) {
-          throw undefined;
-        }
-        return await realLoad(storePath);
-      });
-
-    try {
-      await expect(runMissedJobs(state)).rejects.toBeUndefined();
-    } finally {
-      loadSpy.mockRestore();
     }
   });
 

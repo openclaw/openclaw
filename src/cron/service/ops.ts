@@ -46,18 +46,18 @@ import type {
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import {
+  cancelCronRunAdmissionWaiters,
+  releaseQueuedCronRun,
+  reserveQueuedCronRun,
+  runWithCronAdmission,
+} from "./run-admission.js";
+import {
   type InterruptedStartupRun,
   markInterruptedStartupRun,
   mergeManualRunSnapshotAfterReload,
   restoreFinalizedStartupRun,
   STARTUP_INTERRUPTED_ERROR,
 } from "./startup-run-repair.js";
-import {
-  cancelCronRunAdmissionWaiters,
-  releaseQueuedCronRun,
-  reserveQueuedCronRun,
-  runWithCronAdmission,
-} from "./run-admission.js";
 import type {
   CronAddOptions,
   CronEvent,
@@ -957,6 +957,7 @@ async function prepareManualRun(
         delete persistedJob.state.runningAtMs;
         await persist(state);
       }
+      releaseQueuedCronRun(state, job.id, reservationAt);
       return { ok: true, ran: false, reason: "stopped" as const };
     }
     return {

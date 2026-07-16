@@ -2,7 +2,7 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { CronServiceState } from "./state.js";
 
-function resolveRunConcurrency(state: CronServiceState): number {
+export function resolveRunConcurrency(state: CronServiceState): number {
   return resolveIntegerOption(state.deps.cronConfig?.maxConcurrentRuns, 1, { min: 1 });
 }
 
@@ -68,12 +68,10 @@ export function reserveQueuedCronRun(
   reservationAt: number,
   opts?: { preserveWhenDisabled?: boolean },
 ): void {
-  state.queuedRunReservationAtByJobId.set(jobId, reservationAt);
-  if (opts?.preserveWhenDisabled) {
-    state.queuedForceRunReservationAtByJobId.set(jobId, reservationAt);
-  } else {
-    state.queuedForceRunReservationAtByJobId.delete(jobId);
-  }
+  state.queuedRunReservationsByJobId.set(jobId, {
+    reservedAtMs: reservationAt,
+    preserveWhenDisabled: opts?.preserveWhenDisabled === true,
+  });
 }
 
 export function releaseQueuedCronRun(
@@ -81,17 +79,9 @@ export function releaseQueuedCronRun(
   jobId: string,
   reservationAt?: number,
 ): void {
-  if (
-    reservationAt === undefined ||
-    state.queuedRunReservationAtByJobId.get(jobId) === reservationAt
-  ) {
-    state.queuedRunReservationAtByJobId.delete(jobId);
-  }
-  if (
-    reservationAt === undefined ||
-    state.queuedForceRunReservationAtByJobId.get(jobId) === reservationAt
-  ) {
-    state.queuedForceRunReservationAtByJobId.delete(jobId);
+  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  if (reservationAt === undefined || reservation?.reservedAtMs === reservationAt) {
+    state.queuedRunReservationsByJobId.delete(jobId);
   }
 }
 
@@ -101,7 +91,7 @@ export function isQueuedCronRun(
   jobId: string,
   runningAtMs: number,
 ): boolean {
-  return state.queuedRunReservationAtByJobId.get(jobId) === runningAtMs;
+  return state.queuedRunReservationsByJobId.get(jobId)?.reservedAtMs === runningAtMs;
 }
 
 /** A disabled job can retain only a force reservation that predated the disabled state. */
@@ -110,7 +100,8 @@ export function isQueuedForceCronRun(
   jobId: string,
   runningAtMs: number,
 ): boolean {
-  return state.queuedForceRunReservationAtByJobId.get(jobId) === runningAtMs;
+  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  return reservation?.reservedAtMs === runningAtMs && reservation.preserveWhenDisabled;
 }
 
 /**

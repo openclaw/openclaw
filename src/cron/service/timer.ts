@@ -1,5 +1,4 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import pMap, { pMapSkip } from "p-map";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
@@ -85,6 +84,7 @@ import {
 import { locked } from "./locked.js";
 import {
   releaseQueuedCronRun,
+  resolveRunConcurrency,
   reserveQueuedCronRun,
   runWithCronAdmission,
 } from "./run-admission.js";
@@ -421,10 +421,6 @@ export function maybeNotifyIsolatedAgentSetupTimeout(
     return false;
   }
   return true;
-}
-
-function resolveRunConcurrency(state: CronServiceState): number {
-  return resolveIntegerOption(state.deps.cronConfig?.maxConcurrentRuns, 1, { min: 1 });
 }
 
 function resolveMainSessionCronDeliveryContext(
@@ -1539,7 +1535,10 @@ async function onAdmittedTimer(state: CronServiceState) {
               }
               const dueProbe = structuredClone(job);
               delete dueProbe.state.runningAtMs;
-              if (!isJobEnabled(job) || !isRunnableJob({ state, job: dueProbe, nowMs: state.deps.nowMs() })) {
+              if (
+                !isJobEnabled(job) ||
+                !isRunnableJob({ state, job: dueProbe, nowMs: state.deps.nowMs() })
+              ) {
                 delete job.state.runningAtMs;
                 releaseQueuedCronRun(state, due.id, due.reservedAtMs);
                 await persist(state);
