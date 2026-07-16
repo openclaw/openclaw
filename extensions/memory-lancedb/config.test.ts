@@ -213,4 +213,64 @@ describe("memory-lancedb config", () => {
       });
     }).toThrow("dreaming config must be an object");
   });
+
+  it("aligns recall tuning constraints between the manifest schema and runtime parsing", () => {
+    // Fractional counts must fail identically in both layers: the manifest
+    // declares the two count fields as `integer`, and the runtime parser
+    // rejects (rather than silently floors) non-integer values for them — a
+    // config can never validate in one layer and be reinterpreted by the
+    // other.
+    for (const overrides of [{ recallResultCap: 2.5 }, { autoRecallOverfetch: 4.5 }]) {
+      const manifestResult = validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: "memory-lancedb.manifest.recall-tuning",
+        value: { embedding: { apiKey: "sk-test" }, ...overrides },
+      });
+      expect(manifestResult.ok).toBe(false);
+      expect(() => {
+        memoryConfigSchema.parse({ embedding: { apiKey: "sk-test" }, ...overrides });
+      }).toThrow(/must be an integer between/);
+    }
+
+    // Out-of-range values fail in both layers with the same bounds.
+    const outOfRange: Array<[Record<string, number>, string]> = [
+      [{ recallResultCap: 0 }, "recallResultCap must be an integer between 1 and 50"],
+      [{ recallResultCap: 51 }, "recallResultCap must be an integer between 1 and 50"],
+      [{ autoRecallOverfetch: 0 }, "autoRecallOverfetch must be an integer between 1 and 200"],
+      [{ autoRecallOverfetch: 201 }, "autoRecallOverfetch must be an integer between 1 and 200"],
+      [{ recallMinScore: -0.1 }, "recallMinScore must be a number between 0 and 1"],
+      [{ recallMinScore: 1.5 }, "recallMinScore must be a number between 0 and 1"],
+    ];
+    for (const [overrides, message] of outOfRange) {
+      const manifestResult = validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey: "memory-lancedb.manifest.recall-tuning",
+        value: { embedding: { apiKey: "sk-test" }, ...overrides },
+      });
+      expect(manifestResult.ok).toBe(false);
+      expect(() => {
+        memoryConfigSchema.parse({ embedding: { apiKey: "sk-test" }, ...overrides });
+      }).toThrow(message);
+    }
+
+    // Boundary values pass both layers and are preserved verbatim.
+    const boundary = {
+      recallMinScore: 0.85,
+      recallResultCap: 1,
+      autoRecallOverfetch: 200,
+    };
+    const manifestOk = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.recall-tuning",
+      value: { embedding: { apiKey: "sk-test" }, ...boundary },
+    });
+    expect(manifestOk.ok).toBe(true);
+    const parsed = memoryConfigSchema.parse({
+      embedding: { apiKey: "sk-test" },
+      ...boundary,
+    });
+    expect(parsed.recallMinScore).toBe(0.85);
+    expect(parsed.recallResultCap).toBe(1);
+    expect(parsed.autoRecallOverfetch).toBe(200);
+  });
 });

@@ -79,6 +79,24 @@
       "label": "Storage Options",
       "advanced": true,
       "help": "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values"
+    },
+    "recallMinScore": {
+      "label": "Recall Min Score",
+      "advanced": true,
+      "placeholder": "0.3",
+      "help": "Minimum similarity score (0-1) required for an auto-recall match. Higher is stricter."
+    },
+    "recallResultCap": {
+      "label": "Recall Result Cap",
+      "advanced": true,
+      "placeholder": "3",
+      "help": "Maximum number of memories injected per auto-recall."
+    },
+    "autoRecallOverfetch": {
+      "label": "Auto-Recall Overfetch",
+      "advanced": true,
+      "placeholder": "10",
+      "help": "Candidates fetched before sludge-filtering and capping during auto-recall."
     }
   },
   "configSchema": {
@@ -139,6 +157,21 @@
         "type": "number",
         "minimum": 100,
         "maximum": 10000
+      },
+      "recallMinScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "recallResultCap": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+      },
+      "autoRecallOverfetch": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200
       },
       "storageOptions": {
         "type": "object",

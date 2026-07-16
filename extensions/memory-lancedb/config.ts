@@ -20,6 +20,9 @@ export type MemoryConfig = {
   customTriggers?: string[];
   recallMaxChars?: number;
   storageOptions?: Record<string, string>;
+  recallMinScore?: number;
+  recallResultCap?: number;
+  autoRecallOverfetch?: number;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -122,6 +125,30 @@ function resolveBoundedIntegerConfig(params: {
   return resolved;
 }
 
+// Strict variant for newly introduced count settings: rejects non-integer
+// values instead of silently flooring them, so runtime validation matches the
+// manifest's `integer` schema exactly (a config cannot pass one layer and be
+// reinterpreted by the other). Pre-existing fields keep the tolerant resolver
+// above for backward compatibility.
+function resolveBoundedStrictIntegerConfig(params: {
+  value: unknown;
+  fallback: number;
+  min: number;
+  max: number;
+  label: string;
+}): number {
+  if (params.value === undefined) {
+    return params.fallback;
+  }
+  if (typeof params.value !== "number" || !Number.isInteger(params.value)) {
+    throw new Error(`${params.label} must be an integer between ${params.min} and ${params.max}`);
+  }
+  if (params.value < params.min || params.value > params.max) {
+    throw new Error(`${params.label} must be an integer between ${params.min} and ${params.max}`);
+  }
+  return params.value;
+}
+
 function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number | undefined {
   if (embedding.dimensions === undefined) {
     return undefined;
@@ -152,6 +179,9 @@ export const memoryConfigSchema = {
         "customTriggers",
         "recallMaxChars",
         "storageOptions",
+        "recallMinScore",
+        "recallResultCap",
+        "autoRecallOverfetch",
       ],
       "memory config",
     );
@@ -185,6 +215,31 @@ export const memoryConfigSchema = {
       min: 100,
       max: 10_000,
       label: "recallMaxChars",
+    });
+    const recallMinScore = ((): number => {
+      if (cfg.recallMinScore === undefined) {
+        return 0.3;
+      }
+      const parsed =
+        typeof cfg.recallMinScore === "number" ? parseFiniteNumber(cfg.recallMinScore) : undefined;
+      if (parsed === undefined || parsed < 0 || parsed > 1) {
+        throw new Error("recallMinScore must be a number between 0 and 1");
+      }
+      return parsed;
+    })();
+    const recallResultCap = resolveBoundedStrictIntegerConfig({
+      value: cfg.recallResultCap,
+      fallback: 3,
+      min: 1,
+      max: 50,
+      label: "recallResultCap",
+    });
+    const autoRecallOverfetch = resolveBoundedStrictIntegerConfig({
+      value: cfg.autoRecallOverfetch,
+      fallback: 10,
+      min: 1,
+      max: 200,
+      label: "autoRecallOverfetch",
     });
     let customTriggers: string[] | undefined;
     if (cfg.customTriggers !== undefined) {
@@ -251,6 +306,9 @@ export const memoryConfigSchema = {
       captureMaxChars,
       ...(customTriggers ? { customTriggers } : {}),
       recallMaxChars,
+      recallMinScore,
+      recallResultCap,
+      autoRecallOverfetch,
       ...(storageOptions ? { storageOptions } : {}),
     };
   },
@@ -313,6 +371,24 @@ export const memoryConfigSchema = {
       help: "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
       advanced: true,
       placeholder: String(DEFAULT_RECALL_MAX_CHARS),
+    },
+    recallMinScore: {
+      label: "Recall Min Score",
+      help: "Minimum similarity (0-1) for a memory to be eligible for auto-recall injection. Higher = stricter.",
+      advanced: true,
+      placeholder: "0.3",
+    },
+    recallResultCap: {
+      label: "Recall Result Cap",
+      help: "Maximum number of memories auto-recall injects into context.",
+      advanced: true,
+      placeholder: "3",
+    },
+    autoRecallOverfetch: {
+      label: "Auto-Recall Overfetch",
+      help: "Candidates fetched before sludge-filtering and capping. Keep a few multiples above the result cap.",
+      advanced: true,
+      placeholder: "10",
     },
     storageOptions: {
       label: "Storage Options",
