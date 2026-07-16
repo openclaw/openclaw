@@ -6,9 +6,7 @@ type OpenAICodexProviderRuntimeDeps = {
   refreshOpenAICodexToken: typeof refreshOpenAICodexTokenFromFlow;
 };
 
-export function createOpenAICodexProviderRuntime<T extends OpenAICodexProviderRuntimeDeps>(
-  deps: T,
-): {
+export function createOpenAICodexProviderRuntime(deps: OpenAICodexProviderRuntimeDeps): {
   refreshOpenAICodexToken: typeof refreshOpenAICodexTokenFromFlow;
 } {
   return {

@@ -302,7 +302,6 @@ describe("openai plugin", () => {
     runtimeMocks.refreshOpenAICodexToken.mockResolvedValue(refreshed);
     const runtime = createOpenAICodexProviderRuntime({
       ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
-      getOAuthApiKey: vi.fn(),
       refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
     });
 
