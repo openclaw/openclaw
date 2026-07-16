@@ -8,6 +8,7 @@ import {
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 
 const ZAI_KEY = process.env.ZAI_API_KEY ?? process.env.Z_AI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["ZAI_LIVE_TEST"]);
@@ -53,11 +54,19 @@ async function expectModelReturnsAssistantText(
     final = await complete(8_192);
     text = extractNonEmptyAssistantText(final.content);
   }
-  const summarize = (res: typeof final) =>
-    `stopReason=${res.stopReason}; contentTypes=${res.content.map((block) => block.type).join(",") || "none"}`;
+  const drift = shouldSkipLiveProviderDrift({
+    allowAuth: true,
+    allowBilling: true,
+    allowModelNotFound: true,
+    allowProviderUnavailable: true,
+    allowRateLimit: true,
+    allowTimeout: true,
+    error: final.errorMessage ?? "",
+  });
+  const errorClass = final.errorMessage ? (drift?.reason ?? "unclassified") : "none";
   expect(
     text.length,
-    `${modelId} returned no assistant text; initial(${summarize(initial)}); final(${summarize(final)})`,
+    `${modelId} returned no assistant text; initialStopReason=${initial.stopReason}; finalStopReason=${final.stopReason}; errorClass=${errorClass}; contentTypes=${final.content.map((block) => block.type).join(",") || "none"}`,
   ).toBeGreaterThan(0);
 }
 
