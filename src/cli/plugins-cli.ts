@@ -7,7 +7,7 @@ import type { PluginsListOptions } from "./plugins-list-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-export type PluginUpdateOptions = {
+type PluginUpdateOptions = {
   all?: boolean;
   acknowledgeClawhubRisk?: boolean;
   dryRun?: boolean;
@@ -15,6 +15,7 @@ export type PluginUpdateOptions = {
 };
 
 type CommanderClawHubRiskOptions = Record<string, unknown> & {
+  acknowledgeClawHubRisk?: boolean;
   acknowledgeClawhubRisk?: boolean;
 };
 
@@ -26,6 +27,13 @@ export type PluginMarketplaceListOptions = {
   json?: boolean;
 };
 
+export type PluginMarketplaceEntriesOptions = {
+  feedProfile?: string;
+  feedUrl?: string;
+  json?: boolean;
+  offline?: boolean;
+};
+
 export type PluginMarketplaceRefreshOptions = {
   expectedSha256?: string;
   feedProfile?: string;
@@ -33,12 +41,12 @@ export type PluginMarketplaceRefreshOptions = {
   json?: boolean;
 };
 
-export type PluginSearchOptions = {
+type PluginSearchOptions = {
   json?: boolean;
   limit?: number;
 };
 
-export type PluginUninstallOptions = {
+type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
@@ -51,18 +59,18 @@ export type PluginRegistryOptions = {
   refresh?: boolean;
 };
 
-export type PluginAuthoringBuildOptions = {
+type PluginAuthoringBuildOptions = {
   root?: string;
   entry?: string;
   check?: boolean;
 };
 
-export type PluginAuthoringValidateOptions = {
+type PluginAuthoringValidateOptions = {
   root?: string;
   entry?: string;
 };
 
-export type PluginAuthoringInitOptions = {
+type PluginAuthoringInitOptions = {
   directory?: string;
   force?: boolean;
   type?: string;
@@ -165,7 +173,11 @@ export function registerPluginsCli(program: Command) {
       "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
-    .option("--force", "Overwrite an existing installed plugin or hook pack", false)
+    .option(
+      "--force",
+      "Confirm non-ClawHub sources and overwrite an existing plugin or hook pack",
+      false,
+    )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
@@ -282,6 +294,18 @@ export function registerPluginsCli(program: Command) {
   const marketplace = plugins
     .command("marketplace")
     .description("Inspect Claude-compatible plugin marketplaces");
+
+  marketplace
+    .command("entries")
+    .description("List entries from the configured OpenClaw marketplace feed")
+    .option("--feed-profile <name>", "Configured marketplace feed profile to list")
+    .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
+    .option("--offline", "Read the latest accepted snapshot without fetching the feed", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginMarketplaceEntriesOptions) => {
+      const { runPluginMarketplaceEntriesCommand } = await loadPluginsRuntime();
+      await runPluginMarketplaceEntriesCommand(opts);
+    });
 
   marketplace
     .command("refresh")

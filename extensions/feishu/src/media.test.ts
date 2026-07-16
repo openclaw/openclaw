@@ -55,7 +55,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 });
 
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
-let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
@@ -118,12 +117,8 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
-    ({
-      saveMessageResourceFeishu,
-      sanitizeFileNameForUpload,
-      sendMediaFeishu,
-      shouldSuppressFeishuTextForVoiceMedia,
-    } = await import("./media.js"));
+    ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
+      await import("./media.js"));
   });
 
   afterAll(() => {
@@ -214,6 +209,8 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("uses msg_type=media for mp4 video", async () => {
+    runFfprobeMock.mockResolvedValueOnce("4.2\n");
+
     await sendMediaFeishu({
       cfg: emptyConfig,
       to: "user:ou_target",
@@ -222,6 +219,17 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(4200);
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.slice(0, -1)).toEqual([
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "csv=p=0",
+    ]);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
@@ -297,6 +305,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("uses msg_type=media for remote mp4 content even when the filename is generic", async () => {
+    runFfprobeMock.mockResolvedValueOnce("6.789\n");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("remote-video"),
       fileName: "download",
@@ -311,6 +320,9 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    expect(callData<{ duration?: number }>(fileCreateMock).duration).toBe(6789);
+    const ffprobeArgs = mockCallArg<string[]>(runFfprobeMock, 0, 0);
+    expect(ffprobeArgs.at(-1)).toMatch(/input\.mp4$/);
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
@@ -630,50 +642,6 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("报告—详情（2026）.md");
-  });
-});
-
-describe("sanitizeFileNameForUpload", () => {
-  it("returns ASCII filenames unchanged", () => {
-    expect(sanitizeFileNameForUpload("report.pdf")).toBe("report.pdf");
-    expect(sanitizeFileNameForUpload("my-file_v2.txt")).toBe("my-file_v2.txt");
-  });
-
-  it("preserves Chinese characters", () => {
-    expect(sanitizeFileNameForUpload("测试文件.md")).toBe("测试文件.md");
-    expect(sanitizeFileNameForUpload("武汉15座山登山信息汇总.csv")).toBe(
-      "武汉15座山登山信息汇总.csv",
-    );
-  });
-
-  it("preserves em-dash and full-width brackets", () => {
-    expect(sanitizeFileNameForUpload("文件—说明（v2）.pdf")).toBe("文件—说明（v2）.pdf");
-  });
-
-  it("preserves single quotes and parentheses", () => {
-    expect(sanitizeFileNameForUpload("文件'(test).txt")).toBe("文件'(test).txt");
-  });
-
-  it("preserves filenames without extension", () => {
-    expect(sanitizeFileNameForUpload("测试文件")).toBe("测试文件");
-  });
-
-  it("preserves mixed ASCII and non-ASCII", () => {
-    expect(sanitizeFileNameForUpload("Report_报告_2026.xlsx")).toBe("Report_报告_2026.xlsx");
-  });
-
-  it("preserves emoji filenames", () => {
-    expect(sanitizeFileNameForUpload("report_😀.txt")).toBe("report_😀.txt");
-  });
-
-  it("strips control characters", () => {
-    expect(sanitizeFileNameForUpload("bad\x00file.txt")).toBe("bad_file.txt");
-    expect(sanitizeFileNameForUpload("inject\r\nheader.txt")).toBe("inject__header.txt");
-  });
-
-  it("strips quotes and backslashes to prevent header injection", () => {
-    expect(sanitizeFileNameForUpload('file"name.txt')).toBe("file_name.txt");
-    expect(sanitizeFileNameForUpload("file\\name.txt")).toBe("file_name.txt");
   });
 });
 

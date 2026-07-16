@@ -12,48 +12,7 @@ const {
   resolveRoute,
   runDocsLinkAuditCli,
   sanitizeDocsConfigForEnglishOnly,
-} = (await import("../../scripts/docs-link-audit.mjs")) as unknown as {
-  normalizeRoute: (route: string) => string;
-  prepareAnchorAuditDocsDir: (sourceDir?: string) => string;
-  prepareMirroredDocsDir: (
-    sourceDir?: string,
-    options?: {
-      resolveClawHubRepoPathImpl?: (value?: string, options?: { required?: boolean }) => string;
-      syncClawHubDocsTreeImpl?: (
-        targetDocsDir: string,
-        options?: { repoPath?: string; required?: boolean },
-      ) => unknown;
-    },
-  ) => {
-    cleanup: () => void;
-    dir: string;
-    mirroredClawHub: boolean;
-  };
-  resolveRoute: (
-    route: string,
-    options?: { redirects?: Map<string, string>; routes?: Set<string> },
-  ) => { ok: boolean; terminal: string; loop?: boolean };
-  runDocsLinkAuditCli: (options?: {
-    args?: string[];
-    nodeVersion?: string;
-    spawnSyncImpl?: (
-      command: string,
-      args: string[],
-      options: { cwd: string; env?: NodeJS.ProcessEnv; shell?: boolean; stdio: string },
-    ) => { status: number | null; error?: { code?: string } };
-    env?: NodeJS.ProcessEnv;
-    nodeExecPath?: string;
-    npmExecPath?: string;
-    prepareAnchorAuditDocsDirImpl?: (sourceDir?: string) => string;
-    cleanupAnchorAuditDocsDirImpl?: (dir: string) => void;
-    prepareMirroredDocsDirImpl?: (sourceDir?: string) => {
-      cleanup: () => void;
-      dir: string;
-      mirroredClawHub: boolean;
-    };
-  }) => number;
-  sanitizeDocsConfigForEnglishOnly: (value: unknown) => unknown;
-};
+} = await import("../../scripts/docs-link-audit.mjs");
 
 describe("docs-link-audit", () => {
   function tempEntries(prefix: string): Set<string> {

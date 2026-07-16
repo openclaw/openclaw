@@ -369,11 +369,23 @@ describe("sanitizeRenderableText", () => {
     expect(longestSegment).toBeLessThanOrEqual(32);
   }
 
+  it("strips C1 CSI and OSC without exposing their final byte or payload", () => {
+    const input = "before\u009b@middle\u009d0;title\u009cafter";
+
+    expect(sanitizeRenderableText(input)).toBe("beforemiddleafter");
+  });
+
   it.each([
     { label: "very long", input: "a".repeat(140) },
     { label: "moderately long", input: "b".repeat(90) },
   ])("breaks $label unbroken tokens to protect narrow terminals", ({ input }) => {
     expectTokenWidthUnderLimit(input);
+  });
+
+  it("keeps surrogate pairs intact when breaking long prose tokens", () => {
+    const input = `${"a".repeat(31)}😀b`;
+
+    expect(sanitizeRenderableText(input)).toBe(`${"a".repeat(31)} 😀b`);
   });
 
   it("preserves long CJK prose without inserting display spaces", () => {

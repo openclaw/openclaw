@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
@@ -12,7 +13,7 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
-import kotlinx.coroutines.flow.MutableStateFlow
+import android.webkit.WebView
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -256,7 +257,79 @@ class InvokeDispatcherTest {
       )
     }
 
+  @Test
+  fun handleInvoke_blocksTalkOnceButLeavesPttStartToRuntimeStateGateWhenBackgrounded() =
+    runTest {
+      val talk = InvokeDispatcherFakeTalkHandler()
+      val dispatcher = newDispatcher(isForeground = false, talkHandler = talk)
+
+      val start = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+      val once = dispatcher.handleInvoke(OpenClawTalkCommand.PttOnce.rawValue, null)
+      val stop = dispatcher.handleInvoke(OpenClawTalkCommand.PttStop.rawValue, null)
+      val cancel = dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null)
+
+      assertEquals("""{"captureId":"start"}""", start.payloadJson)
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", once.error?.code)
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE: command requires foreground", once.error?.message)
+      assertEquals("""{"status":"stop"}""", stop.payloadJson)
+      assertEquals("""{"status":"cancel"}""", cancel.payloadJson)
+      assertEquals(listOf("start", "stop", "cancel"), talk.calls)
+    }
+
+  @Test
+  fun handleInvoke_presentAndHideDriveTheShellOwnedCanvasState() =
+    runTest {
+      val appContext = RuntimeEnvironment.getApplication()
+      val canvas = CanvasController()
+      val webView = WebView(appContext)
+      canvas.attach(webView)
+      val dispatcher = newDispatcher(canvas = canvas)
+
+      val present =
+        dispatcher.handleInvoke(
+          OpenClawCanvasCommand.Present.rawValue,
+          """{"url":"https://example.com/canvas"}""",
+        )
+
+      assertNull(present.error)
+      assertEquals("https://example.com/canvas", canvas.currentUrl())
+      assertEquals(CanvasController.PresentationState.Visible, canvas.presentationState.value)
+
+      val hide = dispatcher.handleInvoke(OpenClawCanvasCommand.Hide.rawValue, null)
+
+      assertNull(hide.error)
+      assertEquals(CanvasController.PresentationState.Hidden, canvas.presentationState.value)
+      canvas.releaseHost()
+      webView.destroy()
+    }
+
+  @Test
+  fun handleInvoke_rejectsBackgroundCanvasPresentationBeforeMountingAHost() =
+    runTest {
+      val canvas = CanvasController()
+      val result =
+        newDispatcher(isForeground = false, canvas = canvas)
+          .handleInvoke(OpenClawCanvasCommand.Present.rawValue, """{"url":"https://example.com"}""")
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
+      assertEquals(CanvasController.PresentationState.Unmounted, canvas.presentationState.value)
+    }
+
+  @Test
+  fun handleInvoke_doesNotCommitNavigationWhenTheShellHostCannotAttach() =
+    runTest {
+      val canvas = CanvasController()
+      val result =
+        newDispatcher(canvas = canvas)
+          .handleInvoke(OpenClawCanvasCommand.Present.rawValue, """{"url":"https://example.com"}""")
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", result.error?.code)
+      assertNull(canvas.currentUrl())
+      assertEquals(CanvasController.PresentationState.Unmounted, canvas.presentationState.value)
+    }
+
   private fun newDispatcher(
+    isForeground: Boolean = true,
     cameraEnabled: Boolean = false,
     locationEnabled: Boolean = false,
     sendSmsAvailable: Boolean = false,
@@ -270,10 +343,10 @@ class InvokeDispatcherTest {
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
     talkHandler: TalkHandler = InvokeDispatcherFakeTalkHandler(),
+    canvas: CanvasController = CanvasController(),
   ): InvokeDispatcher {
     val appContext = RuntimeEnvironment.getApplication()
     shadowOf(appContext.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, smsTelephonyAvailable)
-    val canvas = CanvasController()
     return InvokeDispatcher(
       canvas = canvas,
       cameraHandler = newCameraHandler(appContext),
@@ -302,7 +375,7 @@ class InvokeDispatcherTest {
         ),
       debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
-      isForeground = { true },
+      isForeground = { isForeground },
       cameraEnabled = { cameraEnabled },
       locationEnabled = { locationEnabled },
       sendSmsAvailable = { sendSmsAvailable },
@@ -324,9 +397,8 @@ class InvokeDispatcherTest {
     CameraHandler(
       appContext = appContext,
       camera = CameraCaptureManager(appContext),
-      externalAudioCaptureActive = MutableStateFlow(false),
+      setCameraAudioCaptureActive = { true },
       showCameraHud = { _, _, _ -> },
-      triggerCameraFlash = {},
       invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
     )
 }
@@ -335,6 +407,8 @@ private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
   override fun hasFinePermission(context: Context): Boolean = false
 
   override fun hasCoarsePermission(context: Context): Boolean = false
+
+  override fun hasBackgroundPermission(context: Context): Boolean = false
 
   override suspend fun fetchLocation(
     desiredProviders: List<String>,

@@ -14,6 +14,7 @@ import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type {
   PluginAttachmentChannelHints,
@@ -25,23 +26,16 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 /** Filesystem adapter used by attachment MIME probes and tests. */
-export const attachmentProbeFs = {
+const attachmentProbeFs = {
   open: (...args: Parameters<typeof fsPromises.open>) => fsPromises.open(...args),
 };
 const MAX_ATTACHMENT_FILES = 10;
 
 type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
-let sendMessagePromise: Promise<SendMessage> | undefined;
 
-async function loadSendMessage(): Promise<SendMessage> {
-  sendMessagePromise ??= import("../infra/outbound/message.js").then(
-    (module) => module.sendMessage,
-  );
-  return sendMessagePromise;
-}
-
-type GetChannelPlugin = typeof import("../channels/plugins/index.js").getChannelPlugin;
-let getChannelPluginPromise: Promise<GetChannelPlugin> | undefined;
+const loadSendMessage = createLazyRuntimeModule(() =>
+  import("../infra/outbound/message.js").then((module) => module.sendMessage),
+);
 
 type AttachmentDeliveryChannelPlugin = {
   outbound?: {
@@ -49,12 +43,9 @@ type AttachmentDeliveryChannelPlugin = {
   };
 };
 
-async function loadGetChannelPlugin(): Promise<GetChannelPlugin> {
-  getChannelPluginPromise ??= import("../channels/plugins/index.js").then(
-    (module) => module.getChannelPlugin,
-  );
-  return getChannelPluginPromise;
-}
+const loadGetChannelPlugin = createLazyRuntimeModule(() =>
+  import("../channels/plugins/index.js").then((module) => module.getChannelPlugin),
+);
 
 type ResolvedAttachmentDelivery = {
   parseMode?: "HTML";
@@ -98,7 +89,7 @@ async function readMimeSniffBuffer(
 }
 
 /** Resolves channel-specific attachment delivery options from caption format and hints. */
-export function resolveAttachmentDelivery(params: {
+function resolveAttachmentDelivery(params: {
   channel: string;
   captionFormat?: PluginSessionAttachmentCaptionFormat;
   channelHints?: PluginAttachmentChannelHints;
@@ -222,7 +213,7 @@ function normalizeOptionalThreadId(value: unknown): string | number | undefined 
 }
 
 /** Resolves the thread id used when delivering a plugin session attachment. */
-export function resolveSessionAttachmentThreadId(params: {
+function resolveSessionAttachmentThreadId(params: {
   deliveryThreadId?: unknown;
   explicitThreadId?: unknown;
   fallbackThreadId?: unknown;

@@ -1,11 +1,12 @@
 // LLM Core module implements validation behavior.
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
-import { Value } from "typebox/value";
 import type { Tool, ToolCall } from "./types.js";
 
 const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
-const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
+
+/** Maximum string length accepted for schema-gated JSON coercion. */
+const MAX_JSON_COERCE_LENGTH = 64 * 1024;
 
 interface JsonSchemaObject {
   type?: string | string[];
@@ -23,10 +24,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
   return isRecord(value);
-}
-
-function hasTypeBoxMetadata(schema: unknown): boolean {
-  return isRecord(schema) && Object.getOwnPropertySymbols(schema).includes(TYPEBOX_KIND);
 }
 
 function getSchemaTypes(schema: JsonSchemaObject): string[] {
@@ -151,6 +148,40 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       }
       if (typeof value === "number" || typeof value === "boolean") {
         return String(value);
+      }
+      return value;
+    }
+    case "array": {
+      if (
+        typeof value === "string" &&
+        value.trim() !== "" &&
+        value.length <= MAX_JSON_COERCE_LENGTH
+      ) {
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            return parsed;
+          }
+        } catch {
+          // Not valid JSON; leave as-is for the validator to reject.
+        }
+      }
+      return value;
+    }
+    case "object": {
+      if (
+        typeof value === "string" &&
+        value.trim() !== "" &&
+        value.length <= MAX_JSON_COERCE_LENGTH
+      ) {
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+            return parsed;
+          }
+        } catch {
+          // Not valid JSON; leave as-is for the validator to reject.
+        }
       }
       return value;
     }
@@ -309,11 +340,11 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
-  Value.Convert(tool.parameters, args);
-
   const validator = getValidator(tool.parameters);
-  if (!hasTypeBoxMetadata(tool.parameters) && isJsonSchemaObject(tool.parameters)) {
-    // TypeBox Value.Convert is intentionally conservative for plain JSON schemas;
+  validator.Convert(args);
+
+  if (isJsonSchemaObject(tool.parameters)) {
+    // TypeBox conversion is intentionally conservative for plain JSON schemas;
     // mirror the provider-facing coercions so model-emitted string numbers validate.
     const coerced = coerceWithJsonSchema(args, tool.parameters);
     if (coerced !== args) {

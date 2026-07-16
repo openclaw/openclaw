@@ -25,8 +25,14 @@ export type OpenClawPluginConfigSchema = import("../plugins/types.js").OpenClawP
 export type OpenClawPluginDefinition = import("../plugins/types.js").OpenClawPluginDefinition;
 export type OpenClawPluginHttpRouteHandler =
   import("../plugins/types.js").OpenClawPluginHttpRouteHandler;
+export type OpenClawPluginGatewayEventScope =
+  import("../plugins/gateway-events.js").OpenClawPluginGatewayEventScope;
+export type OpenClawPluginGatewayEvents =
+  import("../plugins/gateway-events.js").OpenClawPluginGatewayEvents;
 export type OpenClawPluginNodeHostCommand =
   import("../plugins/types.js").OpenClawPluginNodeHostCommand;
+export type OpenClawPluginNodeHostCommandAvailabilityContext =
+  import("../plugins/types.js").OpenClawPluginNodeHostCommandAvailabilityContext;
 export type OpenClawPluginNodeInvokePolicy =
   import("../plugins/types.js").OpenClawPluginNodeInvokePolicy;
 export type OpenClawPluginNodeInvokePolicyContext =
@@ -45,6 +51,14 @@ export type OpenClawPluginServiceContext =
 export type OpenClawPluginToolContext = import("../plugins/types.js").OpenClawPluginToolContext;
 export type OpenClawPluginToolFactory = import("../plugins/types.js").OpenClawPluginToolFactory;
 export type PluginLogger = import("../plugins/types.js").PluginLogger;
+export type WorkerLease = import("../plugins/types.js").WorkerLease;
+export type WorkerLeaseStatus = import("../plugins/types.js").WorkerLeaseStatus;
+export type WorkerProfile = import("../plugins/types.js").WorkerProfile;
+export type WorkerProvider = import("../plugins/types.js").WorkerProvider;
+export type WorkerSshEndpoint = import("../plugins/types.js").WorkerSshEndpoint;
+export type WorkerSshIdentity = import("../plugins/types.js").WorkerSshIdentity;
+export type WorkerSshIdentityRequest = import("../plugins/types.js").WorkerSshIdentityRequest;
+export { WorkerProviderError } from "../plugins/types.js";
 export type ProviderAugmentModelCatalogContext =
   import("../plugins/types.js").ProviderAugmentModelCatalogContext;
 export type ProviderAuthContext = import("../plugins/types.js").ProviderAuthContext;
@@ -53,6 +67,11 @@ export type ProviderAuthDoctorHintContext =
 export type ProviderAuthMethod = import("../plugins/types.js").ProviderAuthMethod;
 export type ProviderAuthMethodNonInteractiveContext =
   import("../plugins/types.js").ProviderAuthMethodNonInteractiveContext;
+export type ProviderAppGuidedSetup = import("../plugins/types.js").ProviderAppGuidedSetup;
+export type ProviderAppGuidedSetupCandidate =
+  import("../plugins/types.js").ProviderAppGuidedSetupCandidate;
+export type ProviderAppGuidedSetupContext =
+  import("../plugins/types.js").ProviderAppGuidedSetupContext;
 export type ProviderAuthResult = import("../plugins/types.js").ProviderAuthResult;
 export type ProviderApplyConfigDefaultsContext =
   import("../plugins/types.js").ProviderApplyConfigDefaultsContext;

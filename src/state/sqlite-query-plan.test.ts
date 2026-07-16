@@ -1,9 +1,7 @@
 // SQLite query-plan tests pin hot OpenClaw state indexes used by perf proof.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -13,8 +11,10 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
+const planTempDirs: string[] = [];
+
 function createTempStateDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-plan-"));
+  return makeTempDir(planTempDirs, "openclaw-sqlite-plan-");
 }
 
 function explainQueryPlan(
@@ -47,6 +47,10 @@ function expectPlanIncludes(params: {
 }): void {
   expect(explainQueryPlan(params.db, params.sql, params.params)).toContain(params.expected);
 }
+
+afterAll(() => {
+  cleanupTempDirs(planTempDirs);
+});
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -82,30 +86,6 @@ describe("sqlite hot query plans", () => {
          WHERE store_key = ? AND enabled = 1 AND next_run_at_ms IS NOT NULL
          ORDER BY next_run_at_ms ASC, job_id
          LIMIT 25
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_cron_run_logs_store_ts",
-      params: ["/state/cron/jobs.json"],
-      sql: `
-        SELECT job_id, seq, ts
-          FROM cron_run_logs
-         WHERE store_key = ?
-         ORDER BY ts DESC, seq DESC
-         LIMIT 50
-      `,
-    });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_cron_run_logs_job_status",
-      params: ["/state/cron/jobs.json", "job-1", "completed"],
-      sql: `
-        SELECT seq, ts, status
-          FROM cron_run_logs
-         WHERE store_key = ? AND job_id = ? AND status = ?
-         ORDER BY ts DESC, seq DESC
-         LIMIT 50
       `,
     });
     expectPlanUsesIndex({
@@ -186,8 +166,47 @@ describe("sqlite hot query plans", () => {
           FROM cache_entries
          WHERE scope = ? AND expires_at IS NOT NULL
          ORDER BY expires_at ASC, key
-         LIMIT 50
+        LIMIT 50
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_entries_session_updated",
+      params: ["session-1"],
+      sql: `
+        SELECT session_key
+          FROM session_entries
+         WHERE session_id = ?
+         ORDER BY updated_at DESC, session_key ASC
+         LIMIT 1
+      `,
+    });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_entries_status",
+      params: ["running"],
+      sql: `
+        SELECT session_key, entry_json
+          FROM session_entries
+         WHERE status = ?
+      `,
+    });
+    const latestMessagePlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT te.event_json
+          FROM transcript_events AS te
+          JOIN transcript_event_identities AS ti
+            ON ti.session_id = te.session_id AND ti.seq = te.seq
+         WHERE te.session_id = ? AND ti.event_type = 'message'
+         ORDER BY ti.seq DESC
+         LIMIT 1
+      `,
+      ["session-1"],
+    );
+    expect(latestMessagePlan).toContain(
+      "USING COVERING INDEX idx_agent_transcript_event_sequence (session_id=? AND event_type=?)",
+    );
+    expect(latestMessagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
   });
 });

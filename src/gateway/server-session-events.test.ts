@@ -4,9 +4,16 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 const sessionRow = vi.hoisted(() => ({
   key: "agent:main:main",
   kind: "direct",
+  sessionId: "sess-main",
   status: "done",
   updatedAt: 1,
+  thinkingLevel: "ultra" as string | undefined,
+  thinkingLevels: [{ id: "ultra", label: "ultra" }],
+  thinkingOptions: ["ultra"],
+  thinkingDefault: "medium",
+  agentRuntime: { id: "openclaw", source: "model" },
 }));
+const isEmbeddedAgentRunActiveMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("./chat-display-projection.js", () => ({
@@ -18,6 +25,15 @@ vi.mock("./session-utils.js", () => ({
   loadSessionEntry: () => ({ entry: undefined, storePath: "" }),
   readSessionMessageCountAsync: vi.fn(),
 }));
+vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/embedded-agent-runner/runs.js")>(
+    "../agents/embedded-agent-runner/runs.js",
+  );
+  return {
+    ...actual,
+    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
+  };
+});
 
 const { createTranscriptUpdateBroadcastHandler } = await import("./server-session-events.js");
 
@@ -62,6 +78,8 @@ async function emitAssistantTranscriptUpdate(
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    sessionRow.thinkingLevel = "ultra";
   });
 
   it("keeps transcript snapshots active while plugin finalization delays the terminal event", async () => {
@@ -75,12 +93,48 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
   });
 
+  it("keeps stable thinking state without catalog-derived picker metadata", async () => {
+    const payload = await emitAssistantTranscriptUpdate(false);
+
+    expect(payload).toMatchObject({
+      session: {
+        thinkingLevel: "ultra",
+        agentRuntime: { id: "openclaw" },
+      },
+    });
+    expect(payload).not.toHaveProperty("thinkingLevels");
+    expect(payload).not.toHaveProperty("thinkingOptions");
+    expect(payload).not.toHaveProperty("thinkingDefault");
+    expect(payload).not.toHaveProperty("session.thinkingLevels");
+    expect(payload).not.toHaveProperty("session.thinkingOptions");
+    expect(payload).not.toHaveProperty("session.thinkingDefault");
+  });
+
+  it("emits an explicit null when the thinking override is cleared", async () => {
+    sessionRow.thinkingLevel = undefined;
+
+    await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
+      session: { thinkingLevel: null },
+    });
+  });
+
   it("keeps stale-run recovery when terminal lifecycle has cleared active projection", async () => {
     await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       hasActiveRun: false,
       session: { hasActiveRun: false },
     });
+  });
+
+  it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
+    isEmbeddedAgentRunActiveMock.mockImplementation((sessionId) => sessionId === "sess-main");
+
+    await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+      hasActiveRun: true,
+      session: { key: "agent:main:main", sessionId: "sess-main", hasActiveRun: true },
+    });
+    expect(isEmbeddedAgentRunActiveMock).toHaveBeenCalledWith("sess-main");
   });
 
   it("broadcasts user idempotency keys in session.message metadata", async () => {
@@ -98,6 +152,18 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
           seq: 1,
         },
       },
+    });
+  });
+
+  it("broadcasts the authenticated sender ownership decision", async () => {
+    await expect(
+      emitAssistantTranscriptUpdate(false, {
+        role: "user",
+        content: [{ type: "text", text: "Owner turn" }],
+        __openclaw: { senderIsOwner: true },
+      }),
+    ).resolves.toMatchObject({
+      senderIsOwner: true,
     });
   });
 });

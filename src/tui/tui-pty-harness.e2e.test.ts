@@ -60,7 +60,8 @@ function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown
 }
 
 async function writeTuiPtyFixtureScript(dir: string) {
-  const scriptPath = path.join(dir, "run-tui-pty-fixture.ts");
+  // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
+  const scriptPath = path.join(dir, "run-tui-pty-fixture.mts");
   const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
   const payloadsModuleUrl = pathToFileURL(
     path.join(process.cwd(), "src/agents/embedded-agent-runner/run/payloads.ts"),
@@ -83,9 +84,33 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
+      let pendingPluginApproval: {
+        id: string;
+        request: {
+          title: string;
+          description: string;
+          toolName: string;
+          allowedDecisions: string[];
+          sessionKey: string;
+        };
+        createdAtMs: number;
+        expiresAtMs: number;
+      } | null = null;
+      let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
+      let pendingTaskSuggestion: {
+        id: string;
+        title: string;
+        prompt: string;
+        tldr: string;
+        cwd: string;
+        sessionKey: string;
+        agentId: string;
+        createdAt: number;
+      } | null = null;
 
       function record(method: string, payload?: unknown) {
         if (!actionLogPath) {
@@ -153,6 +178,53 @@ async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
+          if (opts.message === "skill approval proof" || opts.message === "skill approval gap proof") {
+            pendingPluginApproval = {
+              id: "plugin:skill-pty",
+              request: {
+                title: "Apply workspace skill proposal",
+                description: "Apply a pending workspace skill proposal into live workspace skills.",
+                pluginId: "workspace-skills",
+                severity: "warning",
+                toolName: "skill_workshop",
+                allowedDecisions: ["allow-once", "deny"],
+                sessionKey: opts.sessionKey,
+              },
+              createdAtMs: Date.now(),
+              expiresAtMs: Date.now() + 120_000,
+            };
+            pendingPluginApprovalRun = { runId, sessionKey: opts.sessionKey };
+            queueMicrotask(() => {
+              if (opts.message === "skill approval gap proof") {
+                this.onGap?.({ expected: 4, received: 5 });
+              } else {
+                this.onEvent?.({
+                  event: "plugin.approval.requested",
+                  payload: pendingPluginApproval,
+                });
+              }
+            });
+            return { runId };
+          }
+          if (opts.message === "task suggestion proof") {
+            pendingTaskSuggestion = {
+              id: "task_pty",
+              title: "Remove stale adapter",
+              prompt: "Delete the stale adapter and update its tests.",
+              tldr: "The adapter is unreachable and adds maintenance cost.",
+              cwd: "/repo/project",
+              sessionKey: opts.sessionKey,
+              agentId: "main",
+              createdAt: Date.now(),
+            };
+            queueMicrotask(() => {
+              this.onEvent?.({
+                event: "task.suggestion",
+                payload: { action: "created", suggestion: pendingTaskSuggestion },
+              });
+            });
+            return { runId };
+          }
           const responseDelayMs =
             opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
           if (opts.message === "streaming prompt") {
@@ -228,7 +300,35 @@ async function writeTuiPtyFixtureScript(dir: string) {
           return { ok: true, aborted: true };
         }
 
-        async loadHistory() {
+        async loadHistory(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
+          const sessionKey = opts?.sessionKey ?? "main";
+          record("loadHistory", { sessionKey });
+          const rapidSwitchMarker = sessionKey.endsWith("switch-a")
+            ? "A"
+            : sessionKey.endsWith("switch-b")
+              ? "B"
+              : null;
+          const delayMs =
+            rapidSwitchMarker === "A" ? 500 : rapidSwitchMarker === "B" ? 40 : startupDelayMs;
+          if (delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+          if (rapidSwitchMarker) {
+            record("loadHistoryResolved", { sessionKey });
+            return {
+              sessionId: "session-" + rapidSwitchMarker,
+              sessionInfo: {
+                key: sessionKey,
+                sessionId: "session-" + rapidSwitchMarker,
+                model: currentModel,
+                modelProvider: "fixture-provider",
+                contextTokens: 128,
+                fastMode,
+                thinkingLevels: [],
+              },
+              messages: [{ role: "user", content: rapidSwitchMarker + "_HISTORY_MARKER" }],
+            };
+          }
           return { messages: [], fastMode };
         }
 
@@ -276,6 +376,12 @@ async function writeTuiPtyFixtureScript(dir: string) {
           };
         }
 
+        async createSession(opts: Parameters<TuiBackend["createSession"]>[0]) {
+          record("createSession", opts);
+          const key = "agent:main:" + opts.key;
+          return { ok: true, key, entry: { ...sessionEntry(key), sessionId: "created-session" } };
+        }
+
         async resetSession(key: string, reason?: "new" | "reset") {
           record("resetSession", { key, reason });
           return {};
@@ -291,6 +397,61 @@ async function writeTuiPtyFixtureScript(dir: string) {
             { id: "fixture-provider/fixture-model", name: "Fixture", provider: "fixture-provider" },
             { id: "fixture-provider/fixture-model-2", name: "Fixture 2", provider: "fixture-provider" },
           ];
+        }
+
+        async listPluginApprovals() {
+          record("listPluginApprovals", { pending: Boolean(pendingPluginApproval) });
+          return pendingPluginApproval ? [pendingPluginApproval] : [];
+        }
+
+        async resolvePluginApproval(id: string, decision: "allow-once" | "allow-always" | "deny") {
+          record("resolvePluginApproval", { id, decision });
+          const pendingRun = pendingPluginApprovalRun;
+          pendingPluginApproval = null;
+          pendingPluginApprovalRun = null;
+          this.onEvent?.({
+            event: "plugin.approval.resolved",
+            payload: { id, decision },
+          });
+          this.onEvent?.({
+            event: "chat",
+            payload: {
+              runId: pendingRun?.runId ?? "run-pty-fixture",
+              sessionKey: pendingRun?.sessionKey ?? "agent:main:main",
+              state: "final",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "PTY_SKILL_APPROVAL_RESOLVED: " + decision }],
+                timestamp: Date.now(),
+              },
+            },
+          });
+          return { ok: true };
+        }
+
+        async listTaskSuggestions() {
+          record("listTaskSuggestions", { pending: Boolean(pendingTaskSuggestion) });
+          return pendingTaskSuggestion ? [pendingTaskSuggestion] : [];
+        }
+
+        async acceptTaskSuggestion(taskId: string) {
+          record("acceptTaskSuggestion", { taskId });
+          pendingTaskSuggestion = null;
+          this.onEvent?.({
+            event: "task.suggestion",
+            payload: { action: "resolved", taskId, resolution: "accepted" },
+          });
+          return { taskId, key: "agent:main:task-pty" };
+        }
+
+        async dismissTaskSuggestion(taskId: string) {
+          record("dismissTaskSuggestion", { taskId });
+          pendingTaskSuggestion = null;
+          this.onEvent?.({
+            event: "task.suggestion",
+            payload: { action: "resolved", taskId, resolution: "dismissed" },
+          });
+          return { taskId, dismissed: true };
         }
       }
 
@@ -368,6 +529,40 @@ describe.sequential("TUI PTY harness", () => {
   });
 
   it(
+    "shows startup activity while post-connect initialization is pending",
+    async () => {
+      const slow = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_STARTUP_DELAY_MS: "400" },
+      });
+      try {
+        await slow.run.waitForOutput("starting up", STARTUP_TIMEOUT_MS);
+        await slow.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+      } finally {
+        await slow.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it("refreshes pending approvals before loading history", async () => {
+    await fixture.waitForLogEntry((entry) => entry.method === "listPluginApprovals");
+    await fixture.waitForLogEntry((entry) => entry.method === "listTaskSuggestions");
+    await fixture.waitForLogEntry((entry) => entry.method === "loadHistory");
+
+    const entries = await readFixtureLog(fixture.logPath);
+    const approvalRefreshIndex = entries.findIndex(
+      (entry) => entry.method === "listPluginApprovals",
+    );
+    const historyLoadIndex = entries.findIndex((entry) => entry.method === "loadHistory");
+    const taskRefreshIndex = entries.findIndex((entry) => entry.method === "listTaskSuggestions");
+
+    expect(approvalRefreshIndex).toBeGreaterThanOrEqual(0);
+    expect(approvalRefreshIndex).toBeLessThan(historyLoadIndex);
+    expect(taskRefreshIndex).toBeGreaterThanOrEqual(0);
+    expect(taskRefreshIndex).toBeLessThan(historyLoadIndex);
+  });
+
+  it(
     "drives the real TUI terminal loop through typed input",
     async () => {
       await fixture.run.write("hello from pty\r");
@@ -376,6 +571,71 @@ describe.sequential("TUI PTY harness", () => {
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "hello from pty"),
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "presents and resolves workspace skill approval in the TUI",
+    async () => {
+      await fixture.run.write("skill approval proof\r");
+      await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
+      await fixture.run.waitForOutput("Plugin: workspace-skills");
+      await fixture.run.waitForOutput(
+        "Apply a pending workspace skill proposal into live workspace skills.",
+      );
+
+      await fixture.run.write("\x1b[A", { delay: false });
+      await fixture.run.write("\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "resolvePluginApproval" &&
+          objectFieldEquals(entry, "decision", "allow-once"),
+      );
+      await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "refreshes pending workspace skill approvals after an event gap",
+    async () => {
+      await fixture.run.write("skill approval gap proof\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "listPluginApprovals" && objectFieldEquals(entry, "pending", true),
+      );
+      await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
+
+      await fixture.run.write("\x1b[A", { delay: false });
+      await fixture.run.write("\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "resolvePluginApproval" &&
+          objectFieldEquals(entry, "decision", "allow-once"),
+      );
+      await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "presents and starts a suggested task in the TUI",
+    async () => {
+      await fixture.run.write("task suggestion proof\r");
+      await fixture.run.waitForOutput("Suggested follow-up: Remove stale adapter");
+      await fixture.run.waitForOutput("Project: /repo/project");
+      await fixture.run.waitForOutput("The adapter is unreachable and adds maintenance cost.");
+
+      await fixture.run.write("\x1b[A", { delay: false });
+      await fixture.run.write("\r", { delay: false });
+      await fixture.run.waitForOutput("Press Enter again to start this task in a worktree.");
+      await fixture.run.write("\r", { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "acceptTaskSuggestion" && objectFieldEquals(entry, "taskId", "task_pty"),
+      );
+      await fixture.run.waitForOutput("session agent:main:task-pty");
     },
     TEST_TIMEOUT_MS,
   );
@@ -511,6 +771,24 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "creates a backend session from /new and adopts its canonical key",
+    async () => {
+      await fixture.run.write("/new\r", { delay: false });
+      await fixture.run.waitForOutput("new session: agent:main:tui-");
+      const created = await fixture.waitForLogEntry((entry) => entry.method === "createSession");
+      expect(created.payload).toMatchObject({ agentId: "main" });
+      expect(created.payload).not.toHaveProperty("parentSessionKey");
+
+      await fixture.run.write("after new\r", { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "after new"),
+      );
+      expect(sent.payload).toMatchObject({ sessionKey: expect.stringMatching(/^agent:main:tui-/) });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "resets the current session from /reset",
     async () => {
       await fixture.run.write("/reset\r", { delay: false });
@@ -524,8 +802,31 @@ describe.sequential("TUI PTY harness", () => {
           return false;
         }
         const key = (entry.payload as Record<string, unknown>).key;
-        return key === "main" || key === "agent:main:main";
+        return typeof key === "string" && (key === "main" || key.startsWith("agent:main:"));
       });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the newer session when a rapid switch's history resolves last",
+    async () => {
+      await fixture.run.write("/session agent:main:switch-a\r", { delay: false });
+      await fixture.run.write("/session agent:main:switch-b\r", { delay: false });
+      await fixture.run.waitForOutput("B_HISTORY_MARKER");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "loadHistoryResolved" &&
+          objectFieldEquals(entry, "sessionKey", "agent:main:switch-a"),
+      );
+
+      await fixture.run.write("after switch\r", { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "after switch"),
+      );
+      expect(sent.payload).toMatchObject({ sessionKey: "agent:main:switch-b" });
+      expect(fixture.run.output()).not.toContain("A_HISTORY_MARKER");
     },
     TEST_TIMEOUT_MS,
   );

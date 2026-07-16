@@ -32,7 +32,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-const ACTION_PAD = 16;
+const ACTION_PAD = "prune-model-run".length;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -304,8 +304,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       return;
     }
 
-    for (let i = 0; i < previewResults.length; i += 1) {
-      const result = previewResults[i];
+    for (const [i, result] of previewResults.entries()) {
       if (i > 0) {
         runtime.log("");
       }

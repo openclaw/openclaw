@@ -242,6 +242,7 @@ describe("runDoctorLintCli", () => {
             checkId: "plugin/example/lint",
             severity: "info",
             message: "plugin finding",
+            fixHint: "Review the plugin finding.",
           },
         ];
       },
@@ -281,6 +282,7 @@ describe("runDoctorLintCli", () => {
             checkId: "plugin/example/lint",
             severity: "info",
             message: "plugin finding",
+            fixHint: "Review the plugin finding.",
           },
         ];
       },
@@ -302,6 +304,7 @@ describe("runDoctorLintCli", () => {
           checkId: "plugin/example/lint",
           severity: "info",
           message: "plugin finding",
+          fixHint: "Review the plugin finding.",
         },
       ]);
     } finally {

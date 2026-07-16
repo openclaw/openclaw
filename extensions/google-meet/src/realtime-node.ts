@@ -677,7 +677,7 @@ export async function startNodeRealtimeAudioBridge(params: {
         payload: { name: event.name, args: event.args },
       });
       const turnId = ensureTalkTurn();
-      handleGoogleMeetRealtimeConsultToolCall({
+      return handleGoogleMeetRealtimeConsultToolCall({
         strategy,
         session,
         event,
@@ -769,3 +769,4 @@ export async function startNodeRealtimeAudioBridge(params: {
     stop,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

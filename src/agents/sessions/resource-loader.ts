@@ -64,7 +64,7 @@ function resolvePromptInput(input: string | undefined, description: string): str
       console.error(
         chalk.yellow(`Warning: Could not read ${description} file ${input}: ${String(error)}`),
       );
-      return input;
+      return undefined;
     }
   }
 
@@ -1036,3 +1036,4 @@ export class DefaultResourceLoader implements ResourceLoader {
     return conflicts;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

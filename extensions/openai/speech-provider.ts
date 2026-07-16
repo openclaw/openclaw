@@ -1,4 +1,5 @@
 // Openai provider module implements model/runtime integration.
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -48,6 +49,10 @@ type OpenAITtsProviderOverrides = {
   voice?: string;
   speed?: number;
 };
+
+function resolveOpenAISpeechApiKey(config: OpenAITtsProviderConfig): string | undefined {
+  return trimToUndefined(config.apiKey) ?? trimToUndefined(process.env.OPENAI_API_KEY);
+}
 
 function normalizeOpenAISpeechResponseFormat(
   value: unknown,
@@ -321,7 +326,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     }),
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readOpenAIProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
+      Boolean(resolveOpenAISpeechApiKey(readOpenAIProviderConfig(providerConfig))),
     prepareSynthesis: (ctx) => {
       const config = readOpenAIProviderConfig(ctx.providerConfig);
       if (config.instructions) {
@@ -342,7 +347,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
       const overrides = readOpenAIOverrides(req.providerOverrides, config.baseUrl);
-      const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+      const apiKey = resolveOpenAISpeechApiKey(config);
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
@@ -364,17 +369,20 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs,
         maxBytes: resolveGeneratedAudioMaxBytes(req),
       });
+      const fileExtension = responseFormatToFileExtension(responseFormat);
       return {
         audioBuffer,
         outputFormat: responseFormat,
-        fileExtension: responseFormatToFileExtension(responseFormat),
-        voiceCompatible: req.target === "voice-note" && responseFormat === "opus",
+        fileExtension,
+        voiceCompatible:
+          req.target === "voice-note" &&
+          isVoiceMessageCompatibleAudio({ fileName: `speech${fileExtension}` }),
       };
     },
     synthesizeTelephony: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
       const overrides = readOpenAIOverrides(req.providerOverrides, config.baseUrl);
-      const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+      const apiKey = resolveOpenAISpeechApiKey(config);
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }

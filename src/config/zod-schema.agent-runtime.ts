@@ -1014,7 +1014,7 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
-export const AgentRuntimePolicySchema = z
+const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
   })
@@ -1039,9 +1039,10 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    utilityModel: z.string().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),
     verboseDefault: z.enum(["off", "on", "full"]).optional(),
     toolProgressDetail: z.enum(["explain", "raw"]).optional(),
@@ -1162,3 +1163,4 @@ export const ToolsSchema = z
     );
   })
   .optional();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

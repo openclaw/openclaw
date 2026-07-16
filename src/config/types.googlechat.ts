@@ -1,6 +1,6 @@
 // Defines Google Chat channel configuration types.
 import type {
-  BlockStreamingCoalesceConfig,
+  ChannelDeliveryStreamingConfig,
   DmPolicy,
   GroupPolicy,
   ReplyToMode,
@@ -33,6 +33,7 @@ export type GoogleChatGroupConfig = {
 };
 
 export type GoogleChatActionConfig = {
+  /** @deprecated Accepted for config compatibility; service-account auth cannot use reaction APIs. */
   reactions?: boolean;
 };
 
@@ -95,11 +96,8 @@ export type GoogleChatAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Delivery streaming config: chunk mode plus block streaming controls. */
+  streaming?: ChannelDeliveryStreamingConfig;
   mediaMaxMb?: number;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;

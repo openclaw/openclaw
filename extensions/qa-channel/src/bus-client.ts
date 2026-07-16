@@ -1,6 +1,9 @@
 // Qa Channel plugin module implements bus client behavior.
 import http from "node:http";
 import https from "node:https";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { parseQaTarget, type QaTargetParts } from "openclaw/plugin-sdk/qa-channel-protocol";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
   QaBusInboundMessageInput,
@@ -11,6 +14,8 @@ import type {
   QaBusThread,
   QaBusToolCall,
 } from "./protocol.js";
+
+export { parseQaTarget };
 
 export type {
   QaBusAttachment,
@@ -35,10 +40,32 @@ export type {
 } from "./protocol.js";
 
 type JsonResult<T> = Promise<T>;
+const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+/** Total deadline for local qa-bus state requests. */
+const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
   return new URL(path.replace(/^\/+/, ""), normalizedBaseUrl);
+}
+
+async function readQaBusNodeJsonResponse<T>(
+  response: http.IncomingMessage,
+  label: string,
+): Promise<T> {
+  const bytes = await readByteStreamWithLimit(response, {
+    maxBytes: QA_BUS_JSON_RESPONSE_MAX_BYTES,
+    onOverflow: ({ maxBytes }) => new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
+  });
+  const text = bytes.toString("utf8");
+  if (!text) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
 }
 
 async function postJson<T>(
@@ -70,27 +97,23 @@ async function postJson<T>(
         },
       },
       (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        response.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          let parsed: T | { error?: string };
-          try {
-            parsed = text ? (JSON.parse(text) as T | { error?: string }) : ({} as T);
-          } catch (error) {
+        const label = `qa-bus ${path}`;
+        void readQaBusNodeJsonResponse<T | { error?: string }>(response, label).then(
+          (parsed) => {
+            if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
+              const error =
+                typeof parsed === "object" && parsed && "error" in parsed
+                  ? parsed.error
+                  : undefined;
+              reject(new Error(error || `qa-bus request failed: ${response.statusCode ?? 500}`));
+              return;
+            }
+            resolve(parsed as T);
+          },
+          (error: unknown) => {
             reject(toLintErrorObject(error, "Non-Error rejection"));
-            return;
-          }
-          if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
-            const error =
-              typeof parsed === "object" && parsed && "error" in parsed ? parsed.error : undefined;
-            reject(new Error(error || `qa-bus request failed: ${response.statusCode ?? 500}`));
-            return;
-          }
-          resolve(parsed as T);
-        });
+          },
+        );
         response.on("error", reject);
       },
     );
@@ -120,48 +143,19 @@ export function normalizeQaTarget(raw: string): string | undefined {
   return trimmed;
 }
 
-export function parseQaTarget(raw: string): {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string;
-} {
-  const normalized = normalizeQaTarget(raw);
-  if (!normalized) {
-    throw new Error("qa-channel target is required");
+export function resolveQaTargetThread(params: {
+  target: string;
+  threadId?: string | number | null;
+}): { target: QaTargetParts; threadId?: string } {
+  const target = parseQaTarget(params.target);
+  const explicitThreadId = params.threadId == null ? "" : String(params.threadId).trim();
+  if (target.threadId && explicitThreadId && target.threadId !== explicitThreadId) {
+    throw new Error("qa-channel target conflicts with the explicit threadId");
   }
-  if (normalized.startsWith("thread:")) {
-    const rest = normalized.slice("thread:".length);
-    const slashIndex = rest.indexOf("/");
-    if (slashIndex <= 0 || slashIndex === rest.length - 1) {
-      throw new Error(`invalid qa-channel thread target: ${normalized}`);
-    }
-    return {
-      chatType: "channel",
-      conversationId: rest.slice(0, slashIndex),
-      threadId: rest.slice(slashIndex + 1),
-    };
-  }
-  if (normalized.startsWith("channel:")) {
-    return {
-      chatType: "channel",
-      conversationId: normalized.slice("channel:".length),
-    };
-  }
-  if (normalized.startsWith("group:")) {
-    return {
-      chatType: "group",
-      conversationId: normalized.slice("group:".length),
-    };
-  }
-  if (normalized.startsWith("dm:")) {
-    return {
-      chatType: "direct",
-      conversationId: normalized.slice("dm:".length),
-    };
-  }
+  const threadId = explicitThreadId || target.threadId;
   return {
-    chatType: "direct",
-    conversationId: normalized,
+    target,
+    ...(threadId ? { threadId } : {}),
   };
 }
 
@@ -286,12 +280,13 @@ export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot
     url: buildQaBusUrl(baseUrl, "/v1/state").toString(),
     policy: { allowPrivateNetwork: true },
     auditContext: "qa-channel.bus-state",
+    timeoutMs: QA_BUS_STATE_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
       throw new Error(`qa-bus request failed: ${response.status}`);
     }
-    return (await response.json()) as QaBusStateSnapshot;
+    return await readProviderJsonResponse<QaBusStateSnapshot>(response, "qa-channel.bus-state");
   } finally {
     await release();
   }
