@@ -38,4 +38,8 @@ describe("parseTcpPortFromArgs", () => {
       19005,
     );
   });
+
+  it("does not reinterpret a consumed port value as another flag", () => {
+    expect(parseTcpPortFromArgs(["gateway", "--port", "--port=19006"])).toBeNull();
+  });
 });

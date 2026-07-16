@@ -298,11 +298,14 @@ function readGatewayServiceCommandPortState(
     return { kind: "missing" };
   }
   let latest: GatewayServiceCommandPort = { kind: "missing" };
-  for (const [index, arg] of programArguments.entries()) {
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const arg = programArguments[index];
     if (arg === "--port") {
       latest = parseGatewayPortArg(programArguments[index + 1]);
+      index += 1;
+      continue;
     }
-    if (arg.startsWith("--port=")) {
+    if (arg?.startsWith("--port=")) {
       latest = parseGatewayPortArg(arg.slice("--port=".length));
     }
   }

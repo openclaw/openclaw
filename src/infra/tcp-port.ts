@@ -29,6 +29,8 @@ export function parseTcpPortFromArgs(programArguments: string[] | undefined): nu
       if (parsed !== null) {
         latestPort = parsed;
       }
+      index += 1;
+      continue;
     }
     if (argument?.startsWith("--port=")) {
       const parsed = parseTcpPort(argument.slice("--port=".length));
