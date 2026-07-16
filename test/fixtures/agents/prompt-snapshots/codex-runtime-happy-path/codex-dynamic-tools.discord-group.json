@@ -722,7 +722,7 @@
                       "type": "boolean"
                     },
                     "script": {
-                      "maxLength": 65536,
+                      "description": "Trigger script source (max 65536 chars).",
                       "minLength": 1,
                       "type": "string"
                     }
@@ -1077,7 +1077,7 @@
                           "type": "boolean"
                         },
                         "script": {
-                          "maxLength": 65536,
+                          "description": "Trigger script source (max 65536 chars).",
                           "minLength": 1,
                           "type": "string"
                         }
@@ -1270,7 +1270,7 @@
               "type": "integer"
             },
             "query": {
-              "maxLength": 4096,
+              "description": "Search query (max 4096 chars).",
               "type": "string"
             },
             "sessionKey": {
