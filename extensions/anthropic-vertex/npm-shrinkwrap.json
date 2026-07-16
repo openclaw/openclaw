@@ -8,7 +8,8 @@
       "name": "@openclaw/anthropic-vertex-provider",
       "version": "2026.7.2",
       "dependencies": {
-        "@anthropic-ai/vertex-sdk": "0.19.0"
+        "@anthropic-ai/vertex-sdk": "0.19.0",
+        "google-auth-library": "10.9.0"
       }
     },
     "node_modules/@anthropic-ai/sdk": {

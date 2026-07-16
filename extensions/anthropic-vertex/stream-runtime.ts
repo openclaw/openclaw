@@ -3,6 +3,7 @@
  * OpenClaw stream options for the shared Anthropic Messages transport.
  */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
+import { GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   clampThinkingLevel,
@@ -21,8 +22,9 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { ensureNativeFetchVisibleToGoogleAuth } from "./native-fetch-auth-shim.js";
 import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
+
+const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
 type AnthropicVertexTransportOptions = ProviderStreamOptions & {
   client?: unknown;
@@ -35,6 +37,7 @@ type AnthropicVertexEffort = NonNullable<AnthropicVertexTransportOptions["effort
 type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
 type AnthropicVertexClientOptions = {
   baseURL?: string;
+  googleAuth: GoogleAuth;
   projectId?: string;
   region: string;
 };
@@ -42,11 +45,13 @@ type AnthropicVertexClientOptions = {
 /** Injectable dependencies for Anthropic Vertex stream tests. */
 export type AnthropicVertexStreamDeps = {
   AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;
+  GoogleAuth: new (options?: GoogleAuthOptions) => GoogleAuth;
   streamAnthropic: typeof streamDefault;
 };
 
 const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
   AnthropicVertex: AnthropicVertexSdk as AnthropicVertexStreamDeps["AnthropicVertex"],
+  GoogleAuth,
   streamAnthropic: streamDefault,
 };
 
@@ -136,8 +141,17 @@ export function createAnthropicVertexStreamFn(
   baseURL?: string,
   deps: AnthropicVertexStreamDeps = defaultAnthropicVertexStreamDeps,
 ): StreamFn {
-  ensureNativeFetchVisibleToGoogleAuth();
+  // google-auth-library carries these options into file-backed ADC clients,
+  // including the service-account JSON path from #107341. Keep the override
+  // provider-local; a `window.fetch` shim changes unrelated browser detection.
+  const googleAuth = new deps.GoogleAuth({
+    scopes: [GOOGLE_CLOUD_PLATFORM_SCOPE],
+    clientOptions: {
+      transporterOptions: { fetchImplementation: globalThis.fetch },
+    },
+  });
   const client = new deps.AnthropicVertex({
+    googleAuth,
     region,
     ...(baseURL ? { baseURL } : {}),
     ...(projectId ? { projectId } : {}),

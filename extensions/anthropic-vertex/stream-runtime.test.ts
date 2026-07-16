@@ -7,6 +7,8 @@ function createStreamDeps(): {
   deps: AnthropicVertexStreamDeps;
   streamAnthropicMock: ReturnType<typeof vi.fn>;
   anthropicVertexCtorMock: ReturnType<typeof vi.fn>;
+  googleAuthCtorMock: ReturnType<typeof vi.fn>;
+  googleAuthClient: InstanceType<AnthropicVertexStreamDeps["GoogleAuth"]>;
 } {
   const streamAnthropicMock = vi.fn(
     (..._args: Parameters<AnthropicVertexStreamDeps["streamAnthropic"]>) =>
@@ -16,14 +18,23 @@ function createStreamDeps(): {
   const MockAnthropicVertex = function MockAnthropicVertex(options: unknown) {
     anthropicVertexCtorMock(options);
   } as unknown as AnthropicVertexStreamDeps["AnthropicVertex"];
+  const googleAuthCtorMock = vi.fn();
+  const googleAuthClient = {} as InstanceType<AnthropicVertexStreamDeps["GoogleAuth"]>;
+  const MockGoogleAuth = function MockGoogleAuth(options: unknown) {
+    googleAuthCtorMock(options);
+    return googleAuthClient;
+  } as unknown as AnthropicVertexStreamDeps["GoogleAuth"];
 
   return {
     deps: {
       AnthropicVertex: MockAnthropicVertex,
+      GoogleAuth: MockGoogleAuth,
       streamAnthropic: streamAnthropicMock,
     },
     streamAnthropicMock,
     anthropicVertexCtorMock,
+    googleAuthCtorMock,
+    googleAuthClient,
   };
 }
 
@@ -149,18 +160,40 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("omits projectId when ADC credentials are used without an explicit project", () => {
-    const { deps, anthropicVertexCtorMock } = createStreamDeps();
+    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn(undefined, "global", undefined, deps);
 
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 }), { messages: [] }, {});
 
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      googleAuth: googleAuthClient,
       region: "global",
     });
   });
 
+  it("uses native fetch for file-backed ADC without mutating the global window", () => {
+    const { deps, anthropicVertexCtorMock, googleAuthCtorMock, googleAuthClient } =
+      createStreamDeps();
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+
+    createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+
+    expect(googleAuthCtorMock).toHaveBeenCalledWith({
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+      clientOptions: {
+        transporterOptions: { fetchImplementation: globalThis.fetch },
+      },
+    });
+    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      googleAuth: googleAuthClient,
+      projectId: "vertex-project",
+      region: "us-east5",
+    });
+    expect(Object.getOwnPropertyDescriptor(globalThis, "window")).toEqual(windowDescriptor);
+  });
+
   it("passes an explicit baseURL through to the Vertex client", () => {
-    const { deps, anthropicVertexCtorMock } = createStreamDeps();
+    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn(
       "vertex-project",
       "us-east5",
@@ -171,6 +204,7 @@ describe("createAnthropicVertexStreamFn", () => {
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 }), { messages: [] }, {});
 
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      googleAuth: googleAuthClient,
       projectId: "vertex-project",
       region: "us-east5",
       baseURL: "https://proxy.example.test/vertex/v1",
@@ -468,7 +502,7 @@ describe("createAnthropicVertexStreamFn", () => {
 
 describe("createAnthropicVertexStreamFnForModel", () => {
   it("derives project and region from the model and env", () => {
-    const { deps, anthropicVertexCtorMock } = createStreamDeps();
+    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(
       { baseUrl: "https://europe-west4-aiplatform.googleapis.com" },
       { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
@@ -478,6 +512,7 @@ describe("createAnthropicVertexStreamFnForModel", () => {
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
 
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      googleAuth: googleAuthClient,
       projectId: "vertex-project",
       region: "europe-west4",
       baseURL: "https://europe-west4-aiplatform.googleapis.com/v1",
@@ -485,7 +520,7 @@ describe("createAnthropicVertexStreamFnForModel", () => {
   });
 
   it("preserves explicit custom provider base URLs", () => {
-    const { deps, anthropicVertexCtorMock } = createStreamDeps();
+    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(
       { baseUrl: "https://proxy.example.test/custom-root/v1" },
       { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
@@ -495,6 +530,7 @@ describe("createAnthropicVertexStreamFnForModel", () => {
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
 
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      googleAuth: googleAuthClient,
       projectId: "vertex-project",
       region: "global",
       baseURL: "https://proxy.example.test/custom-root/v1",
@@ -502,7 +538,7 @@ describe("createAnthropicVertexStreamFnForModel", () => {
   });
 
   it("adds /v1 for path-prefixed custom provider base URLs", () => {
-    const { deps, anthropicVertexCtorMock } = createStreamDeps();
+    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(
       { baseUrl: "https://proxy.example.test/custom-root" },
       { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
@@ -512,6 +548,7 @@ describe("createAnthropicVertexStreamFnForModel", () => {
     void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
 
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      googleAuth: googleAuthClient,
       projectId: "vertex-project",
       region: "global",
       baseURL: "https://proxy.example.test/custom-root/v1",
