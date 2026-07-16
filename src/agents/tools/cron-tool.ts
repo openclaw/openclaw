@@ -178,7 +178,7 @@ function createCronPayloadSchema(): TSchema {
 function createCronTriggerSchema(params: { nullableClears: boolean }): TSchema {
   const trigger = Type.Object(
     {
-      script: Type.String({ minLength: 1, maxLength: 65_536 }),
+      script: Type.String({ minLength: 1, maxLength: 4_096 }),
       once: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
@@ -279,7 +279,6 @@ function createCronJobObjectSchema(): TSchema {
             description: "Idempotent declaration key.",
             minLength: 1,
             maxLength: 200,
-            pattern: "\\S",
           }),
         ),
         displayName: Type.Optional(
