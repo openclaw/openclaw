@@ -149,6 +149,7 @@ export function collectConfigModelRefs(
         agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
         defaultsRuntime,
       }),
+      collectModelsMap: true,
       blockedModelIdentities,
     });
   }
