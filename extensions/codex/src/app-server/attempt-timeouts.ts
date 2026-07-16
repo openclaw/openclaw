@@ -20,7 +20,7 @@ export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Long terminal idle watch for app-server turns that never send completion. */
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
-export type CodexAppServerStartupErrorReason = "aborted" | "timed_out";
+type CodexAppServerStartupErrorReason = "aborted" | "timed_out";
 
 export class CodexAppServerStartupError extends Error {
   readonly code = "CODEX_APP_SERVER_STARTUP_CANCELLED";
