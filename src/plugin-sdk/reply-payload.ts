@@ -310,6 +310,26 @@ export async function sendPayloadMediaSequence<TResult>(params: {
   return lastResult;
 }
 
+/** Sends text chunks sequentially and returns the last send result. */
+export async function sendPayloadTextChunkSequence<TResult>(params: {
+  /** Ordered text chunks to send. */
+  chunks: readonly string[];
+  send: (input: { text: string; index: number; isFirst: boolean }) => Promise<TResult>;
+  /** Called after each successful chunk send and before the next send starts. */
+  onResult?: (result: TResult) => Promise<void> | void;
+}): Promise<TResult | undefined> {
+  let lastResult: TResult | undefined;
+  for (let index = 0; index < params.chunks.length; index += 1) {
+    lastResult = await params.send({
+      text: params.chunks[index]!,
+      index,
+      isFirst: index === 0,
+    });
+    await params.onResult?.(lastResult);
+  }
+  return lastResult;
+}
+
 /** Sends a media sequence or returns a fallback when no media send produces a result. */
 export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
   /** Caption text attached to the first non-empty media URL only. */

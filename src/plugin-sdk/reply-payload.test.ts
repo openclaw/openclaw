@@ -20,6 +20,7 @@ import {
   resolveTextChunksWithFallback,
   sendTextMediaPayload,
   sendMediaWithLeadingCaption,
+  sendPayloadTextChunkSequence,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
 
@@ -113,6 +114,39 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
     expect(isNumericTargetId("  987  ")).toBe(true);
     expect(isNumericTargetId("ab12")).toBe(false);
     expect(isNumericTargetId("")).toBe(false);
+  });
+});
+
+describe("sendPayloadTextChunkSequence", () => {
+  it.each([
+    { name: "empty", chunks: [], expectedCalls: [], expectedResult: undefined },
+    { name: "single", chunks: ["one"], expectedCalls: [["one", 0, true]], expectedResult: "one" },
+    {
+      name: "multiple",
+      chunks: ["one", "two"],
+      expectedCalls: [
+        ["one", 0, true],
+        ["two", 1, false],
+      ],
+      expectedResult: "two",
+    },
+  ])("sends $name chunk sequences", async ({ chunks, expectedCalls, expectedResult }) => {
+    const calls: Array<[string, number, boolean]> = [];
+    const results: string[] = [];
+    const result = await sendPayloadTextChunkSequence({
+      chunks,
+      send: async ({ text, index, isFirst }) => {
+        calls.push([text, index, isFirst]);
+        return text;
+      },
+      onResult: (value) => {
+        results.push(value);
+      },
+    });
+
+    expect(calls).toEqual(expectedCalls);
+    expect(results).toEqual(chunks);
+    expect(result).toBe(expectedResult);
   });
 });
 
