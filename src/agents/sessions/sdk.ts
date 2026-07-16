@@ -11,6 +11,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
+import { getAgentDir } from "../config.js";
 import {
   Agent,
   type AgentMessage,
@@ -30,7 +31,6 @@ import type {
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
-import { getAgentDir } from "../config.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
