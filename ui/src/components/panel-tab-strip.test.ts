@@ -2,7 +2,11 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderPanelTabStrip, type PanelTabStripTab } from "./panel-tab-strip.ts";
+import {
+  panelTabStripStyles,
+  renderPanelTabStrip,
+  type PanelTabStripTab,
+} from "./panel-tab-strip.ts";
 
 const TAB: PanelTabStripTab = {
   id: "tab-1",
@@ -33,6 +37,10 @@ function renderStrip(options: {
 }
 
 describe("renderPanelTabStrip", () => {
+  it("keeps the new-tab control from shrinking when the strip overflows", () => {
+    expect(panelTabStripStyles.cssText).toMatch(/\.tabstrip-new\s*\{[^}]*flex:\s*none/u);
+  });
+
   it("renders an unslotted new button without an empty tab group", () => {
     const onNew = vi.fn();
     const container = renderStrip({ onNew });

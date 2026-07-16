@@ -215,6 +215,7 @@ export const panelTabStripStyles = css`
   }
   .tabstrip-new {
     display: inline-flex;
+    flex: none;
     align-items: center;
     justify-content: center;
     align-self: center;
