@@ -72,6 +72,20 @@ describe("elevenlabs speech provider", () => {
     );
   });
 
+  it.each(["not a url", "ws://localhost:9000/api", "ftp://files.example.com"])(
+    "rejects invalid speech baseUrl %s",
+    async (baseUrl) => {
+      const provider = buildElevenLabsSpeechProvider();
+
+      await expect(
+        provider.listVoices?.({
+          providerConfig: { apiKey: "xi-test", baseUrl },
+          timeoutMs: 30_000,
+        }),
+      ).rejects.toThrow(/^Invalid ElevenLabs baseUrl:/);
+    },
+  );
+
   it("keeps non-equivalent deprecated ElevenLabs TTS model IDs", async () => {
     const provider = buildElevenLabsSpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
