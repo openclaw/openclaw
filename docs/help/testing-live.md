@@ -437,7 +437,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `google/gemini-3.1-pro-preview`               | Gemini API |
 | `google/gemini-3.5-flash`                     | Gemini API |
 | `cohere/command-a-plus-05-2026`               |            |
-| `moonshot/kimi-k2.7-code`                     |            |
+| `moonshot/kimi-k3`                            |            |
 | `anthropic/claude-opus-4-6`                   |            |
 | `deepseek/deepseek-v4-flash`                  |            |
 | `deepseek/deepseek-v4-pro`                    |            |

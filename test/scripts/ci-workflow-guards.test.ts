@@ -1571,7 +1571,7 @@ describe("ci workflow guards", () => {
       (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
     );
 
-    expect(source).toContain('{ check_name: "android-test-play", task: "test-play" }');
+    expect(source).toContain('task: useCompatibleAndroidCi ? "test-play-compat" : "test-play"');
     expect(source).toContain(
       '{ check_name: "android-test-third-party", task: "test-third-party" }',
     );
@@ -2525,6 +2525,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
     ).run;
     expect(androidRun).toContain("build-play-compat)");
+    expect(androidRun).toContain("test-play-compat)");
     expect(androidRun).toContain(":app:assemblePlayDebug");
 
     const legacy = runCiManifestFixture({ bundledPlanner: false });
@@ -2539,7 +2540,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       JSON.parse(expectDefined(legacy.outputs.android_matrix, "legacy Android matrix output"))
         .include,
     ).toEqual([
-      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-play", task: "test-play-compat" },
       { check_name: "android-test-third-party", task: "test-third-party" },
       { check_name: "android-build-play", task: "build-play-compat" },
     ]);

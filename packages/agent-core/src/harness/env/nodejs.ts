@@ -313,7 +313,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 
       const onAbort = () => {
         if (child?.pid) {
-          killProcessTree(child.pid, { force: true });
+          killProcessTree(child.pid, { force: true, detached: true });
         }
       };
 
@@ -354,7 +354,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
           : setTimeout(() => {
               timedOut = true;
               if (child?.pid) {
-                killProcessTree(child.pid, { force: true });
+                killProcessTree(child.pid, { force: true, detached: true });
               }
             }, timeoutMs);
 

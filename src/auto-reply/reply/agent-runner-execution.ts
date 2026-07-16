@@ -20,6 +20,7 @@ import {
   captureAgentRunLifecycleGeneration,
   clearAgentRunContext,
   registerAgentRunContext,
+  withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -411,9 +412,12 @@ export async function runAgentTurnWithFallback(
     terminalOutcomeCommitted = true;
     params.replyOperation?.freezeAbort();
   };
-  try {
-    return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
-  } finally {
-    commitTerminalOutcome();
-  }
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.opts?.runId ?? "");
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    try {
+      return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
+    } finally {
+      commitTerminalOutcome();
+    }
+  });
 }

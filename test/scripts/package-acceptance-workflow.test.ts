@@ -1604,7 +1604,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-src-agents");
     expect(workflow).toContain("Checkout trusted live shard harness");
     expect(workflow).toContain(
-      "command: ZAI_API_KEY= Z_AI_API_KEY= node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
+      "command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
     );
     expect(workflow).toContain("suite_id: native-live-src-agents-zai-coding");
     expect(workflow).toContain(

@@ -422,12 +422,18 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           return;
         }
         const known = new Map(listed.map((session) => [session.sessionId, session]));
-        for (const sessionId of persisted.filter((id) => known.has(id))) {
-          await this.attachSession(
-            sessionId,
-            operation,
-            known.get(sessionId)?.owner?.startsWith("agent:") === true,
-          );
+        for (const sessionId of persisted) {
+          const session = known.get(sessionId);
+          if (!session) {
+            await this.restoreExitedSession(sessionId, operation);
+          } else {
+            await this.attachSession(
+              sessionId,
+              operation,
+              session.owner?.startsWith("agent:") === true,
+              true,
+            );
+          }
           if (!this.isTerminalOperationCurrent(operation)) {
             return;
           }
@@ -747,16 +753,19 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  /** Reattaches one persisted session; returns false when it is gone. */
+  /** Reattaches one session and reports whether adoption succeeded. */
   private async attachSession(
     sessionId: string,
     operation: TerminalOperation,
     agentOwned = false,
+    confirmGoneOnFailure = false,
   ): Promise<boolean> {
     let createdTab: TerminalTabState | undefined;
+    let createdConnection: TerminalConnection | undefined;
     try {
       const boot = await this.bootTab(operation);
       createdTab = boot.tab;
+      createdConnection = boot.connection;
       const result = await boot.connection.attach(sessionId, this.tabSink(boot.tab));
       if (!this.isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
         // A user close is deliberate; lifecycle cancellation leaves the existing
@@ -773,14 +782,58 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.adoptSession(boot.tab, result, agentOwned);
       return true;
     } catch {
-      // Session expired between list and attach (reaper race) or an older
-      // gateway: quietly drop the placeholder tab; restore falls back to a
-      // fresh session when nothing could be reattached.
+      const sessionGone =
+        confirmGoneOnFailure && createdConnection
+          ? await this.confirmRestoredSessionGone(createdConnection, sessionId, operation)
+          : false;
       if (createdTab && !createdTab.gatewaySessionId && this.tabs.includes(createdTab)) {
-        this.dropFailedTab(createdTab);
+        if (sessionGone) {
+          this.markRestoredSessionExited(createdTab, sessionId);
+        } else {
+          this.dropFailedTab(createdTab);
+        }
       }
       return false;
     }
+  }
+
+  private async confirmRestoredSessionGone(
+    connection: TerminalConnection,
+    sessionId: string,
+    operation: TerminalOperation,
+  ): Promise<boolean> {
+    try {
+      const sessions = await connection.list();
+      return (
+        this.isTerminalOperationCurrent(operation) &&
+        !sessions.some((session) => session.sessionId === sessionId)
+      );
+    } catch {
+      // A failed confirmation cannot turn a transport or authorization error
+      // into an authoritative terminal exit.
+      return false;
+    }
+  }
+
+  /** Keeps a dead persisted session visible without replaying bytes from a missing PTY. */
+  private async restoreExitedSession(
+    sessionId: string,
+    operation: TerminalOperation,
+  ): Promise<void> {
+    const boot = await this.bootTab(operation);
+    if (!this.isTerminalOperationCurrent(operation) || boot.tab.cancelled) {
+      if (this.tabs.includes(boot.tab)) {
+        boot.tab.cancelled = "lifecycle";
+        this.dropFailedTab(boot.tab);
+      }
+      return;
+    }
+    this.markRestoredSessionExited(boot.tab, sessionId);
+  }
+
+  private markRestoredSessionExited(tab: TerminalTabState, sessionId: string): void {
+    tab.gatewaySessionId = sessionId;
+    this.handleExit(tab.id, { reason: "disconnected", exitCode: null });
   }
 
   private handleExit(
