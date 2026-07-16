@@ -13,6 +13,7 @@ export type AssistantMessageOptions = {
         cacheRead?: number;
         cacheWrite?: number;
         total?: number;
+        contextUsage?: Usage["contextUsage"];
       }
     | undefined;
   aborted: boolean;
@@ -46,6 +47,11 @@ export function createAssistantMessage(
         output: options.tokenUsage.output ?? 0,
         cacheRead: options.tokenUsage.cacheRead ?? 0,
         cacheWrite: options.tokenUsage.cacheWrite ?? 0,
+        // Preserve absolute thread contextUsage so lastCallUsage can refresh
+        // session totalTokensFresh without using cumulative attempt totals.
+        ...(options.tokenUsage.contextUsage
+          ? { contextUsage: options.tokenUsage.contextUsage }
+          : {}),
         totalTokens:
           options.tokenUsage.total ??
           (options.tokenUsage.input ?? 0) +

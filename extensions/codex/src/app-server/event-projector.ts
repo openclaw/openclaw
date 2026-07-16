@@ -25,7 +25,7 @@ import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import { normalizeCodexTokenUsage } from "./event-projector-usage.js";
+import { projectCodexTokenUsage, type CodexNormalizedTokenUsage } from "./event-projector-usage.js";
 import {
   readCodexErrorNotificationMessage,
   readItem,
@@ -96,7 +96,7 @@ export class CodexAppServerEventProjector {
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
-  private tokenUsage: ReturnType<typeof normalizeCodexTokenUsage>;
+  private tokenUsage: CodexNormalizedTokenUsage | undefined;
   private completedCompactionCount = 0;
 
   constructor(
@@ -557,15 +557,14 @@ export class CodexAppServerEventProjector {
 
   private handleTokenUsage(params: JsonObject): void {
     // v2 ThreadTokenUsageUpdatedNotification: tokenUsage = {total, last, modelContextWindow}.
-    // Prefer absolute cumulative thread `total` for attemptUsage so session
-    // persistence can mark totalTokensFresh from the protocol snapshot.
-    // Per-call `last` alone is not the thread context total and leaves /status
-    // oscillating to ? after ordinary turns (#107324). Fall back to `last`
-    // only when `total` is absent.
+    // Keep per-call `last` on attempt/assistant accounting so /usage stays
+    // per-response. Map absolute thread `total` onto contextUsage so session
+    // totalTokensFresh /status can refresh without overwriting per-attempt
+    // fields (#107324).
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
     const total = tokenUsage && isJsonObject(tokenUsage.total) ? tokenUsage.total : undefined;
     const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-    const usage = normalizeCodexTokenUsage(total ?? last);
+    const usage = projectCodexTokenUsage({ last, total });
     if (usage) {
       this.tokenUsage = usage;
     }
