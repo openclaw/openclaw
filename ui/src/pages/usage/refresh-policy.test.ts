@@ -52,7 +52,6 @@ describe("decideUsageRefresh", () => {
       }),
     ).toBe("fetch");
   });
-
   it("defers interrupted work while hidden, then fetches once active despite a fresh payload", () => {
     const fresh = {
       reason: "reconnect" as const,
@@ -62,5 +61,17 @@ describe("decideUsageRefresh", () => {
     };
     expect(decideUsageRefresh({ ...fresh, visible: false })).toBe("defer");
     expect(decideUsageRefresh({ ...fresh, reason: "focus", visible: true })).toBe("fetch");
+  });
+
+  it("applies the same TTL to automatic settle polling", () => {
+    expect(
+      decideUsageRefresh({
+        reason: "poll",
+        visible: true,
+        interrupted: false,
+        nowMs: NOW_MS,
+        lastLoadedAtMs: NOW_MS - USAGE_PAYLOAD_TTL_MS + 1,
+      }),
+    ).toBe("skip");
   });
 });

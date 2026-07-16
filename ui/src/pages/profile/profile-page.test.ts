@@ -7,6 +7,7 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { USAGE_PAYLOAD_TTL_MS, type UsageRefreshReason } from "../usage/refresh-policy.ts";
 import { ProfilePage } from "./profile-page.ts";
 
 const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
@@ -19,22 +20,28 @@ type ProfilePageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-type ProfilePageLifecycle = HTMLElement & {
-  context: ApplicationContext<RouteId>;
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  costSummary: CostUsageSummary | null;
-  sessionsResult: SessionsUsageResult | null;
-  applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
-};
+const EMPTY_COST_SUMMARY = {
+  totals: { totalTokens: 0, totalCost: 0 },
+  daily: [],
+} as unknown as CostUsageSummary;
 
-function createContext(
-  client: GatewayBrowserClient | null = null,
-  connected = false,
-): ApplicationContext<RouteId> {
+const EMPTY_SESSIONS_USAGE = {
+  sessions: [],
+  aggregates: {
+    messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+    tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+    byModel: [],
+    byProvider: [],
+    byAgent: [],
+    byChannel: [],
+    daily: [],
+  },
+} as unknown as SessionsUsageResult;
+
+function createContext(): ApplicationContext<RouteId> {
   const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    connected,
+    client: null,
+    connected: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",
@@ -45,49 +52,52 @@ function createContext(
   const subscribe = () => () => undefined;
   return {
     gateway: { snapshot, subscribe },
-    agents: { subscribe, ensureList: vi.fn(async () => null) },
-    agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
+    agents: { subscribe },
+    agentIdentity: { subscribe },
   } as unknown as ApplicationContext<RouteId>;
 }
 
-function createCostSummary(cacheStatus?: CostUsageSummary["cacheStatus"]): CostUsageSummary {
-  return {
-    updatedAt: 0,
-    days: 0,
-    daily: [],
-    totals: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 1,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    },
-    ...(cacheStatus ? { cacheStatus } : {}),
+function createConnectedContext(request: GatewayBrowserClient["request"]) {
+  let snapshot: ApplicationGatewaySnapshot = {
+    client: { request } as GatewayBrowserClient,
+    connected: true,
+    reconnecting: false,
+    hello: null,
+    assistantAgentId: "main",
+    sessionKey: "agent:main:main",
+    lastError: null,
+    lastErrorCode: null,
   };
-}
-
-function createSessionsResult(): SessionsUsageResult {
-  const totals = createCostSummary().totals;
+  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const subscribe = () => () => undefined;
+  const context = {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    agents: {
+      state: { agentsList: null },
+      ensureList: async () => null,
+      subscribe,
+    },
+    agentIdentity: {
+      get: () => null,
+      ensure: async () => undefined,
+      subscribe,
+    },
+  } as unknown as ApplicationContext<RouteId>;
   return {
-    updatedAt: 0,
-    startDate: "2026-07-08",
-    endDate: "2026-07-08",
-    sessions: [],
-    totals,
-    aggregates: {
-      messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-      tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-      byModel: [],
-      byProvider: [],
-      byAgent: [],
-      byChannel: [],
-      daily: [],
+    context,
+    emitConnected(connected: boolean) {
+      snapshot = { ...snapshot, connected };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
     },
   };
 }
@@ -119,44 +129,89 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   expect(note?.textContent?.trim()).not.toBe(englishNote);
 });
 
-it("keeps settled profile usage across a same-client reconnect", async () => {
-  const request = vi.fn();
-  const client = { request } as unknown as GatewayBrowserClient;
-  const context = createContext(client, true);
-  const page = new ProfilePage() as unknown as ProfilePageLifecycle;
-  page.context = context;
-  page.client = client;
-  page.connected = true;
-  page.costSummary = createCostSummary();
-  page.sessionsResult = createSessionsResult();
-
-  page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
-  page.applyGatewaySnapshot(context.gateway.snapshot);
-  await Promise.resolve();
-
-  expect(request).not.toHaveBeenCalled();
-});
-
-it("resumes a settling profile cache after a same-client reconnect", async () => {
-  const request = vi.fn(async (method: string) =>
-    method === "sessions.usage" ? { sessions: [] } : createCostSummary(),
-  );
-  const client = { request } as unknown as GatewayBrowserClient;
-  const context = createContext(client, true);
-  const page = new ProfilePage() as unknown as ProfilePageLifecycle;
-  page.context = context;
-  page.client = client;
-  page.connected = true;
-  page.costSummary = createCostSummary({
-    status: "refreshing",
-    cachedFiles: 0,
-    pendingFiles: 1,
-    staleFiles: 0,
+it("gates profile usage refreshes by payload age and page visibility", async () => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const request = vi.fn(async (method: string) => {
+    if (method === "usage.cost") {
+      return EMPTY_COST_SUMMARY;
+    }
+    return EMPTY_SESSIONS_USAGE;
   });
-  page.sessionsResult = createSessionsResult();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement & {
+    costSummary: CostUsageSummary | null;
+    lastProfileLoadedAtMs: number | null;
+    loading: boolean;
+    requestProfileRefresh: (reason: UsageRefreshReason) => void;
+    scheduleCacheSettleRefresh: () => void;
+  };
+  provider.append(page);
+  document.body.append(provider);
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(page.loading).toBe(false));
 
-  page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
-  page.applyGatewaySnapshot(context.gateway.snapshot);
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  expect(request).toHaveBeenCalledTimes(2);
 
-  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("usage.cost", expect.any(Object)));
+  let reconnectPollDelayMs: number | undefined;
+  const reconnectTimerSpy = vi
+    .spyOn(window, "setTimeout")
+    .mockImplementation((_handler, timeout) => {
+      reconnectPollDelayMs = Number(timeout);
+      return 1;
+    });
+  page.costSummary = {
+    ...EMPTY_COST_SUMMARY,
+    cacheStatus: { status: "refreshing" },
+  } as CostUsageSummary;
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(reconnectPollDelayMs).toBeGreaterThan(0);
+  expect(reconnectPollDelayMs).toBeLessThanOrEqual(USAGE_PAYLOAD_TTL_MS);
+  reconnectTimerSpy.mockRestore();
+
+  page.lastProfileLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
+  visibility.mockReturnValue("hidden");
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  expect(request).toHaveBeenCalledTimes(2);
+
+  visibility.mockReturnValue("visible");
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new Event("focus"));
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+  await vi.waitFor(() => expect(page.loading).toBe(false));
+
+  page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(6));
+  await vi.waitFor(() => expect(page.loading).toBe(false));
+
+  let settlePoll: TimerHandler | null = null;
+  let settleDelayMs: number | undefined;
+  const setTimeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation((handler, timeout) => {
+    settlePoll = handler;
+    settleDelayMs = Number(timeout);
+    return 1;
+  });
+  page.costSummary = {
+    ...EMPTY_COST_SUMMARY,
+    cacheStatus: { status: "refreshing" },
+  } as CostUsageSummary;
+  page.lastProfileLoadedAtMs = Date.now();
+  page.scheduleCacheSettleRefresh();
+  expect(settleDelayMs).toBe(USAGE_PAYLOAD_TTL_MS);
+
+  page.lastProfileLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
+  visibility.mockReturnValue("hidden");
+  (settlePoll as (() => void) | null)?.();
+  expect(request).toHaveBeenCalledTimes(6);
+
+  setTimeoutSpy.mockRestore();
+  visibility.mockReturnValue("visible");
+  window.dispatchEvent(new Event("focus"));
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(8));
 });

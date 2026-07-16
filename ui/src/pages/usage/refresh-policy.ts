@@ -1,6 +1,6 @@
 export const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
-export type UsageRefreshReason = "focus" | "manual" | "reconnect";
+export type UsageRefreshReason = "focus" | "manual" | "poll" | "reconnect";
 export type UsageRefreshDecision = "defer" | "fetch" | "skip";
 
 export function decideUsageRefresh(params: {
