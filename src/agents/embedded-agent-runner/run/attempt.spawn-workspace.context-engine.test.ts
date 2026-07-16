@@ -3203,6 +3203,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptCache).toEqual({ retention: "short" });
   });
 
+  it("keeps the run assistant when a context projection reorders the transcript", async () => {
+    const currentAssistant = makeAgentAssistantMessage({ content: "Current run reply" });
+    const priorAssistant = makeAgentAssistantMessage({ content: "Prior transcript reply" });
+    const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
+    if (!baseSubscribe) {
+      throw new Error("missing embedded subscription mock");
+    }
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => ({
+      ...baseSubscribe(params),
+      assistantTexts: ["Current run reply"],
+      getCurrentAttemptAssistant: () => structuredClone(currentAssistant),
+    }));
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [seedMessage, priorAssistant],
+      sessionPrompt: async (session) => {
+        // Reproduce a projection that moves the current output before an older
+        // assistant, invalidating both the prompt index and transcript tail.
+        session.messages = [currentAssistant, priorAssistant];
+      },
+    });
+
+    expect(result.lastAssistant?.content).toEqual(priorAssistant.content);
+    expect(result.currentAttemptAssistant?.content).toEqual(currentAssistant.content);
+  });
+
   it("derives live loop prompt-cache info from the current attempt assistant", () => {
     const toolUseAssistant = {
       role: "assistant",

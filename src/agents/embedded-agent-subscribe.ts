@@ -1280,6 +1280,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
+    // A compaction retry starts a fresh model attempt. Do not let the prior
+    // attempt's assistant become the terminal result if the retry is silent.
+    state.lastAssistant = undefined;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);
@@ -1288,6 +1291,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const noteLastAssistant = (msg: AgentMessage) => {
     if (msg?.role === "assistant") {
       state.lastAssistant = msg;
+    }
+  };
+  const noteCompletedAssistant = (msg: AgentMessage) => {
+    if (msg?.role === "assistant") {
+      // Session projections may later replace or mutate transcript objects.
+      // Keep the finalized event value owned by this attempt.
+      state.lastAssistant = structuredClone(msg);
     }
   };
 
@@ -1301,6 +1311,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     builtinToolNames: params.builtinToolNames,
     trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
     noteLastAssistant,
+    noteCompletedAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
     emitToolSummary,
@@ -1374,6 +1385,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   return {
     assistantTexts,
+    getCurrentAttemptAssistant: () => {
+      const assistant = state.lastAssistant;
+      return assistant?.role === "assistant" ? structuredClone(assistant) : undefined;
+    },
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,

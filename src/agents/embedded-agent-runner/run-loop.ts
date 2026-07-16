@@ -516,7 +516,6 @@ export async function runPreparedEmbeddedLoop(
       } = prepareEmbeddedRunTerminal({
         runParams: params,
         attempt,
-        attemptAssistant,
         currentAttemptAssistant,
         provider,
         model: model.id,
