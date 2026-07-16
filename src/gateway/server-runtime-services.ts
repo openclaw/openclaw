@@ -17,6 +17,11 @@ import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import {
+  createNoopGatewayPublisherFeedRefresh,
+  startGatewayPublisherFeedRefresh,
+  type GatewayPublisherFeedRefresh,
+} from "./server-publisher-feed-refresh.js";
+import {
   createNoopHeartbeatRunner,
   type GatewayRuntimeServiceLogger,
 } from "./server-runtime-service-shared.js";
@@ -347,12 +352,17 @@ export function activateGatewayScheduledServices(params: {
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
   pluginLookUpTable?: PluginMetadataRegistryView;
-}): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
+}): {
+  heartbeatRunner: HeartbeatRunner;
+  publisherFeedRefresh: GatewayPublisherFeedRefresh;
+  stopModelPricingRefresh: () => void;
+} {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
     return {
       heartbeatRunner: createNoopHeartbeatRunner(),
+      publisherFeedRefresh: createNoopGatewayPublisherFeedRefresh(),
       stopModelPricingRefresh: () => {},
     };
   }
@@ -394,8 +404,12 @@ export function activateGatewayScheduledServices(params: {
         log: params.log,
       })
     : () => {};
+  const publisherFeedRefresh = !isVitestRuntimeEnv()
+    ? startGatewayPublisherFeedRefresh({ log: params.log })
+    : createNoopGatewayPublisherFeedRefresh();
   return {
     heartbeatRunner: heartbeatRunnerWithUpstreamMonitor,
+    publisherFeedRefresh,
     stopModelPricingRefresh,
   };
 }
