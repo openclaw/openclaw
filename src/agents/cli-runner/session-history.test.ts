@@ -6,6 +6,8 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { cliBackendLog } from "./log.js";
@@ -459,73 +461,134 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("preserves branched oversized history when the header read returns short", async () => {
+  it("loads branched history from SQLite markers used by CLI resumes", async () => {
     const stateDir = tempDirs.make("openclaw-cli-state-");
-    const sessionFile = createSessionTranscript({
-      rootDir: stateDir,
-      sessionId: "session-oversized-short-header",
-      messages: ["x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES)],
+    const sessionId = "session-sqlite-branch";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
     });
-    fs.appendFileSync(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "message",
-          id: "root",
-          parentId: null,
-          message: { role: "user", content: "active root" },
+
+    await withCliSessionState(stateDir, async () => {
+      await replaceTranscriptEvents(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        [
+          {
+            type: "session",
+            version: CURRENT_SESSION_VERSION,
+            id: sessionId,
+            timestamp: new Date(0).toISOString(),
+            cwd: stateDir,
+          },
+          {
+            type: "message",
+            id: "root",
+            parentId: null,
+            message: { role: "user", content: "active root" },
+          },
+          {
+            type: "message",
+            id: "side-entry",
+            parentId: "root",
+            message: { role: "assistant", content: "side history" },
+          },
+          {
+            type: "leaf",
+            id: "active-leaf",
+            parentId: "side-entry",
+            targetId: "root",
+          },
+          {
+            type: "message",
+            id: "active-tail",
+            parentId: "root",
+            message: { role: "assistant", content: "active history" },
+          },
+        ],
+      );
+
+      await expect(
+        hasCliSessionTranscript({
+          sessionId,
+          sessionFile,
+          sessionKey,
+          agentId: "main",
         }),
-        JSON.stringify({
-          type: "message",
-          id: "side-entry",
-          parentId: "root",
-          message: { role: "assistant", content: "side history" },
-        }),
-        JSON.stringify({
-          type: "leaf",
-          id: "active-leaf",
-          parentId: "side-entry",
-          targetId: "root",
-        }),
-        JSON.stringify({
-          type: "message",
-          id: "active-tail",
-          parentId: "root",
-          message: { role: "assistant", content: "active history" },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
-    const realOpen = fsp.open.bind(fsp);
-    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const realRead = handle.read.bind(handle);
-      return new Proxy(handle, {
-        get(target, prop, receiver) {
-          if (prop === "read") {
-            return (buffer: Buffer, offset: number, length: number, position: number) =>
-              realRead(buffer, offset, position === 0 ? Math.min(length, 16) : length, position);
-          }
-          return Reflect.get(target, prop, receiver);
-        },
+      ).resolves.toBe(true);
+      const history = await loadCliSessionHistoryMessages({
+        sessionId,
+        sessionFile,
+        sessionKey,
+        agentId: "main",
+      });
+      expect(history).toHaveLength(2);
+      expectMessageFields(history[0], { role: "user", content: "active root" });
+      expectMessageFields(history[1], {
+        role: "assistant",
+        content: [{ type: "text", text: "active history" }],
       });
     });
+  });
+
+  it("loads only a bounded tail from oversized SQLite transcripts", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-oversized";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
 
     try {
       await withCliSessionState(stateDir, async () => {
+        await replaceTranscriptEvents(
+          { agentId: "main", sessionId, sessionKey, storePath },
+          [
+            {
+              type: "session",
+              version: CURRENT_SESSION_VERSION,
+              id: sessionId,
+              timestamp: new Date(0).toISOString(),
+              cwd: stateDir,
+            },
+            {
+              type: "message",
+              id: "msg-0",
+              parentId: null,
+              message: {
+                role: "user",
+                content: "x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES),
+              },
+            },
+            {
+              type: "message",
+              id: "msg-1",
+              parentId: "msg-0",
+              message: { role: "user", content: "tail history" },
+            },
+          ],
+        );
+
         const history = await loadCliSessionHistoryMessages({
-          sessionId: "session-oversized-short-header",
+          sessionId,
           sessionFile,
+          sessionKey,
+          agentId: "main",
         });
-        expect(history).toHaveLength(2);
-        expectMessageFields(history[0], { role: "user", content: "active root" });
-        expectMessageFields(history[1], {
-          role: "assistant",
-          content: [{ type: "text", text: "active history" }],
-        });
+        expect(history).toHaveLength(1);
+        expectMessageFields(history[0], { role: "user", content: "tail history" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("cli session history truncated to last"),
+        );
       });
     } finally {
-      openSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 
