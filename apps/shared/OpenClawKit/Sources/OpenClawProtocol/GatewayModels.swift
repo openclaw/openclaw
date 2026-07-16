@@ -8080,7 +8080,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let agentid: String
     public let name: String?
     public let workspace: String?
-    public let model: String?
+    public let model: AnyCodable?
     public let emoji: String?
     public let avatar: String?
 
@@ -8088,7 +8088,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         agentid: String,
         name: String? = nil,
         workspace: String? = nil,
-        model: String? = nil,
+        model: AnyCodable? = nil,
         emoji: String? = nil,
         avatar: String? = nil)
     {

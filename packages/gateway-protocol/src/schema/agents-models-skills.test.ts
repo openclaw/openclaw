@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
+  AgentsUpdateParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
@@ -67,6 +68,17 @@ describe("AgentsListResultSchema", () => {
     };
 
     expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+  });
+});
+
+describe("AgentsUpdateParamsSchema", () => {
+  it("accepts null to clear a model override", () => {
+    expect(
+      Value.Check(AgentsUpdateParamsSchema, {
+        agentId: "work",
+        model: null,
+      }),
+    ).toBe(true);
   });
 });
 
