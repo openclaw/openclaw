@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanvasTool } from "./tool.js";
 
-const A2UI_JSONL_FILE_MAX_BYTES = 1024 * 1024;
+const A2UI_JSONL_FILE_MAX_BYTES = 25 * 1024 * 1024 - 64 * 1024;
 
 const VALID_A2UI_V08_JSONL = [
   JSON.stringify({
@@ -225,6 +225,36 @@ describe("Canvas tool", () => {
         sessionKey: "agent:main:canvas",
       },
     );
+  });
+
+  it("rejects JSONL that cannot fit the serialized dispatch payload before resolving a node", async () => {
+    const quoteHeavyText = '"'.repeat(7 * 1024 * 1024);
+    const quoteHeavyJsonl = [
+      JSON.stringify({
+        surfaceUpdate: {
+          surfaceId: "main",
+          components: [
+            {
+              id: "root",
+              component: {
+                Text: { text: { literalString: quoteHeavyText }, usageHint: "body" },
+              },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+    ].join("\n");
+    const tool = createCanvasTool();
+
+    await expect(
+      tool.execute("tool-call-1", {
+        action: "a2ui_push",
+        jsonl: quoteHeavyJsonl,
+      }),
+    ).rejects.toThrow("A2UI JSONL payload exceeds");
+    expect(mocks.listNodes).not.toHaveBeenCalled();
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it.each([

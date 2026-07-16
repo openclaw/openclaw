@@ -18,7 +18,11 @@ import {
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { readA2UIJsonlFile, validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
+import {
+  assertA2UIJsonlDispatchPayloadFits,
+  readA2UIJsonlFile,
+  validateSupportedA2UIJsonl,
+} from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
@@ -208,6 +212,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             throw new Error("jsonl or jsonlPath required");
           }
           validateSupportedA2UIJsonl(jsonl);
+          assertA2UIJsonlDispatchPayloadFits(jsonl);
           await invoke("canvas.a2ui.pushJSONL", { jsonl });
           return jsonResult({ ok: true });
         }

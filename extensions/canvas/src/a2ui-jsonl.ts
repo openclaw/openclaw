@@ -3,7 +3,10 @@
  */
 import fs from "node:fs/promises";
 
-const A2UI_JSONL_FILE_MAX_BYTES = 1024 * 1024;
+// Keep Canvas file input within Gateway's 25 MiB post-handshake payload budget
+// while reserving room for node.invoke envelope fields and JSON string escaping.
+const A2UI_JSONL_DISPATCH_MAX_BYTES = 25 * 1024 * 1024 - 64 * 1024;
+const A2UI_JSONL_FILE_MAX_BYTES = A2UI_JSONL_DISPATCH_MAX_BYTES;
 const A2UI_JSONL_READ_CHUNK_BYTES = 64 * 1024;
 
 const A2UI_ACTION_KEYS = [
@@ -70,6 +73,14 @@ export async function readA2UIJsonlFile(filePath: string): Promise<string> {
     }
   } finally {
     await handle.close();
+  }
+}
+
+/** Reject JSONL that cannot fit inside the serialized Canvas dispatch payload. */
+export function assertA2UIJsonlDispatchPayloadFits(jsonl: string): void {
+  const payloadBytes = Buffer.byteLength(JSON.stringify({ jsonl }), "utf8");
+  if (payloadBytes > A2UI_JSONL_DISPATCH_MAX_BYTES) {
+    throw new Error(`A2UI JSONL payload exceeds ${A2UI_JSONL_DISPATCH_MAX_BYTES} bytes`);
   }
 }
 
