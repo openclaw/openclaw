@@ -13,6 +13,8 @@ export {
 } from "../agents/agent-scope.js";
 
 export { DEFAULT_PROVIDER } from "../agents/defaults.js";
+// Consumed by the codex plugin's app-server usage surface.
+export { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
 export { resolveAgentAvatar } from "../agents/identity-avatar.js";
 export type { AgentAvatarResolution } from "../agents/identity-avatar.js";
 export {

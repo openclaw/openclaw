@@ -14,6 +14,7 @@ import type {
   MigrationPlan as _MigrationPlan,
   MigrationProviderContext as _MigrationProviderContext,
   MigrationProviderPlugin as _MigrationProviderPlugin,
+  ProviderPlugin as _ProviderPlugin,
   MigrationSummary as _MigrationSummary,
   OpenClawGatewayDiscoveryAdvertiseContext as _OpenClawGatewayDiscoveryAdvertiseContext,
   OpenClawGatewayDiscoveryService as _OpenClawGatewayDiscoveryService,
@@ -148,6 +149,8 @@ export type MigrationItem = _MigrationItem;
 export type MigrationPlan = _MigrationPlan;
 export type MigrationProviderContext = _MigrationProviderContext;
 export type MigrationProviderPlugin = _MigrationProviderPlugin;
+// The plugin-authoring scaffold generates code importing ProviderPlugin from this entrypoint.
+export type ProviderPlugin = _ProviderPlugin;
 export type MigrationSummary = _MigrationSummary;
 export type OpenClawGatewayDiscoveryAdvertiseContext = _OpenClawGatewayDiscoveryAdvertiseContext;
 export type OpenClawGatewayDiscoveryService = _OpenClawGatewayDiscoveryService;
