@@ -1392,12 +1392,48 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
 }): Promise<boolean> {
+  const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
+  const taskCommand = await readScheduledTaskCommand(params.env).catch(() => null);
+  const installedArguments = taskCommand?.programArguments;
+  const taskPort =
+    parsePortFromProgramArguments(installedArguments) ??
+    parsePositivePort(taskCommand?.environment?.OPENCLAW_GATEWAY_PORT) ??
+    resolveConfiguredGatewayPort(params.env);
+  // Capture pre-existing verified gateway listeners on the task port before
+  // polling for launch evidence. A listener that was already bound before the
+  // scheduled-task /Run attempt is not evidence that the task started; it must
+  // be filtered out of later observations so the fallback is not falsely
+  // suppressed (#91144). Resolve the port from the installed task command so
+  // the baseline and the launch-evidence check observe the same port.
+  const baselineGatewayPids =
+    manageGatewayPort && taskPort
+      ? findVerifiedGatewayListenerPidsOnPortSync(taskPort)
+      : [];
+
   const readLaunchObservation = async (): Promise<{
     state: "running" | "not-yet-run" | "stopped-success" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
     if (runtime?.status === "running") {
+      // readScheduledTaskRuntime reports a listener-backed "running" status
+      // when schtasks itself is not running but a verified gateway listener
+      // holds the port. If that listener was present in the baseline (i.e. it
+      // pre-existed the /Run attempt), it does not prove the scheduled task
+      // launched; treat it as not-yet-run so the fallback poll continues and
+      // hasLaunchEvidence can re-check with baseline filtering (#91144).
+      if (
+        baselineGatewayPids.length > 0 &&
+        typeof runtime.pid === "number" &&
+        baselineGatewayPids.includes(runtime.pid)
+      ) {
+        return {
+          state: "not-yet-run",
+          signature: [runtime.state, runtime.lastRunTime, runtime.lastRunResult, runtime.detail]
+            .filter(Boolean)
+            .join("|"),
+        };
+      }
       return {
         state: "running",
         signature: [runtime.state, runtime.lastRunTime, runtime.lastRunResult, runtime.detail]
@@ -1431,16 +1467,13 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   };
 
   const hasLaunchEvidence = async (): Promise<boolean> => {
-    const command = await readScheduledTaskCommand(params.env).catch(() => null);
-    const installedArguments = command?.programArguments;
-    const taskPort =
-      parsePortFromProgramArguments(installedArguments) ??
-      parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
-      resolveConfiguredGatewayPort(params.env);
-    const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
     if (manageGatewayPort && taskPort) {
       const listenerPids = await resolveScheduledTaskGatewayListenerPids(taskPort);
-      if (listenerPids.length > 0) {
+      const freshListenerPids =
+        baselineGatewayPids.length > 0
+          ? listenerPids.filter((pid) => !baselineGatewayPids.includes(pid))
+          : listenerPids;
+      if (freshListenerPids.length > 0) {
         return true;
       }
     }

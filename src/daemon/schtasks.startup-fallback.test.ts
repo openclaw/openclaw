@@ -1418,6 +1418,37 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("fires the fallback when a pre-existing verified gateway listener holds the task port (#91144)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([19444]);
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("does not relaunch the task script when a fresh gateway listener appears after /Run on a port with a baseline listener (#91144)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      const sequence = [[19444], [19444], [19444, 28112]];
+      let sequenceIndex = 0;
+      findVerifiedGatewayListenerPidsOnPortSync.mockImplementation(() => {
+        const value = sequence[sequenceIndex] ?? [];
+        sequenceIndex += 1;
+        return value;
+      });
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalled();
+    });
+  });
+
   it("does not relaunch when the node Scheduled Task process is already running", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
