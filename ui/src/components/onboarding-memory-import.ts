@@ -67,7 +67,7 @@ function setGuardDone() {
   }
 }
 
-export class OnboardingMemoryImport extends OpenClawLightDomElement {
+class OnboardingMemoryImport extends OpenClawLightDomElement {
   @property({ attribute: false }) context?: ApplicationContext<RouteId>;
   @property({ type: Boolean }) active = false;
 

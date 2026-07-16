@@ -33,7 +33,7 @@ export function listMemoryMigrationProviders(config: OpenClawConfig): MigrationP
   );
 }
 
-export function shapeMemoryOnlyPlan(plan: MigrationPlan): MigrationPlan {
+function shapeMemoryOnlyPlan(plan: MigrationPlan): MigrationPlan {
   const items = plan.items.filter((item) => item.kind === MEMORY_ITEM_KIND);
   if (items.length > MAX_MEMORY_MIGRATION_ITEMS) {
     throw new Error(
