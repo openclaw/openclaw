@@ -13,6 +13,7 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.ChatWidgetUrlResolver
 import ai.openclaw.app.chat.MainSessionBinding
 import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
@@ -105,6 +106,7 @@ import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -467,6 +469,7 @@ class NodeRuntime private constructor(
   @Volatile private var connectingEndpointStableId: String? = null
   private val gatewayDataScopeLock = Any()
   private val gatewaySwitchMutex = Mutex()
+  private val inlineWidgetRefreshMutex = Mutex()
   private val gatewayLifecycleIntentLock = Any()
   private val gatewayLifecycleIntentSeq = AtomicLong()
   private var gatewayDataGeneration = 0L
@@ -720,6 +723,7 @@ class NodeRuntime private constructor(
           hasRecordAudioPermission() &&
           isVoiceWakeWordsReadyForCurrentGateway()
       },
+      inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
       manualTls = { endpoint ->
         prefs.gatewayRegistry.entries.value
           .firstOrNull { it.stableId == endpoint.stableId }
@@ -4105,6 +4109,31 @@ class NodeRuntime private constructor(
   }
 
   fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
+
+  suspend fun resolveInlineWidgetUrl(
+    path: String,
+    failedUrl: String?,
+  ): String? {
+    fun currentResolution(): Pair<String?, String?> {
+      val nodeSurfaceUrl = nodeSession.currentCanvasHostUrl()
+      val resolved =
+        ChatWidgetUrlResolver.resolve(nodeSurfaceUrl, path)
+          ?: ChatWidgetUrlResolver.resolve(operatorSession.currentCanvasHostUrl(), path)
+      return nodeSurfaceUrl to resolved
+    }
+
+    val current = currentResolution().second
+    if (failedUrl == null || (current != null && current != failedUrl)) return current
+    return inlineWidgetRefreshMutex.withLock {
+      // Rotation is node-role only; a second rotation would also invalidate a sibling's token.
+      val (observedNodeSurfaceUrl, latest) = currentResolution()
+      latest?.takeIf { it != failedUrl }
+        ?: ChatWidgetUrlResolver.resolve(
+          nodeSession.refreshCanvasHostUrlIfCurrent(observedNodeSurfaceUrl),
+          path,
+        )
+    }
+  }
 
   fun loadChat(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }

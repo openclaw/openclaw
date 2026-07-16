@@ -224,8 +224,19 @@ class GatewaySession(
   /** One ready physical WebSocket captured before queued work starts waiting. */
   internal class RequestLease internal constructor(
     val endpointStableId: String,
+    private val isCurrentImpl: () -> Boolean = { true },
+    private val commitIfCurrentImpl: ((block: () -> Unit) -> Boolean)? = null,
     private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String,
   ) {
+    fun isCurrent(): Boolean = isCurrentImpl()
+
+    fun commitIfCurrent(block: () -> Unit): Boolean {
+      commitIfCurrentImpl?.let { return it(block) }
+      if (!isCurrentImpl()) return false
+      block()
+      return true
+    }
+
     suspend fun request(
       method: String,
       paramsJson: String?,
@@ -377,6 +388,58 @@ class GatewaySession(
 
   internal fun isReady(): Boolean = readyConnection() != null
 
+  internal fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
+
+  internal suspend fun refreshCanvasHostUrl(): String? = refreshCanvasHostUrl(observedSurfaceUrl = null, requireObservedMatch = false)
+
+  internal suspend fun refreshCanvasHostUrlIfCurrent(observedSurfaceUrl: String?): String? = refreshCanvasHostUrl(observedSurfaceUrl = observedSurfaceUrl, requireObservedMatch = true)
+
+  private suspend fun refreshCanvasHostUrl(
+    observedSurfaceUrl: String?,
+    requireObservedMatch: Boolean,
+  ): String? {
+    val (lease, target) =
+      synchronized(lifecycleLock) {
+        val current = pluginSurfaceUrls["canvas"]
+        if (requireObservedMatch && current != observedSurfaceUrl) return current
+        val capturedLease = captureRequestLease() ?: return null
+        val capturedTarget =
+          desired
+            ?.takeIf { it.endpoint.stableId == capturedLease.endpointStableId }
+            ?: return null
+        capturedLease to capturedTarget
+      }
+    val response =
+      runCatching {
+        lease.request(
+          GatewayMethod.NodePluginSurfaceRefresh.rawValue,
+          buildJsonObject { put("surface", JsonPrimitive("canvas")) }.toString(),
+          timeoutMs = 8_000,
+        )
+      }.getOrNull() ?: return null
+    val raw =
+      parseJsonOrNull(response)
+        .asObjectOrNull()
+        ?.get("pluginSurfaceUrls")
+        .asObjectOrNull()
+        ?.get("canvas")
+        .asStringOrNull()
+    val refreshed = normalizeCanvasHostUrl(raw, target.endpoint, isTlsConnection = target.tls != null) ?: return null
+    var result: String? = null
+    val committed =
+      lease.commitIfCurrent {
+        val current = pluginSurfaceUrls["canvas"]
+        result =
+          if (requireObservedMatch && current != observedSurfaceUrl) {
+            current
+          } else {
+            pluginSurfaceUrls = pluginSurfaceUrls + ("canvas" to refreshed)
+            refreshed
+          }
+      }
+    return if (committed) result else null
+  }
+
   /** Current physical connection identity, including events sent during connect publication. */
   internal fun currentEndpointStableId(): String? = currentConnection?.endpoint?.stableId
 
@@ -490,16 +553,30 @@ class GatewaySession(
   }
 
   /** Captures the current physical connection; requests never resolve a replacement socket. */
-  internal fun captureRequestLease(expectedEndpointStableId: String? = null): RequestLease? {
-    val conn = readyConnection(expectedEndpointStableId) ?: return null
-    return RequestLease(endpointStableId = conn.endpoint.stableId) { method, paramsJson, timeoutMs ->
-      val res = requestDetailed(conn, method, paramsJson, timeoutMs)
-      if (!res.ok) {
-        throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+  internal fun captureRequestLease(expectedEndpointStableId: String? = null): RequestLease? =
+    synchronized(lifecycleLock) {
+      val conn = readyConnection(expectedEndpointStableId) ?: return@synchronized null
+      RequestLease(
+        endpointStableId = conn.endpoint.stableId,
+        isCurrentImpl = { currentConnection === conn && conn.isReady() },
+        commitIfCurrentImpl = { block ->
+          synchronized(lifecycleLock) {
+            if (currentConnection !== conn || !conn.isReady()) {
+              false
+            } else {
+              block()
+              true
+            }
+          }
+        },
+      ) { method, paramsJson, timeoutMs ->
+        val res = requestDetailed(conn, method, paramsJson, timeoutMs)
+        if (!res.ok) {
+          throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+        }
+        res.payloadJson ?: ""
       }
-      res.payloadJson ?: ""
     }
-  }
 
   /** Sends an RPC request and returns the structured success/error payload. */
   suspend fun requestDetailed(

@@ -435,7 +435,11 @@ public struct OpenClawChatView: View {
             assistantAvatarTint: self.assistantAvatarTint,
             showsAssistantAvatar: self.showsAssistantAvatars,
             isClean: self.composerChrome == .clean,
-            contextWindowTokens: contextWindowTokens)
+            contextWindowTokens: contextWindowTokens,
+            inlineWidgetResolverReady: self.viewModel.healthOK,
+            inlineWidgetURLResolver: { [weak viewModel] path, failedURL in
+                await viewModel?.resolveInlineWidgetURL(path: path, replacing: failedURL)
+            })
             .frame(
                 maxWidth: .infinity,
                 alignment: msg.role.lowercased() == "user" ? .trailing : .leading)

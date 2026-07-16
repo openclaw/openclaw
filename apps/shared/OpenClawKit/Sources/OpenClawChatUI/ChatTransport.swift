@@ -290,6 +290,7 @@ public protocol OpenClawChatTransport: Sendable {
     func requestHealth(timeoutMs: Int) async throws -> Bool
     func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
     func events() -> AsyncStream<OpenClawChatTransportEvent>
+    func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL?
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
@@ -297,6 +298,10 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func resolveInlineWidgetURL(path _: String, replacing _: URL?) async -> URL? {
+        nil
+    }
+
     public var outboxRequiresSessionRoutingContract: Bool {
         false
     }

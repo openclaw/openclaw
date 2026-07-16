@@ -301,6 +301,24 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             idempotencyKey: idempotencyKey))))
     }
 
+    func emitResponse(id: String, payload: [String: Any]) {
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
+            defer { self.pendingReceiveHandler = nil }
+            return self.pendingReceiveHandler
+        }
+        let frame: [String: Any] = [
+            "type": "res",
+            "id": id,
+            "ok": true,
+            "payload": payload,
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
+        handler?(.success(.data(data)))
+    }
+
     private static func connectChallengeData(nonce: String) -> Data {
         let frame: [String: Any] = [
             "type": "event",
@@ -604,6 +622,112 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `canvas surface refresh is shared across concurrent callers`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["canvas"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        async let first = gateway.refreshCanvasHostUrl(replacing: nil)
+        async let second = gateway.refreshCanvasHostUrl(replacing: nil)
+        try await waitUntil("single surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        }
+        let task = try #require(session.latestTask())
+        let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
+        let requestID = try #require(request["id"] as? String)
+        task.emitResponse(
+            id: requestID,
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/new-token",
+                ],
+            ])
+
+        let values = await (first, second)
+        #expect(values.0 == values.1)
+        #expect(values.0?.hasSuffix("/new-token") == true)
+        #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 1)
+        await gateway.disconnect()
+    }
+
+    @Test func `lagging canvas refresh reuses the rotated capability`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["canvas"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        async let seeded = gateway.refreshCanvasHostUrl(replacing: nil)
+        try await waitUntil("seed surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        }
+        let task = try #require(session.latestTask())
+        let seedRequest = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
+        try task.emitResponse(
+            id: #require(seedRequest["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/old-token",
+                ],
+            ])
+        let oldURL = try #require(await seeded)
+
+        async let rotated = gateway.refreshCanvasHostUrl(replacing: oldURL)
+        try await waitUntil("rotating surface refresh sent") {
+            task.sentRequestCount(method: "node.pluginSurface.refresh") == 2
+        }
+        let rotateRequest = try #require(task.sentRequests(method: "node.pluginSurface.refresh").last)
+        try task.emitResponse(
+            id: #require(rotateRequest["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/new-token",
+                ],
+            ])
+        let newURL = try #require(await rotated)
+
+        let laggingURL = await gateway.refreshCanvasHostUrl(replacing: oldURL)
+
+        #expect(laggingURL == newURL)
+        #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 2)
+        await gateway.disconnect()
+    }
+
     @Test func `node requests preserve numeric JSON params`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()

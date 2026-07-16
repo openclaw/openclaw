@@ -77,6 +77,7 @@ private enum GatewayActivationBindingKeyStore {
 actor GatewayConnection {
     static let shared = GatewayConnection(
         endpointProvider: GatewayConnection.defaultEndpointProvider)
+    nonisolated static let operatorClientCaps = [OpenClawGatewayClientCapability.inlineWidgets]
 
     typealias Config = (url: URL, token: String?, password: String?)
 
@@ -947,7 +948,7 @@ extension GatewayConnection {
             connectOptions: GatewayConnectOptions(
                 role: "operator",
                 scopes: GatewayChannelActor.defaultOperatorConnectScopes,
-                caps: [],
+                caps: Self.operatorClientCaps,
                 commands: [],
                 permissions: [:],
                 clientId: "openclaw-macos",

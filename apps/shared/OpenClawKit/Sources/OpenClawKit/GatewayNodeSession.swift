@@ -98,6 +98,7 @@ public struct GatewayNodeSessionCredentials: Sendable, Equatable {
 
 public actor GatewayNodeSession {
     @TaskLocal private static var executingLifecycleCallbackID: UUID?
+    private static let pluginSurfaceRefreshTimeoutMs = 8000.0
 
     private static let staleRouteInvokeMessage = "UNAVAILABLE: node route changed before dispatch"
     private enum ComputerInvokeReceiptState {
@@ -280,6 +281,17 @@ public actor GatewayNodeSession {
 
     private var serverEventSubscribers: [UUID: ServerEventSubscriber] = [:]
     private var pluginSurfaceUrls: [String: String] = [:]
+
+    private struct PluginSurfaceRefresh {
+        let id: UUID
+        let channelGeneration: UInt64
+        let admissionGeneration: UInt64
+        let task: Task<String?, Never>
+    }
+
+    /// Surface tokens belong to the shared session. A second rotation can invalidate
+    /// the URL returned to another chat before its web view has loaded it.
+    private var pluginSurfaceRefreshes: [String: PluginSurfaceRefresh] = [:]
 
     private struct PluginSurfaceRefreshResponse: Decodable {
         let pluginSurfaceUrls: [String: AnyCodable]?
@@ -614,22 +626,55 @@ public actor GatewayNodeSession {
     }
 
     @discardableResult
-    public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
+    public func refreshPluginSurfaceUrl(
+        surface: String,
+        replacing observedURL: String?) async -> String?
+    {
         guard let channel else { return nil }
         let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSurface.isEmpty else { return nil }
+        if self.pluginSurfaceUrls[trimmedSurface] != observedURL {
+            return self.pluginSurfaceUrls[trimmedSurface]
+        }
+        let channelGeneration = self.channelGeneration
+        let admissionGeneration = self.admissionGeneration
+        if let refresh = self.pluginSurfaceRefreshes[trimmedSurface],
+           refresh.channelGeneration == channelGeneration,
+           refresh.admissionGeneration == admissionGeneration
+        {
+            return await refresh.task.value
+        }
 
-        return await self.requestPluginSurfaceRefresh(
-            channel: channel,
-            method: "node.pluginSurface.refresh",
-            params: ["surface": AnyCodable(trimmedSurface)],
-            surface: trimmedSurface,
-            timeoutSeconds: timeoutSeconds)
+        let id = UUID()
+        let task = Task<String?, Never> { [weak self] in
+            guard let self else { return nil }
+            return await self.requestPluginSurfaceRefresh(
+                channel: channel,
+                channelGeneration: channelGeneration,
+                admissionGeneration: admissionGeneration,
+                method: "node.pluginSurface.refresh",
+                params: ["surface": AnyCodable(trimmedSurface)],
+                surface: trimmedSurface,
+                observedURL: observedURL,
+                timeoutMs: Self.pluginSurfaceRefreshTimeoutMs)
+        }
+        self.pluginSurfaceRefreshes[trimmedSurface] = PluginSurfaceRefresh(
+            id: id,
+            channelGeneration: channelGeneration,
+            admissionGeneration: admissionGeneration,
+            task: task)
+        let refreshed = await task.value
+        if self.pluginSurfaceRefreshes[trimmedSurface]?.id == id {
+            self.pluginSurfaceRefreshes[trimmedSurface] = nil
+        }
+        return refreshed
     }
 
     @discardableResult
-    public func refreshCanvasHostUrl(timeoutSeconds: Int = 8) async -> String? {
-        await self.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: timeoutSeconds)
+    public func refreshCanvasHostUrl(
+        replacing observedURL: String?) async -> String?
+    {
+        await self.refreshPluginSurfaceUrl(surface: "canvas", replacing: observedURL)
     }
 
     public func currentRemoteAddress() -> String? {
@@ -974,19 +1019,29 @@ extension GatewayNodeSession {
 
     private func requestPluginSurfaceRefresh(
         channel: GatewayChannelActor,
+        channelGeneration: UInt64,
+        admissionGeneration: UInt64,
         method: String,
         params: [String: AnyCodable]?,
         surface: String,
-        timeoutSeconds: Int) async -> String?
+        observedURL: String?,
+        timeoutMs: Double) async -> String?
     {
         do {
             let data = try await channel.request(
                 method: method,
                 params: params,
-                timeoutMs: Double(timeoutSeconds * 1000))
+                timeoutMs: timeoutMs)
             let decoded = try decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
             let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
             guard let refreshed = urls[surface] else { return nil }
+            guard self.channel === channel,
+                  self.channelGeneration == channelGeneration,
+                  self.admissionGeneration == admissionGeneration
+            else { return nil }
+            if self.pluginSurfaceUrls[surface] != observedURL {
+                return self.pluginSurfaceUrls[surface]
+            }
             self.pluginSurfaceUrls[surface] = refreshed
             return refreshed
         } catch {

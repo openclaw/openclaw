@@ -895,6 +895,11 @@ class MainViewModel private constructor(
 
   fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = ensureRuntime().isTrustedCanvasActionUrl(rawUrl)
 
+  suspend fun resolveInlineWidgetUrl(
+    path: String,
+    failedUrl: String?,
+  ): String? = ensureRuntime().resolveInlineWidgetUrl(path, failedUrl)
+
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
   }

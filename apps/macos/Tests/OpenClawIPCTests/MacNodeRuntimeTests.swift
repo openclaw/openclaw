@@ -251,7 +251,7 @@ struct MacNodeRuntimeTests {
         let probe = CanvasRefreshProbe()
         let resolver = MacNodeCanvasHostedSurfaceResolver(
             currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
-            refreshSurfaceURL: { await probe.refresh() })
+            refreshSurfaceURL: { _ in await probe.refresh() })
 
         let current = await resolver.resolveA2UIURL()
         #expect(current ==
@@ -268,7 +268,7 @@ struct MacNodeRuntimeTests {
         let probe = CanvasRefreshProbe()
         let resolver = MacNodeCanvasHostedSurfaceResolver(
             currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
-            refreshSurfaceURL: { await probe.refresh() })
+            refreshSurfaceURL: { _ in await probe.refresh() })
 
         let resolved = try await resolver.resolveTarget(
             "/__openclaw__/canvas/demo%20page.html?mode=proof#result")
@@ -979,5 +979,4 @@ struct MacNodeRuntimeTests {
             nodeId: controlHeavyNodeId)
         #expect(controlHeavyProjection > 25 * 1024 * 1024)
     }
-
 }

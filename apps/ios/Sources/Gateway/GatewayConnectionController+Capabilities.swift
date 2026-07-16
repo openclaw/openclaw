@@ -110,6 +110,7 @@ extension GatewayConnectionController {
         var caps = [
             OpenClawCapability.canvas.rawValue,
             OpenClawCapability.screen.rawValue,
+            OpenClawGatewayClientCapability.inlineWidgets,
         ]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.

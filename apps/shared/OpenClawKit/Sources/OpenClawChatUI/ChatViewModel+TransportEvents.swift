@@ -14,6 +14,10 @@ private final class PendingRunOwnerReference {
 }
 
 extension OpenClawChatViewModel {
+    func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL? {
+        await self.transport.resolveInlineWidgetURL(path: path, replacing: failedURL)
+    }
+
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
         switch evt {
         case let .health(ok):

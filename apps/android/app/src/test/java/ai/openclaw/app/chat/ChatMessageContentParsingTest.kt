@@ -28,6 +28,69 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
+  fun parsesCapabilityGatedCanvasWidgets() {
+    val content =
+      Json.parseToJsonElement(
+        """{"type":"canvas","preview":{"kind":"canvas","surface":"assistant_message","render":"url","title":"Status","preferredHeight":240,"url":"/__openclaw__/canvas/documents/widget-1/index.html","sandbox":"scripts"}}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(
+        type = "canvas",
+        widget =
+          ChatWidgetPreview(
+            title = "Status",
+            path = "/__openclaw__/canvas/documents/widget-1/index.html",
+            preferredHeight = 240,
+            sandbox = "scripts",
+          ),
+      ),
+      parseChatMessageContent(content),
+    )
+  }
+
+  @Test
+  fun dropsCanvasBlocksWithoutWidgetSandbox() {
+    val content =
+      Json.parseToJsonElement(
+        """{"type":"canvas","preview":{"kind":"canvas","surface":"assistant_message","render":"url","url":"/__openclaw__/canvas/documents/widget-1/index.html"}}""",
+      )
+
+    assertNull(parseChatMessageContent(content))
+  }
+
+  @Test
+  fun dropsCanvasBlocksWithUntrustedWidgetTargets() {
+    val content =
+      Json.parseToJsonElement(
+        """{"type":"canvas","preview":{"kind":"canvas","surface":"assistant_message","render":"url","url":"https://attacker.example/widget.html","sandbox":"scripts"}}""",
+      )
+
+    assertNull(parseChatMessageContent(content))
+  }
+
+  @Test
+  fun resolvesOnlyCapabilityScopedWidgetDocuments() {
+    val surface = "https://gateway.example/__openclaw__/cap/token"
+
+    assertEquals(
+      "https://gateway.example/__openclaw__/cap/token/__openclaw__/canvas/documents/widget-1/index.html",
+      ChatWidgetUrlResolver.resolve(surface, "/__openclaw__/canvas/documents/widget-1/index.html"),
+    )
+    assertEquals(
+      "https://gateway.example/__openclaw__/cap/token/__openclaw__/canvas/documents/widget-1/index.html",
+      ChatWidgetUrlResolver.resolve(
+        "HTTPS://gateway.example/__openclaw__/cap/token",
+        "/__openclaw__/canvas/documents/widget-1/index.html",
+      ),
+    )
+    assertNull(ChatWidgetUrlResolver.resolve("https://gateway.example", "/__openclaw__/canvas/documents/widget-1/index.html"))
+    assertNull(ChatWidgetUrlResolver.resolve(surface, "https://attacker.example/widget.html"))
+    assertNull(ChatWidgetUrlResolver.resolve(surface, "/__openclaw__/a2ui/index.html"))
+    assertNull(ChatWidgetUrlResolver.resolve(surface, "/__openclaw__/canvas/documents/%252e%252e/index.html"))
+  }
+
+  @Test
   fun parsesImageBlocksOnlyWhenInlineContentExists() {
     val image =
       Json.parseToJsonElement(
