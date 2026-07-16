@@ -22,8 +22,13 @@ export function uniqueSorted(values) {
 }
 
 export function isLikelyRepoFilePath(value) {
-  return /^(\.agents|apps|config|docs|extensions|packages|scripts|src|test|ui)\//u.test(
-    normalizeRepoPath(value),
+  const normalized = normalizeRepoPath(value);
+  return (
+    !normalized.startsWith("/") &&
+    !/^[A-Za-z]:/u.test(normalized) &&
+    !normalized.startsWith("../") &&
+    !normalized.includes("/../") &&
+    /\.(?:[cm]?[jt]sx?)$/u.test(normalized)
   );
 }
 
