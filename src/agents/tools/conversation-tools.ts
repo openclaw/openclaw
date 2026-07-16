@@ -207,6 +207,14 @@ export function createConversationsSendTool(
         turnId,
         signal,
       });
+      if (sent.deliveryStatus !== "sent") {
+        return jsonResult({
+          status: sent.deliveryStatus,
+          conversationRef: conversation.conversationRef,
+          channel: conversation.channel,
+          correlationPersisted: false,
+        });
+      }
       const correlationPersisted = await recordConversationDelivery({
         deps,
         context,

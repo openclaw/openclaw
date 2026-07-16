@@ -65,6 +65,34 @@ function readMessageIdFromActionResult(result: MessageActionRunResult): string |
   return undefined;
 }
 
+function resolveConversationDeliveryStatus(
+  action: Extract<MessageActionRunResult, { kind: "send" }>,
+  messageId: string | undefined,
+): "sent" | "suppressed" {
+  if (action.handledBy === "plugin") {
+    // A plugin action resolves only after its provider send completes; the
+    // plugin-owned mirror is written from that same success continuation.
+    return "sent";
+  }
+  if (action.handledBy !== "core" || !action.sendResult) {
+    throw new Error("Conversation delivery did not return a platform send result");
+  }
+  if (action.sendResult.deliveryStatus === "sent") {
+    return "sent";
+  }
+  if (action.sendResult.deliveryStatus === "suppressed") {
+    return "suppressed";
+  }
+  // Gateway delivery predates the direct-path status field. Its response is
+  // authoritative only when it includes the platform message identity.
+  if (action.sendResult.via === "gateway" && messageId) {
+    return "sent";
+  }
+  throw new Error(
+    `Conversation delivery was not confirmed (${action.sendResult.deliveryStatus ?? "unknown"})`,
+  );
+}
+
 export async function sendConversationMessage(params: {
   deps: ConversationDeliveryDeps;
   context: ConversationDeliveryContext;
@@ -74,7 +102,11 @@ export async function sendConversationMessage(params: {
   preparedMessageId?: string;
   gatewayOwnedDelivery?: boolean;
   signal?: AbortSignal;
-}): Promise<{ deliveredMessage?: string; messageId?: string }> {
+}): Promise<{
+  deliveryStatus: "sent" | "suppressed";
+  deliveredMessage?: string;
+  messageId?: string;
+}> {
   const idempotencyKey = `conversation-outbound:${params.turnId}`;
   const pendingMirror = buildConversationDeliveryMirror({
     context: params.context,
@@ -145,9 +177,11 @@ export async function sendConversationMessage(params: {
   if (action.dryRun) {
     throw new Error("Conversation delivery was only prepared; no message was sent");
   }
+  const messageId = readMessageIdFromActionResult(action);
   return {
+    deliveryStatus: resolveConversationDeliveryStatus(action, messageId),
     ...(action.deliveredText ? { deliveredMessage: action.deliveredText } : {}),
-    messageId: readMessageIdFromActionResult(action),
+    ...(messageId ? { messageId } : {}),
   };
 }
 

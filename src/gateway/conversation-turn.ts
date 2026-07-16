@@ -140,6 +140,9 @@ export async function runGatewayConversationTurn(
       preparedMessageId,
       gatewayOwnedDelivery: true,
     });
+    if (sent.deliveryStatus !== "sent") {
+      throw new Error(`Conversation delivery was ${sent.deliveryStatus}; no message was sent`);
+    }
     const correlationPersisted = await recordConversationDelivery({
       deps,
       context,

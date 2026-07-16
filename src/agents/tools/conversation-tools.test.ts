@@ -46,6 +46,26 @@ function sentResult(): Extract<MessageActionRunResult, { kind: "send" }> {
       via: "direct",
       mediaUrl: null,
       result: { messageId: "reef-outbound-1" },
+      deliveryStatus: "sent",
+    },
+    dryRun: false,
+  };
+}
+
+function suppressedResult(): Extract<MessageActionRunResult, { kind: "send" }> {
+  return {
+    kind: "send",
+    channel: "reef",
+    action: "send",
+    to: "reef:peer-agent",
+    handledBy: "core",
+    payload: {},
+    sendResult: {
+      channel: "reef",
+      to: "reef:peer-agent",
+      via: "direct",
+      mediaUrl: null,
+      deliveryStatus: "suppressed",
     },
     dryRun: false,
   };
@@ -193,6 +213,31 @@ describe("conversation tools", () => {
           replay: "backing-session",
         },
         deliveryMirrorUpdateMode: "marker-only",
+      }),
+    );
+  });
+
+  it("keeps suppressed sends pending instead of recording delivery", async () => {
+    const deps = createDeps();
+    deps.runMessageAction.mockResolvedValueOnce(suppressedResult());
+
+    const result = await createConversationsSendTool(
+      { agentId: "main", agentSessionKey: "agent:main:main", config: {} },
+      deps,
+    ).execute("send", {
+      conversationRef: conversation.conversationRef,
+      message: "suppressed hello",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      conversationRef: conversation.conversationRef,
+      correlationPersisted: false,
+    });
+    expect(deps.appendAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(deps.appendAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryMirror: expect.objectContaining({ status: "pending" }),
       }),
     );
   });

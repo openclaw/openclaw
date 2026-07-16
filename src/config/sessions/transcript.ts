@@ -518,7 +518,7 @@ function replaceExistingConversationDeliveryMirror(params: {
   existing: unknown;
   candidate: unknown;
   mode: "marker-only" | "replace";
-}): unknown | undefined {
+}): unknown {
   if (
     !params.existing ||
     typeof params.existing !== "object" ||
@@ -675,10 +675,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
               : {}),
             ...(explicitIdempotencyKey && params.deliveryMirrorUpdateMode
               ? {
-                  replaceExistingMessage: (
-                    existing: unknown,
-                    candidate: unknown,
-                  ): unknown | undefined =>
+                  replaceExistingMessage: (existing: unknown, candidate: unknown): unknown =>
                     replaceExistingConversationDeliveryMirror({
                       existing,
                       candidate,

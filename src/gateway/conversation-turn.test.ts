@@ -42,6 +42,7 @@ function sentResult(
       via: "direct",
       mediaUrl: null,
       result: { messageId },
+      deliveryStatus: "sent",
     },
     dryRun: false,
   };
@@ -197,5 +198,41 @@ describe("runGatewayConversationTurn", () => {
       correlationPersisted: true,
       error: expect.stringContaining("did not preserve its prepared message id"),
     });
+  });
+
+  it("cancels correlation without promoting a suppressed send", async () => {
+    const deps = createDeps();
+    deps.runMessageAction.mockResolvedValueOnce({
+      ...sentResult(),
+      deliveredText: undefined,
+      sendResult: {
+        channel: "reef",
+        to: conversation.target,
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "suppressed",
+      },
+    });
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          turnId: "turn-suppressed",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).rejects.toThrow("Conversation delivery was suppressed");
+
+    expect(deps.appendAssistantMessage).toHaveBeenCalledTimes(1);
+    expect(deps.appendAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryMirror: expect.objectContaining({ status: "pending" }),
+      }),
+    );
   });
 });
