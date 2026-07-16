@@ -350,6 +350,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     if (dock) {
       this.dock = dock;
     }
+    if (detail?.open === false) {
+      this.closePanel();
+      return;
+    }
     if (detail?.catalog || detail?.open === true) {
       if (!this.available) {
         return;

@@ -384,6 +384,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(withYield).toContain("wait with `sessions_yield`");
   });
 
+  it("limits screen guidance to web/app tool surfaces", () => {
+    const withoutScreen = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions"],
+    });
+    const withScreen = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions", "screen"],
+    });
+
+    expect(withoutScreen).not.toContain("web/app turn may drive UI");
+    expect(withScreen).toContain("- screen: Drive operator web UI");
+    expect(withScreen).toContain(
+      "`screen` present: web/app turn may drive UI; messaging turn: don't.",
+    );
+  });
+
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
