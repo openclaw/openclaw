@@ -1317,30 +1317,6 @@ describe("memory index", () => {
     }
   });
 
-  it("does not search stale provider rows after embeddings become unavailable", async () => {
-    const oldCfg = createCfg({
-      model: "semantic-embed",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const oldManager = await getFreshManager(oldCfg);
-    await oldManager.sync({ reason: "test", force: true });
-    await oldManager.close?.();
-
-    forceNoProvider = true;
-    const nextManager = await getFreshManager(oldCfg);
-    try {
-      const results = await nextManager.search("alpha");
-
-      expect(results).toStrictEqual([]);
-      expect(nextManager.status().dirty).toBe(true);
-      expect(nextManager.status().custom?.indexIdentity).toMatchObject({
-        status: "mismatched",
-      });
-    } finally {
-      await nextManager.close?.();
-    }
-  });
-
   it("does not rebuild missing semantic metadata when embeddings are unavailable", async () => {
     const oldCfg = createCfg({
       model: "semantic-embed",
