@@ -236,9 +236,12 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
     pendingFiles: 1,
     staleFiles: 0,
   });
-  page.lastProfileLoadedAtMs = Date.now();
+  const nowMs = Date.now();
+  const nowSpy = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+  page.lastProfileLoadedAtMs = nowMs;
   page.scheduleCacheSettleRefresh();
   expect(settleDelayMs).toBe(USAGE_PAYLOAD_TTL_MS);
+  nowSpy.mockRestore();
 
   page.lastProfileLoadedAtMs = Date.now() - USAGE_PAYLOAD_TTL_MS;
   visibility.mockReturnValue("hidden");
