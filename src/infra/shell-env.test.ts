@@ -68,6 +68,7 @@ describe("shell env fallback", () => {
     env: NodeJS.ProcessEnv;
     expectedKeys: string[];
     exec: ReturnType<typeof vi.fn>;
+    logger?: Pick<typeof console, "warn">;
     platform?: NodeJS.Platform;
   }) {
     return loadShellEnvFallback({
@@ -75,6 +76,7 @@ describe("shell env fallback", () => {
       env: params.env,
       expectedKeys: params.expectedKeys,
       exec: params.exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      logger: params.logger,
       platform: params.platform,
     });
   }
@@ -358,6 +360,51 @@ describe("shell env fallback", () => {
 
     expect(exec).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "successful",
+      oldest: Buffer.from("PROBE_RESULT=oldest\0"),
+      newest: new Error("newest failure"),
+    },
+    {
+      name: "failed",
+      oldest: new Error("oldest failure"),
+      newest: Buffer.from("PROBE_RESULT=newest\0"),
+    },
+  ])("evicts the oldest $name probe across success and failure entries", ({ oldest, newest }) => {
+    const logger = { warn: vi.fn() };
+    const makeExec = (outcome: Buffer | Error) =>
+      vi.fn(() => {
+        if (outcome instanceof Error) {
+          throw outcome;
+        }
+        return outcome;
+      });
+    const runProbe = (exec: ReturnType<typeof vi.fn>) =>
+      runShellEnvFallback({
+        enabled: true,
+        env: {},
+        expectedKeys: ["PROBE_RESULT"],
+        exec,
+        logger,
+      });
+    const oldestExec = makeExec(oldest);
+    const fillerExecs = Array.from({ length: 63 }, (_, index) =>
+      makeExec(Buffer.from(`PROBE_RESULT=filler-${index}\0`)),
+    );
+    const newestExec = makeExec(newest);
+
+    for (const exec of [oldestExec, ...fillerExecs]) {
+      runProbe(exec);
+    }
+    runProbe(newestExec);
+    runProbe(newestExec);
+    runProbe(oldestExec);
+
+    expect(newestExec).toHaveBeenCalledOnce();
+    expect(oldestExec).toHaveBeenCalledTimes(2);
   });
 
   it("tracks last applied keys across success, skip, and failure paths", () => {
