@@ -302,9 +302,12 @@ async function fetchHttpJson<T>(
         );
       }
       // Overflow cancels the stream and releases its reader lock before the guarded fetch below.
-      const body = await readResponseWithLimit(res, BROWSER_ERROR_BODY_LIMIT_BYTES).catch(
-        () => undefined,
-      );
+      // Idle-timeout error bodies too so a stalled failure payload cannot hang the client.
+      const body = await readResponseWithLimit(res, BROWSER_ERROR_BODY_LIMIT_BYTES, {
+        chunkTimeoutMs: timeoutMs,
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new BrowserServiceError(`Browser control error response stalled for ${chunkTimeoutMs}ms`),
+      }).catch(() => undefined);
       const text = body ? new TextDecoder().decode(body) : "";
       let parsed: unknown;
       if (text) {
@@ -316,9 +319,14 @@ async function fetchHttpJson<T>(
       }
       throw browserServiceErrorFromPayload(parsed, text || `HTTP ${res.status}`, res.status);
     }
+    // fetchWithSsrFGuard resolves after headers; keep the request deadline on the
+    // success body so a stalled control JSON stream cannot hang browser tools.
     const body = await readResponseWithLimit(res, BROWSER_SUCCESS_BODY_LIMIT_BYTES, {
+      chunkTimeoutMs: timeoutMs,
       onOverflow: ({ maxBytes }) =>
         new BrowserServiceError(`Browser control response exceeded ${maxBytes} bytes`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new BrowserServiceError(`Browser control response stalled for ${chunkTimeoutMs}ms`),
     });
     return JSON.parse(new TextDecoder().decode(body)) as T;
   } finally {

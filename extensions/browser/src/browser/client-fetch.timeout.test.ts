@@ -63,4 +63,34 @@ describe("fetchBrowserJson timeout forwarding", () => {
       }),
     );
   });
+
+  it("times out when a success response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"ok":'));
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        finalUrl: browserControlUrl,
+        release,
+      });
+
+      const pending = fetchBrowserJson(browserControlUrl, { timeoutMs: 50 });
+      const settled = expect(pending).rejects.toMatchObject({
+        name: "BrowserServiceError",
+        message: "Browser control response stalled for 50ms",
+      });
+      await vi.advanceTimersByTimeAsync(60);
+      await settled;
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
