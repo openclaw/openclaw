@@ -11,6 +11,7 @@ import { resolveAcpxPluginRoot } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
 const requireFromHere = createRequire(import.meta.url);
+const ACPX_PROCESS_LIST_TIMEOUT_MS = 2_000;
 const GENERATED_WRAPPER_BASENAMES = new Set([
   "codex-acp-wrapper.mjs",
   "claude-agent-acp-wrapper.mjs",
@@ -235,6 +236,7 @@ async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   const { stdout } = await runExec("ps", ["-axo", "pid=,ppid=,command="], {
     logOutput: false,
     maxBuffer: 8 * 1024 * 1024,
+    timeoutMs: ACPX_PROCESS_LIST_TIMEOUT_MS,
   });
   return parseProcessList(stdout);
 }

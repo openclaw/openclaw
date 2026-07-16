@@ -2,6 +2,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+
+const runExecMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runExec: runExecMock }));
+
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
@@ -61,6 +66,23 @@ function collectMatching<T, U>(
 }
 
 describe("process reaper", () => {
+  it("bounds startup process listing and fails closed when it times out", async () => {
+    runExecMock.mockRejectedValueOnce(new Error("process listing timed out"));
+
+    const result = await reapStaleOpenClawOwnedAcpxOrphans({ wrapperRoot: WRAPPER_ROOT });
+
+    expect(runExecMock).toHaveBeenCalledWith("ps", ["-axo", "pid=,ppid=,command="], {
+      logOutput: false,
+      maxBuffer: 8 * 1024 * 1024,
+      timeoutMs: 2_000,
+    });
+    expect(result).toEqual({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "process-list-unavailable",
+    });
+  });
+
   it("only treats generated wrappers as launch-lease aware", () => {
     expect(
       isOpenClawLeaseAwareAcpxProcessCommand({
