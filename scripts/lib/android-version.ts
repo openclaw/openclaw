@@ -115,14 +115,9 @@ export function normalizeAndroidVersionCode(rawVersionCode: number, version: str
   return rawVersionCode;
 }
 
-export function canonicalAndroidWearVersionCode(
-  rawVersionCode: number,
-  version: string,
-): number {
+export function canonicalAndroidWearVersionCode(rawVersionCode: number, version: string): number {
   const phoneVersionCode = normalizeAndroidVersionCode(rawVersionCode, version).toString();
-  const wearVersionCode = Number(
-    `${phoneVersionCode.slice(2)}${ANDROID_WEAR_VERSION_CODE_SUFFIX}`,
-  );
+  const wearVersionCode = Number(`${phoneVersionCode.slice(2)}${ANDROID_WEAR_VERSION_CODE_SUFFIX}`);
   if (
     !Number.isSafeInteger(wearVersionCode) ||
     wearVersionCode <= 0 ||
