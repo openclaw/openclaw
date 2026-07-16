@@ -49,12 +49,15 @@ function resolveModel(modelId: "k3" | "k3[1m]"): Model<"anthropic-messages"> {
 }
 
 function countContentChars(message: AssistantMessage, type: "text" | "thinking"): number {
-  return message.content
-    .filter((block) => block.type === type)
-    .reduce(
-      (total, block) => total + (block.type === "text" ? block.text.length : block.thinking.length),
-      0,
-    );
+  return message.content.reduce((total, block) => {
+    if (type === "text" && block.type === "text") {
+      return total + block.text.length;
+    }
+    if (type === "thinking" && block.type === "thinking") {
+      return total + block.thinking.length;
+    }
+    return total;
+  }, 0);
 }
 
 async function runReasoningScenario(params: {
