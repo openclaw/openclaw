@@ -426,6 +426,12 @@ async function startAnthropicProxy(params: {
         }
         res.end();
       } catch (error) {
+        // Once upstream headers are forwarded, a synthetic 502 is invalid.
+        // Close the downstream body so its reader fails instead of hanging.
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
         res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
         res.end(redactForDevToolLog(`proxy error: ${String(error)}`));
       }

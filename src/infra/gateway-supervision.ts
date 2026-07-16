@@ -1,12 +1,10 @@
 // Defines gateway lifecycle ownership shared by service, restart, and update paths.
-export const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
+const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 export const EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON = "external-supervisor-update-required";
 
-export type GatewaySupervisorMode = "auto" | "external";
+type GatewaySupervisorMode = "auto" | "external";
 
-export function resolveGatewaySupervisorMode(
-  env: NodeJS.ProcessEnv = process.env,
-): GatewaySupervisorMode {
+function resolveGatewaySupervisorMode(env: NodeJS.ProcessEnv = process.env): GatewaySupervisorMode {
   return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external"
     ? "external"
     : "auto";

@@ -1202,9 +1202,17 @@ describe("script-specific dev tooling hardening", () => {
     ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
   });
 
-  it("aborts a stalled Anthropic proxy upstream at the configured deadline", async () => {
+  it.each([
+    { name: "before response headers", sendsHeaders: false },
+    { name: "during the response body", sendsHeaders: true },
+  ])("bounds an Anthropic upstream stall $name", async ({ sendsHeaders }) => {
     const nativeFetch = globalThis.fetch;
-    const upstream = http.createServer(() => {});
+    const upstream = http.createServer((_request, response) => {
+      if (sendsHeaders) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.flushHeaders();
+      }
+    });
     await new Promise<void>((resolve, reject) => {
       upstream.once("error", reject);
       upstream.listen(0, "127.0.0.1", () => {
@@ -1229,13 +1237,19 @@ describe("script-specific dev tooling hardening", () => {
         timeoutMs: 100,
       });
       const startedAt = Date.now();
-      const response = await nativeFetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+      const request = nativeFetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
         method: "POST",
         body: "{}",
-      });
+      }).then(async (response) => ({ status: response.status, body: await response.text() }));
 
-      expect(response.status).toBe(502);
-      await expect(response.text()).resolves.toMatch(/TimeoutError/u);
+      if (sendsHeaders) {
+        await expect(request).rejects.toThrow();
+      } else {
+        await expect(request).resolves.toMatchObject({
+          status: 502,
+          body: expect.stringMatching(/TimeoutError/u),
+        });
+      }
       expect(Date.now() - startedAt).toBeLessThan(2_000);
       expect(fetchSpy).toHaveBeenCalledWith(
         "https://api.anthropic.com/v1/messages",
@@ -1244,6 +1258,7 @@ describe("script-specific dev tooling hardening", () => {
     } finally {
       fetchSpy.mockRestore();
       await proxy?.stop();
+      upstream.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         upstream.close((error) => (error ? reject(error) : resolve()));
       });
