@@ -1161,3 +1161,4 @@ describe("plugin conversation binding approvals", () => {
     expect(binding.conversationId).toBe(expectedBinding.conversationId);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,7 +6,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
-import { canSubmitTuiChatMessage } from "./tui-submit.js";
 import {
   createBackspaceDeduper,
   createDeferredTuiFinish,
@@ -123,73 +122,6 @@ describe("tui slash commands", () => {
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
     expect(commands.map((command) => command.name)).toContain("auth");
-  });
-});
-
-describe("canSubmitTuiChatMessage", () => {
-  it("allows submit when no run registration is pending", () => {
-    expect(canSubmitTuiChatMessage({})).toBe(true);
-  });
-
-  it("allows submit while a run is active so the backend owns queue policy", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activeChatRunId: "run-active",
-      }),
-    ).toBe(true);
-  });
-
-  it("blocks message submit while disconnected so the editor preserves the draft", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        isConnected: false,
-        message: "send after reconnect",
-      }),
-    ).toBe(false);
-  });
-
-  it("allows stop text while a run is active", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activeChatRunId: "run-active",
-        message: "please stop",
-      }),
-    ).toBe(true);
-  });
-
-  it("allows stop text while a queued run is pending", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activeChatRunId: "run-active",
-        pendingChatRunId: "run-queued",
-        message: "please stop",
-      }),
-    ).toBe(true);
-  });
-
-  it("blocks submits with pending optimistic state", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        pendingOptimisticUserMessage: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("blocks submits with a pending chat run id", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        pendingChatRunId: "run-pending",
-      }),
-    ).toBe(false);
-  });
-
-  it("blocks submit while optimistic state is pending during an active run", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        activeChatRunId: "run-active",
-        pendingOptimisticUserMessage: true,
-      }),
-    ).toBe(false);
   });
 });
 

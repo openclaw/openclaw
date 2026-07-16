@@ -1,11 +1,11 @@
 // Channel entry contract tests cover SDK channel entrypoint exports and package boundaries.
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
@@ -16,15 +16,12 @@ import {
   loadBundledEntryExportSync,
 } from "./channel-entry-contract.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
   "openclaw.pluginModuleLoaderJitiFactoryOverride",
 );
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
   vi.resetModules();
   vi.doUnmock("jiti");
   vi.doUnmock("../plugins/native-module-require.js");
@@ -122,8 +119,7 @@ function createBundledChannelEntry(params: {
 
 describe("defineBundledChannelEntry", () => {
   it("runs tool registrations without channel sidecar hydration during tool discovery", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-entry-tools-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-bundled-entry-tools-");
     const runtimeMarker = path.join(tempRoot, "runtime-loaded");
     const pluginId = "bundled-tool-discovery";
     const { importerPath } = writeBundledChannelFixture({
@@ -162,8 +158,7 @@ describe("defineBundledChannelEntry", () => {
   });
 
   it("loads runtime sidecars during discovery registration", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-entry-runtime-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-bundled-entry-runtime-");
     const runtimeMarker = path.join(tempRoot, "runtime-loaded");
     const pluginId = "bundled-discovery";
     const { importerPath } = writeBundledChannelFixture({
@@ -190,8 +185,7 @@ describe("defineBundledChannelEntry", () => {
   });
 
   it("keeps setup-runtime and full registration wired to runtime sidecars", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-entry-runtime-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-bundled-entry-runtime-");
     const runtimeMarker = path.join(tempRoot, "runtime-loaded");
     const pluginId = "bundled-runtime";
     const { importerPath } = writeBundledChannelFixture({
@@ -224,8 +218,7 @@ describe("defineBundledChannelEntry", () => {
 
 describe("defineBundledChannelSetupEntry", () => {
   it("exposes setup-runtime registrations without loading the full channel entry", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-entry-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-bundled-setup-entry-");
     const runtimeMarker = path.join(tempRoot, "runtime-loaded");
     const setupRuntimeRegister = vi.fn<(api: OpenClawPluginApi) => void>();
     const pluginId = "bundled-setup-runtime";
@@ -263,8 +256,7 @@ async function expectBuiltArtifactNodeRequireFastPath(
       typeof import("./channel-entry-contract.js")
     >(import.meta.url, `./channel-entry-contract.js?scope=${scope}`);
 
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
 
     const pluginRoot = path.join(tempRoot, artifactRoot, "extensions", "telegram");
     fs.mkdirSync(pluginRoot, { recursive: true });
@@ -299,8 +291,7 @@ async function expectBuiltArtifactNodeRequireFastPath(
 }
 
 function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-  tempDirs.push(tempRoot);
+  const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
   const probePath = path.join(tempRoot, "probe.mjs");
   const channelEntryContractModuleUrl = pathToFileURL(
     path.join(process.cwd(), "src", "plugin-sdk", "channel-entry-contract.ts"),
@@ -367,8 +358,7 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("includes importer and resolved path context when a bundled sidecar is missing", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
 
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
     fs.mkdirSync(pluginRoot, { recursive: true });
@@ -403,8 +393,7 @@ describe("loadBundledEntryExportSync", () => {
       const channelEntryContract = await importFreshModule<
         typeof import("./channel-entry-contract.js")
       >(import.meta.url, "./channel-entry-contract.js?scope=windows-dist-jiti");
-      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-      tempDirs.push(tempRoot);
+      const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
 
       const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
       fs.mkdirSync(pluginRoot, { recursive: true });
@@ -425,8 +414,7 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("normalizes Windows absolute sidecar paths before module loads them", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
     const openedFdPath = path.join(tempRoot, "opened");
     fs.writeFileSync(openedFdPath, "opened\n", "utf8");
     const jitiLoad = vi.fn(() => ({ load: 42 }));
@@ -475,8 +463,7 @@ describe("loadBundledEntryExportSync", () => {
     const channelEntryContract = await importFreshModule<
       typeof import("./channel-entry-contract.js")
     >(import.meta.url, "./channel-entry-contract.js?scope=native-esm-race-fallback");
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "whatsapp");
     fs.mkdirSync(pluginRoot, { recursive: true });
     const importerPath = path.join(pluginRoot, "setup-entry.js");
@@ -503,8 +490,7 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
 
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
     fs.mkdirSync(pluginRoot, { recursive: true });
@@ -550,8 +536,7 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("reuses resolved bundled sidecar paths before cached module exports", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
 
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
     fs.mkdirSync(pluginRoot, { recursive: true });
@@ -621,8 +606,7 @@ describe("loadBundledEntryExportSync", () => {
     stubPluginModuleLoaderJitiFactory(
       vi.fn(() => vi.fn(() => ({ sentinel: 42 }))) as unknown as PluginModuleLoaderFactory,
     );
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
-    tempDirs.push(tempRoot);
+    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
 
     fs.writeFileSync(path.join(tempRoot, "package.json"), '{"name":"openclaw"}\n', "utf8");
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");

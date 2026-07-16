@@ -434,6 +434,21 @@ describe("qa scenario catalog", () => {
     expect(config?.unavailableNeedles).toContain("not in my available tool surface");
   });
 
+  it("loads Matrix flow provider overrides", () => {
+    expect(readQaScenarioById("matrix-room-block-streaming").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "mock-openai",
+      retryCount: 0,
+      timeoutMs: 75_000,
+    });
+    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "live-frontier",
+      retryCount: 0,
+      timeoutMs: 180_000,
+    });
+  });
+
   it("loads live gateway sentinel scenarios for harness self-health", () => {
     const scenarioIds = [
       "plugin-hook-health-sentinel",
@@ -716,7 +731,7 @@ describe("qa scenario catalog", () => {
 
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
     const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
-      | { requiredChannelDriver?: string; requiredProviderMode?: string }
+      | { requiredProviderMode?: string }
       | undefined;
     const retryFailureConfig = readQaScenarioExecutionConfig(
       "message-tool-stranded-final-retry-failure",
@@ -819,7 +834,6 @@ describe("qa scenario catalog", () => {
       | {
           workspaceFiles?: Record<string, string>;
           prompt?: string;
-          requiredChannelDriver?: string;
           expectedReplyAll?: string[];
           expectedArtifactAll?: string[];
           expectedArtifactAny?: string[];
@@ -832,7 +846,7 @@ describe("qa scenario catalog", () => {
       "Mission: prove you followed the repo contract.",
     );
     expect(config?.prompt).toContain("Repo contract followthrough check.");
-    expect(config?.requiredChannelDriver).toBe("qa-channel");
+    expect(scenario.execution.driver).toBe("qa-channel");
     expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
     expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
     expect(config?.expectedArtifactAny).toContain("evidence path");
@@ -864,46 +878,39 @@ describe("qa scenario catalog", () => {
     ];
 
     for (const scenarioId of scenarioIds) {
-      const config = readQaScenarioExecutionConfig(scenarioId) as
-        | { requiredChannelDriver?: string }
-        | undefined;
-      expect(config?.requiredChannelDriver, scenarioId).toBe("qa-channel");
+      expect(readQaScenarioById(scenarioId).execution.driver, scenarioId).toBe("qa-channel");
     }
   });
 
-  it("routes canonical thread relation flows through Crabline Matrix", () => {
+  it("keeps portable thread relation flows free of a channel requirement", () => {
     for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
       const scenario = readQaScenarioById(scenarioId);
-      const config = readQaScenarioExecutionConfig(scenarioId) as
-        | { requiredChannelDriver?: string }
-        | undefined;
 
-      expect(scenario.execution.channel, scenarioId).toBe("matrix");
-      expect(config?.requiredChannelDriver, scenarioId).toBeUndefined();
+      expect(scenario.execution.channel, scenarioId).toBeUndefined();
+      expect(scenario.execution.driver, scenarioId).toBeUndefined();
+      expect(Object.keys(scenario.execution.profiles ?? {}), scenarioId).toEqual(
+        expect.arrayContaining(["matrix:adapter", "slack:adapter"]),
+      );
     }
   });
 
   it("keeps Matrix subagent thread spawn explicitly selectable", () => {
     const scenario = readQaScenarioById("subagent-thread-spawn");
-    const config = readQaScenarioExecutionConfig("subagent-thread-spawn") as
-      | { requiredChannelDriver?: string }
-      | undefined;
 
     expect(scenario.execution.channel).toBe("matrix");
-    expect(config?.requiredChannelDriver).toBe("live");
+    expect(scenario.execution.driver).toBe("live");
   });
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
       | {
-          requiredChannelDriver?: string;
           requiredProviderMode?: string;
         }
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
-    expect(config?.requiredChannelDriver).toBeUndefined();
+    expect(scenario.execution.driver).toBeUndefined();
     expect(config?.requiredProviderMode).toBe("mock-openai");
   });
 
@@ -920,10 +927,7 @@ describe("qa scenario catalog", () => {
     ];
 
     for (const scenarioId of liveScenarioIds) {
-      const config = readQaScenarioExecutionConfig(scenarioId) as
-        | { requiredChannelDriver?: string }
-        | undefined;
-      expect(config?.requiredChannelDriver, scenarioId).toBe("live");
+      expect(readQaScenarioById(scenarioId).execution.driver, scenarioId).toBe("live");
     }
   });
 

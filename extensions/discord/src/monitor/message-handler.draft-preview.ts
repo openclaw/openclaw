@@ -2,6 +2,7 @@ import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
+  resolveChannelProgressDraftConfig,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
@@ -82,8 +83,18 @@ export function createDiscordDraftPreviewController(params: {
   let progressDraftStartedBeforeFinal = false;
   let progressDraftCollapsed = false;
   let progressNarratorLifecycle: { beginTurn: () => void; stopTurn: () => void } | undefined;
+  const progressConfig = resolveChannelProgressDraftConfig(params.discordConfig);
+  const progressHasExplicitLabel =
+    progressConfig.label !== undefined || progressConfig.labels !== undefined;
+  // Discord defaults to progress mode even when `streaming.mode` is omitted,
+  // so pass that resolved mode into the shared default through this fallback.
+  const progressToolDefault = progressConfig.toolProgress ?? progressHasExplicitLabel;
   const previewToolProgressEnabled =
-    Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
+    Boolean(draftStream) &&
+    resolveChannelStreamingPreviewToolProgress(
+      params.discordConfig,
+      discordStreamMode === "progress" ? progressToolDefault : true,
+    );
   const narrationProgressEnabled =
     Boolean(draftStream) &&
     discordStreamMode === "progress" &&
@@ -108,7 +119,7 @@ export function createDiscordDraftPreviewController(params: {
     seed: progressSeed,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
-    reasoningGate: true,
+    reasoningGate: previewToolProgressEnabled,
     commentaryItalics: false,
     update: async (previewText, options) => {
       lastPartialText = previewText;

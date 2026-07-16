@@ -2,7 +2,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
+import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
 
@@ -310,6 +311,13 @@ describe("workboard tools", () => {
     ).rejects.toThrow(/claimed by main/);
     expect(await store.list()).toHaveLength(1);
 
+    await expect(
+      otherTools.get("workboard_create")?.execute("call-2b", {
+        title: "Wrong token child",
+        parents: [parent.id],
+        token: "test-token-placeholder",
+      }),
+    ).rejects.toThrow(/claimed by main/);
     await otherTools.get("workboard_create")?.execute("call-2", {
       title: "Scoped child",
       parents: [parent.id],
@@ -582,5 +590,42 @@ describe("workboard tools", () => {
       }),
     );
     expect(Buffer.from(attachment.contentBase64 as string, "base64").toString("utf8")).toBe("done");
+  });
+
+  it("moves cards with agent claim scope", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({ api, store, context: { agentId: "agent-b" } as never }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const card = await store.create({ title: "Move tool card", status: "todo" });
+
+    const unclaimed = readPayload(
+      await tools.get("workboard_move")?.execute("move-unclaimed", {
+        id: card.id,
+        status: "ready",
+      }),
+    );
+    expect(unclaimed.card).toMatchObject({ status: "ready" });
+
+    await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
+    await expect(
+      tools.get("workboard_move")?.execute("move-denied", {
+        id: card.id,
+        status: "review",
+      }),
+    ).rejects.toThrow("card is claimed by agent-a");
+
+    const claimed = readPayload(
+      await tools.get("workboard_move")?.execute("move-claimed", {
+        id: card.id,
+        status: "review",
+        token: "test-auth-token",
+      }),
+    );
+    expect(claimed.card).toMatchObject({ status: "review" });
   });
 });

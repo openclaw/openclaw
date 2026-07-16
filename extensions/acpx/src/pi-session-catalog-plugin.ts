@@ -1,4 +1,9 @@
 import process from "node:process";
+import {
+  decodeNodePtyResumeParams,
+  resolveNodeHostExecutable,
+  runNodePtyCommand,
+} from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -9,6 +14,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogProvider,
   SessionCatalogSession,
+  SessionCatalogTerminalPlan,
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
@@ -23,13 +29,13 @@ import { piSessionStoreAvailable } from "./pi-session-paths.js";
 
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
+const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
 
 const CAPABILITY = "pi-sessions";
 const LOCAL_HOST_ID = "gateway";
 const MAX_PAGE_LIMIT = 100;
 const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
-const MAX_SEARCH_LENGTH = 500;
 const NODE_TIMEOUT_MS = 20_000;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const TRANSCRIPT_ITEM_TYPES = new Set([
@@ -40,6 +46,13 @@ const TRANSCRIPT_ITEM_TYPES = new Set([
   "toolResult",
   "other",
 ]);
+
+function validatePiThreadId(value: unknown): string {
+  if (typeof value !== "string" || !SESSION_ID_PATTERN.test(value)) {
+    throw new Error("INVALID_REQUEST: threadId is invalid");
+  }
+  return value;
+}
 
 function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
@@ -116,14 +129,14 @@ function isPiSessionCatalogEnabled(pluginConfig: unknown): boolean {
 }
 
 function createPiSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
-  const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
+  const storeAvailable = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
     fullConfigCatalogEnabled(config) && piSessionStoreAvailable(env);
   return [
     {
       command: PI_SESSIONS_LIST_COMMAND,
       cap: CAPABILITY,
       dangerous: false,
-      isAvailable: available,
+      isAvailable: storeAvailable,
       handle: async (paramsJSON) =>
         JSON.stringify(await listLocalPiSessionPage(parseNodeParams(paramsJSON))),
     },
@@ -131,9 +144,51 @@ function createPiSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
       command: PI_SESSION_READ_COMMAND,
       cap: CAPABILITY,
       dangerous: false,
-      isAvailable: available,
+      isAvailable: storeAvailable,
       handle: async (paramsJSON) =>
         JSON.stringify(await readLocalPiTranscriptPage(parseNodeParams(paramsJSON))),
+    },
+    {
+      command: PI_TERMINAL_RESUME_COMMAND,
+      cap: CAPABILITY,
+      dangerous: false,
+      duplex: true,
+      isAvailable: ({ config, env }) =>
+        storeAvailable({ config, env }) &&
+        Boolean(
+          resolveNodeHostExecutable("pi", {
+            env,
+            pathEnv: env.PATH ?? env.Path ?? "",
+            strategy: "direct",
+          }),
+        ),
+      handle: async (paramsJSON, io) => {
+        if (!io) {
+          throw new Error("Pi terminal command requires duplex transport");
+        }
+        const params = decodeNodePtyResumeParams(paramsJSON, validatePiThreadId);
+        const record = await requireLocalPiSession(params.threadId);
+        const resolution = resolveNodeHostExecutable("pi", {
+          env: process.env,
+          pathEnv: process.env.PATH ?? process.env.Path ?? "",
+          strategy: "direct",
+        });
+        if (!resolution) {
+          throw new Error("Pi CLI is unavailable");
+        }
+        return JSON.stringify(
+          await runNodePtyCommand(
+            {
+              file: resolution.executable,
+              args: ["--session", params.threadId],
+              cwd: record.cwd,
+              cols: params.cols,
+              rows: params.rows,
+            },
+            io,
+          ),
+        );
+      },
     },
   ];
 }
@@ -141,9 +196,10 @@ function createPiSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
 function createPiSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
     {
-      commands: [PI_SESSIONS_LIST_COMMAND, PI_SESSION_READ_COMMAND],
+      commands: [PI_SESSIONS_LIST_COMMAND, PI_SESSION_READ_COMMAND, PI_TERMINAL_RESUME_COMMAND],
       defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) => context.invokeNode(),
+      handle: (context) =>
+        context.command === PI_TERMINAL_RESUME_COMMAND ? { ok: true } : context.invokeNode(),
     },
   ];
 }
@@ -159,6 +215,13 @@ function unwrapNodePayload(value: unknown): unknown {
 }
 
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
+
+function setTerminalCapability(page: PiSessionPage, canOpenTerminal: boolean): PiSessionPage {
+  for (const session of page.sessions) {
+    session.canOpenTerminal = canOpenTerminal;
+  }
+  return page;
+}
 
 async function listPiNodeHost(
   runtime: PluginRuntime,
@@ -186,15 +249,19 @@ async function listPiNodeHost(
       command: PI_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search?.trim()
-          ? { searchTerm: query.search.trim().slice(0, MAX_SEARCH_LENGTH) }
-          : {}),
+        ...(query.search ? { searchTerm: query.search } : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
       scopes: ["operator.write"],
     });
-    return { ...common, ...parseNodeSessionPage(unwrapNodePayload(raw)) };
+    const page = parseNodeSessionPage(unwrapNodePayload(raw));
+    const commands = node.invocableCommands ?? node.commands;
+    const canOpenTerminal = commands?.includes(PI_TERMINAL_RESUME_COMMAND) === true;
+    return {
+      ...common,
+      ...setTerminalCapability(page, canOpenTerminal),
+    };
   } catch {
     return {
       ...common,
@@ -250,7 +317,6 @@ async function listPiHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const searchTerm = query.search?.trim().slice(0, MAX_SEARCH_LENGTH) || undefined;
   const hosts: SessionCatalogHost[] = [];
   if ((!requested || requested.has(LOCAL_HOST_ID)) && piSessionStoreAvailable(process.env)) {
     try {
@@ -261,9 +327,18 @@ async function listPiHosts(
         connected: true,
         ...(await listLocalPiSessionPage({
           limit: query.limitPerHost,
-          ...(searchTerm ? { searchTerm } : {}),
+          ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
-        })),
+        }).then((page) =>
+          setTerminalCapability(
+            page,
+            resolveNodeHostExecutable("pi", {
+              env: process.env,
+              pathEnv: process.env.PATH ?? "",
+              strategy: "fallback",
+            }) !== undefined,
+          ),
+        )),
       });
     } catch {
       hosts.push({
@@ -292,6 +367,90 @@ async function listPiHosts(
     .slice(0, MAX_HOSTS - hosts.length);
   const nodeHosts = await Promise.all(eligible.map((node) => listPiNodeHost(runtime, query, node)));
   return [...hosts, ...nodeHosts];
+}
+
+async function requireLocalPiSession(threadId: string): Promise<SessionCatalogSession> {
+  const page = await listLocalPiSessionPage({ searchTerm: threadId, limit: MAX_PAGE_LIMIT });
+  const record = page.sessions.find((session) => session.threadId === threadId);
+  if (!record) {
+    throw new Error("Pi session is unavailable");
+  }
+  return record;
+}
+
+async function resolveNodePiSession(params: {
+  runtime: PluginRuntime;
+  nodeId: string;
+  threadId: string;
+}): Promise<SessionCatalogSession> {
+  const raw = await params.runtime.nodes.invoke({
+    nodeId: params.nodeId,
+    command: PI_SESSIONS_LIST_COMMAND,
+    params: { searchTerm: params.threadId, limit: MAX_PAGE_LIMIT },
+    timeoutMs: NODE_TIMEOUT_MS,
+    scopes: ["operator.write"],
+  });
+  const page = parseNodeSessionPage(unwrapNodePayload(raw));
+  const record = page.sessions.find((session) => session.threadId === params.threadId);
+  if (!record) {
+    throw new Error("Pi session is unavailable");
+  }
+  return record;
+}
+
+async function openPiTerminal(params: {
+  runtime: PluginRuntime;
+  hostId: string;
+  threadId: string;
+}): Promise<SessionCatalogTerminalPlan> {
+  const title = `pi --session ${params.threadId.slice(0, 12)}…`;
+  if (params.hostId === LOCAL_HOST_ID) {
+    const record = await requireLocalPiSession(params.threadId);
+    const resolution = resolveNodeHostExecutable("pi", {
+      env: process.env,
+      pathEnv: process.env.PATH ?? "",
+      strategy: "fallback",
+    });
+    if (!resolution) {
+      throw new Error("Pi CLI is unavailable");
+    }
+    return {
+      kind: "local",
+      argv: [resolution.executable, "--session", params.threadId],
+      ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
+      title,
+    };
+  }
+  if (!params.hostId.startsWith("node:")) {
+    throw new Error("hostId is invalid");
+  }
+  const nodeId = params.hostId.slice("node:".length);
+  const node = (await params.runtime.nodes.list()).nodes.find((candidate) => {
+    const commands = candidate.invocableCommands ?? candidate.commands;
+    return (
+      candidate.nodeId === nodeId &&
+      candidate.connected === true &&
+      commands?.includes(PI_SESSIONS_LIST_COMMAND) === true &&
+      commands.includes(PI_TERMINAL_RESUME_COMMAND)
+    );
+  });
+  if (!node) {
+    throw new Error("paired-node Pi terminal is unavailable");
+  }
+  const record = await resolveNodePiSession({
+    runtime: params.runtime,
+    nodeId,
+    threadId: params.threadId,
+  });
+  return {
+    kind: "node",
+    nodeId,
+    command: PI_TERMINAL_RESUME_COMMAND,
+    paramsJSON: JSON.stringify({ threadId: params.threadId }),
+    ...(record.cwd ? { cwd: record.cwd } : {}),
+    title,
+  };
 }
 
 async function readPiTranscript(
@@ -345,6 +504,7 @@ export function registerPiSessionCatalog(api: OpenClawPluginApi): void {
     label: "Pi",
     list: async (query) => await listPiHosts(api.runtime, query),
     read: async (request) => await readPiTranscript(api.runtime, request),
+    openTerminal: async (request) => await openPiTerminal({ runtime: api.runtime, ...request }),
   });
   for (const command of createPiSessionNodeHostCommands()) {
     api.registerNodeHostCommand(command);

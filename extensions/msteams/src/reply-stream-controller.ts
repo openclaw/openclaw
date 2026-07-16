@@ -7,7 +7,6 @@ import {
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelPreviewStreamMode,
-  resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -17,22 +16,6 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 type Maybe<T> = T | undefined;
-
-/**
- * Resolve the informative status text shown above the streaming card while the
- * agent is working. Pulls custom labels from `msteams.streaming.progressDraft`
- * config when set, falls back to the plugin-sdk's default rotation otherwise.
- */
-export function pickInformativeStatusText(
-  params: { config?: MSTeamsConfig; seed?: string; random?: () => number } | (() => number) = {},
-): string | undefined {
-  const options = typeof params === "function" ? { random: params } : params;
-  return resolveChannelProgressDraftLabel({
-    entry: options.config,
-    seed: options.seed,
-    random: options.random,
-  });
-}
 
 // The SDK throws StreamCancelledError synchronously from stream.emit/update
 // when the user pressed Stop in Teams (Teams replies 403 to the next chunk

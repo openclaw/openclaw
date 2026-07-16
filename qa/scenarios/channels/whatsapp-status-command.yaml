@@ -16,8 +16,7 @@ scenario:
   execution:
     kind: flow
     channel: whatsapp
-    config:
-      requiredChannelDriver: live
+    driver: live
     summary: Run WhatsApp status and verify session text.
 
 flow:

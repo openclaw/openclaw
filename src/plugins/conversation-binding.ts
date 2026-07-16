@@ -1002,3 +1002,4 @@ export function buildPluginBindingResolvedText(params: PluginBindingResolveResul
   }
   return `Allowed ${params.request.pluginName ?? params.request.pluginId} to bind this conversation once.${summarySuffix}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

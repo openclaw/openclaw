@@ -2,7 +2,8 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
-import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
+import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { WorkboardStore } from "./store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
@@ -276,5 +277,37 @@ describe("registerWorkboardCli", () => {
     await expect(
       program.parseAsync(["workboard", "show", prefix], { from: "user" }),
     ).rejects.toThrow("Ambiguous card id prefix");
+  });
+
+  it("moves claimed cards with operator authority and redacts JSON output", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Claimed card", status: "todo" });
+    await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(
+        ["workboard", "move", card.id.slice(0, 8), "--status", "review", "--json"],
+        { from: "user" },
+      );
+    });
+
+    const parsed = JSON.parse(output);
+    expect(parsed).toMatchObject({ card: { id: card.id, status: "review" } });
+    expect(parsed.card.metadata.claim.token).toBe("[redacted]");
+    expect(output).not.toContain("secret-token");
+  });
+
+  it("rejects an invalid move status", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Invalid move" });
+    const program = createProgram(store);
+
+    await expect(
+      program.parseAsync(["workboard", "move", card.id, "--status", "later"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--status must be one of");
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "todo" });
   });
 });

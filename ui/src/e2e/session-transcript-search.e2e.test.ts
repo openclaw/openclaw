@@ -23,7 +23,8 @@ const artifactDir = path.join(
   "session-transcript-search",
 );
 
-let browser: Browser | undefined;
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 let context: BrowserContext | undefined;
 let page: Page | undefined;
 let server: ControlUiE2eServer | undefined;
@@ -40,24 +41,28 @@ describeControlUiE2e("Control UI session transcript search", () => {
     if (captureProof) {
       await mkdir(artifactDir, { recursive: true });
     }
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterEach(async () => {
     await context?.close().catch(() => {});
-    await browser?.close().catch(() => {});
     context = undefined;
-    browser = undefined;
     page = undefined;
   });
 
   afterAll(async () => {
+    await browser?.close().catch(() => {});
     await server?.close();
   });
 
   it("searches once on submit, shows provenance, and opens the matching chat", async () => {
     const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     context = await browser.newContext({
       colorScheme: "light",
       locale: "en-US",
@@ -127,8 +132,10 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await result.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
+      agentId: "main",
       limit: 25,
       query: "nebula launch",
+      sessionKeys: ["agent:main:launch"],
     });
     await expect.poll(() => result.textContent()).toContain("Launch planning");
     await expect.poll(() => result.textContent()).toContain("Assistant");
@@ -154,7 +161,6 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
   it("ignores stale results and exposes indexing and request errors", async () => {
     const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -165,10 +171,19 @@ describeControlUiE2e("Control UI session transcript search", () => {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
       methodResponses: {
         "sessions.list": {
-          count: 0,
+          count: 1,
           defaults: { contextTokens: null, model: null, modelProvider: null },
           path: "",
-          sessions: [],
+          sessions: [
+            {
+              key: "agent:main:stale",
+              kind: "direct",
+              label: "Stale search fixture",
+              status: "done",
+              totalTokens: 0,
+              updatedAt: timestamp,
+            },
+          ],
           ts: timestamp,
         },
         "sessions.search": { indexing: true, results: [] },
@@ -240,7 +255,6 @@ describeControlUiE2e("Control UI session transcript search", () => {
   });
 
   it("disables the control when transcript search is not advertised", async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",

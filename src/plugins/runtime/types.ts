@@ -15,6 +15,8 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 export type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
+  toolsAlsoAllow?: string[];
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
