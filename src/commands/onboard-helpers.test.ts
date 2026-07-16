@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -27,6 +28,8 @@ import {
   validateGatewayPasswordInput,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("onboard error summaries", () => {
   it("keeps the bounded first line UTF-16 well-formed", () => {
@@ -273,7 +276,7 @@ describe("moveToTrash", () => {
   });
 
   it("moves a dangling symlink instead of treating it as already removed", async () => {
-    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-dangling-link-"));
+    const testRoot = tempDirs.make("openclaw-trash-dangling-link-");
     const targetPath = path.join(testRoot, "workspace-link");
     fs.symlinkSync(path.join(testRoot, "missing-target"), targetPath, "dir");
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;

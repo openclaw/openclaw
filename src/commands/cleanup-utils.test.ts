@@ -3,10 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const workspaceStateMocks = vi.hoisted(() => ({
   deleteWorkspaceState: vi.fn(),
@@ -191,7 +194,7 @@ describe("cleanup path removals", () => {
 
   it("deletes workspace state only after workspace removal succeeds", async () => {
     const runtime = createRuntimeMock();
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-workspace-"));
+    const tmpRoot = tempDirs.make("openclaw-cleanup-workspace-");
     const workspaceDir = path.join(tmpRoot, "workspace");
 
     try {
@@ -208,7 +211,7 @@ describe("cleanup path removals", () => {
 
   it("cleans workspace state when the workspace directory is already missing", async () => {
     const runtime = createRuntimeMock();
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-missing-workspace-"));
+    const tmpRoot = tempDirs.make("openclaw-cleanup-missing-workspace-");
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
@@ -229,7 +232,7 @@ describe("cleanup path removals", () => {
 
   it("removes a retired sibling marker after workspace removal without opening SQLite", async () => {
     const runtime = createRuntimeMock();
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-legacy-"));
+    const tmpRoot = tempDirs.make("openclaw-cleanup-legacy-");
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
@@ -263,7 +266,7 @@ describe("cleanup path removals", () => {
 
   it("previews retired sibling-marker cleanup during workspace dry-run", async () => {
     const runtime = createRuntimeMock();
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-dry-run-legacy-"));
+    const tmpRoot = tempDirs.make("openclaw-cleanup-dry-run-legacy-");
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
