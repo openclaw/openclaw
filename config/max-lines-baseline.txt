@@ -651,7 +651,6 @@ src/channels/streaming.ts
 src/channels/turn/kernel.test.ts
 src/channels/turn/kernel.ts
 src/cli/capability-cli.test.ts
-src/cli/capability-cli.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
 src/cli/command-secret-targets.test.ts
@@ -1130,7 +1129,6 @@ ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
 ui/src/components/app-sidebar.test.ts
-ui/src/components/app-sidebar.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
 ui/src/components/lobster-pet.ts

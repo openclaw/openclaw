@@ -13,8 +13,8 @@ vi.mock("../shared/live-transport-cli.runtime.js", () => ({
   }),
 }));
 
+import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
 import { runQaSlackCommand } from "./cli.runtime.js";
-import { SLACK_QA_DEFAULT_SCENARIO_IDS } from "./profiles.js";
 
 describe("QA Lab Slack CLI runtime", () => {
   beforeEach(() => {
@@ -48,7 +48,9 @@ describe("QA Lab Slack CLI runtime", () => {
       channelDriver: "live",
       channel: "slack",
       concurrency: 1,
-      scenarioIds: [...SLACK_QA_DEFAULT_SCENARIO_IDS],
+      scenarioIds: listQaScenariosForExecutionProfile("slack:default").map(
+        (scenario) => scenario.id,
+      ),
       sutAccountId: "slack-sut",
       credentialSource: "convex",
       credentialRole: "ci",

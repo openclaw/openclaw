@@ -1,7 +1,13 @@
 // Qa Channel tests cover bus client plugin behavior.
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";
+import {
+  buildQaTarget,
+  getQaBusState,
+  parseQaTarget,
+  pollQaBus,
+  resolveQaTargetThread,
+} from "./bus-client.js";
 
 const guardedFetchCalls = vi.hoisted(
   () =>
@@ -166,6 +172,46 @@ describe("qa-bus client", () => {
         conversationId: "ops-room",
       }),
     ).toBe("group:ops-room");
+  });
+
+  it("parses canonical target prefixes consistently and rejects empty ids", () => {
+    expect(parseQaTarget("channel:CaseSensitiveId")).toEqual({
+      chatType: "channel",
+      conversationId: "CaseSensitiveId",
+    });
+    expect(parseQaTarget("dm:Alice")).toEqual({
+      chatType: "direct",
+      conversationId: "Alice",
+    });
+    expect(parseQaTarget("thread:Room/Topic")).toEqual({
+      chatType: "channel",
+      conversationId: "Room",
+      threadId: "Topic",
+    });
+    expect(parseQaTarget("plain-id", { defaultChatType: "channel" })).toEqual({
+      chatType: "channel",
+      conversationId: "plain-id",
+    });
+    for (const target of ["channel:", "group:  ", "dm:", "thread:/topic", "thread:room/"]) {
+      expect(() => parseQaTarget(target)).toThrow("invalid qa-channel");
+    }
+    for (const target of ["CHANNEL:room", "Dm:alice", "THREAD:room/topic"]) {
+      expect(() => parseQaTarget(target)).toThrow("qa-channel target prefixes must be lowercase");
+    }
+  });
+
+  it("rejects conflicting embedded and explicit thread ids", () => {
+    expect(resolveQaTargetThread({ target: "thread:Room/Topic", threadId: "Topic" })).toEqual({
+      target: {
+        chatType: "channel",
+        conversationId: "Room",
+        threadId: "Topic",
+      },
+      threadId: "Topic",
+    });
+    expect(() => resolveQaTargetThread({ target: "thread:Room/Topic", threadId: "Other" })).toThrow(
+      "qa-channel target conflicts with the explicit threadId",
+    );
   });
 
   it("rejects malformed JSON responses instead of throwing from the stream callback", async () => {

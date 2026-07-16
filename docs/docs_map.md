@@ -2820,7 +2820,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Discord Mantis scenarios
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
-  - H2: Live transport coverage
+  - H2: Canonical scenario coverage
   - H2: Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
   - H3: Telegram QA

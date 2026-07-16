@@ -185,19 +185,17 @@ precedence over `--profile`.
 
 | Profile      | Scenarios | Purpose                                                                                                                                  |
 | ------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `all`        | 92        | Complete catalog (default).                                                                                                              |
+| `all`        | 93        | Complete catalog (default).                                                                                                              |
 | `release`    | 2         | Release-critical channel baseline and live allowlist reload.                                                                             |
-| `fast`       | 11        | Focused threading, reactions, approvals, policy, bot-gating, and encrypted-reply coverage.                                               |
+| `fast`       | 12        | Focused threading, reactions, approvals, policy, bot-gating, and encrypted-reply coverage.                                               |
 | `transport`  | 50        | Threading, DM/room routing, autojoin, approvals, reactions, restarts, mention/allowlist policy, edits, and multi-actor ordering.         |
 | `media`      | 7         | Image, generated-image, voice, attachment, unsupported-media, and encrypted-media coverage.                                              |
 | `e2ee-smoke` | 8         | Minimum encrypted reply, threading, bootstrap, recovery, restart, redaction, and failure coverage.                                       |
 | `e2ee-deep`  | 18        | State-loss, backup, key recovery, device hygiene, and SAS/QR/DM verification.                                                            |
 | `e2ee-cli`   | 9         | `openclaw matrix encryption setup`, recovery-key, multi-account, gateway round-trip, and self-verification commands through the harness. |
 
-The profile mapping lives in
-`extensions/qa-lab/src/live-transports/matrix/profiles.ts`. The declarative
-Matrix scenarios live under `qa/scenarios/channels/`; their live
-implementations live under
+Profile membership and channel/driver requirements live with the declarative
+Matrix scenarios under `qa/scenarios/channels/`. Their live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
 The adapter provisions a disposable Tuwunel homeserver in Docker (default
@@ -393,27 +391,19 @@ only set/missing status for `OPENCLAW_QA_CONVEX_SECRET_CI` and
 `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`, and verifies admin/list reachability
 when the maintainer secret is present.
 
-## Live transport coverage
+## Canonical scenario coverage
 
-Live transport lanes share one contract instead of each inventing their own
-scenario list shape. `qa-channel` is the broad synthetic product-behavior
-suite and is not part of the live transport coverage matrix.
+The root `taxonomy.yaml` defines semantic coverage IDs. Scenario YAML files
+under `qa/scenarios/` map each scenario to those IDs and own execution
+metadata: `channel` is the only channel requirement, `driver` constrains the
+runner when needed, and `profiles` declare named run membership. TypeScript
+runners query that catalog; they do not maintain parallel scenario or coverage
+inventories.
 
-Live transport runners import the shared scenario ids, baseline coverage
-helpers, and scenario-selection helper from
-`openclaw/plugin-sdk/qa-live-transport-scenarios`.
-
-| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Quote reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
-| -------- | ------ | -------------- | ---------- | --------------- | --------------- | ----------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
-| Discord  | x      | x              | x          |                 |                 |             |                |                  |                  |                      |              | x                           |
-| Matrix   | x      | x              | x          | x               | x               |             | x              | x                | x                | x                    |              |                             |
-| Slack    | x      | x              | x          | x               | x               |             | x              | x                | x                |                      |              |                             |
-| Telegram | x      | x              | x          |                 |                 |             |                |                  |                  |                      | x            |                             |
-| WhatsApp | x      | x              |            | x               | x               | x           | x              |                  |                  | x                    | x            |                             |
-
-This keeps `qa-channel` as the broad product-behavior suite while Matrix,
-Telegram, and the other live transports share one explicit transport-contract
-checklist.
+Static `qa coverage` output reports the taxonomy-to-scenario mapping. Actual
+proof comes from `qa-evidence.json`, which records the executed scenario,
+coverage IDs, channel, driver, and result. Channel and driver are report
+dimensions, not additional coverage-ID vocabularies.
 
 For a disposable Linux VM lane without bringing Docker into the QA path, run:
 
@@ -463,11 +453,12 @@ accept the same flags:
 | `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
 | `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
 | `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
-| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai` or `live-frontier` (legacy `live-openai` still works).                                                                            |
+| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                    |
 | `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
 | `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
 | `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
 | `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
+| `--allow-failures`                    | off                                                | Write artifacts without returning a failing exit code when scenarios fail.                                                                      |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
 artifacts without setting a failing exit code. Telegram also accepts
@@ -521,7 +512,7 @@ when threaded directly after canary, and the latter is a real-Telegram proof
 of the `/usage` footer on tool-only replies. Use `pnpm openclaw qa telegram
 --list-scenarios --provider-mode mock-openai` to print the current
 default/optional split with regression refs. Use `--profile all` for every
-Telegram scenario and `--fail-fast` to stop after the first failed scenario.
+Telegram live-adapter scenario.
 
 Output artifacts:
 

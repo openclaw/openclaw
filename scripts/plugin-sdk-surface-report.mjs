@@ -222,7 +222,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: matchesNoProxy exposes canonical Undici-compatible bypass selection to plugins.
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
-      10612,
+      // Harvest: retired qa-live-transport-scenarios subpath -6.
+      10606,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -230,7 +231,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: materializeRequesterScopedMcpToolsForHarnessRun (agent-harness-runtime + compat mirror).
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
-      5344,
+      // Harvest: retired qa-live-transport-scenarios subpath -3.
+      5341,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

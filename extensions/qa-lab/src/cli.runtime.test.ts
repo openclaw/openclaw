@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { QaScenarioPack } from "./scenario-catalog.js";
+import { listQaScenariosForExecutionProfile, type QaScenarioPack } from "./scenario-catalog.js";
 
 const {
   runQaManualLane,
@@ -283,7 +283,6 @@ describe("qa cli runtime", () => {
     listLiveTransportQaAdapterFactories.mockReturnValue([
       {
         id: "telegram",
-        scenarioIds: ["channel-chat-baseline"],
         matches: vi.fn(),
         create: vi.fn(),
       },
@@ -678,7 +677,7 @@ describe("qa cli runtime", () => {
     );
   });
 
-  it("uses the selected live adapter's declared scenarios by default", async () => {
+  it("uses the selected live adapter's YAML profile by default", async () => {
     await runQaSuiteCommand({
       channelDriver: "live",
       channel: "telegram",
@@ -687,7 +686,9 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).toHaveBeenCalledWith(
       expect.objectContaining({
         adapterOptions: expect.objectContaining({ explicitScenarioSelection: false }),
-        scenarioIds: ["channel-chat-baseline"],
+        scenarioIds: listQaScenariosForExecutionProfile("telegram:adapter").map(
+          (scenario) => scenario.id,
+        ),
       }),
     );
   });
