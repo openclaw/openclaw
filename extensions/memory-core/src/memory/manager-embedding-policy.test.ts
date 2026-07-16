@@ -266,6 +266,28 @@ describe("memory embedding policy", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards the caught error to waitForRetry for rate-limit-aware delay adjustment", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("gemini embeddings failed (429)");
+    });
+    const captured: unknown[] = [];
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async (_delayMs, err) => {
+          captured.push(err);
+        },
+        maxAttempts: 2,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toThrow("429");
+
+    expect(captured).toHaveLength(1);
+    expect((captured[0] as Error).message).toContain("429");
+  });
+
   it("caps retry jittered delays", () => {
     expect(resolveMemoryEmbeddingRetryDelay(500, 0, 8000)).toBe(500);
     expect(resolveMemoryEmbeddingRetryDelay(500, 1, 8000)).toBe(600);

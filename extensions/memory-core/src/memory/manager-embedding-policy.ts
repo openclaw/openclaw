@@ -116,7 +116,7 @@ export function resolveMemoryEmbeddingRetryDelay(
 export async function runMemoryEmbeddingRetryLoop<T>(params: {
   run: () => Promise<T>;
   isRetryable: (message: string) => boolean;
-  waitForRetry: (delayMs: number) => Promise<void>;
+  waitForRetry: (delayMs: number, error?: unknown) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
   /** Caller-owned cancellation; an aborted caller stops the retry loop. */
@@ -138,7 +138,7 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
       if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
         throw err;
       }
-      await params.waitForRetry(delayMs);
+      await params.waitForRetry(delayMs, err);
     }
   }
   throw new Error("retry loop exhausted");
@@ -149,7 +149,7 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   run: (items: TInput[]) => Promise<TOutput[]>;
   isRetryable: (message: string) => boolean;
   isSplittable: (message: string) => boolean;
-  waitForRetry: (delayMs: number) => Promise<void>;
+  waitForRetry: (delayMs: number, error?: unknown) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;

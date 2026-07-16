@@ -60,9 +60,12 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
-const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
+const EMBEDDING_RETRY_MAX_ATTEMPTS = 7;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+
+/** Maximum delay for rate-limit (429) retries — covers typical 60s rate-limit windows. */
+const RATE_LIMIT_RETRY_MAX_DELAY_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
@@ -432,8 +435,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingTransportError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying");
+        waitForRetry: async (delayMs, err) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying", err);
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
@@ -484,8 +487,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingTransportError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
+        waitForRetry: async (delayMs, err) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying structured batch", err);
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
@@ -505,12 +508,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
-    const waitMs = resolveMemoryEmbeddingRetryDelay(
-      delayMs,
-      Math.random(),
-      EMBEDDING_RETRY_MAX_DELAY_MS,
-    );
+  private async waitForEmbeddingRetry(
+    delayMs: number,
+    action: string,
+    err?: unknown,
+  ): Promise<void> {
+    const isRateLimit =
+      err !== undefined && /(rate[_ ]limit|too many requests|429)/i.test(formatErrorMessage(err));
+    // For rate-limit errors, multiply delay by 4x to cover typical 60s reset windows
+    // while keeping the same exponential growth pattern. Non-rate-limit errors use
+    // the raw computed delay (capped at EMBEDDING_RETRY_MAX_DELAY_MS).
+    const effectiveDelay = isRateLimit
+      ? Math.min(delayMs * 4, RATE_LIMIT_RETRY_MAX_DELAY_MS)
+      : delayMs;
+    const maxDelay = isRateLimit ? RATE_LIMIT_RETRY_MAX_DELAY_MS : EMBEDDING_RETRY_MAX_DELAY_MS;
+    const waitMs = resolveMemoryEmbeddingRetryDelay(effectiveDelay, Math.random(), maxDelay);
     log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
     await new Promise((resolve) => {
       setTimeout(resolve, waitMs);
@@ -546,8 +558,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         signal,
         isRetryable: isRetryableMemoryEmbeddingError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying query");
+        waitForRetry: async (delayMs, err) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying query", err);
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
