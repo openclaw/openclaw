@@ -13689,6 +13689,21 @@
       "translated": "Xem lại yêu cầu thực thi này trước khi tiếp tục. Quyết định của bạn sẽ được gửi lại về gateway."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "Phần bổ trợ"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "Công cụ"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "Mức độ nghiêm trọng"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "Máy chủ"

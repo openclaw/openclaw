@@ -13689,6 +13689,21 @@
       "translated": "계속하기 전에 이 exec 요청을 검토하세요. 결정은 gateway로 다시 전송됩니다."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "플러그인"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "도구"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "심각도"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "호스트"

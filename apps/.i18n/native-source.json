@@ -1723,7 +1723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 769,
+      "line": 763,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Wait for the current response to finish before starting a new chat.",
       "surface": "android",
@@ -1731,7 +1731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 900,
+      "line": 894,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not update model.",
       "surface": "android",
@@ -1739,7 +1739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 964,
+      "line": 958,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not update thinking level.",
       "surface": "android",
@@ -1747,7 +1747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1343,
+      "line": 1337,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed before the run started; try again.",
       "surface": "android",
@@ -1755,7 +1755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2148,
+      "line": 2140,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not stage an attachment for sending.",
       "surface": "android",
@@ -1763,7 +1763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2168,
+      "line": 2160,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Could not queue message for later delivery.",
       "surface": "android",
@@ -1771,7 +1771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2178,
+      "line": 2170,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "surface": "android",
@@ -1779,7 +1779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2182,
+      "line": 2174,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Attachments are too large to queue for one message; remove some and try again.",
       "surface": "android",
@@ -1787,7 +1787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2186,
+      "line": 2178,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Offline attachment storage is full; delete queued items first.",
       "surface": "android",
@@ -1795,7 +1795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2190,
+      "line": 2182,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Gateway health not OK; cannot send",
       "surface": "android",
@@ -1803,7 +1803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2821,
+      "line": 2813,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -1811,7 +1811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2924,
+      "line": 2916,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Event stream interrupted; try refreshing.",
       "surface": "android",
@@ -1819,7 +1819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3024,
+      "line": 2996,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out waiting for a reply; try again or refresh.",
       "surface": "android",
@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3216,
+      "line": 3188,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out confirming the sent message; refresh to check delivery.",
       "surface": "android",
@@ -1899,7 +1899,15 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 227,
+      "line": 210,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/tools/ToolDisplay.kt",
+      "source": "${firstLine.take(157)}…",
+      "surface": "android",
+      "id": "native.android.f7a4f3bbcb0b2090"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 221,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/tools/ToolDisplay.kt",
       "source": "$preview…",
       "surface": "android",
@@ -21883,7 +21891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 110,
+      "line": 119,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Exec approval required",
       "surface": "apple",
@@ -21891,7 +21899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 112,
+      "line": 121,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Review this exec request before continuing. Your decision will be sent back to the gateway.",
       "surface": "apple",
@@ -21899,7 +21907,31 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 138,
+      "line": 151,
+      "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
+      "source": "Plugin",
+      "surface": "apple",
+      "id": "native.apple.d861d4796fad795b"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 154,
+      "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
+      "source": "Tool",
+      "surface": "apple",
+      "id": "native.apple.3e8bff33a33da259"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 157,
+      "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
+      "source": "Severity",
+      "surface": "apple",
+      "id": "native.apple.0122ae27422ef135"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 161,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Host",
       "surface": "apple",
@@ -21907,7 +21939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 141,
+      "line": 164,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Node",
       "surface": "apple",
@@ -21915,7 +21947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 144,
+      "line": 168,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Agent",
       "surface": "apple",
@@ -21923,7 +21955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 147,
+      "line": 171,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Expires",
       "surface": "apple",
@@ -21931,7 +21963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 167,
+      "line": 191,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Resolving…",
       "surface": "apple",
@@ -21939,7 +21971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 182,
+      "line": 210,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Allow Once",
       "surface": "apple",
@@ -21947,7 +21979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 194,
+      "line": 222,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Allow Always",
       "surface": "apple",
@@ -21955,7 +21987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 221,
+      "line": 249,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Dismiss",
       "surface": "apple",
@@ -21963,7 +21995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 236,
+      "line": 264,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Deny",
       "surface": "apple",
@@ -21971,7 +22003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 248,
+      "line": 276,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -21979,7 +22011,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 278,
+      "line": 306,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "expired",
       "surface": "apple",
@@ -21987,7 +22019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 281,
+      "line": 309,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "under a minute",
       "surface": "apple",
@@ -21995,7 +22027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 287,
+      "line": 315,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "about ^[\\(minutes) minute](inflect: true)",
       "surface": "apple",
@@ -22003,7 +22035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 293,
+      "line": 321,
       "path": "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
       "source": "about ^[\\(hours) hour](inflect: true)",
       "surface": "apple",
@@ -22411,7 +22443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 623,
+      "line": 649,
       "path": "apps/ios/Sources/Gateway/GatewaySettingsStore.swift",
       "source": "\\(host):\\(port)",
       "surface": "apple",
@@ -22419,7 +22451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 686,
+      "line": 712,
       "path": "apps/ios/Sources/Gateway/GatewaySettingsStore.swift",
       "source": "\\(legacy.host ?? \"\"):\\(legacy.port ?? 0)",
       "surface": "apple",
@@ -22867,7 +22899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3819,
+      "line": 3857,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -22875,7 +22907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3820,
+      "line": 3858,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -22883,7 +22915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4519,
+      "line": 4535,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -22891,7 +22923,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4520,
+      "line": 4536,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -22899,7 +22931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4864,
+      "line": 4880,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -22907,7 +22939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4864,
+      "line": 4880,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -22915,7 +22947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6006,
+      "line": 6040,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -22923,7 +22955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6205,
+      "line": 6239,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -22931,7 +22963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6205,
+      "line": 6239,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -22939,7 +22971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8490,
+      "line": 8648,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -22947,7 +22979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8490,
+      "line": 8648,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -22955,7 +22987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8496,
+      "line": 8654,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -22963,7 +22995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8497,
+      "line": 8655,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -22971,7 +23003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9801,
+      "line": 9993,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -23779,7 +23811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 523,
+      "line": 524,
       "path": "apps/ios/Sources/OpenClawApp.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -26947,7 +26979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 217,
+      "line": 130,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.",
       "surface": "apple",
@@ -26955,7 +26987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 907,
+      "line": 282,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Replace the older OpenClaw in Applications?",
       "surface": "apple",
@@ -26963,7 +26995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 908,
+      "line": 283,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Install OpenClaw in Applications?",
       "surface": "apple",
@@ -26971,7 +27003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 910,
+      "line": 285,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "This copy is newer than the installed app. OpenClaw will replace it and reopen from Applications.",
       "surface": "apple",
@@ -26979,7 +27011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 911,
+      "line": 286,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw will copy itself to Applications and reopen there so updates and launch at login stay reliable.",
       "surface": "apple",
@@ -26987,7 +27019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 913,
+      "line": 288,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Install and Relaunch",
       "surface": "apple",
@@ -26995,7 +27027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 913,
+      "line": 288,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Replace and Relaunch",
       "surface": "apple",
@@ -27003,7 +27035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 938,
+      "line": 312,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.",
       "surface": "apple",
@@ -36347,7 +36379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 588,
+      "line": 545,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift",
       "source": "z",
       "surface": "apple",

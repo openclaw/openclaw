@@ -13689,6 +13689,21 @@
       "translated": "जारी रखने से पहले इस exec अनुरोध की समीक्षा करें। आपका निर्णय gateway को वापस भेजा जाएगा।"
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "प्लगइन"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "टूल"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "गंभीरता"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "होस्ट"

@@ -13689,6 +13689,21 @@
       "translated": "Revise esta solicitação de execução antes de continuar. Sua decisão será enviada de volta ao gateway."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "Plugin"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "Ferramenta"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "Gravidade"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "Host"

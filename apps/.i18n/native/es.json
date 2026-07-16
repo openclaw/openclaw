@@ -13689,6 +13689,21 @@
       "translated": "Revisa esta solicitud de exec antes de continuar. Tu decisión se enviará de vuelta a la puerta de enlace."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "Complemento"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "Herramienta"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "Gravedad"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "Host"

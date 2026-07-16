@@ -13689,6 +13689,21 @@
       "translated": "Przejrzyj to żądanie wykonania przed kontynuowaniem. Twoja decyzja zostanie odesłana do gateway."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "Wtyczka"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "Narzędzie"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "Poziom ważności"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "Host"

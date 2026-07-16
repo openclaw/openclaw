@@ -13689,6 +13689,21 @@
       "translated": "Tinjau permintaan eksekusi ini sebelum melanjutkan. Keputusan Anda akan dikirim kembali ke gateway."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "Plugin"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "Alat"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "Tingkat Keparahan"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "Host"

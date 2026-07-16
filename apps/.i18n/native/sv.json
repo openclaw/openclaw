@@ -13689,6 +13689,21 @@
       "translated": "Granska denna exec-begäran innan du fortsätter. Ditt beslut skickas tillbaka till gatewayen."
     },
     {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "Insticksprogram"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "Verktyg"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "Allvarlighetsgrad"
+    },
+    {
       "id": "native.apple.1f2576ef69108e39",
       "source": "Host",
       "translated": "Värd"
