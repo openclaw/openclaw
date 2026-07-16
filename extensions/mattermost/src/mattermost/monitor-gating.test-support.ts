@@ -85,6 +85,87 @@ describe("mattermost monitor gating", () => {
     });
   });
 
+  it("drops engaged thread follow-ups without a mention when thread.requireExplicitMention is set", () => {
+    const resolveRequireMention = vi.fn(() => true);
+
+    expect(
+      evaluateMattermostMentionGate({
+        kind: "channel",
+        cfg: {} as never,
+        accountId: "default",
+        channelId: "chan-1",
+        resolveRequireMention,
+        wasMentioned: false,
+        threadAlreadyEngaged: true,
+        threadRequireExplicitMention: true,
+        isControlCommand: false,
+        commandAuthorized: false,
+        oncharEnabled: false,
+        oncharTriggered: false,
+        canDetectMention: true,
+      }),
+    ).toEqual({
+      shouldRequireMention: true,
+      shouldBypassMention: false,
+      effectiveWasMentioned: false,
+      dropReason: "missing-mention",
+    });
+  });
+
+  it("still answers an explicit mention in an engaged thread when thread.requireExplicitMention is set", () => {
+    const resolveRequireMention = vi.fn(() => true);
+
+    expect(
+      evaluateMattermostMentionGate({
+        kind: "channel",
+        cfg: {} as never,
+        accountId: "default",
+        channelId: "chan-1",
+        resolveRequireMention,
+        wasMentioned: true,
+        threadAlreadyEngaged: true,
+        threadRequireExplicitMention: true,
+        isControlCommand: false,
+        commandAuthorized: false,
+        oncharEnabled: false,
+        oncharTriggered: false,
+        canDetectMention: true,
+      }),
+    ).toEqual({
+      shouldRequireMention: true,
+      shouldBypassMention: false,
+      effectiveWasMentioned: true,
+      dropReason: null,
+    });
+  });
+
+  it("keeps thread auto-follow when thread.requireExplicitMention is explicitly false", () => {
+    const resolveRequireMention = vi.fn(() => true);
+
+    expect(
+      evaluateMattermostMentionGate({
+        kind: "channel",
+        cfg: {} as never,
+        accountId: "default",
+        channelId: "chan-1",
+        resolveRequireMention,
+        wasMentioned: false,
+        threadAlreadyEngaged: true,
+        threadRequireExplicitMention: false,
+        isControlCommand: false,
+        commandAuthorized: false,
+        oncharEnabled: false,
+        oncharTriggered: false,
+        canDetectMention: true,
+      }),
+    ).toEqual({
+      shouldRequireMention: true,
+      shouldBypassMention: false,
+      effectiveWasMentioned: true,
+      dropReason: null,
+    });
+  });
+
   it("engaged threads respond even when onchar is enabled but not triggered", () => {
     const resolveRequireMention = vi.fn(() => true);
 

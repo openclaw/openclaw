@@ -1221,6 +1221,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           resolveRequireMention: core.channel.groups.resolveRequireMention,
           wasMentioned,
           threadAlreadyEngaged,
+          threadRequireExplicitMention: account.config.thread?.requireExplicitMention ?? false,
           isControlCommand,
           commandAuthorized,
           oncharEnabled,

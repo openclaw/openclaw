@@ -20,6 +20,18 @@ const MattermostGroupSchema = buildGroupEntrySchema().omit({
   systemPrompt: true,
 });
 
+const MattermostThreadSchema = z
+  .object({
+    /**
+     * Require an explicit @mention to respond to thread follow-ups, even in
+     * threads the bot has already replied in. Default: false (the bot
+     * auto-follows participated threads). Parity with Slack's
+     * `channels.slack.thread.requireExplicitMention`.
+     */
+    requireExplicitMention: z.boolean().optional(),
+  })
+  .strict();
+
 function requireMattermostOpenAllowFrom(params: {
   policy?: string;
   allowFrom?: Array<string | number>;
@@ -138,6 +150,7 @@ const MattermostAccountSchemaBase = z
     chatmode: z.enum(["oncall", "onmessage", "onchar"]).optional(),
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
+    thread: MattermostThreadSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
