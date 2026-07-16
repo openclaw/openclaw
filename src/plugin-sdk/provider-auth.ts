@@ -23,6 +23,7 @@ import {
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_GITHUB_COPILOT_DOMAIN,
@@ -167,7 +168,7 @@ function readGithubCopilotDomainFromConfig(config?: OpenClawConfig): string | un
 // github.com (fail-closed for the token). That silent fallback turns a typo like
 // `acme.ghe.co` into an opaque 401 (tenant token vs public endpoint), so warn the
 // user loudly — once per distinct bad value — that their config was ignored.
-const warnedRejectedConfigDomains = new Set<string>();
+const warnedRejectedConfigDomains = createDedupeCache({ ttlMs: 0, maxSize: 256 });
 function warnOnceOnRejectedConfigDomain(configured: string): void {
   const lowered = configured.toLowerCase();
   if (lowered === DEFAULT_GITHUB_COPILOT_DOMAIN) {
@@ -176,13 +177,17 @@ function warnOnceOnRejectedConfigDomain(configured: string): void {
   if (normalizeGithubCopilotDomain(configured) !== DEFAULT_GITHUB_COPILOT_DOMAIN) {
     return;
   }
-  if (warnedRejectedConfigDomains.has(lowered)) {
+  if (warnedRejectedConfigDomains.check(lowered)) {
     return;
   }
-  warnedRejectedConfigDomains.add(lowered);
   logWarn(
     `Ignoring configured GitHub Copilot domain "${configured}": only github.com and *.ghe.com tenants are accepted. Falling back to github.com.`,
   );
+}
+
+/** Resets the rejected-domain warning cache. Exported for tests only. */
+export function resetRejectedConfigDomainWarningsForTest(): void {
+  warnedRejectedConfigDomains.clear();
 }
 
 // Provider-internal host resolver (env > explicit caller value > persisted

@@ -978,6 +978,60 @@ describe("Copilot data-residency domain resolution", () => {
     vi.doUnmock("../logger.js");
   });
 
+  it("bounds the rejected-domain warning cache and re-warns evicted domains", async () => {
+    vi.resetModules();
+
+    const logWarn = vi.fn();
+    vi.doMock("../logger.js", async () => {
+      const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+      return { ...actual, logWarn };
+    });
+
+    const { resetRejectedConfigDomainWarningsForTest, resolveCopilotApiToken } =
+      await import("./provider-auth.js");
+    resetRejectedConfigDomainWarningsForTest();
+
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ token: "tok", expires_at: "+2000000000" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const withDomain = (githubDomain: string) =>
+      ({
+        models: { providers: { "github-copilot": { params: { githubDomain } } } },
+      }) as never;
+    const resolveWithConfigDomain = (githubDomain: string) =>
+      resolveCopilotApiToken({
+        githubToken: "github-token",
+        env: {},
+        config: withDomain(githubDomain),
+        fetchImpl,
+        cachePath: "/tmp/copilot-token-bound.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {},
+      });
+
+    const domains: string[] = [];
+    for (let i = 0; i < 256; i += 1) {
+      domains.push(`tenant-${i}.ghe.co`);
+    }
+
+    for (const domain of domains) {
+      await resolveWithConfigDomain(domain);
+    }
+    expect(logWarn).toHaveBeenCalledTimes(256);
+
+    await resolveWithConfigDomain("tenant-256.ghe.co");
+    expect(logWarn).toHaveBeenCalledTimes(257);
+
+    await resolveWithConfigDomain(domains[0]);
+    expect(logWarn).toHaveBeenCalledTimes(258);
+
+    vi.doUnmock("../logger.js");
+  });
+
   it("rejects unsafe hostnames and falls back to github.com", async () => {
     vi.resetModules();
     const { normalizeGithubCopilotDomain } = await import("./provider-auth.js");
