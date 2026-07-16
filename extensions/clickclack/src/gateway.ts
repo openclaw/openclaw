@@ -237,33 +237,47 @@ export async function startClickClackGatewayAccount(
         break;
       }
       const socket = client.websocket(workspaceId, afterCursor);
-      await new Promise<void>((resolve, reject) => {
+      await new Promise<void>((resolve) => {
         let settled = false;
         let closing = false;
-        let pendingMessages = 0;
+        let loggedMessageFailure = false;
         let messageQueue = Promise.resolve();
         let removeAbortListener: (() => void) | undefined;
-        const finishSocketCycle = (error?: unknown) => {
+        const finishSocketCycle = () => {
           if (settled) {
             return;
           }
           settled = true;
           removeAbortListener?.();
           removeAbortListener = undefined;
-          if (error === undefined) {
-            resolve();
+          resolve();
+        };
+        const finishAfterQueuedMessages = () => {
+          // The queue is scoped to this account/socket. Waiting here preserves
+          // its contiguous cursor without blocking unrelated account streams.
+          void messageQueue.then(
+            () => finishSocketCycle(),
+            () => finishSocketCycle(),
+          );
+        };
+        const reconnectAfterMessageFailure = (error: unknown) => {
+          if (settled || ctx.abortSignal.aborted) {
             return;
           }
-          // A failed message ends this socket's ownership. Closing it prevents
-          // the old connection from surviving beside the supervisor's restart.
-          socket.close();
-          reject(
-            error instanceof Error
-              ? error
-              : new Error(`ClickClack ws message failed: ${formatErrorMessage(error)}`, {
-                  cause: error,
-                }),
-          );
+          if (!loggedMessageFailure) {
+            loggedMessageFailure = true;
+            ctx.log?.warn?.(
+              `[${account.accountId}] ClickClack event processing failed; reconnecting: ${
+                error instanceof Error ? error.message : formatErrorMessage(error)
+              }`,
+            );
+          }
+          if (!closing) {
+            // Keep the last successful cursor. Reconnect backlog will replay
+            // this event; a repeated failure there remains a surfaced error.
+            closing = true;
+            socket.close();
+          }
         };
         const abort = () => {
           socket.close();
@@ -272,32 +286,27 @@ export async function startClickClackGatewayAccount(
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
         socket.on("message", (data) => {
-          // Preserve server event order and commit each cursor only after its
-          // handler succeeds, so reconnect backlog can retry a failed event.
-          pendingMessages += 1;
-          messageQueue = messageQueue
-            .then(async () => {
-              const event = parseSocketEvent(data);
-              if (!event) {
-                ctx.log?.warn?.(
-                  `[${account.accountId}] skipped malformed ClickClack websocket event`,
-                );
-                return;
-              }
-              await processIncomingEvent(event);
-              afterCursor = event.cursor || afterCursor;
-            })
-            .finally(() => {
-              pendingMessages -= 1;
-            });
-          void messageQueue.catch(finishSocketCycle);
-        });
-        socket.on("close", () => {
-          if (pendingMessages === 0) {
-            finishSocketCycle();
+          if (closing || settled) {
             return;
           }
-          void messageQueue.then(() => finishSocketCycle(), finishSocketCycle);
+          // Preserve server event order and commit each cursor only after its
+          // handler succeeds, so reconnect backlog can retry a failed event.
+          messageQueue = messageQueue.then(async () => {
+            const event = parseSocketEvent(data);
+            if (!event) {
+              ctx.log?.warn?.(
+                `[${account.accountId}] skipped malformed ClickClack websocket event`,
+              );
+              return;
+            }
+            await processIncomingEvent(event);
+            afterCursor = event.cursor || afterCursor;
+          });
+          void messageQueue.catch(reconnectAfterMessageFailure);
+        });
+        socket.on("close", () => {
+          closing = true;
+          finishAfterQueuedMessages();
         });
         socket.on("error", (error) => {
           if (settled || ctx.abortSignal.aborted) {
