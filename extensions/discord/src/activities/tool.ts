@@ -7,6 +7,7 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
 import { Button, Row } from "../internal/discord.js";
 import { sendMessageDiscord } from "../send.js";
+import { resolveDiscordChannelId as resolveDiscordTargetChannelId } from "../target-parsing.js";
 import type { DiscordActivitiesRuntime } from "./runtime.js";
 
 const DISCORD_WIDGET_HTML_MAX_BYTES = 48 * 1024;
@@ -47,8 +48,11 @@ function resolveDiscordChannelId(context: OpenClawPluginToolContext): string | u
   if (!raw) {
     return undefined;
   }
-  const normalized = raw.replace(/^channel:/i, "");
-  return /^\d+$/.test(normalized) ? normalized : undefined;
+  try {
+    return resolveDiscordTargetChannelId(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 function buildDiscordWidgetDocument(title: string, html: string): string {

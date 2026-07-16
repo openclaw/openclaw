@@ -71,6 +71,36 @@ describe("discord_widget", () => {
     });
   });
 
+  it("resolves a provider-prefixed forum thread target", async () => {
+    const runtime = createActivityTestRuntime();
+    const send = vi.fn(async (..._args: Parameters<typeof sendMessageDiscord>) => ({
+      messageId: "message-1",
+      channelId: "987654321",
+      receipt: {},
+    }));
+    const tool = createDiscordWidgetTool(
+      discordContext({
+        nativeChannelId: undefined,
+        deliveryContext: { channel: "discord", to: "discord:channel:987654321" },
+      }),
+      {
+        runtime,
+        sendMessage: send as unknown as typeof sendMessageDiscord,
+      },
+    );
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+
+    const result = await tool.execute("forum-widget", {
+      html: "<p>Forum widget</p>",
+      title: "Forum widget",
+    });
+
+    expect(result.details).toMatchObject({ channelId: "987654321" });
+    expect(send).toHaveBeenCalledWith("channel:987654321", "Forum widget", expect.any(Object));
+  });
+
   it("keeps full documents unchanged and rejects oversized HTML", async () => {
     const document = "<!doctype html><html><body>full</body></html>";
     const runtime = createActivityTestRuntime();
@@ -138,5 +168,24 @@ describe("discord_widget", () => {
     await expect(
       tool.execute("missing-channel", { html: "hello", title: "No channel" }),
     ).rejects.toThrow("requires a concrete Discord channel");
+  });
+
+  it("rejects direct-message targets without a channel", async () => {
+    const tool = createDiscordWidgetTool(
+      discordContext({
+        nativeChannelId: undefined,
+        deliveryContext: { channel: "discord", to: "discord:user:987654321" },
+      }),
+      {
+        runtime: createActivityTestRuntime(),
+        sendMessage: vi.fn() as unknown as typeof sendMessageDiscord,
+      },
+    );
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+    await expect(tool.execute("dm-target", { html: "hello", title: "No channel" })).rejects.toThrow(
+      "requires a concrete Discord channel",
+    );
   });
 });
