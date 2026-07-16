@@ -61,17 +61,25 @@ export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
 export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodObject>(
   accountSchema: T,
 ): T {
-  return buildMultiAccountChannelSchema(accountSchema as z.ZodObject, {
+  return buildMultiAccountChannelSchema(accountSchema as unknown as z.ZodObject, {
     accountsMode: "catchall",
   }) as unknown as T;
 }
 
-type MultiAccountSchemaOptions<T extends z.ZodObject, TAccount extends ZodTypeAny> = {
+type MultiAccountSchemaBaseOptions<TAccount extends ZodTypeAny> = {
   accountSchema?: TAccount;
   accountsMode?: "record" | "catchall";
   optionalAccount?: boolean;
-  refine?: (value: z.output<T>, ctx: z.RefinementCtx) => void;
 };
+
+type MultiAccountRefinement<T extends z.ZodObject> = (
+  value: z.output<T>,
+  ctx: z.RefinementCtx,
+) => void | Promise<void>;
+
+type MultiAccountSchemaOptions<T extends z.ZodObject, TAccount extends ZodTypeAny> =
+  | (MultiAccountSchemaBaseOptions<TAccount> & { refine?: undefined })
+  | (MultiAccountSchemaBaseOptions<T> & { refine: MultiAccountRefinement<T> });
 
 type MultiAccountEnvelopeShape<TAccount extends ZodTypeAny> = {
   accounts: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodOptional<TAccount>>>;
@@ -88,7 +96,11 @@ export function buildMultiAccountChannelSchema<
 ): z.ZodObject<T["shape"] & MultiAccountEnvelopeShape<TAccount>> {
   const refine = options.refine;
   const rawAccountSchema = options.accountSchema ?? baseSchema;
-  const accountSchema = refine ? rawAccountSchema.superRefine(refine) : rawAccountSchema;
+  const accountSchema = refine
+    ? (rawAccountSchema as T).superRefine((value, ctx) => {
+        return refine(value, ctx as z.RefinementCtx);
+      })
+    : rawAccountSchema;
   const accountValueSchema = options.optionalAccount ? accountSchema.optional() : accountSchema;
   const accountsSchema =
     options.accountsMode === "catchall"
@@ -98,9 +110,14 @@ export function buildMultiAccountChannelSchema<
     accounts: accountsSchema,
     defaultAccount: z.string().optional(),
   });
-  return (refine ? channelSchema.superRefine(refine) : channelSchema) as z.ZodObject<
-    T["shape"] & MultiAccountEnvelopeShape<TAccount>
-  >;
+  return (
+    refine
+      ? channelSchema.superRefine((value, ctx) => {
+          // Generic Zod extension widens the callback value; the runtime value and context stay intact.
+          return refine(value as z.output<T>, ctx as z.RefinementCtx);
+        })
+      : channelSchema
+  ) as z.ZodObject<T["shape"] & MultiAccountEnvelopeShape<TAccount>>;
 }
 
 type BuildChannelConfigSchemaOptions = {

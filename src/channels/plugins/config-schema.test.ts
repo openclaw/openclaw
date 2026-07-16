@@ -49,6 +49,26 @@ describe("channel config composition", () => {
       schema.safeParse({ policy: "open", allow: true, accounts: { work: undefined } }).success,
     ).toBe(true);
   });
+
+  it("awaits an asynchronous shared refinement for root and account entries", async () => {
+    const base = z.object({ enabled: z.boolean().optional() });
+    const schema = buildMultiAccountChannelSchema(base, {
+      refine: async (value, ctx) => {
+        expect(ctx.value).toBe(value);
+        await Promise.resolve();
+        if (value.enabled) {
+          ctx.addIssue({ code: "custom", path: ["enabled"], message: "disabled required" });
+        }
+      },
+    });
+
+    await expect(schema.safeParseAsync({ enabled: true })).resolves.toMatchObject({
+      success: false,
+    });
+    await expect(
+      schema.safeParseAsync({ accounts: { work: { enabled: true } } }),
+    ).resolves.toMatchObject({ success: false });
+  });
 });
 
 describe("buildChannelConfigSchema", () => {
