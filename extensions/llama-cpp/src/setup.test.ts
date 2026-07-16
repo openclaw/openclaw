@@ -100,7 +100,11 @@ describe("llama.cpp setup", () => {
     await fs.writeFile(cachedPath, "fixture");
     nodeLlamaMocks.resolveModelFile.mockResolvedValueOnce(cachedPath);
     const config = configWithCache();
-    config.models.providers[LLAMA_CPP_PROVIDER_ID].models.push({
+    const provider = config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    if (!provider) {
+      throw new Error("expected llama.cpp provider config");
+    }
+    provider.models.push({
       id: "custom",
       name: "Custom",
       reasoning: false,
