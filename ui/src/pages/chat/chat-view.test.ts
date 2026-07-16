@@ -1619,10 +1619,15 @@ describe("chat composer workbench", () => {
       tasks: [],
       cancellingTaskIds: new Set<string>(),
       finishedCollapsed: false,
+      selectedTaskId: null,
+      taskDetails: new Map(),
+      taskDetailErrors: new Map(),
+      taskDetailLoadingIds: new Set<string>(),
       onToggleCollapsed: () => undefined,
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
+      onToggleTask: () => undefined,
       onOpenSession: () => undefined,
     };
 
@@ -1660,10 +1665,15 @@ describe("chat composer workbench", () => {
       ],
       cancellingTaskIds: new Set<string>(),
       finishedCollapsed: false,
+      selectedTaskId: null,
+      taskDetails: new Map(),
+      taskDetailErrors: new Map(),
+      taskDetailLoadingIds: new Set<string>(),
       onToggleCollapsed: () => undefined,
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
+      onToggleTask: () => undefined,
       onOpenSession: () => undefined,
     };
     const messages = [{ role: "assistant", content: "done", timestamp: 1 }];

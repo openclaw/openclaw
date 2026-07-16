@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "../../scripts/docs-sync-publish.mjs";
+import { parseArgs, pruneOrphanLocaleDocs } from "../../scripts/docs-sync-publish.mjs";
 
 describe("docs-sync-publish", () => {
   it("parses docs sync provenance args", () => {
@@ -42,6 +45,27 @@ describe("docs-sync-publish", () => {
         `${flag} requires a value`,
       );
       expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
+    }
+  });
+
+  it("preserves localized pages for externally mirrored English docs", () => {
+    const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-"));
+    const mirroredEnglish = path.join(docsDir, "clawhub", "api.md");
+    const localizedMirror = path.join(docsDir, "de", "clawhub", "api.md");
+    const orphan = path.join(docsDir, "de", "removed.md");
+
+    fs.mkdirSync(path.dirname(mirroredEnglish), { recursive: true });
+    fs.mkdirSync(path.dirname(localizedMirror), { recursive: true });
+    fs.writeFileSync(mirroredEnglish, "# ClawHub API\n");
+    fs.writeFileSync(localizedMirror, "# ClawHub-API\n");
+    fs.writeFileSync(orphan, "# Removed\n");
+
+    try {
+      pruneOrphanLocaleDocs(docsDir);
+      expect(fs.existsSync(localizedMirror)).toBe(true);
+      expect(fs.existsSync(orphan)).toBe(false);
+    } finally {
+      fs.rmSync(docsDir, { recursive: true, force: true });
     }
   });
 });

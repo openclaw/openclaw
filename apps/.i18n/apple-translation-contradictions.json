@@ -1592,6 +1592,14 @@
       ]
     },
     {
+      "locale": "zh-CN",
+      "source": "Cron",
+      "translations": [
+        "Cron",
+        "定时任务"
+      ]
+    },
+    {
       "locale": "id",
       "source": "Cron expression",
       "translations": [
@@ -6745,11 +6753,20 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Running",
+      "translations": [
+        "चल रहा है",
+        "जारी"
+      ]
+    },
+    {
       "locale": "id",
       "source": "Running",
       "translations": [
         "Berjalan",
-        "Sedang Berjalan"
+        "Sedang Berjalan",
+        "Sedang berjalan"
       ]
     },
     {
@@ -6765,7 +6782,16 @@
       "source": "Running",
       "translations": [
         "Uruchomione",
-        "Uruchomiono"
+        "Uruchomiono",
+        "W toku"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Running",
+      "translations": [
+        "Körs",
+        "Pågår"
       ]
     },
     {

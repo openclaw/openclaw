@@ -2,7 +2,7 @@
 // list of packed group plans. Extracted from .github/workflows/ci.yml so the
 // execution policy is unit-testable and plans can run concurrently.
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -14,6 +14,9 @@ import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.
 // stacking outer and inner parallelism oversubscribes the 4 vCPU runner class.
 const PLAN_CONCURRENCY = 2;
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
+const FS_MODULE_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const FS_MODULE_CACHE_PRUNE_TARGET_RATIO = 0.75;
+const FS_MODULE_CACHE_METADATA_FILE = "_metadata.json";
 
 function parseJsonEnv(env, name, fallback = null) {
   try {
@@ -51,16 +54,19 @@ export function resolveShardPlans(env = process.env) {
 }
 
 export function buildChildEnv(entry, baseEnv, scratchDir, index, options = {}) {
+  const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const cacheDirectory = persistentCacheRoot
+    ? `vitest-cache-${options.cacheSlot ?? index}`
+    : options.serial
+      ? "vitest-cache-shared"
+      : `vitest-cache-${index}`;
   const childEnv = {
     ...baseEnv,
-    // Concurrent children must not share a Vitest module cache directory
-    // (shared caches race with ENOTEMPTY when two runs rewrite the same
-    // entries), but serial bins reuse one cache so later plans skip the cold
-    // module transforms the first plan already paid for.
-    [FS_MODULE_CACHE_PATH_ENV_KEY]: join(
-      scratchDir,
-      options.serial ? "vitest-cache-shared" : `vitest-cache-${index}`,
-    ),
+    // Never give concurrent Vitest processes the same live directory. A
+    // persistent backend is cloned per CI job, then split into stable worker
+    // slots so serial plans on one worker reuse transforms without ENOTEMPTY
+    // races. The scratch fallback preserves per-plan isolation.
+    [FS_MODULE_CACHE_PATH_ENV_KEY]: join(persistentCacheRoot || scratchDir, cacheDirectory),
     OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
     // This wrapper holds the repo heavy-check lock; children skipping it is
     // what lets two plans run concurrently instead of serializing on the lock.
@@ -88,6 +94,51 @@ export function buildChildEnv(entry, baseEnv, scratchDir, index, options = {}) {
     delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   }
   return childEnv;
+}
+
+export function pruneFsModuleCache(root, maxBytes = FS_MODULE_CACHE_MAX_BYTES) {
+  if (!root || !existsSync(root) || !Number.isFinite(maxBytes) || maxBytes < 0) {
+    return { beforeBytes: 0, afterBytes: 0, removedFiles: 0 };
+  }
+
+  const files = [];
+  let totalBytes = 0;
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const filePath = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(filePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const fileStat = statSync(filePath);
+      totalBytes += fileStat.size;
+      if (entry.name !== FS_MODULE_CACHE_METADATA_FILE) {
+        files.push({ filePath, mtimeMs: fileStat.mtimeMs, size: fileStat.size });
+      }
+    }
+  };
+  visit(root);
+
+  const beforeBytes = totalBytes;
+  if (totalBytes <= maxBytes) {
+    return { beforeBytes, afterBytes: totalBytes, removedFiles: 0 };
+  }
+
+  const targetBytes = Math.floor(maxBytes * FS_MODULE_CACHE_PRUNE_TARGET_RATIO);
+  files.sort((left, right) => left.mtimeMs - right.mtimeMs);
+  let removedFiles = 0;
+  for (const file of files) {
+    if (totalBytes <= targetBytes) {
+      break;
+    }
+    unlinkSync(file.filePath);
+    totalBytes -= file.size;
+    removedFiles += 1;
+  }
+  return { beforeBytes, afterBytes: totalBytes, removedFiles };
 }
 
 const MAX_PENDING_LINE_CHARS = 1_000_000;
@@ -164,10 +215,11 @@ export async function runShardPlans(plans, options = {}) {
   const concurrency = Math.max(1, options.concurrency ?? PLAN_CONCURRENCY);
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
+  const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
 
   let nextIndex = 0;
   let exitCode = 0;
-  const workers = Array.from({ length: concurrency }, async () => {
+  const workers = Array.from({ length: concurrency }, async (_, cacheSlot) => {
     while (nextIndex < plans.length && exitCode === 0) {
       const index = nextIndex;
       nextIndex += 1;
@@ -180,6 +232,7 @@ export async function runShardPlans(plans, options = {}) {
       }
       const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
         serial: concurrency === 1,
+        cacheSlot,
       });
       const code = await runner(args, childEnv, entry.name);
       if (code !== 0) {
@@ -190,6 +243,18 @@ export async function runShardPlans(plans, options = {}) {
     }
   });
   await Promise.all(workers);
+  if (persistentCacheRoot) {
+    try {
+      const pruned = pruneFsModuleCache(persistentCacheRoot);
+      if (pruned.removedFiles > 0) {
+        process.stdout.write(
+          `[shard:cache] pruned ${pruned.removedFiles} files (${pruned.beforeBytes} -> ${pruned.afterBytes} bytes)\n`,
+        );
+      }
+    } catch (error) {
+      console.warn(`[shard:cache] failed to prune persistent cache: ${String(error)}`);
+    }
+  }
   return exitCode;
 }
 
