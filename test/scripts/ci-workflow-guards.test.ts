@@ -33,6 +33,7 @@ const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
+const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
@@ -259,6 +260,10 @@ function runCiManifestFixture(options: {
 
 function readAndroidReleaseWorkflow() {
   return parse(readFileSync(".github/workflows/android-release.yml", "utf8"));
+}
+
+function readAndroidToolchainAction() {
+  return parse(readFileSync(SETUP_ANDROID_TOOLCHAIN_ACTION, "utf8"));
 }
 
 function readBuildArtifactsTestboxWorkflow() {
@@ -1480,6 +1485,7 @@ describe("ci workflow guards", () => {
   it("installs the Android SDK platform used by Gradle", () => {
     const workflow = readCiWorkflow();
     const releaseWorkflow = readAndroidReleaseWorkflow();
+    const action = readAndroidToolchainAction();
     const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
     const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
     const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
@@ -1487,31 +1493,48 @@ describe("ci workflow guards", () => {
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
     for (const job of sdkJobs) {
-      const cacheStep = job.steps.find((step: WorkflowStep) => step.name === "Cache Android SDK");
-      const installStep = job.steps.find(
-        (step: WorkflowStep) => step.name === "Install Android SDK packages",
+      const toolchainSteps = job.steps.filter(
+        (step: WorkflowStep) => step.uses === "./.github/actions/setup-android-toolchain",
       );
-
-      expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}.0-`);
-      expect(installStep.run).toContain(`"${packageId}"`);
+      expect(toolchainSteps).toHaveLength(1);
     }
+
+    const cacheStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Cache Android SDK"),
+      "Android SDK cache step",
+    );
+    const javaStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Setup Java"),
+      "Android Java setup step",
+    );
+    const installStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Install Android SDK packages"),
+      "Android SDK package install step",
+    );
+
+    expect(javaStep.uses).toBe("actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287");
+    expect(javaStep.with).toMatchObject({
+      cache: "gradle",
+      distribution: "temurin",
+      "java-version": 17,
+    });
+    expect(javaStep.with?.["cache-dependency-path"]).toContain(
+      "apps/android/gradle/libs.versions.toml",
+    );
+    expect(cacheStep.with?.key).toContain(`platform-${appCompileSdk}.0-`);
+    expect(installStep.run).toContain(`"${packageId}"`);
   });
 
   it("bounds Android SDK command-line tools downloads", () => {
-    const workflow = readCiWorkflow();
-    const releaseWorkflow = readAndroidReleaseWorkflow();
-    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
+    const action = readAndroidToolchainAction();
+    const setupStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) =>
+        step.run?.includes("commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"),
+      ),
+      "Android SDK setup step",
+    );
 
-    for (const job of sdkJobs) {
-      const setupStep = expectDefined(
-        job.steps.find((step: WorkflowStep) =>
-          step.run?.includes("commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"),
-        ),
-        "Android SDK setup step",
-      );
-
-      expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
-    }
+    expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
   });
 
   it("covers Android app variants, lint, and benchmark compilation", () => {
