@@ -54,12 +54,21 @@ type LineAutoReplyDeliveryResult =
   | { status: "delivered"; replyTokenUsed: boolean; visibleReplySent: boolean }
   | { status: "partial"; replyTokenUsed: boolean; visibleReplySent: true; error: Error };
 
+function toLineDeliveryError(error: unknown): Error {
+  return error instanceof Error
+    ? error
+    : new Error("LINE rich or media message send failed", { cause: error });
+}
+
 function markLineVisibleDeliveryError(error: unknown): Error {
-  if (error instanceof Error && Object.isExtensible(error)) {
-    Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
-    return error;
+  const deliveryError = toLineDeliveryError(error);
+  if (Object.isExtensible(deliveryError)) {
+    Object.assign(deliveryError, { sentBeforeError: true, visibleReplySent: true });
+    return deliveryError;
   }
-  const visibleError = new Error("LINE rich or media message send failed", { cause: error });
+  const visibleError = new Error("LINE rich or media message send failed", {
+    cause: deliveryError,
+  });
   Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
   return visibleError;
 }
@@ -286,7 +295,7 @@ export async function deliverLineAutoReply(params: {
       // No user-visible content landed, so this is a full delivery failure.
       // Throwing lets the caller surface or replace it instead of recording a
       // successful empty reply.
-      throw richMediaError;
+      throw toLineDeliveryError(richMediaError);
     }
     // Other visible content landed; preserve that evidence so downstream
     // recovery does not replay text the user already saw.

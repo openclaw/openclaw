@@ -640,4 +640,32 @@ describe("deliverLineAutoReply", () => {
     expect(replyMessageLine).not.toHaveBeenCalled();
     expect(pushMessagesLine).not.toHaveBeenCalled();
   });
+
+  it("wraps a non-Error media-only build failure", async () => {
+    const lineData = { mediaKind: "video" as const };
+    const failure = { code: "invalid_media" };
+    const { deps } = createDeps({
+      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      chunkMarkdownText: () => [],
+      buildMediaMessage: vi.fn(async () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- dependency callbacks may reject unknown values; this proves the delivery boundary normalizes them.
+        throw failure;
+      }) as LineAutoReplyDeps["buildMediaMessage"],
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: {
+          mediaUrls: ["https://example.com/clip.mp4"],
+          channelData: { line: lineData },
+        },
+        lineData,
+        deps,
+      }),
+    ).rejects.toMatchObject({
+      message: "LINE rich or media message send failed",
+      cause: failure,
+    });
+  });
 });

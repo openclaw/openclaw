@@ -14,7 +14,7 @@ type LineOutboundMediaResolved = {
   trackingId?: string;
 };
 
-export type ResolveLineOutboundMediaOpts = {
+type ResolveLineOutboundMediaOpts = {
   mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
   durationMs?: number;
