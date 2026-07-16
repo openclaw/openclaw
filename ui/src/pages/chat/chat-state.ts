@@ -1669,6 +1669,8 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       const result = navigateInputHistory(input);
       if (result.handled) {
         this.composerPersistence.schedule();
+        // State mutates chatMessage; force a re-render so the composer textarea reflects it.
+        this.host.requestUpdate();
       }
       return result;
     };
