@@ -127,6 +127,37 @@ describe("xAI OAuth", () => {
     expect(refreshed.expires).toBe(121_000);
   });
 
+  it("times out when an xAI OAuth refresh response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"access_token":'));
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      const credential = {
+        type: "oauth",
+        provider: "xai",
+        access: "access-1",
+        refresh: "refresh-1",
+        expires: 100,
+        tokenEndpoint: "https://auth.x.ai/oauth2/token",
+      } satisfies OAuthCredential & { tokenEndpoint: string };
+
+      const pending = refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+      const settled = expect(pending).rejects.toThrow("xAI OAuth response stalled for 30000ms");
+      await vi.advanceTimersByTimeAsync(30_060);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rediscovers the current token endpoint for stale xAI OAuth credentials", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
       if (requestUrl(url) === XAI_OAUTH_DISCOVERY_URL) {

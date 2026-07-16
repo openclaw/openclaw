@@ -120,8 +120,13 @@ function readStringRecord(value: unknown): Record<string, unknown> {
 }
 
 async function readResponseBody(response: Response): Promise<XaiOAuthResponseBody> {
+  // Fetch resolves after headers; keep the OAuth fetch deadline on the body so a
+  // stalled discovery/token stream cannot hang login or refresh.
   const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
+    chunkTimeoutMs: XAI_OAUTH_FETCH_TIMEOUT_MS,
     onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`xAI OAuth response stalled for ${chunkTimeoutMs}ms`),
   });
   const text = new TextDecoder().decode(buffer);
   let json: unknown;
