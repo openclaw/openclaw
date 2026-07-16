@@ -27,6 +27,37 @@ public enum OpenClawChatWidgetURLResolver {
         self.relativeWidgetTarget(rawTarget) != nil
     }
 
+    public static func resolve(
+        target: String,
+        replacing failedURL: URL?,
+        currentSurfaceURLs: @Sendable () async -> (node: String?, operatorSurface: String?),
+        refreshNodeSurfaceURL: @Sendable (String?) async -> String?) async -> URL?
+    {
+        let observed = await currentSurfaceURLs()
+        if let current = self.resolvePreferred(
+            surfaces: observed,
+            target: target,
+            excluding: failedURL)
+        {
+            return current
+        }
+        guard let failedURL else { return nil }
+
+        if let refreshedSurface = await refreshNodeSurfaceURL(observed.node),
+           let refreshed = self.resolve(surfaceURL: refreshedSurface, target: target),
+           refreshed != failedURL
+        {
+            return refreshed
+        }
+
+        // A nil refresh can mean its route lease lost a reconnect race. Re-read
+        // both roles so a replacement connection wins over the stale observation.
+        return await self.resolvePreferred(
+            surfaces: currentSurfaceURLs(),
+            target: target,
+            excluding: failedURL)
+    }
+
     private static func relativeWidgetTarget(_ rawTarget: String) -> URLComponents? {
         let target = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
         guard target.hasPrefix("/"),
@@ -60,6 +91,17 @@ public enum OpenClawChatWidgetURLResolver {
               !capability.isEmpty
         else { return nil }
         return components
+    }
+
+    private static func resolvePreferred(
+        surfaces: (node: String?, operatorSurface: String?),
+        target: String,
+        excluding failedURL: URL?) -> URL?
+    {
+        [surfaces.node, surfaces.operatorSurface]
+            .lazy
+            .compactMap { self.resolve(surfaceURL: $0, target: target) }
+            .first { $0 != failedURL }
     }
 
     private static func isWebURL(_ components: URLComponents) -> Bool {
@@ -199,10 +241,37 @@ struct ChatInlineWidgetView: View {
 }
 
 #if canImport(WebKit) && (os(iOS) || os(macOS))
+struct ChatInlineWidgetContentProcessRecovery {
+    enum Action: Equatable {
+        case reload
+        case fail
+    }
+
+    private var didReload = false
+
+    mutating func nextAction() -> Action {
+        guard !self.didReload else { return .fail }
+        self.didReload = true
+        return .reload
+    }
+
+    mutating func reset() {
+        self.didReload = false
+    }
+}
+
 @MainActor
 private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDelegate {
-    var expectedURL: URL
+    var expectedURL: URL {
+        didSet {
+            if self.expectedURL != oldValue {
+                self.contentProcessRecovery.reset()
+            }
+        }
+    }
+
     let onFailure: @MainActor @Sendable () -> Void
+    private var contentProcessRecovery = ChatInlineWidgetContentProcessRecovery()
 
     init(expectedURL: URL, onFailure: @escaping @MainActor @Sendable () -> Void) {
         self.expectedURL = expectedURL
@@ -253,9 +322,14 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        // Process loss does not prove the capability expired. Reload the same
-        // document; normal navigation failures own the one allowed token refresh.
-        webView.load(URLRequest(url: self.expectedURL, cachePolicy: .reloadIgnoringLocalCacheData))
+        // One same-document recovery handles incidental process loss. A second
+        // termination enters the view's bounded capability-refresh/failure path.
+        switch self.contentProcessRecovery.nextAction() {
+        case .reload:
+            webView.load(URLRequest(url: self.expectedURL, cachePolicy: .reloadIgnoringLocalCacheData))
+        case .fail:
+            self.onFailure()
+        }
     }
 
     private func matchesExpectedDocument(_ candidate: URL) -> Bool {

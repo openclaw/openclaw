@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
@@ -89,6 +90,29 @@ class ChatMessageContentParsingTest {
     assertNull(ChatWidgetUrlResolver.resolve(surface, "/__openclaw__/a2ui/index.html"))
     assertNull(ChatWidgetUrlResolver.resolve(surface, "/__openclaw__/canvas/documents/%252e%252e/index.html"))
   }
+
+  @Test
+  fun usesReplacementRouteAfterCapabilityRefreshLosesItsLease() =
+    runTest {
+      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+      val oldSurface = "https://gateway.example/__openclaw__/cap/old"
+      val newSurface = "https://gateway.example/__openclaw__/cap/new"
+      val failedUrl = ChatWidgetUrlResolver.resolve(oldSurface, target)
+      var current = ChatWidgetSurfaceUrls(node = oldSurface, operator = null)
+
+      val resolved =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedUrl = requireNotNull(failedUrl),
+          currentSurfaceUrls = { current },
+          refreshNodeSurfaceUrl = {
+            current = ChatWidgetSurfaceUrls(node = newSurface, operator = null)
+            null
+          },
+        )
+
+      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved)
+    }
 
   @Test
   fun parsesImageBlocksOnlyWhenInlineContentExists() {

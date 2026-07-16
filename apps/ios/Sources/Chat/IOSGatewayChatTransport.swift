@@ -300,19 +300,20 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL? {
-        let nodeSurfaceURL = await self.widgetGateway?.currentCanvasHostUrl()
-        let operatorSurfaceURL = await self.gateway.currentCanvasHostUrl()
-        let current = OpenClawChatWidgetURLResolver.resolve(surfaceURL: nodeSurfaceURL, target: path)
-            ?? OpenClawChatWidgetURLResolver.resolve(surfaceURL: operatorSurfaceURL, target: path)
-        guard let failedURL else { return current }
-        if let current, current != failedURL {
-            return current
-        }
-        // Only node-role sessions may rotate plugin-surface capabilities. The operator
-        // URL remains a useful initial fallback but cannot own expired-token recovery.
-        guard let widgetGateway = self.widgetGateway else { return nil }
-        let refreshed = await widgetGateway.refreshCanvasHostUrl(replacing: nodeSurfaceURL)
-        return OpenClawChatWidgetURLResolver.resolve(surfaceURL: refreshed, target: path)
+        let gateway = self.gateway
+        let widgetGateway = self.widgetGateway
+        return await OpenClawChatWidgetURLResolver.resolve(
+            target: path,
+            replacing: failedURL,
+            currentSurfaceURLs: {
+                let node = await widgetGateway?.currentCanvasHostUrl()
+                let operatorSurface = await gateway.currentCanvasHostUrl()
+                return (node: node, operatorSurface: operatorSurface)
+            },
+            // Only node-role sessions may rotate plugin-surface capabilities.
+            refreshNodeSurfaceURL: { observed in
+                await widgetGateway?.refreshCanvasHostUrl(replacing: observed)
+            })
     }
 
     func requestHistory(

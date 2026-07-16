@@ -47,4 +47,57 @@ struct ChatInlineWidgetTests {
             surfaceURL: surface,
             target: "/__openclaw__/canvas/documents/%2525252525252525252525252525252525/index.html") == nil)
     }
+
+    @Test func `uses replacement route after capability refresh loses its lease`() async throws {
+        let target = "/__openclaw__/canvas/documents/widget-1/index.html"
+        let oldSurface = "https://gateway.example/__openclaw__/cap/old"
+        let newSurface = "https://gateway.example/__openclaw__/cap/new"
+        let failedURL = try #require(OpenClawChatWidgetURLResolver.resolve(
+            surfaceURL: oldSurface,
+            target: target))
+        let probe = ChatWidgetReconnectProbe(surfaceURL: oldSurface, replacementURL: newSurface)
+
+        let resolved = await OpenClawChatWidgetURLResolver.resolve(
+            target: target,
+            replacing: failedURL,
+            currentSurfaceURLs: { await probe.current() },
+            refreshNodeSurfaceURL: { observed in await probe.reconnect(observed: observed) })
+
+        #expect(resolved == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
+        #expect(await probe.refreshCount == 1)
+    }
+
+    #if canImport(WebKit) && (os(iOS) || os(macOS))
+    @Test func `bounds WebKit content process recovery per document`() {
+        var recovery = ChatInlineWidgetContentProcessRecovery()
+
+        #expect(recovery.nextAction() == .reload)
+        #expect(recovery.nextAction() == .fail)
+        #expect(recovery.nextAction() == .fail)
+
+        recovery.reset()
+        #expect(recovery.nextAction() == .reload)
+    }
+    #endif
+}
+
+private actor ChatWidgetReconnectProbe {
+    private var surfaceURL: String?
+    private let replacementURL: String
+    private(set) var refreshCount = 0
+
+    init(surfaceURL: String, replacementURL: String) {
+        self.surfaceURL = surfaceURL
+        self.replacementURL = replacementURL
+    }
+
+    func current() -> (node: String?, operatorSurface: String?) {
+        (node: self.surfaceURL, operatorSurface: nil)
+    }
+
+    func reconnect(observed _: String?) -> String? {
+        self.refreshCount += 1
+        self.surfaceURL = self.replacementURL
+        return nil
+    }
 }

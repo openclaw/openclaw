@@ -27,6 +27,31 @@ internal object ChatWidgetUrlResolver {
 
   fun supportsTarget(target: String): Boolean = parseRelativeTarget(target) != null
 
+  fun resolvePreferred(
+    surfaces: ChatWidgetSurfaceUrls,
+    target: String,
+    excluding: String?,
+  ): String? =
+    sequenceOf(surfaces.node, surfaces.operator)
+      .mapNotNull { resolve(it, target) }
+      .firstOrNull { it != excluding }
+
+  suspend fun resolveAfterFailure(
+    target: String,
+    failedUrl: String,
+    currentSurfaceUrls: () -> ChatWidgetSurfaceUrls,
+    refreshNodeSurfaceUrl: suspend (String?) -> String?,
+  ): String? {
+    val observed = currentSurfaceUrls()
+    resolvePreferred(observed, target, excluding = failedUrl)?.let { return it }
+    val refreshed = resolve(refreshNodeSurfaceUrl(observed.node), target)
+    if (refreshed != null && refreshed != failedUrl) return refreshed
+
+    // A nil refresh can mean its route lease lost a reconnect race. Re-read
+    // both roles so a replacement connection wins over the stale observation.
+    return resolvePreferred(currentSurfaceUrls(), target, excluding = failedUrl)
+  }
+
   private fun parseCapabilitySurface(raw: String?): URI? {
     val parsed = raw?.trim()?.takeIf(String::isNotEmpty)?.let { runCatching { URI(it) }.getOrNull() } ?: return null
     val scheme = parsed.scheme?.lowercase()
@@ -70,3 +95,8 @@ internal object ChatWidgetUrlResolver {
     return null
   }
 }
+
+internal data class ChatWidgetSurfaceUrls(
+  val node: String?,
+  val operator: String?,
+)

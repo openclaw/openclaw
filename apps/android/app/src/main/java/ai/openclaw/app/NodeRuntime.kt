@@ -13,6 +13,7 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.ChatWidgetSurfaceUrls
 import ai.openclaw.app.chat.ChatWidgetUrlResolver
 import ai.openclaw.app.chat.MainSessionBinding
 import ai.openclaw.app.chat.MessageSpeechClient
@@ -4114,24 +4115,22 @@ class NodeRuntime private constructor(
     path: String,
     failedUrl: String?,
   ): String? {
-    fun currentResolution(): Pair<String?, String?> {
-      val nodeSurfaceUrl = nodeSession.currentCanvasHostUrl()
-      val resolved =
-        ChatWidgetUrlResolver.resolve(nodeSurfaceUrl, path)
-          ?: ChatWidgetUrlResolver.resolve(operatorSession.currentCanvasHostUrl(), path)
-      return nodeSurfaceUrl to resolved
-    }
+    fun currentSurfaceUrls(): ChatWidgetSurfaceUrls =
+      ChatWidgetSurfaceUrls(
+        node = nodeSession.currentCanvasHostUrl(),
+        operator = operatorSession.currentCanvasHostUrl(),
+      )
 
-    val current = currentResolution().second
-    if (failedUrl == null || (current != null && current != failedUrl)) return current
+    val current = ChatWidgetUrlResolver.resolvePreferred(currentSurfaceUrls(), path, excluding = failedUrl)
+    if (failedUrl == null || current != null) return current
     return inlineWidgetRefreshMutex.withLock {
       // Rotation is node-role only; a second rotation would also invalidate a sibling's token.
-      val (observedNodeSurfaceUrl, latest) = currentResolution()
-      latest?.takeIf { it != failedUrl }
-        ?: ChatWidgetUrlResolver.resolve(
-          nodeSession.refreshCanvasHostUrlIfCurrent(observedNodeSurfaceUrl),
-          path,
-        )
+      ChatWidgetUrlResolver.resolveAfterFailure(
+        target = path,
+        failedUrl = failedUrl,
+        currentSurfaceUrls = ::currentSurfaceUrls,
+        refreshNodeSurfaceUrl = nodeSession::refreshCanvasHostUrlIfCurrent,
+      )
     }
   }
 
