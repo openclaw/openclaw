@@ -225,12 +225,20 @@ export async function azureSpeechTTS(params: {
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech TTS API error");
+    // fetchWithSsrFGuard resolves after headers; keep the request deadline on the
+    // audio body so a stalled TTS stream cannot hang speech synthesis.
+    const timeoutMs = params.timeoutMs ?? DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS;
     return await readResponseWithLimit(
       response,
       params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
       {
+        chunkTimeoutMs: timeoutMs,
         onOverflow: ({ maxBytes }) =>
           new Error(`Azure Speech TTS audio response exceeds ${maxBytes} bytes`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(
+            `Azure Speech TTS audio response stalled: no data received for ${chunkTimeoutMs}ms`,
+          ),
       },
     );
   } finally {

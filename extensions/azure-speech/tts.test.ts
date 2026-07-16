@@ -121,6 +121,42 @@ describe("azure speech tts", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
+  it("times out when a TTS audio response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array([1, 2, 3]));
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+
+      const pending = azureSpeechTTS({
+        text: "hello",
+        apiKey: "speech-key",
+        region: "eastus",
+        voice: "en-US-JennyNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        timeoutMs: 50,
+      });
+      const settled = expect(pending).rejects.toThrow(
+        "Azure Speech TTS audio response stalled: no data received for 50ms",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lists voices with timeout and filters deprecated entries", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
