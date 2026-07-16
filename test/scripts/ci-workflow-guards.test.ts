@@ -2024,6 +2024,8 @@ describe("ci workflow guards", () => {
       expect(installStep.run).toContain(
         "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip",
       );
+      expect(installStep.run).toContain("--connect-timeout 10 --max-time 120");
+      expect(installStep.run).toContain("--retry 3 --retry-max-time 120");
       expect(installStep.run).toContain(
         'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
       );
@@ -2087,10 +2089,26 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("bounds Mantis Slack runner IP discovery", () => {
+    const workflow = parse(
+      readFileSync(".github/workflows/mantis-slack-desktop-smoke.yml", "utf8"),
+    ) as { jobs: { run_slack_desktop: { steps: WorkflowStep[] } } };
+    const runStep = workflow.jobs.run_slack_desktop.steps.find(
+      (step) => step.name === "Run Slack desktop scenario",
+    );
+
+    expect(runStep?.run).toContain(
+      "curl -fsS --connect-timeout 5 --max-time 15 --retry 2 https://checkip.amazonaws.com",
+    );
+  });
+
   it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
     const workflow = readFileSync(".github/workflows/windows-blacksmith-testbox.yml", "utf8");
 
+    expect(workflow.match(/--connect-timeout 10 --max-time 30/gu)).toHaveLength(2);
+    expect(workflow).toContain('echo "phone_home_hydrating_curl=${hydrating_curl_status}"');
     expect(workflow).toContain('echo "phone_home_hydrating_http=${hydrating_http_code}"');
+    expect(workflow).toContain('echo "phone_home_ready_curl=${ready_curl_status}"');
     expect(workflow).toContain('echo "phone_home_ready_http=${http_code}"');
     expect(workflow).toContain('jq -e \'type == "number"\' <<<"$installation_model_id"');
     expect(workflow).toContain('--arg testbox_id "$TESTBOX_ID"');
@@ -2099,7 +2117,9 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain('--data-binary @"$hydrating_body"');
     expect(workflow).toContain('--data-binary @"$ready_body"');
     const hydratingFailureBlock = workflow.slice(
-      workflow.indexOf('if [[ ! "$hydrating_http_code" =~ ^2 ]]; then'),
+      workflow.indexOf(
+        'if (( hydrating_curl_status != 0 )) || [[ ! "$hydrating_http_code" =~ ^2 ]]; then',
+      ),
       workflow.indexOf('response="$(cat "$hydrating_response")"'),
     );
     const missingSshKeyFailureBlock = workflow.slice(
@@ -2107,10 +2127,12 @@ describe("ci workflow guards", () => {
       workflow.indexOf("mkdir -p ~/.ssh"),
     );
     const readyFailureBlock = workflow.slice(
-      workflow.indexOf('if [[ ! "$http_code" =~ ^2 ]]; then'),
+      workflow.indexOf('if (( ready_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then'),
       workflow.indexOf('echo "============================================"'),
     );
 
+    expect(workflow).toContain(')" || hydrating_curl_status=$?');
+    expect(workflow).toContain(')" || ready_curl_status=$?');
     expect(hydratingFailureBlock).toContain("exit 1");
     expect(missingSshKeyFailureBlock).toContain("exit 1");
     expect(readyFailureBlock).toContain("exit 1");

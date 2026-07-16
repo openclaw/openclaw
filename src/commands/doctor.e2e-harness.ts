@@ -288,6 +288,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourceDir: "/tmp/state/media/outgoing/records",
       hasLegacy: false,
     },
+    apns: {
+      sourcePath: "/tmp/state/push/apns-registrations.json",
+      hasLegacy: false,
+    },
     webPush: {
       subscriptionsPath: "/tmp/state/push/web-push-subscriptions.json",
       vapidKeysPath: "/tmp/state/push/vapid-keys.json",

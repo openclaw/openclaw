@@ -22,7 +22,6 @@ import type {
   AssistantMessage,
   CacheRetention,
   Context,
-  ImageContent,
   Message,
   Model,
   OpenAICompletionsCompat,
@@ -64,7 +63,7 @@ import { buildBaseOptions } from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
-  hasMediaPayload,
+  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -99,10 +98,6 @@ function isThinkingContentBlock(block: { type: string }): block is ThinkingConte
 
 function isToolCallBlock(block: { type: string }): block is ToolCall {
   return block.type === "toolCall";
-}
-
-function isImageContentBlock(block: { type: string }): block is ImageContent {
-  return block.type === "image" && hasMediaPayload(block);
 }
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -1214,7 +1209,7 @@ export function convertMessages(
         // Extract text and image content
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some(isImageContentBlock);
+        const hasImages = toolMsg.content.some(isImageWithMediaPayload);
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(
@@ -1234,7 +1229,7 @@ export function convertMessages(
 
         if (hasImages && model.input.includes("image")) {
           for (const block of toolMsg.content) {
-            if (isImageContentBlock(block)) {
+            if (isImageWithMediaPayload(block)) {
               imageBlocks.push({
                 type: "image_url",
                 image_url: {

@@ -18,7 +18,6 @@ import type {
   Api,
   AssistantMessage,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   StopReason,
@@ -36,7 +35,7 @@ import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
-  hasMediaPayload,
+  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -281,7 +280,7 @@ export function convertMessages<T extends GoogleApiType>(
       // Extract text and image content
       const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
-        ? msg.content.filter((c): c is ImageContent => c.type === "image" && hasMediaPayload(c))
+        ? msg.content.filter(isImageWithMediaPayload)
         : [];
 
       const hasText = textResult.length > 0;

@@ -1001,16 +1001,17 @@ async function updateCommandInternal(
       cwd: packageInstallCwd,
       env: packageInstallEnv,
     });
-    if (runtimePreflight.error) {
+    if (!runtimePreflight.ok) {
       defaultRuntime.error(runtimePreflight.error);
       defaultRuntime.exit(1);
       return;
     }
-    packageUpdateNodeRunner = runtimePreflight.nodeRunner;
-    if (runtimePreflight.replacedNodeRunner && !opts.json) {
+    const runtimeSelection = runtimePreflight.value;
+    packageUpdateNodeRunner = runtimeSelection.nodeRunner;
+    if (runtimeSelection.replacedNodeRunner && !opts.json) {
       defaultRuntime.log(
         theme.warn(
-          `Managed gateway service Node (${runtimePreflight.replacedNodeRunner}) cannot run openclaw@${runtimePreflight.targetVersion ?? tag}.`,
+          `Managed gateway service Node (${runtimeSelection.replacedNodeRunner}) cannot run openclaw@${runtimeSelection.targetVersion ?? tag}.`,
         ),
       );
       defaultRuntime.log(
