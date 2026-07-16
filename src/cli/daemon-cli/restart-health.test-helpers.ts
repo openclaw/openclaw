@@ -19,7 +19,7 @@ export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
-export const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
+const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
 export const readActiveGatewayLockIdentity = vi.fn();
 
 vi.mock("../../infra/ports.js", () => ({
