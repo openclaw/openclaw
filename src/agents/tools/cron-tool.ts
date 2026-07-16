@@ -178,7 +178,13 @@ function createCronPayloadSchema(): TSchema {
 function createCronTriggerSchema(params: { nullableClears: boolean }): TSchema {
   const trigger = Type.Object(
     {
-      script: Type.String({ minLength: 1, maxLength: 65_536 }),
+      // No `maxLength` here: a bounded length compiles to that many repeated GBNF
+      // rules and 65536 blows past llama.cpp's ~2000 repetition ceiling (#108580).
+      // The 64KB cap stays enforced server-side by the RPC CronTriggerSchema.
+      script: Type.String({
+        minLength: 1,
+        description: "Trigger script source (max 65536 chars).",
+      }),
       once: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
@@ -275,6 +281,9 @@ function createCronJobObjectSchema(): TSchema {
       {
         name: Type.Optional(Type.String({ description: "Job name" })),
         declarationKey: Type.Optional(
+          // No `pattern` here: llama.cpp's regex->GBNF converter rejects PCRE
+          // shorthand (`\S`) and unanchored patterns (#108580). The non-blank
+          // guarantee is enforced server-side (cron gateway handler + RPC schema).
           Type.String({
             description: "Idempotent declaration key.",
             minLength: 1,
