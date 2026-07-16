@@ -63,6 +63,17 @@ describe("buildInworldSpeechProvider", () => {
     ).toBe(false);
   });
 
+  it("reports not configured when INWORLD_API_KEY is whitespace only", () => {
+    vi.stubEnv("INWORLD_API_KEY", "   ");
+    const provider = buildInworldSpeechProvider();
+    expect(
+      provider.isConfigured({
+        providerConfig: {},
+        timeoutMs: 30_000,
+      }),
+    ).toBe(false);
+  });
+
   it("has correct provider metadata", () => {
     const provider = buildInworldSpeechProvider();
     expect(provider.id).toBe("inworld");
@@ -279,5 +290,19 @@ describe("buildInworldSpeechProvider", () => {
       outputFormat: "pcm",
       sampleRate: 22_050,
     });
+  });
+
+  it("throws when INWORLD_API_KEY is whitespace only", async () => {
+    vi.stubEnv("INWORLD_API_KEY", "   ");
+    const provider = buildInworldSpeechProvider();
+    await expect(
+      provider.synthesize({
+        text: "test",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Inworld API key missing");
   });
 });
