@@ -653,6 +653,19 @@ describe("test-install-sh-docker", () => {
     expect(nonrootDockerfile).not.toMatch(/curl[^\n]+\|\s*bash/u);
   });
 
+  it("bounds the CLI installer non-root smoke download before execution", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+    const cliSmokeBlock = wrapper.slice(wrapper.indexOf("==> Run CLI installer non-root test"));
+
+    expect(cliSmokeBlock).toContain('installer="$(mktemp)"');
+    expect(cliSmokeBlock).toMatch(/trap .*rm -f "\$installer".* EXIT/u);
+    expect(cliSmokeBlock).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" "$OPENCLAW_INSTALL_CLI_URL"',
+    );
+    expect(cliSmokeBlock).toContain('bash "$installer" --set-npm-prefix --no-onboard');
+    expect(cliSmokeBlock).not.toMatch(/curl[^\n]+\|\s*bash/u);
+  });
+
   it("keeps shared install helpers parsing and verifying installed CLI versions", () => {
     const root = tempDirs.make("openclaw-install-helper-");
     const binDir = join(root, "bin");
