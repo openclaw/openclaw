@@ -207,6 +207,9 @@ struct ChatInlineWidgetView: View {
     @State private var refreshInFlight = false
     @State private var unavailable = false
     @State private var activePath: String?
+    /// A reset can keep the same path while installing a new connection route.
+    /// Its generation prevents older resolver completions from restoring stale trust state.
+    @State private var loadGeneration = UUID()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -260,7 +263,7 @@ struct ChatInlineWidgetView: View {
                 self.unavailable = true
                 return
             }
-            await self.load(path: path, replacing: nil)
+            await self.load(path: path, replacing: nil, generation: self.loadGeneration)
         }
     }
 
@@ -270,6 +273,7 @@ struct ChatInlineWidgetView: View {
     }
 
     private func reset(path: String?) {
+        self.loadGeneration = UUID()
         self.activePath = path
         self.resolvedResource = nil
         self.didRefresh = false
@@ -277,9 +281,16 @@ struct ChatInlineWidgetView: View {
         self.unavailable = false
     }
 
-    private func load(path: String, replacing failedResource: OpenClawChatWidgetResource?) async {
+    private func load(
+        path: String,
+        replacing failedResource: OpenClawChatWidgetResource?,
+        generation: UUID) async
+    {
         let candidate = await self.resolveResource(path, failedResource)
-        guard !Task.isCancelled, self.activePath == path else { return }
+        guard !Task.isCancelled,
+              self.activePath == path,
+              self.loadGeneration == generation
+        else { return }
         let resource = candidate?.hasValidTLSBinding == true ? candidate : nil
         self.resolvedResource = resource
         self.unavailable = resource == nil
@@ -297,9 +308,10 @@ struct ChatInlineWidgetView: View {
         }
         self.didRefresh = true
         self.refreshInFlight = true
+        let generation = self.loadGeneration
         Task { @MainActor in
-            await self.load(path: path, replacing: resource)
-            guard self.activePath == path else { return }
+            await self.load(path: path, replacing: resource, generation: generation)
+            guard self.activePath == path, self.loadGeneration == generation else { return }
             self.refreshInFlight = false
         }
     }

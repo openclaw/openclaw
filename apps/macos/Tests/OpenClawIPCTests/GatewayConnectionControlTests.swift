@@ -236,8 +236,10 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
     @Test func `operator widget capability refresh is shared and retained`() async throws {
-        let oldSurface = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
-        let newSurface = "http://127.0.0.1:18789/__openclaw__/cap/new-token"
+        let rawOldSurface = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
+        let rawNewSurface = "http://127.0.0.1:18789/__openclaw__/cap/new-token"
+        let oldSurface = "https://gateway.example.invalid:9443/__openclaw__/cap/old-token"
+        let newSurface = "https://gateway.example.invalid:9443/__openclaw__/cap/new-token"
         let recorder = WebSocketMessageRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(
@@ -250,9 +252,18 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
                           let id = frame["id"] as? String
                     else { return }
                     if method == "plugin.surface.refresh" {
-                        task.emitReceiveSuccess(.data(Data(
-                            #"{"type":"res","id":"\#(id)","ok":true,"payload":{"surface":"canvas","pluginSurfaceUrls":{"canvas":"\#(newSurface)"}}}"#
-                                .utf8)))
+                        let response = """
+                        {
+                          "type": "res",
+                          "id": "\(id)",
+                          "ok": true,
+                          "payload": {
+                            "surface": "canvas",
+                            "pluginSurfaceUrls": { "canvas": "\(rawNewSurface)" }
+                          }
+                        }
+                        """
+                        task.emitReceiveSuccess(.data(Data(response.utf8)))
                     } else {
                         task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                     }
@@ -264,13 +275,13 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
                     let id = task.snapshotConnectRequestID() ?? "connect"
                     return .data(GatewayWebSocketTestSupport.connectOkData(
                         id: id,
-                        canvasPluginSurfaceURL: oldSurface))
+                        canvasPluginSurfaceURL: rawOldSurface))
                 })
         })
         let connection = GatewayConnection(
             configProvider: {
                 (
-                    url: URL(string: "ws://127.0.0.1:1")!,
+                    url: URL(string: "wss://gateway.example.invalid:9443")!,
                     token: "test-token-placeholder",
                     password: nil)
             },

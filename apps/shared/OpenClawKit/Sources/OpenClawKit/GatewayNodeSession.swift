@@ -1081,7 +1081,7 @@ extension GatewayNodeSession {
     }
 
     private func normalizeCanvasHostUrl(_ raw: String?) -> String? {
-        canonicalizeCanvasHostUrl(raw: raw, activeURL: self.activeURL)
+        GatewayPluginSurfaceURL.canonicalize(raw: raw, against: self.activeURL)
     }
 
     private func normalizePluginSurfaceUrls(_ raw: [String: AnyCodable]?) -> [String: String] {

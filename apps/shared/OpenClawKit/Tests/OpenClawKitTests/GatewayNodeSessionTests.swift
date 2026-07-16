@@ -3359,18 +3359,18 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `normalize canvas host url preserves explicit secure canvas port`() {
-        let normalized = canonicalizeCanvasHostUrl(
+        let normalized = GatewayPluginSurfaceURL.canonicalize(
             raw: "https://canvas.example.com:9443/__openclaw__/cap/token",
-            activeURL: URL(string: "wss://gateway.example.com"))
+            against: URL(string: "wss://gateway.example.com"))
 
         #expect(normalized == "https://canvas.example.com:9443/__openclaw__/cap/token")
     }
 
     @Test
     func `normalize canvas host url backfills gateway host for loopback canvas`() {
-        let normalized = canonicalizeCanvasHostUrl(
+        let normalized = GatewayPluginSurfaceURL.canonicalize(
             raw: "http://127.0.0.1:18789/__openclaw__/cap/token",
-            activeURL: URL(string: "wss://gateway.example.com:7443"))
+            against: URL(string: "wss://gateway.example.com:7443"))
 
         #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
     }

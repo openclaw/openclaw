@@ -72,7 +72,10 @@ extension GatewayConnection {
                 return self.currentCanvasPluginSurfaceRoute()
             }
             let raw = response.pluginSurfaceUrls?["canvas"]?.value as? String
-            guard let refreshed = Self.normalizePluginSurfaceURL(raw) else { return nil }
+            guard let refreshed = GatewayPluginSurfaceURL.canonicalize(
+                raw: raw,
+                against: self.configuredGatewayURL())
+            else { return nil }
             self.canvasPluginSurfaceURL = refreshed
             return self.currentCanvasPluginSurfaceRoute()
         } catch {
@@ -92,17 +95,14 @@ extension GatewayConnection {
     func installCanvasPluginSurfaceURL(from snapshot: HelloOk) {
         let raw = snapshot.pluginsurfaceurls?["canvas"]?.value as? String
         self.resetCanvasPluginSurfaceState()
-        self.canvasPluginSurfaceURL = Self.normalizePluginSurfaceURL(raw)
+        self.canvasPluginSurfaceURL = GatewayPluginSurfaceURL.canonicalize(
+            raw: raw,
+            against: self.configuredGatewayURL())
     }
 
     func resetCanvasPluginSurfaceState() {
         self.canvasPluginSurfaceRefresh?.task.cancel()
         self.canvasPluginSurfaceRefresh = nil
         self.canvasPluginSurfaceURL = nil
-    }
-
-    private static func normalizePluginSurfaceURL(_ raw: String?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
