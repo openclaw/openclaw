@@ -277,12 +277,12 @@ jobs:
               fi
             done
             valid_runner_ip=true
-            IFS=. read -r -a runner_ip_octets <<<"$runner_ip"
-            if ((${#runner_ip_octets[@]} != 4)); then
+            if [[ ! "$runner_ip" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]]; then
               valid_runner_ip=false
             else
+              IFS=. read -r -a runner_ip_octets <<<"$runner_ip"
               for octet in "${runner_ip_octets[@]}"; do
-                if [[ ! "$octet" =~ ^(0|[1-9][0-9]{0,2})$ ]] || ((10#$octet > 255)); then
+                if ((10#$octet > 255)); then
                   valid_runner_ip=false
                   break
                 fi

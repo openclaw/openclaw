@@ -2120,7 +2120,7 @@ describe("ci workflow guards", () => {
     );
     expect(runStep?.run).not.toContain("--retry");
     expect(runStep?.run).toContain('runner_ip=""');
-    expect(runStep?.run).toContain("((${#runner_ip_octets[@]} != 4))");
+    expect(runStep?.run).toContain('[[ ! "$runner_ip" =~ ^(0|[1-9][0-9]{0,2})\\.');
     expect(runStep?.run).toContain("((10#$octet > 255))");
 
     const discoveryBlock = runStep?.run?.match(
@@ -2169,19 +2169,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(result.stdout).not.toContain("198.51.");
       expect(readFileSync(callCount, "utf8")).toBe("2\n");
 
-      writeFileSync(callCount, "0\n");
-      const invalidResult = spawnSync("bash", ["-c", `set -euo pipefail\n${discoveryBlock}`], {
-        encoding: "utf8",
-        env: {
-          CURL_CALL_COUNT: callCount,
-          CURL_SUCCESS_IP: "999.0.0.1",
-          PATH: `${fakeBin}:${process.env.PATH}`,
-        },
-      });
-      expect(invalidResult.status).toBe(1);
-      expect(invalidResult.stderr).toContain(
-        "Could not resolve GitHub runner public IPv4 for AWS SSH ingress.",
-      );
+      for (const invalidIp of ["999.0.0.1", "203.0.113.7."]) {
+        writeFileSync(callCount, "0\n");
+        const invalidResult = spawnSync("bash", ["-c", `set -euo pipefail\n${discoveryBlock}`], {
+          encoding: "utf8",
+          env: {
+            CURL_CALL_COUNT: callCount,
+            CURL_SUCCESS_IP: invalidIp,
+            PATH: `${fakeBin}:${process.env.PATH}`,
+          },
+        });
+        expect(invalidResult.status).toBe(1);
+        expect(invalidResult.stderr).toContain(
+          "Could not resolve GitHub runner public IPv4 for AWS SSH ingress.",
+        );
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
