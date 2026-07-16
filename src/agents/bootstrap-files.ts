@@ -312,11 +312,17 @@ export async function resolveBootstrapFilesForRun(params: {
   // configured in the agent config, so default state directories do not
   // silently override workspace safety rules (issue #29387).
   let mergedRawFiles = rawFiles;
-  if (params.config && params.agentId) {
-    const explicitAgentDir = resolveAgentConfig(params.config, params.agentId)?.agentDir?.trim();
+  const resolvedAgentId =
+    params.agentId ??
+    (params.sessionKey && params.config
+      ? resolveSessionAgentIds({ sessionKey: params.sessionKey, config: params.config })
+          .sessionAgentId
+      : undefined);
+  if (params.config && resolvedAgentId) {
+    const explicitAgentDir = resolveAgentConfig(params.config, resolvedAgentId)?.agentDir?.trim();
     if (explicitAgentDir) {
       const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
-      const agentDir = resolveAgentDir(params.config, params.agentId);
+      const agentDir = resolveAgentDir(params.config, resolvedAgentId);
       const resolvedAgentDir = resolveUserPath(agentDir);
       if (resolvedAgentDir !== resolvedWorkspaceDir) {
         const agentDirFiles = await loadWorkspaceBootstrapFiles(agentDir);
