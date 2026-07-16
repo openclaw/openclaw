@@ -10,6 +10,7 @@ import {
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -47,6 +48,9 @@ import type {
 } from "./runtime-api.js";
 
 const CRABLINE_TRANSPORT_ID = "crabline";
+const CRABLINE_RESPONSE_MAX_BYTES = 1024 * 1024;
+const QA_INTERNAL_RESPONSE_IDLE_TIMEOUT_MS = 5_000;
+const QA_INTERNAL_RESPONSE_TIMEOUT_MS = 15_000;
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -215,7 +219,13 @@ async function postCrablineInbound(params: {
         `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
       );
     }
-    const result: unknown = await response.json();
+    const bytes = await readResponseWithLimit(response, CRABLINE_RESPONSE_MAX_BYTES, {
+      chunkTimeoutMs: QA_INTERNAL_RESPONSE_IDLE_TIMEOUT_MS,
+      timeoutMs: QA_INTERNAL_RESPONSE_TIMEOUT_MS,
+      onOverflow: ({ maxBytes }) =>
+        new Error(`Crabline inbound response exceeds ${maxBytes} bytes`),
+    });
+    const result: unknown = JSON.parse(bytes.toString("utf8"));
     if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
       return readStringValue(result.event.event_id);
     }
@@ -487,3 +497,5 @@ export async function createQaCrablineTransportAdapter(params: {
     state,
   });
 }
+
+export const testing = { postCrablineInbound };
