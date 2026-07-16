@@ -36,7 +36,9 @@ async function fixture() {
     version: "1.0.0",
     packageRoot: root,
     manifestPath: join(root, "openclaw.claw.json"),
+    integrityKind: "artifact",
     integrity: "sha256:manifest",
+    byteLength: 100,
   };
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
@@ -65,7 +67,7 @@ describe("installClawCronJobs", () => {
       enabled: true,
       agentId: "worker-two",
       schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-      sessionTarget: "session:main",
+      sessionTarget: "session:agent:worker-two:main",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Prepare the report" },
       delivery: { mode: "announce", channel: "last" },

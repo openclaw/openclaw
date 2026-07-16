@@ -448,7 +448,7 @@ describe("claws cli", () => {
 
     expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
       expect.objectContaining({ planIntegrity: "sha256:remove-plan" }),
-      { consentPlanIntegrity: "sha256:remove-plan" },
+      expect.objectContaining({ consentPlanIntegrity: "sha256:remove-plan" }),
     );
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       schemaVersion: "openclaw.clawRemoveResult.v1",

@@ -5,7 +5,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan, ClawCronJob } from "./types.js";
 
-export const CLAW_CRON_REF_SCHEMA_VERSION = "openclaw.clawCronRef.v1" as const;
+const CLAW_CRON_REF_SCHEMA_VERSION = "openclaw.clawCronRef.v1" as const;
 
 export type PersistedClawCronRef = {
   schemaVersion: typeof CLAW_CRON_REF_SCHEMA_VERSION;
@@ -73,14 +73,15 @@ function persistPendingRef(
   const nowMs = options.nowMs ?? Date.now();
   const declarationKey = `claw:${plan.agent.finalId}:${job.id}`;
   const database = openOpenClawStateDatabase(options);
-  const existing = database.db
-    .prepare(
-      `SELECT schema_version, agent_id, manifest_id, declaration_key, scheduler_job_id,
+  const existing =
+    database.db /* sqlite-allow-raw: read one Claw cron ownership row by closed agent and manifest ids. */
+      .prepare(
+        `SELECT schema_version, agent_id, manifest_id, declaration_key, scheduler_job_id,
               status, job_json, error, created_at_ms, updated_at_ms
          FROM claw_cron_refs
         WHERE agent_id = ? AND manifest_id = ?`,
-    )
-    .get(plan.agent.finalId, job.id) as CronRefRow | undefined;
+      )
+      .get(plan.agent.finalId, job.id) as CronRefRow | undefined;
   if (existing) {
     const ref = rowToRef(existing);
     if (ref.declarationKey !== declarationKey || JSON.stringify(ref.job) !== JSON.stringify(job)) {
@@ -106,24 +107,26 @@ function persistPendingRef(
     updatedAtMs: nowMs,
   };
   runOpenClawStateWriteTransaction(({ db }) => {
-    db.prepare(
-      `INSERT INTO claw_cron_refs (
+    db /* sqlite-allow-raw: insert one pending Claw cron ownership row. */
+      .prepare(
+        `INSERT INTO claw_cron_refs (
          agent_id, manifest_id, schema_version, declaration_key, scheduler_job_id,
          status, job_json, error, created_at_ms, updated_at_ms
        ) VALUES (
          @agent_id, @manifest_id, @schema_version, @declaration_key, NULL,
          @status, @job_json, NULL, @created_at_ms, @updated_at_ms
        )`,
-    ).run({
-      agent_id: record.agentId,
-      manifest_id: record.manifestId,
-      schema_version: record.schemaVersion,
-      declaration_key: record.declarationKey,
-      status: record.status,
-      job_json: JSON.stringify(record.job),
-      created_at_ms: nowMs,
-      updated_at_ms: nowMs,
-    });
+      )
+      .run({
+        agent_id: record.agentId,
+        manifest_id: record.manifestId,
+        schema_version: record.schemaVersion,
+        declaration_key: record.declarationKey,
+        status: record.status,
+        job_json: JSON.stringify(record.job),
+        created_at_ms: nowMs,
+        updated_at_ms: nowMs,
+      });
   }, options);
   return record;
 }
@@ -139,21 +142,23 @@ function updateRef(
     updatedAtMs: options.nowMs ?? Date.now(),
   };
   runOpenClawStateWriteTransaction(({ db }) => {
-    db.prepare(
-      `UPDATE claw_cron_refs
+    db /* sqlite-allow-raw: update one Claw cron ownership row. */
+      .prepare(
+        `UPDATE claw_cron_refs
           SET scheduler_job_id = @scheduler_job_id,
               status = @status,
               error = @error,
               updated_at_ms = @updated_at_ms
         WHERE agent_id = @agent_id AND manifest_id = @manifest_id`,
-    ).run({
-      agent_id: ref.agentId,
-      manifest_id: ref.manifestId,
-      scheduler_job_id: update.schedulerJobId ?? null,
-      status: update.status,
-      error: update.error ?? null,
-      updated_at_ms: updated.updatedAtMs,
-    });
+      )
+      .run({
+        agent_id: ref.agentId,
+        manifest_id: ref.manifestId,
+        scheduler_job_id: update.schedulerJobId ?? null,
+        status: update.status,
+        error: update.error ?? null,
+        updated_at_ms: updated.updatedAtMs,
+      });
   }, options);
   return updated;
 }
@@ -191,7 +196,8 @@ function schedulerJobByDeclarationKey(
       (job as Record<string, unknown>).declarationKey === declarationKey &&
       typeof (job as Record<string, unknown>).id === "string",
   );
-  return matches.length === 1 ? { id: matches[0].id as string } : undefined;
+  const match = matches.length === 1 ? matches[0] : undefined;
+  return match ? { id: match.id as string } : undefined;
 }
 
 function gatewayInput(plan: ClawAddPlan, ref: PersistedClawCronRef): Record<string, unknown> {
@@ -208,7 +214,8 @@ function gatewayInput(plan: ClawAddPlan, ref: PersistedClawCronRef): Record<stri
       expr: job.schedule.cron,
       ...(job.schedule.timezone ? { tz: job.schedule.timezone } : {}),
     },
-    sessionTarget: job.session === "main" ? "session:main" : job.session,
+    sessionTarget:
+      job.session === "main" ? `session:agent:${plan.agent.finalId}:main` : job.session,
     wakeMode: "now",
     payload: { kind: "agentTurn", message: job.message },
     delivery: job.delivery
@@ -301,7 +308,7 @@ export function readClawCronRefs(
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawCronRef[] {
   const database = openOpenClawStateDatabase(options);
-  const rows = database.db
+  const rows = database.db /* sqlite-allow-raw: read Claw cron ownership rows by closed agent id. */
     .prepare(
       `SELECT schema_version, agent_id, manifest_id, declaration_key, scheduler_job_id,
               status, job_json, error, created_at_ms, updated_at_ms
@@ -319,10 +326,9 @@ export function deleteClawCronRef(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    db.prepare("DELETE FROM claw_cron_refs WHERE agent_id = ? AND manifest_id = ?").run(
-      agentId,
-      manifestId,
-    );
+    db /* sqlite-allow-raw: delete one Claw cron ownership row after scheduler cleanup. */
+      .prepare("DELETE FROM claw_cron_refs WHERE agent_id = ? AND manifest_id = ?")
+      .run(agentId, manifestId);
   }, options);
 }
 

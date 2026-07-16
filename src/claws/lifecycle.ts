@@ -424,17 +424,8 @@ export async function buildClawAddPlan(params: {
     });
   }
 
+  // Strict v1 validation permits only deterministic main or isolated targets.
   for (const job of params.manifest.cronJobs) {
-    const blocked = job.session === "current";
-    if (blocked) {
-      blockers.push(
-        blocker(
-          "cron_current_session_unavailable",
-          `$.cronJobs.${job.id}.session`,
-          'Claw apply has no caller session; use "main" or "isolated".',
-        ),
-      );
-    }
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -448,7 +439,7 @@ export async function buildClawAddPlan(params: {
           ? { deliveryResolution: "local-channel-state:last" }
           : {}),
       },
-      blocked,
+      blocked: false,
     });
   }
 

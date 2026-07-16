@@ -434,6 +434,12 @@ export async function buildClawRemovePlan(
         action: blocked ? "retain" : "remove",
         target: cron.schedulerJobId ?? cron.declarationKey,
         blocked,
+        details: {
+          expectedStatus: cron.status,
+          declarationKey: cron.declarationKey,
+          schedulerJobId: cron.schedulerJobId,
+          job: cron.job,
+        },
         ...(blocked ? { reason: `Cron ownership state is ${cron.status}.` } : {}),
       });
     }
