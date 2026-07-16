@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { OnePasswordError } from "./errors.js";
 
@@ -190,13 +191,12 @@ export class OpClient {
   }
 
   private async readToken(): Promise<string> {
-    let contents: string;
+    let contents: string | undefined;
     try {
-      const [raw, stat] = await Promise.all([
-        fs.readFile(this.tokenFile, "utf8"),
-        fs.stat(this.tokenFile),
-      ]);
-      contents = raw.trim();
+      contents = tryReadSecretFileSync(this.tokenFile, "1Password service account token", {
+        rejectHardlinks: false,
+      });
+      const stat = await fs.stat(this.tokenFile);
       if (
         !this.permissionWarningEmitted &&
         process.platform !== "win32" &&
