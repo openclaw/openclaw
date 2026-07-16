@@ -259,6 +259,8 @@ NODE
       is_alpine_linux() { return 1; }
       pacman() { printf 'pacman:%s\\n' "$*"; }
       apt-get() { :; }
+      download_file() { :; }
+      validate_downloaded_script() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { :; }
       run_required_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
