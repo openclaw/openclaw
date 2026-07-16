@@ -133,7 +133,7 @@ test("webchat clients cannot mutate sessions", async () => {
   expect(
     listSessionEntries({ storePath })
       .map(({ sessionKey }) => sessionKey)
-      .sort(),
+      .toSorted(),
   ).toEqual(["agent:main:discord:group:dev", "agent:main:main"]);
 
   const restored = await rpcReq(ws, "sessions.compaction.restore", {
