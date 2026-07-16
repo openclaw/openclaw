@@ -66,8 +66,9 @@ describe("downloadDashscopeGeneratedVideos", () => {
     expect(videos).toHaveLength(1);
     const video = videos[0];
     expect(video).toBeDefined();
-    if (!video) {
-      throw new Error("expected downloaded video asset");
+    expect(video?.buffer).toBeInstanceOf(Buffer);
+    if (!video?.buffer) {
+      throw new Error("expected downloaded video asset buffer");
     }
     expect(video.buffer.toString("utf8")).toBe("mp4-bytes");
     expect(video.mimeType).toBe("video/mp4");
