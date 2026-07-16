@@ -89,7 +89,16 @@ describe("Discord Activity shell request timeout", () => {
   it("expires a request that stalls before response headers", async () => {
     const fetchMock = vi.fn((_input: string, init: { signal: AbortSignal }) => {
       return new Promise((_resolve, reject) => {
-        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        init.signal.addEventListener(
+          "abort",
+          () =>
+            reject(
+              init.signal.reason instanceof Error
+                ? init.signal.reason
+                : new Error("request aborted"),
+            ),
+          { once: true },
+        );
       });
     });
     const { scheduledTimeouts, clearTimeoutSpy, fireTimeout } = executeShell(fetchMock);
