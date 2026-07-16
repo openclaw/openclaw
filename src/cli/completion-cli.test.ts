@@ -163,6 +163,21 @@ describe("completion-cli", () => {
     );
   });
 
+  it("uses Commander's parsed flags instead of value placeholder syntax", () => {
+    const program = new Command()
+      .name("openclaw")
+      .option("--trigger-script <path|->", "Condition script file, or - for stdin");
+
+    const fishScript = getCompletionScript("fish", program);
+
+    expect(fishScript).toContain(
+      "complete -c openclaw -n \"__fish_use_subcommand\" -l trigger-script -d 'Condition script file, or - for stdin'",
+    );
+    expect(fishScript).not.toContain(" -s > ");
+    expect(getCompletionScript("bash", program)).not.toContain("--trigger-script ->");
+    expect(getCompletionScript("zsh", program)).not.toContain("{--trigger-script,->}");
+  });
+
   it("generates Bash completions without comma-suffixed short flags", () => {
     const script = getCompletionScript("bash", createCompletionProgram());
 
