@@ -164,3 +164,11 @@ export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): Str
     wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn)),
   );
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  Reflect.set(globalThis, Symbol.for("openclaw.githubCopilotStreamTestApi"), {
+    buildCopilotDynamicHeaders,
+    wrapCopilotOpenAICompletionsStream,
+    wrapCopilotOpenAIResponsesStream,
+  });
+}

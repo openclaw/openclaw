@@ -493,6 +493,13 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   return buildOpenAICodexStaticProviderConfig();
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  Reflect.set(globalThis, Symbol.for("openclaw.openaiProviderTestApi"), {
+    buildOpenAICodexLiveProviderConfig,
+    buildOpenAILiveProviderConfig,
+  });
+}
+
 function isCodexCatalogAuthMode(mode: string): boolean {
   return mode === "oauth" || mode === "token";
 }

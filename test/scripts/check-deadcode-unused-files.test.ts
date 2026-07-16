@@ -114,6 +114,14 @@ left-pad: package.json
     ]);
   });
 
+  it("keeps dot-directory and root entry files", () => {
+    expect(
+      parseKnipCompactUnusedFiles(
+        ".agents/skills/example/scripts/check.mjs: .agents/skills/example/scripts/check.mjs\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
+      ),
+    ).toEqual([".agents/skills/example/scripts/check.mjs", "tsdown.ai.config.ts"]);
+  });
+
   it("ignores pnpm dlx progress lines in files-only compact output", () => {
     expect(
       parseKnipCompactUnusedFiles(`

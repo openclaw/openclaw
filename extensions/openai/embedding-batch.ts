@@ -181,6 +181,12 @@ function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
   return normalizeStringEntries(text.split("\n")).map(parseOpenAiBatchOutputLine);
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  Reflect.set(globalThis, Symbol.for("openclaw.openaiEmbeddingBatchTestApi"), {
+    parseOpenAiBatchOutput,
+  });
+}
+
 function parseOpenAiBatchOutputLine(line: string): OpenAiBatchOutputLine {
   try {
     return JSON.parse(line) as OpenAiBatchOutputLine;
