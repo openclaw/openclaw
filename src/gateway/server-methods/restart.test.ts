@@ -2,6 +2,7 @@
 // response payloads returned by gateway.restart.request.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { restartHandlers } from "./restart.js";
 
@@ -182,6 +183,49 @@ describe("gateway.restart.request handler", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "INVALID_REQUEST",
       message: "invalid targeted gateway restart intent",
+    });
+  });
+
+  it.each([0.5, -1, MAX_TIMER_TIMEOUT_MS + 1, Number.MAX_SAFE_INTEGER])(
+    "rejects an invalid targeted restart wait of %s ms",
+    async (waitMs) => {
+      const respond = await invokeRestartRequest({
+        reason: "operator",
+        target: {
+          pid: process.pid,
+          ownerId: "gateway-owner",
+          port: 18_789,
+        },
+        restartIntent: { waitMs },
+      });
+
+      expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "INVALID_REQUEST",
+        message: "invalid targeted gateway restart intent",
+      });
+    },
+  );
+
+  it("accepts the maximum timer-safe targeted restart wait", async () => {
+    const respond = await invokeRestartRequest({
+      reason: "operator",
+      target: {
+        pid: process.pid,
+        ownerId: "gateway-owner",
+        port: 18_789,
+      },
+      restartIntent: { waitMs: MAX_TIMER_TIMEOUT_MS },
+    });
+
+    expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledWith("operator", {
+      reason: "operator",
+      waitMs: MAX_TIMER_TIMEOUT_MS,
+    });
+    expect(respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      status: "emitted",
+      pid: process.pid,
     });
   });
 

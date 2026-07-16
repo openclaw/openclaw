@@ -620,7 +620,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const handled = await restartGatewayWithoutServiceManager(unmanagedPort, restartIntent);
       if (handled) {
         restartedWithoutServiceManager = true;
-        if ("previousLockIdentity" in handled && handled.previousLockIdentity) {
+        if ("pid" in handled && handled.previousLockIdentity) {
           unmanagedPreviousLockIdentity = handled.previousLockIdentity;
           const healthWait = await resolveRestartListenerHealthWait(restartIntent);
           unmanagedRestartHealthAttempts = healthWait.attempts;
