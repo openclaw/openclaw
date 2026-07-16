@@ -115,6 +115,52 @@ export function modelCostsEqual(
     current?.cacheWrite === expected.cacheWrite
   );
 }
+
+const LOCAL_MODEL_FAMILY_PREFERENCES = [
+  /qwen[-_.]?3[._]5(?!\d)/,
+  /qwen[-_.]?3(?!\d)/,
+  /gemma[-_.]?4(?!\d)/,
+  /gpt[-_.]?oss/,
+  /gemma[-_.]?3(?!\d)/,
+  /llama[-_.]?4(?!\d)/,
+  /llama[-_.]?3(?!\d)/,
+  /phi[-_.]?4(?!\d)/,
+  /mistral/,
+  /deepseek/,
+] as const;
+const LOCAL_MODEL_SPECIALIST_PATTERN = /embed|rerank|whisper|-vl\b|vision|omni|guard/;
+
+/**
+ * Setup-assistant preference for agentic tool-calling quality in current BFCL-class results.
+ * Heuristic contract; safe to retune as local model families improve.
+ */
+export function selectPreferredLocalModelId(modelIds: readonly string[]): string | undefined {
+  const familyCount = LOCAL_MODEL_FAMILY_PREFERENCES.length;
+  let preferred: string | undefined;
+  let preferredRank = Number.POSITIVE_INFINITY;
+
+  for (const rawId of modelIds) {
+    const id = rawId.trim();
+    if (!id) {
+      continue;
+    }
+    const normalized = id.toLowerCase();
+    const familyRank = LOCAL_MODEL_FAMILY_PREFERENCES.findIndex((pattern) =>
+      pattern.test(normalized),
+    );
+    const rank = LOCAL_MODEL_SPECIALIST_PATTERN.test(normalized)
+      ? familyCount * 3
+      : familyRank >= 0
+        ? familyRank + (normalized.includes("coder") ? familyCount : 0)
+        : familyCount * 2 + (normalized.includes("coder") ? 1 : 0);
+    if (rank < preferredRank) {
+      preferred = id;
+      preferredRank = rank;
+    }
+  }
+
+  return preferred;
+}
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
