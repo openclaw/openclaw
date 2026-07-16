@@ -3204,8 +3204,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps the run assistant when a context projection reorders the transcript", async () => {
-    const currentAssistant = makeAgentAssistantMessage({ content: "Current run reply" });
-    const priorAssistant = makeAgentAssistantMessage({ content: "Prior transcript reply" });
+    const currentAssistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Current run reply" }],
+    });
+    const priorAssistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Prior transcript reply" }],
+    });
     const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
     if (!baseSubscribe) {
       throw new Error("missing embedded subscription mock");
