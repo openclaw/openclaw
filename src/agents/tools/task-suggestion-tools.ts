@@ -24,7 +24,8 @@ const SpawnTaskToolSchema = Type.Object(
     }),
     prompt: Type.String({
       minLength: 1,
-      description: "Self-contained task prompt with relevant file paths and context.",
+      description:
+        "Self-contained task prompt with relevant file paths and context (max 32768 chars).",
     }),
     tldr: Type.String({
       minLength: 1,
@@ -34,7 +35,8 @@ const SpawnTaskToolSchema = Type.Object(
     cwd: Type.Optional(
       Type.String({
         minLength: 1,
-        description: "Absolute project directory; defaults to the current project.",
+        description:
+          "Absolute project directory; defaults to the current project (max 4096 chars).",
       }),
     ),
   },
