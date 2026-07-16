@@ -1138,6 +1138,7 @@ describe("loadPluginManifestRegistry", () => {
           assistantPriority: 10,
           assistantVisibility: "visible",
           appGuidedSecret: true,
+          appGuidedDiscovery: true,
         },
       ],
       configSchema: { type: "object" },
@@ -1206,6 +1207,7 @@ describe("loadPluginManifestRegistry", () => {
         assistantPriority: 10,
         assistantVisibility: "visible",
         appGuidedSecret: true,
+        appGuidedDiscovery: true,
       },
     ]);
   });
@@ -2380,7 +2382,7 @@ describe("loadPluginManifestRegistry", () => {
   it("preserves qa runner descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
-      id: "qa-matrix",
+      id: "qa-runner-fixture",
       qaRunners: [
         {
           commandName: "matrix",
@@ -2391,7 +2393,7 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     const registry = loadSingleCandidateRegistry({
-      idHint: "qa-matrix",
+      idHint: "qa-runner-fixture",
       rootDir: dir,
       origin: "bundled",
     });

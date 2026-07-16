@@ -115,6 +115,7 @@ class UsagePage extends OpenClawLightDomElement {
   private queryDebounceTimer: number | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
+  private usageReloadPending = false;
   private hasBoundGatewaySource = false;
   private observedAgentScopeId: string | null | undefined;
   private readonly subscriptions = new SubscriptionsController(this)
@@ -178,12 +179,16 @@ class UsagePage extends OpenClawLightDomElement {
       this.resetForClientChange();
     }
     if (!snapshot.connected || !snapshot.client) {
+      this.usageReloadPending ||= this.usageLoading;
       this.invalidateRequests();
       return;
     }
 
     void this.context.agents.ensureList();
-    if (this.routeDataInitialized && (clientChanged || becameConnected)) {
+    if (
+      this.routeDataInitialized &&
+      (clientChanged || (becameConnected && (this.usageReloadPending || this.usageResult === null)))
+    ) {
       void this.loadUsage();
     }
   }
@@ -251,6 +256,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageCostSummary = null;
     this.providerUsageSummary = null;
     this.usageError = null;
+    this.usageReloadPending = false;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
     this.clearSelectionsAndDetails();
   }
@@ -300,10 +306,15 @@ class UsagePage extends OpenClawLightDomElement {
 
   private async loadUsage() {
     const client = this.client;
-    if (!client || !this.connected || this.usageLoading) {
+    if (!client || !this.connected) {
+      this.usageReloadPending = true;
+      return;
+    }
+    if (this.usageLoading) {
       return;
     }
 
+    this.usageReloadPending = false;
     this.routeDataEnabled = false;
     const requestId = ++this.usageRequestId;
     const startDate = this.usageStartDate;

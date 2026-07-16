@@ -235,6 +235,12 @@ happen before the test shell starts:
 OPENCLAW_TESTBOX=1 "$AUTOREVIEW" --parallel-tests "pnpm check:changed"
 ```
 
+On POSIX, the helper puts this isolated Testbox home under the short, sticky
+system `/tmp`; Blacksmith creates an SSH control socket below that home, and a
+long macOS `TMPDIR` can exceed the Unix-socket path limit. With an older helper,
+prefix the outer autoreview process with `TMPDIR=/tmp`. Setting `TMPDIR` inside
+the quoted test command is too late because the isolated home already exists.
+
 This is the narrow trusted-maintainer-code exception: it stages only the Blacksmith
 credential file into the temporary home so the command can delegate remotely. Never
 use this credential-hydrated path for untrusted contributor or fork code. Run other

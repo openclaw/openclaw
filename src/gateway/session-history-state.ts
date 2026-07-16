@@ -19,6 +19,7 @@ import {
 type SessionHistoryTranscriptMeta = {
   idempotencyKey?: string;
   seq?: number;
+  turnBoundary?: boolean;
 };
 
 type SessionHistoryMessage = Record<string, unknown> & {
@@ -39,7 +40,7 @@ type SessionHistorySnapshot = {
 };
 
 type InlineSessionHistoryAppend = {
-  message?: unknown;
+  message?: SessionHistoryMessage;
   messageSeq?: number;
   shouldRefresh?: boolean;
 };

@@ -136,6 +136,7 @@ enum class GatewayMethod(
   PluginsUiDescriptors("plugins.uiDescriptors"),
   PluginsSessionAction("plugins.sessionAction"),
   OpenclawChat("openclaw.chat"),
+  OpenclawApprovalList("openclaw.approval.list"),
   OpenclawSetupDetect("openclaw.setup.detect"),
   OpenclawSetupActivate("openclaw.setup.activate"),
   OpenclawSetupAuthStart("openclaw.setup.auth.start"),
@@ -372,9 +373,11 @@ enum class GatewayMethod(
   ApprovalResolve("approval.resolve"),
   SessionsSearch("sessions.search"),
   SessionsDispatch("sessions.dispatch"),
+  SessionsReclaim("sessions.reclaim"),
   ModelsProbe("models.probe"),
   MigrationsMemoryPlan("migrations.memory.plan"),
   MigrationsMemoryApply("migrations.memory.apply"),
+  UiCommand("ui.command"),
 }
 
 enum class GatewayEvent(
@@ -383,6 +386,7 @@ enum class GatewayEvent(
   ConnectChallenge("connect.challenge"),
   Agent("agent"),
   Chat("chat"),
+  UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
   SessionOperation("session.operation"),
@@ -412,6 +416,8 @@ enum class GatewayEvent(
   ExecApprovalResolved("exec.approval.resolved"),
   PluginApprovalRequested("plugin.approval.requested"),
   PluginApprovalResolved("plugin.approval.resolved"),
+  OpenclawApprovalRequested("openclaw.approval.requested"),
+  OpenclawApprovalResolved("openclaw.approval.resolved"),
   TerminalData("terminal.data"),
   TerminalExit("terminal.exit"),
   UpdateAvailable("update.available"),

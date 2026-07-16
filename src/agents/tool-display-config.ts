@@ -54,6 +54,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Computer",
       detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
     },
+    screen: {
+      emoji: "🖥️",
+      title: "Screen",
+      detailKeys: ["action", "sessionKey", "dock"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -313,12 +318,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     gateway: {
       emoji: "🔌",
       title: "Gateway",
-      actions: {
-        restart: {
-          label: "restart",
-          detailKeys: ["reason", "delayMs"],
-        },
-      },
+      detailKeys: ["action", "path"],
     },
     exec: {
       emoji: "🛠️",

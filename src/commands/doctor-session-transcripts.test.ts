@@ -257,8 +257,10 @@ describe("doctor session transcript repair", () => {
       },
     });
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg = {};
 
     await noteSessionTranscriptHealth({
+      cfg,
       env,
       sessionDirs: [sessionsDir],
       sessionSqlite: true,
@@ -267,6 +269,7 @@ describe("doctor session transcript repair", () => {
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
       allAgents: true,
+      cfg,
       env,
       mode: "import",
     });
@@ -301,8 +304,10 @@ describe("doctor session transcript repair", () => {
       },
     });
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg = {};
 
     await noteSessionTranscriptHealth({
+      cfg,
       env,
       sessionDirs: [sessionsDir],
       sessionSqlite: true,
@@ -311,6 +316,7 @@ describe("doctor session transcript repair", () => {
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
       allAgents: true,
+      cfg,
       env,
       mode: "dry-run",
     });
@@ -594,6 +600,32 @@ describe("doctor session transcript repair", () => {
     const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
 
     expect(result.broken).toBe(true);
+    expect(result.repaired).toBe(true);
+    expect(result.legacyOpenAICodexEntries).toBe(1);
+    const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
+    const assistant = JSON.parse(expectDefined(lines[1], "lines[1] test invariant"));
+    expect(assistant.message.provider).toBe("openai");
+    expect(assistant.message.api).toBe("openai-chatgpt-responses");
+  });
+
+  it("rewrites shipped codex transcript provider metadata", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "legacy-assistant",
+        parentId: null,
+        message: {
+          role: "assistant",
+          provider: "codex",
+          api: "openai-chatgpt-responses",
+          content: [{ type: "text", text: "hello" }],
+        },
+      },
+    ]);
+
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
+
     expect(result.repaired).toBe(true);
     expect(result.legacyOpenAICodexEntries).toBe(1);
     const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);

@@ -116,6 +116,7 @@ import {
   PendingSessionApprovalEventSchema,
   PluginApprovalPresentationSchema,
   PluginApprovalSeveritySchema,
+  SystemAgentApprovalPresentationSchema,
   TerminalApprovalSnapshotSchema,
   TerminalSessionApprovalEventSchema,
 } from "./approvals.js";
@@ -461,6 +462,17 @@ import {
 } from "./tasks.js";
 import { TerminalProtocolSchemas } from "./terminal-protocol-schemas.js";
 import {
+  UiClosePaneCommandSchema,
+  UiCommandParamsSchema,
+  UiCommandResultSchema,
+  UiCommandSchema,
+  UiFocusCommandSchema,
+  UiNavigateCommandSchema,
+  UiPanelCommandSchema,
+  UiSidebarCommandSchema,
+  UiSplitCommandSchema,
+} from "./ui-command.js";
+import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -581,6 +593,15 @@ export const ProtocolSchemas = {
   // Push and secret-resolution payloads used by mobile/control integrations.
   PushTestParams: PushTestParamsSchema,
   PushTestResult: PushTestResultSchema,
+  UiSplitCommand: UiSplitCommandSchema,
+  UiClosePaneCommand: UiClosePaneCommandSchema,
+  UiFocusCommand: UiFocusCommandSchema,
+  UiSidebarCommand: UiSidebarCommandSchema,
+  UiPanelCommand: UiPanelCommandSchema,
+  UiNavigateCommand: UiNavigateCommandSchema,
+  UiCommand: UiCommandSchema,
+  UiCommandParams: UiCommandParamsSchema,
+  UiCommandResult: UiCommandResultSchema,
   SecretsReloadParams: SecretsReloadParamsSchema,
   SecretsResolveParams: SecretsResolveParamsSchema,
   SecretsResolveAssignment: SecretsResolveAssignmentSchema,
@@ -835,7 +856,6 @@ export const ProtocolSchemas = {
   SkillsUploadCommitParams: SkillsUploadCommitParamsSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
-
   // Scheduler, logs, approval, plugin control, device, chat, and lifecycle events.
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
@@ -861,6 +881,7 @@ export const ProtocolSchemas = {
   PluginApprovalSeverity: PluginApprovalSeveritySchema,
   ExecApprovalPresentation: ExecApprovalPresentationSchema,
   PluginApprovalPresentation: PluginApprovalPresentationSchema,
+  SystemAgentApprovalPresentation: SystemAgentApprovalPresentationSchema,
   ApprovalPresentation: ApprovalPresentationSchema,
   PendingApprovalSnapshot: PendingApprovalSnapshotSchema,
   AllowedApprovalSnapshot: AllowedApprovalSnapshotSchema,
@@ -942,7 +963,6 @@ export const ProtocolSchemas = {
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
 } satisfies Record<string, TSchema>;
-
 export {
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,

@@ -78,17 +78,11 @@ function cleanupSkippedDiscordQueuedMessage(params: {
   job: DiscordInboundJob;
   replayGuard: ClaimableDedupe;
 }) {
-  try {
-    // Skipped jobs never reach processDiscordMessage's finally block.
-    // Clean carried typing here before reopening the replay key for retry.
-    params.job.runtime.replyTypingFeedback?.onCleanup?.();
-  } finally {
-    releaseDiscordInboundReplay({
-      replayKeys: params.job.replayKeys,
-      error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
-      replayGuard: params.replayGuard,
-    });
-  }
+  releaseDiscordInboundReplay({
+    replayKeys: params.job.replayKeys,
+    error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
+    replayGuard: params.replayGuard,
+  });
 }
 
 export function createDiscordMessageRunQueue(
@@ -137,7 +131,7 @@ export function createDiscordMessageRunQueue(
       skippedCleanup.add(cleanupSkipped);
       runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
         // Once the task starts, normal process/commit handling owns cleanup.
-        // Leaving it in skippedCleanup would double-release replay/typing state.
+        // Leaving it in skippedCleanup would double-release replay state.
         skippedCleanup.delete(cleanupSkipped);
         await processDiscordQueuedMessage({
           job,

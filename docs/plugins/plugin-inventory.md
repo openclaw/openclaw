@@ -213,7 +213,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[cloudflare-ai-gateway](/plugins/reference/cloudflare-ai-gateway)** (`@openclaw/cloudflare-ai-gateway-provider`) - npm; ClawHub: `clawhub:@openclaw/cloudflare-ai-gateway-provider`. Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
-- **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm; ClawHub. Codex app-server harness, model provider, and native session catalog.
+- **[codex](/plugins/reference/codex)** (`@openclaw/codex`) - npm; ClawHub. Codex app-server harness and native session catalog.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm; ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
 
@@ -337,10 +337,8 @@ Each entry lists the package, distribution route, and description.
 
 ## Source checkout only
 
-3 plugins
+2 plugins
 
 - **[qa-channel](/plugins/reference/qa-channel)** (`@openclaw/qa-channel`) - source checkout only. Adds the QA Channel surface for sending and receiving OpenClaw messages.
 
 - **[qa-lab](/plugins/reference/qa-lab)** (`@openclaw/qa-lab`) - source checkout only. OpenClaw QA lab plugin with private debugger UI and scenario runner.
-
-- **[qa-matrix](/plugins/reference/qa-matrix)** (`@openclaw/qa-matrix`) - source checkout only. Matrix QA transport runner and substrate.

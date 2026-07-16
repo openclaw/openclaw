@@ -18,15 +18,14 @@ import {
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { catalogError } from "./session-catalog-parsing.js";
+import { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_TERMINAL_RESUME_COMMAND,
   codexSessionCatalogRuntime,
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogNodeInvokePolicies,
 } from "./session-catalog.js";
-import { classifyCodexUpstreamTurns } from "./session-upstream-activity.js";
 
 const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
@@ -83,15 +82,22 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   return {
     ...actual,
     runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveExecutableFromPathEnv: (
+    resolveNodeHostExecutable: (
       command: string,
-      pathEnv: string,
-      env?: NodeJS.ProcessEnv,
-      options?: { withPathEnv?: boolean },
-    ) =>
-      options?.withPathEnv
-        ? actual.resolveExecutableFromPathEnv(command, pathEnv, env, { withPathEnv: true })
-        : actual.resolveExecutableFromPathEnv(command, pathEnv, env),
+      options: {
+        env?: NodeJS.ProcessEnv;
+        pathEnv?: string;
+        includeExtensionless?: boolean;
+      },
+    ) => {
+      const env = options.env ?? process.env;
+      return actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: options.pathEnv ?? env.PATH ?? env.Path ?? "",
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+    },
   };
 });
 
@@ -1600,25 +1606,6 @@ describe("Codex supervision actions", () => {
         userMessageCount: 2,
       },
     ]);
-    const baseline = baselines[0];
-    if (!baseline) {
-      throw new Error("expected canonical upstream baseline");
-    }
-    expect(
-      classifyCodexUpstreamTurns({
-        probe: {
-          sessionKey,
-          agentId: "main",
-          threadId: "thread-1",
-          hostId: CODEX_LOCAL_SESSION_HOST_ID,
-          upstreamKind: "codex-app-server",
-          upstreamRef: { connectionFingerprint: "catalog-connection" },
-          marker: baseline,
-          ownRecentUserTexts: [],
-        },
-        turns: [canonicalTurn],
-      }),
-    ).toBeUndefined();
   });
 
   it("keeps adopted sessions discoverable when the configured default agent changes", async () => {

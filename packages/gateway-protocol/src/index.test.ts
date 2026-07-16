@@ -952,6 +952,19 @@ describe("validateChatSendParams", () => {
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
+
+  it("accepts one-turn queue mode overrides", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    for (const queueMode of ["steer", "followup", "collect", "interrupt"] as const) {
+      expect(validateChatSendParams({ ...base, queueMode })).toBe(true);
+    }
+    expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
+  });
 });
 
 describe("validateModelsListParams", () => {

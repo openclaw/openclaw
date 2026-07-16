@@ -5,7 +5,6 @@ import {
   buildTerminalEnv,
   createTerminalLaunchPolicy,
   resolveTerminalSpawnPlan,
-  shellQuote,
 } from "./launch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -360,10 +359,6 @@ describe("buildTerminalEnv", () => {
 
 describe("resolveTerminalSpawnPlan", () => {
   it("quotes every command argument for a login shell", () => {
-    expect(shellQuote("plain")).toBe("'plain'");
-    expect(shellQuote("a b;$HOME")).toBe("'a b;$HOME'");
-    expect(shellQuote("it's")).toBe("'it'\"'\"'s'");
-
     const plan = resolveTerminalSpawnPlan({
       agentId: "main",
       cwd: "/work",

@@ -616,7 +616,7 @@ describe("SessionHistorySseState", () => {
       },
       messageSeq: 4,
     });
-    expect(compaction?.message["__openclaw"]?.turnBoundary).toBeUndefined();
+    expect(compaction?.message?.["__openclaw"]?.turnBoundary).toBeUndefined();
 
     const appended = appendAssistantText(state, "Disk usage crossed 95 percent.", 5);
     expect(appended?.message).toMatchObject({

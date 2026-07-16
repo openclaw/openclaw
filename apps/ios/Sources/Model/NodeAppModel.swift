@@ -3555,7 +3555,7 @@ extension NodeAppModel {
             nodeOptions: connectOptions)
         let previousGatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
-        let preserveGatewayProblem = previousGatewayStableID.map {
+        let isSameGatewayTarget = previousGatewayStableID.map {
             !$0.isEmpty && GatewayStableIdentifier.matches($0, effectiveStableID)
         } ?? false
         let targetChanged = previousGatewayStableID.map {
@@ -3592,7 +3592,8 @@ extension NodeAppModel {
         self.activeGatewayConnectConfig = nextConfig
         prepareForGatewayConnect(
             stableID: effectiveStableID,
-            preservingGatewayProblem: preserveGatewayProblem)
+            preservingGatewayProblem: isSameGatewayTarget,
+            preservingFocusedChatSession: isSameGatewayTarget)
         if operatorLoopRequired {
             startOperatorGatewayLoop(
                 url: url,
@@ -3837,7 +3838,8 @@ extension NodeAppModel {
 
     private func prepareForGatewayConnect(
         stableID: String,
-        preservingGatewayProblem: Bool = false)
+        preservingGatewayProblem: Bool = false,
+        preservingFocusedChatSession: Bool = false)
     {
         self.invalidateNodePushToTalkRoute()
         self.operatorTalkConnectionGeneration &+= 1
@@ -3875,7 +3877,11 @@ extension NodeAppModel {
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
-        self.focusedChatSessionKey = nil
+        // Session keys are gateway-owned: transport reconnects keep the active chat,
+        // while initial connects and target changes must not inherit another route.
+        if !preservingFocusedChatSession {
+            self.focusedChatSessionKey = nil
+        }
         self.synchronizeTalkSessionKey()
         self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
@@ -4075,7 +4081,7 @@ extension NodeAppModel {
         stableID: String,
         routeGeneration: UInt64,
         issuedRoles: Set<String>,
-        nodeOptions: GatewayConnectOptions) -> GatewayConnectOptions?
+        nodeOptions: GatewayConnectOptions) throws -> GatewayConnectOptions?
     {
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return nil }
 
@@ -4092,12 +4098,12 @@ extension NodeAppModel {
         if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(
             instanceId: instanceID,
             gatewayStableID: deviceAuthGatewayID),
-            metadata.suppressStoredDeviceAuth,
-            !GatewaySettingsStore.completeGatewayCredentialHandoff(
+            metadata.suppressStoredDeviceAuth
+        {
+            guard try GatewaySettingsStore.completeGatewayCredentialHandoff(
                 instanceId: instanceID,
                 gatewayStableID: deviceAuthGatewayID)
-        {
-            return nil
+            else { return nil }
         }
         var reconnectOptions = nodeOptions
         reconnectOptions.allowStoredDeviceAuth = true
@@ -4149,12 +4155,21 @@ extension NodeAppModel {
         }
         let issuedRoles = await nodeGateway.currentIssuedDeviceAuthRoles()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return nil }
-        guard let reconnectOptions = completeSuccessfulGatewayAuthHandoff(
-            stableID: stableID,
-            routeGeneration: routeGeneration,
-            issuedRoles: issuedRoles,
-            nodeOptions: nodeOptions)
-        else {
+        let reconnectOptions: GatewayConnectOptions?
+        do {
+            reconnectOptions = try self.completeSuccessfulGatewayAuthHandoff(
+                stableID: stableID,
+                routeGeneration: routeGeneration,
+                issuedRoles: issuedRoles,
+                nodeOptions: nodeOptions)
+        } catch {
+            await self.handleGatewayCredentialHandoffPersistenceFailure(
+                stableID: stableID,
+                routeGeneration: routeGeneration,
+                error: error)
+            return nil
+        }
+        guard let reconnectOptions else {
             await self.handleGatewayCredentialHandoffPersistenceFailure(
                 stableID: stableID,
                 routeGeneration: routeGeneration)
@@ -4165,7 +4180,8 @@ extension NodeAppModel {
 
     private func handleGatewayCredentialHandoffPersistenceFailure(
         stableID: String,
-        routeGeneration: UInt64) async
+        routeGeneration: UInt64,
+        error: Error? = nil) async
     {
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
         guard self.credentialHandoffFailureGeneration != routeGeneration else { return }
@@ -4178,6 +4194,10 @@ extension NodeAppModel {
         await self.nodeGateway.disconnect()
         await self.operatorGateway.disconnect()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        let technicalDetails = error.map {
+            "Gateway credential handoff persistence failed: \($0.localizedDescription)"
+        } ?? "Gateway credential handoff persistence failed."
+        GatewayDiagnostics.log(technicalDetails)
         self.applyGatewayConnectionProblem(GatewayConnectionProblem(
             kind: .unknown,
             owner: .iphone,
@@ -4185,7 +4205,7 @@ extension NodeAppModel {
             message: "OpenClaw disconnected because it could not securely save the new gateway credential.",
             retryable: true,
             pauseReconnect: true,
-            technicalDetails: "Gateway credential handoff persistence failed."))
+            technicalDetails: technicalDetails))
     }
 
     private func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
@@ -4327,15 +4347,23 @@ extension NodeAppModel {
         if usedBootstrapToken {
             let issuedRoles = await nodeGateway.currentIssuedDeviceAuthRoles()
             guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
-            guard self.completeSuccessfulGatewayAuthHandoff(
-                stableID: stableID,
-                routeGeneration: routeGeneration,
-                issuedRoles: issuedRoles,
-                nodeOptions: nodeOptions) != nil
-            else {
+            do {
+                guard try self.completeSuccessfulGatewayAuthHandoff(
+                    stableID: stableID,
+                    routeGeneration: routeGeneration,
+                    issuedRoles: issuedRoles,
+                    nodeOptions: nodeOptions) != nil
+                else {
+                    await self.handleGatewayCredentialHandoffPersistenceFailure(
+                        stableID: stableID,
+                        routeGeneration: routeGeneration)
+                    return
+                }
+            } catch {
                 await self.handleGatewayCredentialHandoffPersistenceFailure(
                     stableID: stableID,
-                    routeGeneration: routeGeneration)
+                    routeGeneration: routeGeneration,
+                    error: error)
                 return
             }
         }
@@ -10872,10 +10900,10 @@ extension NodeAppModel {
 
     func _test_completeSuccessfulGatewayAuthHandoff(
         issuedRoles: Set<String>,
-        nodeOptions: GatewayConnectOptions) -> GatewayConnectOptions?
+        nodeOptions: GatewayConnectOptions) throws -> GatewayConnectOptions?
     {
         guard let stableID = activeGatewayConnectConfig?.effectiveStableID else { return nil }
-        return self.completeSuccessfulGatewayAuthHandoff(
+        return try self.completeSuccessfulGatewayAuthHandoff(
             stableID: stableID,
             routeGeneration: self.gatewayRouteGeneration,
             issuedRoles: issuedRoles,

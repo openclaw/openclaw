@@ -1,6 +1,6 @@
 # OpenClaw for Linux
 
-The Linux companion is a Tauri v2 desktop shell for a local OpenClaw Gateway. It installs the CLI when needed, delegates Gateway service management to `openclaw gateway`, opens the Gateway-served Control UI with its resolved auth URL, and stays available in the system tray.
+The Linux companion is a Tauri v2 desktop shell for OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when needed, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
 ## Linux prerequisites
 
@@ -26,6 +26,10 @@ cargo build
 
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
+## Updates
+
+The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files.
+
 ## Canvas bridge
 
 The running app gives the headless `openclaw node run` host a single Canvas WebView. The bundled `linux-canvas` plugin advertises `canvas.*` only while the app socket exists. The app listens at `$XDG_RUNTIME_DIR/openclaw-canvas.sock` (or `/tmp/openclaw-canvas-$UID.sock`) with mode `0600`; a headless Linux node without the app does not advertise Canvas.
@@ -50,6 +54,7 @@ magick 32x32.png -background none -gravity center -extent 32x32 PNG32:32x32.png
 rsvg-convert -w 128 -h 128 icon-tile.svg -o 128x128.png
 rsvg-convert -w 256 -h 256 icon-tile.svg -o 128x128@2x.png
 rsvg-convert -w 512 -h 512 icon-tile.svg -o icon.png
+magick icon.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico
 ```
 
 ## Packaging

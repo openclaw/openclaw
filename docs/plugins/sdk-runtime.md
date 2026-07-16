@@ -223,6 +223,7 @@ two-party event loops that do not go through the shared inbound reply runner.
       purpose: "my-plugin.summary",
       maxTokens: 512,
       temperature: 0.2,
+      reasoning: "high",
     });
     ```
 
@@ -264,6 +265,12 @@ two-party event loops that do not go through the shared inbound reply runner.
     active session's agent and do not silently fall back to the default agent. The
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
+
+    Set `reasoning` to request a reasoning effort for the selected model. The
+    host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
+    `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
+    provider and model before dispatching the completion. `adaptive` becomes
+    `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
 
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
@@ -703,13 +710,14 @@ two-party event loops that do not go through the shared inbound reply runner.
     await store.register("key-1", { value: "hello" });
     const claimed = await store.registerIfAbsent("dedupe-key", { value: "first" });
     const value = await store.lookup("key-1");
+    await store.deleteIf?.("key-1", (current) => current.value === "hello");
     await store.consume("key-1");
     await store.clear();
     ```
 
-    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `deleteIf(...)` when cleanup must remove only the value previously observed; its synchronous predicate and deletion run in one SQLite transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
 
-    `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `lookup`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
+    `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `deleteIf`, `lookup`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
@@ -726,7 +734,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     | `text` | Chunking (`chunkText`, `chunkMarkdownText`, `resolveChunkMode`), control-command detection, Markdown table conversion. |
     | `reply` | Buffered-block reply dispatch, envelope formatting, effective messages/human-delay config resolution. |
     | `routing` | `buildAgentSessionKey`, `resolveAgentRoute`. |
-    | `pairing` | `buildPairingReply`, allowlist reads, pairing-request upserts. |
+    | `pairing` | `buildPairingReply`, allowlist reads/removals, pairing-request upserts, and request-derived approval entries. |
     | `media` | Remote media download/save (see below). |
     | `activity` | Record/read last channel activity. |
     | `session` | Session metadata from inbound events, last-route updates. |
