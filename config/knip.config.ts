@@ -397,7 +397,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/codex`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: strictBundledPluginWorkspace([
+      // Channel package-state probes resolve this module from package metadata.
+      "configured-state.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/elevenlabs`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/featherless`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/fal`]: strictBundledPluginWorkspace(),
@@ -424,7 +427,10 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/pixverse`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: strictBundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/qa-lab`]: strictBundledPluginWorkspace([
+      // The plugin-SDK QA Lab facade resolves this CLI surface by basename.
+      "cli.ts!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: strictBundledPluginWorkspace(),
