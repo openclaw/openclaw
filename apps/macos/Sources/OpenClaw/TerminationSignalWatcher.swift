@@ -16,17 +16,17 @@ final class TerminationSignalWatcher {
     private var terminationRequested = false
 
     func start() {
-        guard sources.isEmpty else { return }
-        install(SIGTERM)
-        install(SIGINT)
+        guard self.sources.isEmpty else { return }
+        self.install(SIGTERM)
+        self.install(SIGINT)
     }
 
     func stop() {
-        for s in sources {
+        for s in self.sources {
             s.cancel()
         }
-        sources.removeAll(keepingCapacity: false)
-        terminationRequested = false
+        self.sources.removeAll(keepingCapacity: false)
+        self.terminationRequested = false
     }
 
     private func install(_ sig: Int32) {
@@ -37,14 +37,14 @@ final class TerminationSignalWatcher {
             self?.handle(sig)
         }
         source.resume()
-        sources.append(source)
+        self.sources.append(source)
     }
 
     private func handle(_ sig: Int32) {
-        guard !terminationRequested else { return }
-        terminationRequested = true
+        guard !self.terminationRequested else { return }
+        self.terminationRequested = true
 
-        logger.info("received signal \(sig, privacy: .public); terminating")
+        self.logger.info("received signal \(sig, privacy: .public); terminating")
         // Ensure any pairing prompt can't accidentally approve during shutdown.
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
@@ -56,8 +56,8 @@ final class TerminationSignalWatcher {
         // AppKit waits in a nested event loop while async termination cleanup runs.
         // A main-queue failsafe cannot fire from that loop, so enforce the deadline off-main.
         DispatchQueue.global(qos: .userInitiated).asyncAfter(
-            deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds
-        ) {
+            deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds)
+        {
             exit(0)
         }
     }

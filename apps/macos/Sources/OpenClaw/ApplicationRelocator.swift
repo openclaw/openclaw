@@ -7,11 +7,10 @@ import Security
 
 @_silgen_name("csops")
 private func csops(
-    _ pid: pid_t,
-    _ operation: UInt32,
-    _ userAddress: UnsafeMutableRawPointer?,
-    _ userSize: Int
-) -> Int32
+    _: pid_t,
+    _: UInt32,
+    _: UnsafeMutableRawPointer?,
+    _: Int) -> Int32
 
 @MainActor
 enum ApplicationRelocator {
@@ -71,14 +70,13 @@ enum ApplicationRelocator {
         let executableRelativePath: String
 
         var executableURL: URL {
-            bundleURL.appendingPathComponent(executableRelativePath)
+            self.bundleURL.appendingPathComponent(self.executableRelativePath)
         }
 
         var bundleURL: URL {
             URL(
-                fileURLWithPath: "/.vol/\(deviceIdentifier)/\(fileIdentifier)",
-                isDirectory: true
-            )
+                fileURLWithPath: "/.vol/\(self.deviceIdentifier)/\(self.fileIdentifier)",
+                isDirectory: true)
         }
     }
 
@@ -122,11 +120,10 @@ enum ApplicationRelocator {
 
     static func recommendation(for environment: Environment) -> Recommendation {
         guard !environment.isDebugOrTesting,
-              isTransientLocation(
+              self.isTransientLocation(
                   environment.bundleURL,
                   homeDirectory: environment.homeDirectory,
-                  isReadOnlyVolume: environment.isReadOnlyVolume
-              )
+                  isReadOnlyVolume: environment.isReadOnlyVolume)
         else {
             return .continueLaunch
         }
@@ -161,8 +158,8 @@ enum ApplicationRelocator {
     static func isTransientLocation(
         _ bundleURL: URL,
         homeDirectory: URL,
-        isReadOnlyVolume: Bool
-    ) -> Bool {
+        isReadOnlyVolume: Bool) -> Bool
+    {
         let path = bundleURL.standardizedFileURL.path
         let homePath = homeDirectory.standardizedFileURL.path
         let stableRoots = ["/Applications", "\(homePath)/Applications"]
@@ -182,25 +179,23 @@ enum ApplicationRelocator {
     static func handleLaunch(
         bundle: Bundle = .main,
         fileManager: FileManager = .default,
-        processInfo: ProcessInfo = .processInfo
-    ) -> LaunchDisposition {
+        processInfo: ProcessInfo = .processInfo) -> LaunchDisposition
+    {
         let environment = currentEnvironment(
             bundle: bundle,
             fileManager: fileManager,
-            processInfo: processInfo
-        )
-        switch recommendation(for: environment) {
+            processInfo: processInfo)
+        switch self.recommendation(for: environment) {
         case .continueLaunch:
             #if DEBUG
-                let monitorDebugReplacement = processInfo.environment["OPENCLAW_MONITOR_APP_REPLACEMENT"] == "1"
+            let monitorDebugReplacement = processInfo.environment["OPENCLAW_MONITOR_APP_REPLACEMENT"] == "1"
             #else
-                let monitorDebugReplacement = true
+            let monitorDebugReplacement = true
             #endif
             if !processInfo.isRunningTests, !processInfo.isPreview, monitorDebugReplacement {
                 let monitoredBundleURL = replacementSourceBundleURL(
                     environment: processInfo.environment,
-                    fallback: bundle.bundleURL
-                )
+                    fallback: bundle.bundleURL)
                 startBundleReplacementMonitoring(bundle: bundle, at: monitoredBundleURL)
             }
             return .continueLaunch(startUpdater: true)
@@ -215,14 +210,12 @@ enum ApplicationRelocator {
                     source: environment.bundleURL,
                     destination: destination,
                     replacing: replacing,
-                    fileManager: fileManager
-                )
+                    fileManager: fileManager)
                 return relaunchAndTerminate(at: destination)
             } catch {
-                logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
+                self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
                 showFailure(
-                    "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy."
-                )
+                    "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
                 return .continueLaunch(startUpdater: false)
             }
         case .cannotInstall:
@@ -237,12 +230,12 @@ enum ApplicationRelocator {
     static func currentBundleAllowsPersistentIntegration(
         bundle: Bundle = .main,
         fileManager: FileManager = .default,
-        processInfo: ProcessInfo = .processInfo
-    ) -> Bool {
+        processInfo: ProcessInfo = .processInfo) -> Bool
+    {
         #if DEBUG
-            let debugBuild = true
+        let debugBuild = true
         #else
-            let debugBuild = false
+        let debugBuild = false
         #endif
         if debugBuild || processInfo.isRunningTests || processInfo.isPreview {
             return true
@@ -250,15 +243,13 @@ enum ApplicationRelocator {
 
         let bundleURL = replacementSourceBundleURL(
             environment: processInfo.environment,
-            fallback: bundle.bundleURL
-        )
+            fallback: bundle.bundleURL)
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
-        return !isTransientLocation(
+        return !self.isTransientLocation(
             bundleURL,
             homeDirectory: fileManager.homeDirectoryForCurrentUser,
-            isReadOnlyVolume: isReadOnlyVolume
-        )
+            isReadOnlyVolume: isReadOnlyVolume)
     }
 }
 
@@ -267,8 +258,8 @@ extension ApplicationRelocator {
         launchedCodeDirectoryHash: Data,
         installedCodeDirectoryHash: Data?,
         sameBundleIdentifier: Bool,
-        trusted: Bool
-    ) -> ReplacementAction {
+        trusted: Bool) -> ReplacementAction
+    {
         guard let installedCodeDirectoryHash else { return .waitForTrustedReplacement }
         guard installedCodeDirectoryHash != launchedCodeDirectoryHash else { return .unchanged }
         guard sameBundleIdentifier, trusted else { return .waitForTrustedReplacement }
@@ -279,22 +270,21 @@ extension ApplicationRelocator {
         xpcServiceName: String?,
         executableURL: URL?,
         homeDirectory: URL,
-        fileManager: FileManager = .default
-    ) -> RelaunchStrategy {
-        verifiedKeepAliveSupervisor(
+        fileManager: FileManager = .default) -> RelaunchStrategy
+    {
+        self.verifiedKeepAliveSupervisor(
             xpcServiceName: xpcServiceName,
             executableURL: executableURL,
             homeDirectory: homeDirectory,
-            fileManager: fileManager
-        ) == nil ? .openAfterTermination : .externalSupervisor
+            fileManager: fileManager) == nil ? .openAfterTermination : .externalSupervisor
     }
 
     private static func verifiedKeepAliveSupervisor(
         xpcServiceName: String?,
         executableURL: URL?,
         homeDirectory: URL,
-        fileManager _: FileManager = .default
-    ) -> KeepAliveSupervisor? {
+        fileManager _: FileManager = .default) -> KeepAliveSupervisor?
+    {
         guard let serviceName = xpcServiceName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !serviceName.isEmpty,
               serviceName != "0",
@@ -314,8 +304,8 @@ extension ApplicationRelocator {
             if let supervisor = keepAliveSupervisor(
                 label: serviceName,
                 plistURL: url,
-                expectedExecutablePath: expectedExecutable
-            ) {
+                expectedExecutablePath: expectedExecutable)
+            {
                 return supervisor
             }
         }
@@ -324,8 +314,8 @@ extension ApplicationRelocator {
 
     private static func inheritedSupervisor(
         environment: [String: String],
-        monitoredBundleURL: URL
-    ) -> KeepAliveSupervisor? {
+        monitoredBundleURL: URL) -> KeepAliveSupervisor?
+    {
         guard let label = environment[replacementSupervisorLabelEnvironmentKey],
               let plistPath = environment[replacementSupervisorPlistEnvironmentKey],
               plistPath.hasPrefix("/"),
@@ -336,20 +326,19 @@ extension ApplicationRelocator {
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents"),
             URL(fileURLWithPath: "/Library/LaunchAgents"),
             URL(fileURLWithPath: "/System/Library/LaunchAgents"),
-        ].map { $0.standardizedFileURL.path }
+        ].map(\.standardizedFileURL.path)
         guard allowedDirectories.contains(plistURL.deletingLastPathComponent().path) else { return nil }
-        return keepAliveSupervisor(
+        return self.keepAliveSupervisor(
             label: label,
             plistURL: plistURL,
-            expectedExecutablePath: executablePath
-        )
+            expectedExecutablePath: executablePath)
     }
 
     private static func keepAliveSupervisor(
         label: String,
         plistURL: URL,
-        expectedExecutablePath: String
-    ) -> KeepAliveSupervisor? {
+        expectedExecutablePath: String) -> KeepAliveSupervisor?
+    {
         guard !label.isEmpty,
               label != "0",
               !label.hasPrefix("application."),
@@ -370,8 +359,8 @@ extension ApplicationRelocator {
 
     static func acceptReplacementHandoff(
         environment: [String: String],
-        bundle: Bundle = .main
-    ) -> Bool {
+        bundle: Bundle = .main) -> Bool
+    {
         guard let sourcePath = environment[replacementSourceBundleEnvironmentKey],
               sourcePath.hasPrefix("/"),
               URL(fileURLWithPath: sourcePath).pathExtension == "app",
@@ -393,25 +382,23 @@ extension ApplicationRelocator {
               trustedCodeDirectoryHash(
                   at: bundle.bundleURL,
                   executableURL: executableURL,
-                  matching: identity.requirementData
-              ) == expectedHash,
+                  matching: identity.requirementData) == expectedHash,
               process(parentPID, matches: identity.requirementData)
         else { return false }
 
         let monitoredBundleURL = URL(fileURLWithPath: sourcePath).standardizedFileURL
-        let supervisor = inheritedSupervisor(
+        let supervisor = self.inheritedSupervisor(
             environment: environment,
-            monitoredBundleURL: monitoredBundleURL
-        )
+            monitoredBundleURL: monitoredBundleURL)
         let hasSupervisorMetadata = environment[replacementSupervisorLabelEnvironmentKey] != nil ||
-            environment[replacementSupervisorPlistEnvironmentKey] != nil
+            environment[self.replacementSupervisorPlistEnvironmentKey] != nil
         guard !hasSupervisorMetadata || supervisor != nil else {
-            writeHandoffStatus("FAIL", to: readyFD)
+            self.writeHandoffStatus("FAIL", to: readyFD)
             return false
         }
-        inheritedReplacementSupervisor = supervisor
+        self.inheritedReplacementSupervisor = supervisor
         if let supervisor, !startSupervisorRestorationWatcher(supervisor) {
-            writeHandoffStatus("FAIL", to: readyFD)
+            self.writeHandoffStatus("FAIL", to: readyFD)
             return false
         }
 
@@ -421,20 +408,20 @@ extension ApplicationRelocator {
                   target == "gui/\(getuid())/\(supervisor.label)",
                   bootoutLaunchdTarget(target)
             else {
-                cancelSupervisorRestorationWatcher()
-                writeHandoffStatus("FAIL", to: readyFD)
+                self.cancelSupervisorRestorationWatcher()
+                self.writeHandoffStatus("FAIL", to: readyFD)
                 return false
             }
         }
-        authenticatedReplacementSourceBundleURL = monitoredBundleURL
-        writeHandoffStatus("READY", to: readyFD)
+        self.authenticatedReplacementSourceBundleURL = monitoredBundleURL
+        self.writeHandoffStatus("READY", to: readyFD)
         return true
     }
 
     nonisolated static func hasReplacementHandoffMetadata(environment: [String: String]) -> Bool {
-        environment[replacementParentPIDEnvironmentKey] != nil ||
-            environment[replacementReadyFDEnvironmentKey] != nil ||
-            environment[replacementCodeHashEnvironmentKey] != nil
+        environment[self.replacementParentPIDEnvironmentKey] != nil ||
+            environment[self.replacementReadyFDEnvironmentKey] != nil ||
+            environment[self.replacementCodeHashEnvironmentKey] != nil
     }
 
     private static func bootoutLaunchdTarget(_ target: String) -> Bool {
@@ -446,7 +433,7 @@ extension ApplicationRelocator {
             process.waitUntilExit()
             return process.terminationStatus == 0
         } catch {
-            logger.error("Could not unload launchd owner: \(error.localizedDescription, privacy: .public)")
+            self.logger.error("Could not unload launchd owner: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -488,26 +475,24 @@ extension ApplicationRelocator {
             bundleIdentifier: bundleIdentifier,
             executableURL: bundleURL
                 .appendingPathComponent("Contents/MacOS")
-                .appendingPathComponent(executableName)
-        )
+                .appendingPathComponent(executableName))
     }
 
     private static func currentEnvironment(
         bundle: Bundle,
         fileManager: FileManager,
-        processInfo: ProcessInfo
-    ) -> Environment {
-        let bundleURL = replacementSourceBundleURL(
+        processInfo: ProcessInfo) -> Environment
+    {
+        let bundleURL = self.replacementSourceBundleURL(
             environment: processInfo.environment,
-            fallback: bundle.bundleURL
-        )
+            fallback: bundle.bundleURL)
         let homeDirectory = fileManager.homeDirectoryForCurrentUser.standardizedFileURL
         let appName = bundleURL.lastPathComponent
         let destinations = [
             URL(fileURLWithPath: "/Applications").appendingPathComponent(appName),
             homeDirectory.appendingPathComponent("Applications").appendingPathComponent(appName),
         ]
-        let currentRequirement = designatedRequirement(for: bundleURL)
+        let currentRequirement = self.designatedRequirement(for: bundleURL)
         let candidates = destinations.map { destination in
             let exists = fileManager.fileExists(atPath: destination.path)
             let installedBundle = exists ? Bundle(url: destination) : nil
@@ -518,24 +503,22 @@ extension ApplicationRelocator {
                 isTrusted: installedBundle.map {
                     self.isTrustedInstalledApp($0, matching: currentRequirement, fileManager: fileManager)
                 } ?? false,
-                identity: installedBundle.flatMap(self.identity(for:))
-            )
+                identity: installedBundle.flatMap(self.identity(for:)))
         }
         #if DEBUG
-            let debugBuild = true
+        let debugBuild = true
         #else
-            let debugBuild = false
+        let debugBuild = false
         #endif
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
         return Environment(
             bundleURL: bundleURL,
             homeDirectory: homeDirectory,
-            currentIdentity: identity(for: bundle),
+            currentIdentity: self.identity(for: bundle),
             candidates: candidates,
             isReadOnlyVolume: isReadOnlyVolume,
-            isDebugOrTesting: debugBuild || processInfo.isRunningTests || processInfo.isPreview
-        )
+            isDebugOrTesting: debugBuild || processInfo.isRunningTests || processInfo.isPreview)
     }
 
     private static func identity(for bundle: Bundle) -> ApplicationIdentity? {
@@ -547,19 +530,19 @@ extension ApplicationRelocator {
 
     private static func replacementSourceBundleURL(
         environment _: [String: String],
-        fallback: URL
-    ) -> URL {
-        authenticatedReplacementSourceBundleURL ?? fallback.standardizedFileURL
+        fallback: URL) -> URL
+    {
+        self.authenticatedReplacementSourceBundleURL ?? fallback.standardizedFileURL
     }
 
     private static func startBundleReplacementMonitoring(bundle: Bundle, at monitoredBundleURL: URL) {
-        bundleReplacementRecoveryTask?.cancel()
-        bundleReplacementRecoveryTask = nil
-        bundleReplacementSource?.cancel()
-        bundleReplacementSource = nil
-        bundleReplacementSnapshot = nil
-        bundleReplacementCheckPending = false
-        bundleReplacementHandoffInProgress = false
+        self.bundleReplacementRecoveryTask?.cancel()
+        self.bundleReplacementRecoveryTask = nil
+        self.bundleReplacementSource?.cancel()
+        self.bundleReplacementSource = nil
+        self.bundleReplacementSnapshot = nil
+        self.bundleReplacementCheckPending = false
+        self.bundleReplacementHandoffInProgress = false
 
         let bundleURL = monitoredBundleURL.standardizedFileURL
         guard bundleURL.pathExtension == "app",
@@ -568,29 +551,27 @@ extension ApplicationRelocator {
               installedApp.bundleIdentifier == bundleIdentifier,
               let runningIdentity = runningCodeIdentity(bundleIdentifier: bundleIdentifier)
         else {
-            logger.warning("Installed app replacement monitoring is unavailable")
+            self.logger.warning("Installed app replacement monitoring is unavailable")
             return
         }
 
-        bundleReplacementSnapshot = BundleReplacementSnapshot(
+        self.bundleReplacementSnapshot = BundleReplacementSnapshot(
             bundleURL: bundleURL,
             bundleIdentifier: bundleIdentifier,
             executableURL: installedApp.executableURL,
             codeDirectoryHash: runningIdentity.codeDirectoryHash,
-            requirementData: runningIdentity.requirementData
-        )
+            requirementData: runningIdentity.requirementData)
 
         let descriptor = open(bundleURL.deletingLastPathComponent().path, O_EVTONLY | O_CLOEXEC)
         guard descriptor >= 0 else {
-            logger.error("Could not monitor installed app directory: errno \(errno)")
-            bundleReplacementSnapshot = nil
+            self.logger.error("Could not monitor installed app directory: errno \(errno)")
+            self.bundleReplacementSnapshot = nil
             return
         }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
             eventMask: [.write, .delete, .rename, .revoke],
-            queue: .main
-        )
+            queue: .main)
         source.setEventHandler {
             Task { @MainActor in
                 ApplicationRelocator.bundleDirectoryDidChange()
@@ -599,22 +580,22 @@ extension ApplicationRelocator {
         source.setCancelHandler {
             Darwin.close(descriptor)
         }
-        bundleReplacementSource = source
+        self.bundleReplacementSource = source
         source.resume()
         // Reconcile once after arming. This closes the launch-to-watch window even
         // when the directory event coalesced before the source became active.
-        bundleDirectoryDidChange()
-        logger.notice("Monitoring the installed app for signed replacement")
+        self.bundleDirectoryDidChange()
+        self.logger.notice("Monitoring the installed app for signed replacement")
     }
 
     private static func bundleDirectoryDidChange() {
-        bundleReplacementCheckPending = true
-        guard !bundleReplacementHandoffInProgress,
-              bundleReplacementRecoveryTask == nil,
+        self.bundleReplacementCheckPending = true
+        guard !self.bundleReplacementHandoffInProgress,
+              self.bundleReplacementRecoveryTask == nil,
               let snapshot = bundleReplacementSnapshot
         else { return }
 
-        bundleReplacementRecoveryTask = Task { @MainActor in
+        self.bundleReplacementRecoveryTask = Task { @MainActor in
             defer {
                 self.bundleReplacementRecoveryTask = nil
                 if self.bundleReplacementCheckPending {
@@ -629,7 +610,7 @@ extension ApplicationRelocator {
             while !Task.isCancelled {
                 self.bundleReplacementCheckPending = false
                 let evaluation = await Task.detached(priority: .utility) {
-                    replacementEvaluationOnDisk(for: snapshot)
+                    self.replacementEvaluationOnDisk(for: snapshot)
                 }.value
                 switch evaluation.action {
                 case .unchanged:
@@ -640,8 +621,7 @@ extension ApplicationRelocator {
                 case .waitForTrustedReplacement:
                     if attempt == 120 {
                         self.logger.warning(
-                            "Installed app is still incomplete or untrusted; continuing replacement recovery"
-                        )
+                            "Installed app is still incomplete or untrusted; continuing replacement recovery")
                     }
                     let retryDelay: Duration = attempt < 120 ? .milliseconds(250) : .seconds(5)
                     attempt += 1
@@ -660,8 +640,7 @@ extension ApplicationRelocator {
                     let scheduled = self.scheduleReplacementRelaunch(
                         at: snapshot.bundleURL,
                         launchReference: launchReference,
-                        codeDirectoryHash: launchCodeDirectoryHash
-                    )
+                        codeDirectoryHash: launchCodeDirectoryHash)
                     if !scheduled {
                         self.bundleReplacementHandoffInProgress = false
                         try? await Task.sleep(for: .seconds(1))
@@ -674,60 +653,54 @@ extension ApplicationRelocator {
     }
 
     private nonisolated static func replacementEvaluationOnDisk(
-        for snapshot: BundleReplacementSnapshot
-    ) -> ReplacementEvaluation {
+        for snapshot: BundleReplacementSnapshot) -> ReplacementEvaluation
+    {
         guard let installedApp = applicationOnDisk(at: snapshot.bundleURL) else {
             return ReplacementEvaluation(
                 action: .waitForTrustedReplacement,
                 launchReference: nil,
-                launchCodeDirectoryHash: nil
-            )
+                launchCodeDirectoryHash: nil)
         }
         guard let launchReference = bundleFileReference(
             bundleURL: snapshot.bundleURL,
-            executableURL: installedApp.executableURL
-        ) else {
+            executableURL: installedApp.executableURL)
+        else {
             return ReplacementEvaluation(
                 action: .waitForTrustedReplacement,
                 launchReference: nil,
-                launchCodeDirectoryHash: nil
-            )
+                launchCodeDirectoryHash: nil)
         }
         let sameBundleIdentifier = installedApp.bundleIdentifier == snapshot.bundleIdentifier
-        let installedCodeDirectoryHash = trustedCodeDirectoryHash(
+        let installedCodeDirectoryHash = self.trustedCodeDirectoryHash(
             at: snapshot.bundleURL,
             executableURL: installedApp.executableURL,
-            matching: snapshot.requirementData
-        )
+            matching: snapshot.requirementData)
         // Security validates the canonical path. Re-capture its object identity
         // afterward so the launch reference can only name that validated bundle.
-        guard bundleFileReference(
+        guard self.bundleFileReference(
             bundleURL: snapshot.bundleURL,
-            executableURL: installedApp.executableURL
-        ) == launchReference else {
+            executableURL: installedApp.executableURL) == launchReference
+        else {
             return ReplacementEvaluation(
                 action: .waitForTrustedReplacement,
                 launchReference: nil,
-                launchCodeDirectoryHash: nil
-            )
+                launchCodeDirectoryHash: nil)
         }
-        let action = replacementAction(
+        let action = self.replacementAction(
             launchedCodeDirectoryHash: snapshot.codeDirectoryHash,
             installedCodeDirectoryHash: installedCodeDirectoryHash,
             sameBundleIdentifier: sameBundleIdentifier,
-            trusted: installedCodeDirectoryHash != nil
-        )
+            trusted: installedCodeDirectoryHash != nil)
         return ReplacementEvaluation(
             action: action,
             launchReference: action == .relaunch ? launchReference : nil,
-            launchCodeDirectoryHash: action == .relaunch ? installedCodeDirectoryHash : nil
-        )
+            launchCodeDirectoryHash: action == .relaunch ? installedCodeDirectoryHash : nil)
     }
 
     nonisolated static func bundleFileReference(
         bundleURL: URL,
-        executableURL: URL
-    ) -> BundleFileReference? {
+        executableURL: URL) -> BundleFileReference?
+    {
         let bundlePath = bundleURL.standardizedFileURL.path
         let executablePath = executableURL.standardizedFileURL.path
         let prefix = bundlePath + "/"
@@ -743,8 +716,7 @@ extension ApplicationRelocator {
         let reference = BundleFileReference(
             deviceIdentifier: UInt64(truncatingIfNeeded: bundleInformation.st_dev),
             fileIdentifier: UInt64(bundleInformation.st_ino),
-            executableRelativePath: relativePath
-        )
+            executableRelativePath: relativePath)
         var canonicalExecutableInformation = stat()
         var referencedExecutableInformation = stat()
         guard stat(executablePath, &canonicalExecutableInformation) == 0,
@@ -758,22 +730,20 @@ extension ApplicationRelocator {
     }
 
     private static func runningCodeIdentity(
-        bundleIdentifier: String
-    ) -> (codeDirectoryHash: Data, requirementData: Data)? {
+        bundleIdentifier: String) -> (codeDirectoryHash: Data, requirementData: Data)?
+    {
         guard let codeDirectoryHash = kernelCodeDirectoryHash(),
               let teamIdentifier = kernelTeamIdentifier(),
               let requirementString = developerIDRequirementString(
                   bundleIdentifier: bundleIdentifier,
-                  teamIdentifier: teamIdentifier
-              )
+                  teamIdentifier: teamIdentifier)
         else { return nil }
         var requirement: SecRequirement?
         var requirementData: CFData?
         guard SecRequirementCreateWithString(
             requirementString as CFString,
             SecCSFlags(),
-            &requirement
-        ) == errSecSuccess,
+            &requirement) == errSecSuccess,
             let requirement,
             SecRequirementCopyData(requirement, SecCSFlags(), &requirementData) == errSecSuccess,
             let requirementData
@@ -783,9 +753,9 @@ extension ApplicationRelocator {
 
     nonisolated static func developerIDRequirementString(
         bundleIdentifier: String,
-        teamIdentifier: String
-    ) -> String? {
-        guard isRequirementToken(bundleIdentifier), isRequirementToken(teamIdentifier) else { return nil }
+        teamIdentifier: String) -> String?
+    {
+        guard self.isRequirementToken(bundleIdentifier), self.isRequirementToken(teamIdentifier) else { return nil }
         return "identifier \"\(bundleIdentifier)\" and anchor apple generic and " +
             "certificate 1[field.1.2.840.113635.100.6.2.6] exists and " +
             "certificate leaf[field.1.2.840.113635.100.6.1.13] exists and " +
@@ -808,7 +778,7 @@ extension ApplicationRelocator {
             csops(getpid(), 14, $0.baseAddress, $0.count)
         }
         guard result == 0 else { return nil }
-        return teamIdentifier(fromCSOpsToken: bytes)
+        return self.teamIdentifier(fromCSOpsToken: bytes)
     }
 
     nonisolated static func teamIdentifier(fromCSOpsToken bytes: [UInt8]) -> String? {
@@ -837,8 +807,8 @@ extension ApplicationRelocator {
     private nonisolated static func trustedCodeDirectoryHash(
         at bundleURL: URL,
         executableURL: URL,
-        matching requirementData: Data
-    ) -> Data? {
+        matching requirementData: Data) -> Data?
+    {
         guard FileManager.default.isExecutableFile(atPath: executableURL.path) else { return nil }
         var requirement: SecRequirement?
         guard SecRequirementCreateWithData(requirementData as CFData, SecCSFlags(), &requirement) == errSecSuccess,
@@ -850,10 +820,9 @@ extension ApplicationRelocator {
               SecStaticCodeCheckValidity(
                   code,
                   SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode),
-                  requirement
-              ) == errSecSuccess
+                  requirement) == errSecSuccess
         else { return nil }
-        return codeDirectoryHash(for: code)
+        return self.codeDirectoryHash(for: code)
     }
 
     private static func designatedRequirement(for bundleURL: URL) -> SecRequirement? {
@@ -870,23 +839,22 @@ extension ApplicationRelocator {
     private static func isTrustedInstalledApp(
         _ bundle: Bundle,
         matching requirement: SecRequirement?,
-        fileManager: FileManager
-    ) -> Bool {
+        fileManager: FileManager) -> Bool
+    {
         guard let executableURL = bundle.executableURL else { return false }
-        return isTrustedInstalledApp(
+        return self.isTrustedInstalledApp(
             at: bundle.bundleURL,
             executableURL: executableURL,
             matching: requirement,
-            fileManager: fileManager
-        )
+            fileManager: fileManager)
     }
 
     private static func isTrustedInstalledApp(
         at bundleURL: URL,
         executableURL: URL,
         matching requirement: SecRequirement?,
-        fileManager: FileManager
-    ) -> Bool {
+        fileManager: FileManager) -> Bool
+    {
         guard let requirement, fileManager.isExecutableFile(atPath: executableURL.path) else { return false }
 
         var code: SecStaticCode?
@@ -896,8 +864,7 @@ extension ApplicationRelocator {
         return SecStaticCodeCheckValidity(
             code,
             SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode),
-            requirement
-        ) == errSecSuccess
+            requirement) == errSecSuccess
     }
 
     private static func canWrite(destination: URL, fileManager: FileManager) -> Bool {
@@ -914,8 +881,8 @@ extension ApplicationRelocator {
         source: URL,
         destination: URL,
         replacing: Bool,
-        fileManager: FileManager
-    ) throws {
+        fileManager: FileManager) throws
+    {
         let parent = destination.deletingLastPathComponent()
         try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
         let staging = parent.appendingPathComponent(".\(destination.lastPathComponent).installing-\(UUID().uuidString)")
@@ -927,8 +894,7 @@ extension ApplicationRelocator {
             _ = try fileManager.replaceItemAt(
                 destination,
                 withItemAt: staging,
-                backupItemName: backupName
-            )
+                backupItemName: backupName)
             try? fileManager.removeItem(at: parent.appendingPathComponent(backupName))
         } else {
             try fileManager.moveItem(at: staging, to: destination)
@@ -968,16 +934,15 @@ extension ApplicationRelocator {
             NSApp.terminate(nil)
             return .terminating
         } catch {
-            logger.error("Could not schedule relaunch: \(error.localizedDescription, privacy: .public)")
-            showFailure(
-                "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually."
-            )
+            self.logger.error("Could not schedule relaunch: \(error.localizedDescription, privacy: .public)")
+            self.showFailure(
+                "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.")
             return .continueLaunch(startUpdater: false)
         }
     }
 
     private static func startSupervisorRestorationWatcher(_ supervisor: KeepAliveSupervisor) -> Bool {
-        guard supervisorRestorationWatcher == nil else { return true }
+        guard self.supervisorRestorationWatcher == nil else { return true }
         let watcher = Process()
         let processIdentifier = ProcessInfo.processInfo.processIdentifier
         let domain = "gui/\(getuid())"
@@ -995,17 +960,17 @@ extension ApplicationRelocator {
         ]
         do {
             try watcher.run()
-            supervisorRestorationWatcher = watcher
+            self.supervisorRestorationWatcher = watcher
             return true
         } catch {
-            logger.error("Could not schedule launchd restoration: \(error.localizedDescription, privacy: .public)")
+            self.logger.error("Could not schedule launchd restoration: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
 
     private static func cancelSupervisorRestorationWatcher() {
         guard let watcher = supervisorRestorationWatcher else { return }
-        supervisorRestorationWatcher = nil
+        self.supervisorRestorationWatcher = nil
         guard watcher.isRunning else { return }
         Darwin.kill(watcher.processIdentifier, SIGKILL)
         watcher.waitUntilExit()
@@ -1014,15 +979,14 @@ extension ApplicationRelocator {
     private static func scheduleReplacementRelaunch(
         at destination: URL,
         launchReference: BundleFileReference,
-        codeDirectoryHash: Data
-    ) -> Bool {
+        codeDirectoryHash: Data) -> Bool
+    {
         let processInfo = ProcessInfo.processInfo
-        let activeSupervisor = verifiedKeepAliveSupervisor(
+        let activeSupervisor = self.verifiedKeepAliveSupervisor(
             xpcServiceName: processInfo.environment["XPC_SERVICE_NAME"],
             executableURL: Bundle.main.executableURL,
-            homeDirectory: FileManager.default.homeDirectoryForCurrentUser
-        )
-        let supervisor = inheritedReplacementSupervisor ?? activeSupervisor
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        let supervisor = self.inheritedReplacementSupervisor ?? activeSupervisor
         let forwardedArguments = Array(processInfo.arguments.dropFirst())
         let bootoutTarget = activeSupervisor.map { "gui/\(getuid())/\($0.label)" }
         // The volfs path pins atomic bundle swaps and direct exec bypasses mutable
@@ -1034,30 +998,30 @@ extension ApplicationRelocator {
             codeDirectoryHash: codeDirectoryHash,
             supervisor: supervisor,
             bootoutTarget: bootoutTarget,
-            forwardedArguments: forwardedArguments
-        ) else {
-            logger.error("Could not spawn the trusted replacement")
+            forwardedArguments: forwardedArguments)
+        else {
+            self.logger.error("Could not spawn the trusted replacement")
             return false
         }
 
         Task { @MainActor in
             let handoffStatus = await Task.detached(priority: .utility) {
-                awaitReplacementHandoff(on: spawned.readyDescriptor)
+                self.awaitReplacementHandoff(on: spawned.readyDescriptor)
             }.value
             Darwin.close(spawned.readyDescriptor)
             guard handoffStatus == "READY" else {
                 Darwin.kill(spawned.processIdentifier, SIGKILL)
                 await Task.detached(priority: .utility) {
-                    reapProcess(spawned.processIdentifier)
+                    self.reapProcess(spawned.processIdentifier)
                 }.value
-                logger.error("Trusted replacement did not complete its authenticated handoff")
-                bundleReplacementHandoffInProgress = false
-                bundleReplacementCheckPending = true
+                self.logger.error("Trusted replacement did not complete its authenticated handoff")
+                self.bundleReplacementHandoffInProgress = false
+                self.bundleReplacementCheckPending = true
                 try? await Task.sleep(for: .seconds(1))
-                bundleDirectoryDidChange()
+                self.bundleDirectoryDidChange()
                 return
             }
-            cancelSupervisorRestorationWatcher()
+            self.cancelSupervisorRestorationWatcher()
             TerminationSignalWatcher.scheduleExitFailsafe()
             NSApp.terminate(nil)
         }
@@ -1070,8 +1034,8 @@ extension ApplicationRelocator {
         codeDirectoryHash: Data,
         supervisor: KeepAliveSupervisor?,
         bootoutTarget: String?,
-        forwardedArguments: [String]
-    ) -> (processIdentifier: pid_t, readyDescriptor: Int32)? {
+        forwardedArguments: [String]) -> (processIdentifier: pid_t, readyDescriptor: Int32)?
+    {
         let childReadyDescriptor: Int32 = 19
         var descriptors = [Int32](repeating: -1, count: 2)
         guard pipe(&descriptors) == 0 else { return nil }
@@ -1080,18 +1044,18 @@ extension ApplicationRelocator {
 
         var environmentAssignments = [
             "\(replacementSourceBundleEnvironmentKey)=\(sourceBundleURL.path)",
-            "\(replacementParentPIDEnvironmentKey)=\(getpid())",
-            "\(replacementCodeHashEnvironmentKey)=\(codeDirectoryHash.base64EncodedString())",
-            "\(replacementReadyFDEnvironmentKey)=\(childReadyDescriptor)",
+            "\(self.replacementParentPIDEnvironmentKey)=\(getpid())",
+            "\(self.replacementCodeHashEnvironmentKey)=\(codeDirectoryHash.base64EncodedString())",
+            "\(self.replacementReadyFDEnvironmentKey)=\(childReadyDescriptor)",
         ]
         if let supervisor {
             environmentAssignments += [
-                "\(replacementSupervisorLabelEnvironmentKey)=\(supervisor.label)",
-                "\(replacementSupervisorPlistEnvironmentKey)=\(supervisor.plistURL.path)",
+                "\(self.replacementSupervisorLabelEnvironmentKey)=\(supervisor.label)",
+                "\(self.replacementSupervisorPlistEnvironmentKey)=\(supervisor.plistURL.path)",
             ]
         }
         if let bootoutTarget {
-            environmentAssignments.append("\(replacementBootoutTargetEnvironmentKey)=\(bootoutTarget)")
+            environmentAssignments.append("\(self.replacementBootoutTargetEnvironmentKey)=\(bootoutTarget)")
         }
         // The detached child is no longer owned by the current launchd job. Do not
         // let it inherit that job's identity and attempt a second bootout later.
@@ -1116,7 +1080,7 @@ extension ApplicationRelocator {
         ] + environmentAssignments +
             [launchReference.executableURL.path] + forwardedArguments
         var cArguments = arguments.map { strdup($0) } + [nil]
-        defer { cArguments.compactMap { $0 }.forEach { free($0) } }
+        defer { cArguments.compactMap(\.self).forEach { free($0) } }
 
         var fileActions: posix_spawn_file_actions_t?
         var attributes: posix_spawnattr_t?
@@ -1134,8 +1098,7 @@ extension ApplicationRelocator {
         guard posix_spawn_file_actions_adddup2(&fileActions, writeDescriptor, childReadyDescriptor) == 0,
               posix_spawnattr_setflags(
                   &attributes,
-                  Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT)
-              ) == 0
+                  Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0
         else {
             Darwin.close(readDescriptor)
             Darwin.close(writeDescriptor)
@@ -1164,8 +1127,7 @@ extension ApplicationRelocator {
                 &fileActions,
                 &attributes,
                 buffer.baseAddress,
-                environ
-            )
+                environ)
         }
         Darwin.close(writeDescriptor)
         guard spawnResult == 0 else {
