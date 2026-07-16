@@ -133,11 +133,24 @@ function directOpenAIPlatformModelRequiresApiKey(params: {
   );
 }
 
+function openAICodexTransportRequiresOAuth(params: {
+  provider: string;
+  modelApi?: string;
+}): boolean {
+  return (
+    normalizeProviderId(params.provider) === OPENAI_PROVIDER_ID &&
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === OPENAI_CODEX_RESPONSES_API
+  );
+}
+
 function isAuthModeAllowedForModel(params: {
   provider: string;
   modelApi?: string;
   mode: ResolvedProviderAuth["mode"];
 }): boolean {
+  if (openAICodexTransportRequiresOAuth(params)) {
+    return params.mode === "oauth";
+  }
   return !directOpenAIPlatformModelRequiresApiKey(params) || params.mode === "api-key";
 }
 
@@ -149,6 +162,11 @@ function assertAuthModeAllowedForModel(params: {
 }): void {
   if (isAuthModeAllowedForModel(params)) {
     return;
+  }
+  if (openAICodexTransportRequiresOAuth(params)) {
+    throw new Error(
+      `Auth profile "${params.profileId}" uses ${params.mode} auth, but ${params.provider}/${params.modelApi} requires a ChatGPT subscription OAuth profile.`,
+    );
   }
   throw new Error(
     `Auth profile "${params.profileId}" uses ${params.mode} auth, but ${params.provider}/${params.modelApi} requires an OpenAI API key profile.`,

@@ -306,12 +306,12 @@ export function collectDisabledCodexPluginRouteIssues(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): DisabledCodexPluginRouteIssue[] {
-  const blockedOutsideEntry = codexPluginIsBlockedOutsideEntry(cfg);
+  const repairBlocked = codexPluginRepairIsBlocked(cfg);
   return collectDisabledCodexPluginRouteHits(cfg, env).map((hit) => ({
     path: hit.path,
     modelRef: hit.modelRef,
     canonicalModel: hit.canonicalModel,
-    blockedOutsideEntry,
+    repairBlocked,
   }));
 }
 
@@ -319,7 +319,8 @@ export function enableCodexPluginForRequiredRoutes(params: {
   cfg: OpenClawConfig;
   routeHits: DisabledCodexPluginRouteHit[];
 }): { cfg: OpenClawConfig; changes: string[] } {
-  if (params.routeHits.length === 0 || codexPluginIsBlockedOutsideEntry(params.cfg)) {
+  // Explicit user opt-out wins over managed-harness repair; doctor warns instead.
+  if (params.routeHits.length === 0 || codexPluginRepairIsBlocked(params.cfg)) {
     return { cfg: params.cfg, changes: [] };
   }
   const cfg = structuredClone(params.cfg);
@@ -356,11 +357,15 @@ export function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
   return cfg.plugins?.enabled === false || pluginIdListIncludes(cfg.plugins?.deny, "codex");
 }
 
+export function codexPluginRepairIsBlocked(cfg: OpenClawConfig): boolean {
+  return (
+    codexPluginIsBlockedOutsideEntry(cfg) ||
+    asMutableRecord(asMutableRecord(cfg.plugins?.entries)?.codex)?.enabled === false
+  );
+}
+
 function isCodexPluginUnavailableByConfig(cfg: OpenClawConfig): boolean {
-  if (codexPluginIsBlockedOutsideEntry(cfg)) {
-    return true;
-  }
-  if (asMutableRecord(asMutableRecord(cfg.plugins?.entries)?.codex)?.enabled === false) {
+  if (codexPluginRepairIsBlocked(cfg)) {
     return true;
   }
   const allow = cfg.plugins?.allow;
