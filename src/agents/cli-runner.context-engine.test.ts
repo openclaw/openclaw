@@ -1,6 +1,7 @@
 /** Tests CLI runner integration with context-engine lifecycle hooks. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -247,6 +248,39 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       },
     });
     expect(dispose).not.toHaveBeenCalled();
+  });
+
+  it("uses the canonical SQLite store target across context-engine lifecycle hooks", async () => {
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () =>
+      createMaintenanceResult(),
+    );
+    const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain });
+    const context = buildPreparedContext(contextEngine);
+    const storePath = "/tmp/openclaw-cli-context-engine-current/sessions.json";
+    context.params.sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: context.params.sessionId,
+      storePath: "/tmp/openclaw-cli-context-engine-old/sessions.json",
+    });
+    context.params.storePath = storePath;
+
+    await runPreparedCliAgent(context);
+
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "openclaw-session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    expect(bootstrap.mock.calls[0]?.[0]).toMatchObject({ sessionTarget });
+    expect(afterTurn.mock.calls[0]?.[0]).toMatchObject({ sessionTarget });
+    expect(maintain).toHaveBeenCalledTimes(2);
+    expect(maintain.mock.calls[0]?.[0]).toMatchObject({ sessionTarget });
+    expect(maintain.mock.calls[1]?.[0]).toMatchObject({ sessionTarget });
   });
 
   it("does not synthesize a context-engine user turn for empty transcript prompts", async () => {

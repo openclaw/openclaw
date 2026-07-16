@@ -239,6 +239,21 @@ describe("runContextEngineMaintenance", () => {
       bytesFreed: 123,
       rewrittenEntries: 2,
     });
+    expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).toHaveBeenCalledWith({
+      scope: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile: "/tmp/session.jsonl",
+        storePath: "/tmp/state/openclaw.sqlite",
+      },
+      request: {
+        replacements: [
+          { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
+        ],
+      },
+      config: undefined,
+    });
   });
 
   it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
