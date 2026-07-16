@@ -6468,6 +6468,7 @@ public struct SystemAgentSetupDetectParams: Codable, Sendable {}
 
 public struct SystemAgentSetupDetectResult: Codable, Sendable {
     public let candidates: [[String: AnyCodable]]
+    public let unavailablecandidates: [[String: AnyCodable]]?
     public let manualproviders: [[String: AnyCodable]]
     public let authoptions: [[String: AnyCodable]]?
     public let workspace: String
@@ -6477,6 +6478,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
 
     public init(
         candidates: [[String: AnyCodable]],
+        unavailablecandidates: [[String: AnyCodable]]? = nil,
         manualproviders: [[String: AnyCodable]],
         authoptions: [[String: AnyCodable]]? = nil,
         workspace: String,
@@ -6485,6 +6487,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         setupcomplete: Bool)
     {
         self.candidates = candidates
+        self.unavailablecandidates = unavailablecandidates
         self.manualproviders = manualproviders
         self.authoptions = authoptions
         self.workspace = workspace
@@ -6495,6 +6498,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case candidates
+        case unavailablecandidates = "unavailableCandidates"
         case manualproviders = "manualProviders"
         case authoptions = "authOptions"
         case workspace

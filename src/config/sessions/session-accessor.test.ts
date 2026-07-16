@@ -2591,10 +2591,20 @@ describe("session accessor seam", () => {
       expectedSessionId: scope.sessionId,
       expectedSessionState: {
         abortedLastRun: retryable.abortedLastRun,
+        restartRecoveryBeforeAgentReplyState: retryable.restartRecoveryBeforeAgentReplyState,
+        restartRecoveryDeliveryReceiptState: retryable.restartRecoveryDeliveryReceiptState,
+        restartRecoveryDeliveryToolCallId: retryable.restartRecoveryDeliveryToolCallId,
         restartRecoveryDeliveryRequestFingerprint:
           retryable.restartRecoveryDeliveryRequestFingerprint,
         restartRecoveryDeliveryRunId: retryable.restartRecoveryDeliveryRunId,
         restartRecoveryDeliverySourceRunId: retryable.restartRecoveryDeliverySourceRunId,
+        restartRecoveryRequesterAccountId: retryable.restartRecoveryRequesterAccountId,
+        restartRecoveryRequesterSenderId: retryable.restartRecoveryRequesterSenderId,
+        restartRecoverySameChannelThreadRequired:
+          retryable.restartRecoverySameChannelThreadRequired,
+        restartRecoverySourceIngress: retryable.restartRecoverySourceIngress,
+        restartRecoverySourceReplyDeliveryMode: retryable.restartRecoverySourceReplyDeliveryMode,
+        restartRecoveryTerminalRunIds: retryable.restartRecoveryTerminalRunIds,
         status: retryable.status,
         updatedAt: retryable.updatedAt,
       },
@@ -2776,9 +2786,18 @@ describe("session accessor seam", () => {
     }
     const expectedSessionState = {
       abortedLastRun: stored.abortedLastRun,
+      restartRecoveryBeforeAgentReplyState: stored.restartRecoveryBeforeAgentReplyState,
+      restartRecoveryDeliveryReceiptState: stored.restartRecoveryDeliveryReceiptState,
+      restartRecoveryDeliveryToolCallId: stored.restartRecoveryDeliveryToolCallId,
       restartRecoveryDeliveryRequestFingerprint: stored.restartRecoveryDeliveryRequestFingerprint,
       restartRecoveryDeliveryRunId: stored.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: stored.restartRecoveryDeliverySourceRunId,
+      restartRecoveryRequesterAccountId: stored.restartRecoveryRequesterAccountId,
+      restartRecoveryRequesterSenderId: stored.restartRecoveryRequesterSenderId,
+      restartRecoverySameChannelThreadRequired: stored.restartRecoverySameChannelThreadRequired,
+      restartRecoverySourceIngress: stored.restartRecoverySourceIngress,
+      restartRecoverySourceReplyDeliveryMode: stored.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryTerminalRunIds: stored.restartRecoveryTerminalRunIds,
       status: stored.status,
       updatedAt: stored.updatedAt,
     };

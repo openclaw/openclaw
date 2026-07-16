@@ -67,6 +67,11 @@ export type ProviderAuthDoctorHintContext =
 export type ProviderAuthMethod = import("../plugins/types.js").ProviderAuthMethod;
 export type ProviderAuthMethodNonInteractiveContext =
   import("../plugins/types.js").ProviderAuthMethodNonInteractiveContext;
+export type ProviderAppGuidedSetup = import("../plugins/types.js").ProviderAppGuidedSetup;
+export type ProviderAppGuidedSetupCandidate =
+  import("../plugins/types.js").ProviderAppGuidedSetupCandidate;
+export type ProviderAppGuidedSetupContext =
+  import("../plugins/types.js").ProviderAppGuidedSetupContext;
 export type ProviderAuthResult = import("../plugins/types.js").ProviderAuthResult;
 export type ProviderApplyConfigDefaultsContext =
   import("../plugins/types.js").ProviderApplyConfigDefaultsContext;

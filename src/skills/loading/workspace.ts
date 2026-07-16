@@ -1802,5 +1802,4 @@ export function filterWorkspaceSkillEntriesWithOptions(
 ): SkillEntry[] {
   return filterSkillEntries(entries, opts?.config, opts?.skillFilter, opts?.eligibility);
 }
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

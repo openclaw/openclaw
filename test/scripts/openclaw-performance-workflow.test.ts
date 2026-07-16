@@ -191,6 +191,40 @@ describe("OpenClaw performance workflow", () => {
     expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 
+  it("keeps source gateway health waits within one startup budget", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+    const deadline = "gateway_ready_deadline=$((SECONDS + gateway_ready_timeout_seconds))";
+    const remaining = "gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))";
+    const deadlineFailure = [
+      "  if (( gateway_ready_remaining <= 0 )); then",
+      '    cat "$gateway_log" >&2',
+      '    echo "Timed out after ${gateway_ready_timeout_seconds}s waiting for gateway health." >&2',
+      "    exit 1",
+      "  fi",
+    ].join("\n");
+    const probeCap = [
+      '  gateway_probe_timeout="$gateway_ready_remaining"',
+      "  if (( gateway_probe_timeout > gateway_probe_timeout_seconds )); then",
+      '    gateway_probe_timeout="$gateway_probe_timeout_seconds"',
+      "  fi",
+    ].join("\n");
+    const boundedProbe =
+      'curl -fsS --connect-timeout 2 --max-time "$gateway_probe_timeout" "http://127.0.0.1:${gateway_port}/healthz"';
+
+    expect(run).toContain("gateway_ready_timeout_seconds=120");
+    expect(run).toContain("gateway_probe_timeout_seconds=5");
+    expect(run).toContain(deadline);
+    expect(run).toContain(remaining);
+    expect(run).toContain(deadlineFailure);
+    expect(run).toContain(probeCap);
+    expect(run).toContain(boundedProbe);
+    expect(run.split("/healthz")).toHaveLength(2);
+    expect(run.indexOf(deadline)).toBeLessThan(run.indexOf(remaining));
+    expect(run.indexOf(remaining)).toBeLessThan(run.indexOf(deadlineFailure));
+    expect(run.indexOf(deadlineFailure)).toBeLessThan(run.indexOf(probeCap));
+    expect(run.indexOf(probeCap)).toBeLessThan(run.indexOf(boundedProbe));
+  });
+
   it("isolates required publication in a fresh artifact-consuming job", () => {
     const workflow = readWorkflow();
     const publisher = workflow.jobs?.publish;

@@ -252,6 +252,16 @@ export function countActiveToolExecutions(runId: string): number {
   return count;
 }
 
+/** Cleans up tool start data for a run that has been unsubscribed or aborted. */
+export function cleanupRunToolStartData(runId: string): void {
+  const prefix = `${runId}:`;
+  for (const key of toolStartData.keys()) {
+    if (key.startsWith(prefix)) {
+      toolStartData.delete(key);
+    }
+  }
+}
+
 function isCronAddAction(args: unknown): boolean {
   if (!args || typeof args !== "object") {
     return false;

@@ -4422,7 +4422,7 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
   });
 }
 
-export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
+function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   if (hasConservativeVitestWorkerBudget(env)) {
     return false;
   }
@@ -4431,7 +4431,7 @@ export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   );
 }
 
-export function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
+function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
   return env.CI !== "true" && env.GITHUB_ACTIONS !== "true";
 }
 
