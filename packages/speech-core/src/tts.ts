@@ -68,10 +68,7 @@ import {
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
 
-export type {
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-};
+export type { TtsDirectiveOverrides, TtsDirectiveParseResult };
 
 function resolvePositiveTimeoutMs(timeoutMs: number | undefined): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0

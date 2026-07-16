@@ -246,7 +246,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: lightweight speech settings types, normalizers, and config resolver.
       // Harvest: retired AudioConfig type -1.
       // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
-      7991,
+      7997,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -269,7 +269,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared channel replay-guard factory.
       // +3: receipt tracker/snapshot callables across channel barrels.
       // +3: lightweight speech settings normalizers and config resolver.
-      4468,
+      4471,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
