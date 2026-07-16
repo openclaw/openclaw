@@ -1,225 +1,356 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearChatRole
+import ai.openclaw.wear.shared.WearConversationSnapshot
+import android.app.RemoteInput
+import android.content.Intent
 import android.os.Bundle
+import android.speech.RecognizerIntent
+import android.view.HapticFeedbackConstants
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
-import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.AppScaffold
-import androidx.wear.compose.material3.Button
-import androidx.wear.compose.material3.ButtonDefaults
-import androidx.wear.compose.material3.MaterialTheme
-import androidx.wear.compose.material3.ScreenScaffold
-import androidx.wear.compose.material3.Text
+import androidx.wear.input.RemoteInputIntentHelper
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+internal enum class WearInteractionState {
+  READY,
+  LISTENING,
+  TYPING,
+  SENDING,
+  AGENT_WORKING,
+  ERROR,
+}
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContent {
       OpenClawWearApp(
-        client = remember { WearStatusClient(applicationContext) },
+        client = remember { WearConversationClient(applicationContext) },
+        themePreferences = remember { WearThemePreferences(applicationContext) },
+        conversationPreferences =
+          remember {
+            WearConversationPreferences(applicationContext)
+          },
+        speaker = remember { WearReplySpeaker(applicationContext) },
       )
     }
   }
 }
 
 @Composable
-internal fun OpenClawWearApp(client: WearStatusClient) {
-  var state by remember { mutableStateOf<WearStatusUiState>(WearStatusUiState.Loading) }
+internal fun OpenClawWearApp(
+  client: WearConversationClient,
+  themePreferences: WearThemePreferences,
+  conversationPreferences: WearConversationPreferences,
+  speaker: WearReplySpeaker,
+) {
+  var snapshot by remember { mutableStateOf<WearConversationSnapshot?>(null) }
+  var failure by remember { mutableStateOf<WearConversationFailure?>(null) }
+  var loading by remember { mutableStateOf(true) }
+  var actionBusy by remember { mutableStateOf(false) }
+  var interaction by remember { mutableStateOf(WearInteractionState.READY) }
+  var themeMode by remember { mutableStateOf(themePreferences.read()) }
+  var autoSpeak by remember {
+    mutableStateOf(conversationPreferences.readAutoSpeak())
+  }
+  val speaking by speaker.isSpeaking.collectAsState()
   val scope = rememberCoroutineScope()
+  val view = LocalView.current
+  val speakPrompt = stringResource(R.string.speak_to_agent)
+  val messageLabel = stringResource(R.string.message)
+  val messageTitle = stringResource(R.string.message_agent)
+  val sendLabel = stringResource(R.string.send)
+
+  fun applyResult(result: WearConversationClientResult) {
+    val receivedSnapshot = result.snapshot
+    if (receivedSnapshot != null) {
+      snapshot = receivedSnapshot
+      failure = null
+    } else {
+      failure = result.failure ?: WearConversationFailure.INTERNAL_ERROR
+    }
+    loading = false
+  }
+
+  fun reportFailure(result: WearConversationClientResult) {
+    applyResult(result)
+    interaction = WearInteractionState.ERROR
+    view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+  }
+
+  fun submitMessage(rawMessage: String) {
+    val message = rawMessage.trim()
+    if (message.isEmpty() || actionBusy) return
+    val previousAssistantId = snapshot.latestAssistantMessage()?.id
+    actionBusy = true
+    failure = null
+    interaction = WearInteractionState.SENDING
+    speaker.stop()
+    scope.launch {
+      val submitted = client.sendMessage(message)
+      if (submitted.snapshot == null) {
+        reportFailure(submitted)
+        actionBusy = false
+        return@launch
+      }
+      applyResult(submitted)
+      view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+      interaction = WearInteractionState.AGENT_WORKING
+
+      var replyText: String? = null
+      for (attempt in 0 until REPLY_POLL_ATTEMPTS) {
+        val current = snapshot
+        val latestAssistant = current.latestAssistantMessage()
+        if (
+          latestAssistant != null &&
+          latestAssistant.id != previousAssistantId &&
+          current?.pendingRunCount == 0
+        ) {
+          replyText = latestAssistant.text
+          break
+        }
+        delay(REPLY_POLL_INTERVAL_MILLIS)
+        val refreshed = client.loadSnapshot()
+        if (refreshed.snapshot == null) {
+          reportFailure(refreshed)
+          return@launch
+        }
+        applyResult(refreshed)
+      }
+
+      actionBusy = false
+      interaction = WearInteractionState.READY
+      val completedReply = replyText
+      if (completedReply != null) {
+        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+        if (autoSpeak) speaker.speak(completedReply)
+      }
+    }
+  }
+
+  fun selectAgent(agentId: String) {
+    if (actionBusy) return
+    actionBusy = true
+    interaction = WearInteractionState.AGENT_WORKING
+    speaker.stop()
+    scope.launch {
+      val result = client.selectAgent(agentId)
+      if (result.snapshot == null) {
+        reportFailure(result)
+      } else {
+        applyResult(result)
+        interaction = WearInteractionState.READY
+        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+      }
+      actionBusy = false
+    }
+  }
+
+  fun selectSession(sessionId: String) {
+    if (actionBusy) return
+    actionBusy = true
+    interaction = WearInteractionState.AGENT_WORKING
+    speaker.stop()
+    scope.launch {
+      val result = client.selectSession(sessionId)
+      if (result.snapshot == null) {
+        reportFailure(result)
+      } else {
+        applyResult(result)
+        interaction = WearInteractionState.READY
+        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+      }
+      actionBusy = false
+    }
+  }
+
+  fun refresh() {
+    if (actionBusy) return
+    loading = snapshot == null
+    scope.launch {
+      val result = client.loadSnapshot()
+      if (result.snapshot == null) {
+        reportFailure(result)
+      } else {
+        applyResult(result)
+        if (interaction == WearInteractionState.ERROR) {
+          interaction = WearInteractionState.READY
+        }
+      }
+    }
+  }
+
+  val speechLauncher =
+    rememberLauncherForActivityResult(
+      ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+      val transcript =
+        result.data
+          ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+          ?.firstOrNull()
+      if (transcript.isNullOrBlank()) {
+        interaction = WearInteractionState.READY
+      } else {
+        submitMessage(transcript)
+      }
+    }
+  val textLauncher =
+    rememberLauncherForActivityResult(
+      ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+      val text =
+        result.data
+          ?.let(RemoteInput::getResultsFromIntent)
+          ?.getCharSequence(REMOTE_INPUT_KEY)
+          ?.toString()
+      if (text.isNullOrBlank()) {
+        interaction = WearInteractionState.READY
+      } else {
+        submitMessage(text)
+      }
+    }
 
   LaunchedEffect(client) {
-    state = client.loadStatus()
+    applyResult(client.loadSnapshot())
   }
 
-  MaterialTheme {
-    AppScaffold {
-      WearStatusScreen(
-        state = state,
-        onRefresh = {
-          if (state !is WearStatusUiState.Loading) {
-            state = WearStatusUiState.Loading
-            scope.launch {
-              state = client.loadStatus()
-            }
-          }
+  LaunchedEffect(client) {
+    while (isActive) {
+      delay(
+        if (snapshot?.pendingRunCount.orZero() > 0) {
+          ACTIVE_REFRESH_INTERVAL_MILLIS
+        } else {
+          IDLE_REFRESH_INTERVAL_MILLIS
         },
       )
+      if (!actionBusy) {
+        applyResult(client.loadSnapshot())
+      }
     }
   }
-}
 
-@Composable
-private fun WearStatusScreen(
-  state: WearStatusUiState,
-  onRefresh: () -> Unit,
-) {
-  val listState = rememberTransformingLazyColumnState()
-  ScreenScaffold(scrollState = listState) { contentPadding ->
-    TransformingLazyColumn(
-      modifier = Modifier.background(OpenClawBackground),
-      state = listState,
-      contentPadding = contentPadding,
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      item {
-        Text(
-          text = stringResource(R.string.app_name).uppercase(),
-          color = OpenClawRed,
-          fontSize = 15.sp,
-          fontWeight = FontWeight.Bold,
-          letterSpacing = 1.2.sp,
-          textAlign = TextAlign.Center,
-          modifier = Modifier.fillMaxWidth(),
-        )
-      }
-      item {
-        StatusPanel(state = state)
-      }
-      item {
-        Button(
-          onClick = onRefresh,
-          enabled = state !is WearStatusUiState.Loading,
-          colors =
-            ButtonDefaults.buttonColors(
-              containerColor = OpenClawRed,
-              contentColor = Color.White,
-            ),
-          label = {
-            Text(
-              text = stringResource(R.string.refresh),
-              modifier = Modifier.fillMaxWidth(),
-              textAlign = TextAlign.Center,
-            )
+  DisposableEffect(speaker) {
+    onDispose {
+      speaker.shutdown()
+    }
+  }
+
+  OpenClawWearTheme(themeMode = themeMode) {
+    AppScaffold {
+      OpenClawWearScreens(
+        snapshot = snapshot,
+        failure = failure,
+        loading = loading,
+        interaction =
+          when {
+            speaking -> WearInteractionState.READY
+            snapshot?.pendingRunCount.orZero() > 0 &&
+              interaction == WearInteractionState.READY ->
+              WearInteractionState.AGENT_WORKING
+            else -> interaction
           },
-          modifier = Modifier.fillMaxWidth(),
-        )
-      }
+        speaking = speaking,
+        actionBusy = actionBusy,
+        themeMode = themeMode,
+        autoSpeak = autoSpeak,
+        onTalk = {
+          interaction = WearInteractionState.LISTENING
+          val intent =
+            Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+              .putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+              ).putExtra(
+                RecognizerIntent.EXTRA_PROMPT,
+                speakPrompt,
+              )
+          runCatching { speechLauncher.launch(intent) }
+            .onFailure {
+              interaction = WearInteractionState.ERROR
+              failure = WearConversationFailure.INTERNAL_ERROR
+              view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+            }
+        },
+        onType = {
+          interaction = WearInteractionState.TYPING
+          val remoteInput =
+            RemoteInput
+              .Builder(REMOTE_INPUT_KEY)
+              .setLabel(messageLabel)
+              .build()
+          val intent =
+            RemoteInputIntentHelper
+              .createActionRemoteInputIntent()
+              .also { inputIntent ->
+                RemoteInputIntentHelper.putRemoteInputsExtra(
+                  inputIntent,
+                  listOf(remoteInput),
+                )
+                RemoteInputIntentHelper.putTitleExtra(
+                  inputIntent,
+                  messageTitle,
+                )
+                RemoteInputIntentHelper.putConfirmLabelExtra(
+                  inputIntent,
+                  sendLabel,
+                )
+              }
+          runCatching { textLauncher.launch(intent) }
+            .onFailure {
+              interaction = WearInteractionState.ERROR
+              failure = WearConversationFailure.INTERNAL_ERROR
+              view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+            }
+        },
+        onSelectAgent = ::selectAgent,
+        onSelectSession = ::selectSession,
+        onRefresh = ::refresh,
+        onThemeModeChange = { selectedMode ->
+          themeMode = selectedMode
+          themePreferences.write(selectedMode)
+        },
+        onAutoSpeakChange = { enabled ->
+          autoSpeak = enabled
+          conversationPreferences.writeAutoSpeak(enabled)
+          if (!enabled) speaker.stop()
+        },
+        onSpeakLatest = {
+          snapshot.latestAssistantMessage()?.text?.let(speaker::speak)
+        },
+        onStopSpeaking = speaker::stop,
+      )
     }
   }
 }
 
-@Composable
-private fun StatusPanel(state: WearStatusUiState) {
-  val presentation = statusPresentation(state)
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .background(OpenClawPanel, RoundedCornerShape(22.dp))
-        .padding(horizontal = 14.dp, vertical = 13.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-  ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.Center,
-    ) {
-      Box(
-        modifier =
-          Modifier
-            .size(8.dp)
-            .background(presentation.indicatorColor, CircleShape),
-      )
-      Spacer(modifier = Modifier.size(7.dp))
-      Text(
-        text = stringResource(presentation.titleRes),
-        color = Color.White,
-        fontWeight = FontWeight.SemiBold,
-        textAlign = TextAlign.Center,
-      )
+private fun WearConversationSnapshot?.latestAssistantMessage() =
+  this
+    ?.messages
+    ?.lastOrNull { message ->
+      message.role == WearChatRole.ASSISTANT && message.text.isNotBlank()
     }
-    Spacer(modifier = Modifier.height(6.dp))
-    Text(
-      text = stringResource(presentation.detailRes),
-      color = OpenClawMuted,
-      fontSize = 12.sp,
-      lineHeight = 15.sp,
-      textAlign = TextAlign.Center,
-    )
-  }
-}
 
-private data class StatusPresentation(
-  val titleRes: Int,
-  val detailRes: Int,
-  val indicatorColor: Color,
-)
+private fun Int?.orZero(): Int = this ?: 0
 
-@Composable
-private fun statusPresentation(state: WearStatusUiState): StatusPresentation =
-  when (state) {
-    WearStatusUiState.Loading ->
-      StatusPresentation(
-        titleRes = R.string.checking_phone,
-        detailRes = R.string.reading_status,
-        indicatorColor = OpenClawCyan,
-      )
-    is WearStatusUiState.Ready ->
-      if (state.gatewayConnected) {
-        StatusPresentation(
-          titleRes = R.string.phone_ready,
-          detailRes = R.string.gateway_connected,
-          indicatorColor = OpenClawGreen,
-        )
-      } else {
-        StatusPresentation(
-          titleRes = R.string.phone_ready,
-          detailRes = R.string.gateway_offline,
-          indicatorColor = OpenClawRed,
-        )
-      }
-    WearStatusUiState.PhoneNotReady ->
-      StatusPresentation(
-        titleRes = R.string.open_phone_app,
-        detailRes = R.string.phone_not_ready_detail,
-        indicatorColor = OpenClawRed,
-      )
-    WearStatusUiState.PhoneUnavailable ->
-      StatusPresentation(
-        titleRes = R.string.phone_unavailable,
-        detailRes = R.string.phone_unavailable_detail,
-        indicatorColor = OpenClawRed,
-      )
-    WearStatusUiState.Incompatible ->
-      StatusPresentation(
-        titleRes = R.string.update_required,
-        detailRes = R.string.update_required_detail,
-        indicatorColor = OpenClawRed,
-      )
-  }
-
-private val OpenClawBackground = Color(0xFF07080A)
-private val OpenClawPanel = Color(0xFF17191F)
-private val OpenClawRed = Color(0xFFFF4D5A)
-private val OpenClawCyan = Color(0xFF70DDF2)
-private val OpenClawGreen = Color(0xFF68D391)
-private val OpenClawMuted = Color(0xFFB7BAC2)
+private const val REMOTE_INPUT_KEY = "openclaw_watch_message"
+private const val REPLY_POLL_ATTEMPTS = 72
+private const val REPLY_POLL_INTERVAL_MILLIS = 1_250L
+private const val ACTIVE_REFRESH_INTERVAL_MILLIS = 1_500L
+private const val IDLE_REFRESH_INTERVAL_MILLIS = 10_000L

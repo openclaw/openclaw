@@ -31,6 +31,7 @@ robolectric = "4.16.1"
 room = "2.8.4"
 serialization-json = "1.11.0"
 wear-compose = "1.6.2"
+wear-input = "1.2.0"
 play-services-wearable = "20.0.1"
 
 [libraries]
@@ -81,6 +82,7 @@ okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation", version.ref = "wear-compose" }
 wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", version.ref = "wear-compose" }
+wear-input = { module = "androidx.wear:wear-input", version.ref = "wear-input" }
 play-services-wearable = { module = "com.google.android.gms:play-services-wearable", version.ref = "play-services-wearable" }
 
 [plugins]

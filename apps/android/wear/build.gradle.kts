@@ -1,3 +1,4 @@
+import com.android.build.api.variant.impl.VariantOutputImpl
 import java.util.Properties
 
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
@@ -62,6 +63,16 @@ android {
   }
 }
 
+androidComponents {
+  onVariants { variant ->
+    variant.outputs
+      .filterIsInstance<VariantOutputImpl>()
+      .forEach { output ->
+        output.outputFileName = "OpenClaw-WatchOS-${variant.buildType}.apk"
+      }
+  }
+}
+
 kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -90,6 +101,7 @@ dependencies {
   implementation(libs.play.services.wearable)
   implementation(libs.wear.compose.foundation)
   implementation(libs.wear.compose.material3)
+  implementation(libs.wear.input)
 
   debugImplementation(libs.androidx.compose.ui.tooling)
 

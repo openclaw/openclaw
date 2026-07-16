@@ -57,10 +57,10 @@
             tools:ignore="ExportedService">
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
-                <data
-                    android:host="*"
-                    android:path="/openclaw/v1/status"
-                    android:scheme="wear" />
+                <data android:scheme="wear" />
+                <data android:host="*" />
+                <data android:path="/openclaw/v1/status" />
+                <data android:path="/openclaw/v1/conversation" />
             </intent-filter>
         </service>
         <service

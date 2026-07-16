@@ -52,4 +52,76 @@ class WearStatusContractTest {
 
     assertEquals(WearStatusErrorCode.PHONE_NOT_READY, decoded.errorCode)
   }
+
+  @Test
+  fun conversationRequestRoundTripsWithActionPayload() {
+    val request =
+      WearConversationRequest(
+        requestId = "conversation-1",
+        action = WearConversationAction.SEND_MESSAGE,
+        message = "Hello from the watch",
+      )
+
+    val decoded =
+      WearConversationCodec.decodeRequest(
+        WearConversationCodec.encodeRequest(request),
+      )
+
+    assertEquals(request, decoded)
+  }
+
+  @Test
+  fun conversationSnapshotRoundTripsWithoutPrivateSessionKeys() {
+    val response =
+      WearConversationResponse(
+        requestId = "conversation-2",
+        result = WearConversationResult.OK,
+        snapshot =
+          WearConversationSnapshot(
+            generatedAtEpochMillis = 1234L,
+            gatewayState = WearGatewayState.CONNECTED,
+            activeAgentId = "main",
+            agents =
+              listOf(
+                WearAgentSummary(
+                  id = "main",
+                  name = "Main",
+                  selected = true,
+                ),
+              ),
+            activeSessionId = "session-handle",
+            sessions =
+              listOf(
+                WearSessionSummary(
+                  id = "session-handle",
+                  title = "Main session",
+                  selected = true,
+                ),
+              ),
+            messages =
+              listOf(
+                WearChatMessage(
+                  id = "message-1",
+                  role = WearChatRole.ASSISTANT,
+                  text = "Ready.",
+                ),
+              ),
+          ),
+      )
+
+    val decoded =
+      WearConversationCodec.decodeResponse(
+        WearConversationCodec.encodeResponse(response),
+      )
+
+    assertEquals(response, decoded)
+    assertEquals(
+      "session-handle",
+      decoded
+        .snapshot
+        ?.sessions
+        ?.single()
+        ?.id,
+    )
+  }
 }

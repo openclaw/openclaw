@@ -3,5 +3,6 @@
     tools:keep="@array/android_wear_capabilities">
     <string-array name="android_wear_capabilities">
         <item tools:ignore="Typos">openclaw_phone_status_v1</item>
+        <item tools:ignore="Typos">openclaw_phone_conversation_v1</item>
     </string-array>
 </resources>
