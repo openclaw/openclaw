@@ -1014,34 +1014,6 @@ describe("detectChangedScope", () => {
     expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
   });
 
-  it("marks generated Control UI locale diffs for the strict catalog gate", () => {
-    const outputPath = path.join(os.tmpdir(), `openclaw-ci-i18n-output-${Date.now()}.txt`);
-    markerPaths.push(outputPath);
-    const changedPaths = ["ui/src/i18n/locales/de.ts"];
-    writeGitHubOutput(
-      detectChangedScope(changedPaths),
-      outputPath,
-      undefined,
-      undefined,
-      false,
-      changedPaths,
-    );
-
-    expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).strict_control_ui_i18n).toBe(
-      "true",
-    );
-  });
-
-  it("fails closed to the strict Control UI locale gate when changed paths are unknown", () => {
-    const outputPath = path.join(os.tmpdir(), `openclaw-ci-unknown-output-${Date.now()}.txt`);
-    markerPaths.push(outputPath);
-    writeGitHubOutput(detectChangedScope([]), outputPath, undefined, undefined, true, null);
-
-    expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).strict_control_ui_i18n).toBe(
-      "true",
-    );
-  });
-
   it("keeps direct CLI preflight empty diffs as no-op scope", () => {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-"));
     tempDirs.push(repoDir);

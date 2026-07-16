@@ -33,6 +33,7 @@ export function assertControlUiGeneratedArtifactsIsolated(
   changedPaths: string[],
   branchName?: string,
 ): void;
+export function shouldStrictControlUiI18n(changedPaths: string[] | null): boolean;
 export function detectChangedScope(changedPaths: string[]): ChangedScope;
 export function shouldRunNativeI18n(changedPaths: string[]): boolean;
 export function detectNodeFastScope(changedPaths: string[]): NodeFastScope;

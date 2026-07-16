@@ -217,6 +217,13 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
   );
 }
 
+export function shouldStrictControlUiI18n(changedPaths) {
+  return (
+    changedPaths === null ||
+    changedPaths.some((filePath) => CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath))
+  );
+}
+
 function resolveChangedBranchName() {
   const githubBranch = process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME;
   if (githubBranch) {
@@ -416,7 +423,7 @@ export function writeGitHubOutput(
   appendFileSync(outputPath, `run_control_ui_i18n=${scope.runControlUiI18n}\n`, "utf8");
   appendFileSync(
     outputPath,
-    `strict_control_ui_i18n=${changedPaths === null || changedPaths.some((filePath) => CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath))}\n`,
+    `strict_control_ui_i18n=${shouldStrictControlUiI18n(changedPaths)}\n`,
     "utf8",
   );
   appendFileSync(outputPath, `run_ui_tests=${scope.runUiTests}\n`, "utf8");

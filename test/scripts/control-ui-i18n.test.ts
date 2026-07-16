@@ -6,7 +6,10 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { assertControlUiGeneratedArtifactsIsolated } from "../../scripts/ci-changed-scope.mjs";
+import {
+  assertControlUiGeneratedArtifactsIsolated,
+  shouldStrictControlUiI18n,
+} from "../../scripts/ci-changed-scope.mjs";
 import {
   analyzeControlUiCatalogs,
   flattenControlUiCatalog,
@@ -69,6 +72,10 @@ describe("control-ui-i18n generated ownership", () => {
         "release/2026.7.3",
       ),
     ).not.toThrow();
+
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(true);
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/en.ts"])).toBe(false);
+    expect(shouldStrictControlUiI18n(null)).toBe(true);
   });
 });
 
