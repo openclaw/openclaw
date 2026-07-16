@@ -796,6 +796,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         code: "UNAVAILABLE",
         message: "metadata unavailable",
       });
+      const agentsRequestsBeforeStartup = (await gateway.getRequests("agents.list")).length;
       await gateway.resolveDeferred("chat.startup", {
         agentsList: {
           agents: [
@@ -814,19 +815,31 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
       });
-      await page.waitForTimeout(150);
-
-      const metadataRequests = await gateway.getRequests("chat.metadata");
-      expect(metadataRequests).toHaveLength(1);
-      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
-        "work",
-      );
+      await expect
+        .poll(async () => (await gateway.getRequests("agents.list")).length)
+        .toBeGreaterThan(agentsRequestsBeforeStartup);
+      await page.waitForFunction(() => {
+        const pane = document.querySelector("openclaw-chat-pane") as
+          | (HTMLElement & {
+              state?: { agentsList?: { defaultId?: string; agents?: Array<{ id?: string }> } };
+            })
+          | null;
+        return (
+          pane?.state?.agentsList?.defaultId === "main" &&
+          pane.state.agentsList.agents?.some((agent) => agent.id === "main") === true
+        );
+      });
       const composer = page.locator(".agent-chat__input");
       await expect
         .poll(async () =>
           (await composer.locator("[data-chat-model-option]").allTextContents()).join(" "),
         )
         .not.toContain("GPT Default");
+      const metadataRequests = await gateway.getRequests("chat.metadata");
+      expect(metadataRequests).toHaveLength(1);
+      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
+        "work",
+      );
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
     } finally {
       await context.close();

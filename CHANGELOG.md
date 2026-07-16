@@ -15,7 +15,7 @@ Docs: https://docs.openclaw.ai
 - **Skill Workshop history review:** add a manual, newest-first session scan that progressively searches older substantial work for conservative skill ideas, stores only SQLite cursor metadata, and leaves up to three results as pending proposals even when autonomous self-learning is disabled. (#106182)
 - **SQLite snapshots:** add `openclaw backup sqlite create|list|verify|restore` for compact, verified global and per-agent database artifacts with fresh-target-only restore. (#94805) Thanks @giodl73-repo.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
-- **OpenAI GPT-5.6 defaults:** use `openai/gpt-5.6` (Sol alias) for fresh API-key setup and exact `openai/gpt-5.6-sol` for fresh Codex/OAuth setup, while preserving existing primaries, fallbacks, aliases, and explicit GPT-5.5 selections. (#103234)
+- **OpenAI GPT-5.6 defaults:** use `openai/gpt-5.6` (Sol alias) for fresh API-key setup and exact `openai/gpt-5.6-sol` for fresh Codex/OAuth setup, default Sol to medium reasoning across both runtimes, and preserve existing primaries, fallbacks, aliases, and explicit GPT-5.5 selections. (#103234)
 - **Meta provider:** add bundled `muse-spark-1.1` model support with Responses API streaming, tool calls, encrypted reasoning replay, onboarding, and standalone npm/ClawHub distribution. (#102873) Thanks @HamidShojanazeri.
 - **Android chat agent selector:** switch the active agent directly from the live chat screen while keeping chat, Talk mode, and home canvas on the same canonical session. (#80422) Thanks @bcperry.
 - **Gateway host status:** show the connected Gateway's host, network address, OS, runtime, uptime, CPU, memory, and disk details in Control UI Settings. (#100478)
@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
 - **LINE reply-token media kinds:** honor video and audio metadata on inbound replies, share the canonical media builder with proactive sends, and fail visibly instead of recording empty media-only deliveries. (#106515) Thanks @edenfunf.
 - **Mattermost websocket connection deadlines:** bound opening handshakes so stalled TCP peers cannot hang channel startup indefinitely and reconnect control resumes after timeout. (#105553) Thanks @hugenshen.
@@ -51,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - **Slack Socket Mode health:** report connected Socket Mode transports as degraded when `auth.test` fails or the configured bot token resolves to a user without `bot_id`, while preserving healthy enterprise-org installs. Thanks @zw-xysk.
 - **Synology Chat response limits:** bound user-list response reads, stop oversized streams immediately, and retain stale cached identities when a NAS exceeds the supported envelope. Thanks @zw-xysk.
 - **Usage date ranges:** exclude legacy transcript rows without timestamps from finite session ranges while preserving them in all-time totals, and rebuild older usage caches before serving the new semantics. Fixes #89709. Thanks @TurboTheTurtle.
+- **LINE group history races:** retain ambient group messages received during an active mention turn for the next turn while consuming the pre-turn snapshot exactly once. (#107367) Thanks @edenfunf.
 - **Mattermost progress command details:** accept the documented `streaming.preview.commandText` and `streaming.progress.commandText` modes in channel config validation and bundled metadata. Thanks @shakkernerd.
 - **1Password authorization handoff:** persist nonce-bound pending approvals in shared plugin state so hook and tool execution across broker instances remain single-use and fail closed.
 - **Control UI chat transcripts:** preserve loaded history across session and pane returns, bound automatic backscroll loading, virtualize long transcripts, retain hidden native run boundaries, and keep prepends, streaming, and responsive layouts from flickering or jumping. Thanks @shakkernerd.
@@ -79,6 +81,7 @@ Docs: https://docs.openclaw.ai
 - **Control UI New Session reconnects:** rediscover agents, nodes, repository branches, and folder-browser state, refresh derived workspaces, gate unvalidated devices, and block ambiguous retries after Gateway client replacement while preserving the typed task and explicit choices. Fixes #106372.
 - **macOS remote node readiness:** take the main-session key from the node hello snapshot instead of opening an operator connection during node admission, preventing remote tunnel recovery from leaving Computer Use and node exec stuck in lifecycle transition.
 - **Claude CLI context budgets:** honor Anthropic model and per-agent `contextTokens` limits by passing the effective limit to Claude Code's native auto-compactor and persisting the same prepared budget in OpenClaw session state. Fixes #80933. (#93198) Thanks @mushuiyu886.
+- **Transcript read failures:** propagate permission and I/O failures from streaming JSONL session reads instead of treating unreadable transcripts as empty. (#106412) Thanks @zenglingbiao.
 - **Native app connection and relay reliability:** keep Android disconnects stopped across Activity recreation, fail remote camera commands without opening permission prompts, refresh mobile node registration after capability changes, surface iOS onboarding connection failures, cancel stale Talk owners on session switches, reject invalid Watch acknowledgments, preserve Watch events received during startup, and prevent older agent overview requests from replacing newer gateway state.
 - **Gateway source watch:** hand the configured port off from the installed service before starting the tmux watcher, preserve failed panes for attach/capture, and keep explicit alternate-port watches side by side with the managed Gateway.
 - **Claude CLI max-turn diagnostics:** preserve terminal max-turn results with OpenClaw and Claude session context, warn when tool actions may already have run, and stop unsafe auth-profile or model replay for potentially side-effecting turns. (#94130) Thanks @zhangguiping-xydt.

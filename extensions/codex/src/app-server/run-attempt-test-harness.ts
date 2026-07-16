@@ -268,7 +268,7 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
-export function getMockServerVersion() {
+function getMockServerVersion() {
   return "0.132.0";
 }
 

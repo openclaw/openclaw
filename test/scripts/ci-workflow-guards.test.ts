@@ -3480,10 +3480,10 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);
-    expect(smokeProfileJob.strategy["max-parallel"]).toBe(2);
+    expect(smokeProfileJob.strategy["max-parallel"]).toBe(4);
     expect(
       smokeProfileJob.strategy.matrix.include.map((entry: { slug: string }) => entry.slug),
-    ).toEqual(["profile-1-of-2", "profile-2-of-2"]);
+    ).toEqual(["profile-1-of-4", "profile-2-of-4", "profile-3-of-4", "profile-4-of-4"]);
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");

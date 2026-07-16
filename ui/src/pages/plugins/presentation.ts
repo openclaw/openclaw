@@ -129,7 +129,6 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "portfolio-pulse",
   "qa-channel",
   "qa-lab",
-  "qa-matrix",
   "qianfan",
   "qqbot",
   "qwen",
