@@ -3616,6 +3616,12 @@ describe("ci workflow guards", () => {
     expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
     expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
     expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
+    expect(smokeRunStep.run).toContain(
+      "console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+    );
+    expect(smokeRunStep.run).not.toContain(
+      "console.log(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+    );
     expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");

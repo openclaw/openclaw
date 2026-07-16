@@ -71,7 +71,9 @@ env:
   OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa
   KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
-  KOVA_SCENARIO_TIMEOUT_MS: "300000"
+  # OCM local runtime builds normally take about 3.5 minutes but can exceed
+  # five minutes on a cold runner. Keep the whole command bounded with margin.
+  KOVA_SCENARIO_TIMEOUT_MS: "420000"
 
 jobs:
   resolve_target:
