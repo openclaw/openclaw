@@ -44,7 +44,7 @@ describe("kimi provider plugin", () => {
     });
   });
 
-  it.each(["k3", "k3[1m]"])("forces %s to max thinking", async (modelId) => {
+  it.each(["k3", "k3[1m]"])("exposes %s off and max thinking", async (modelId) => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(
@@ -54,7 +54,10 @@ describe("kimi provider plugin", () => {
         reasoning: true,
       } as never),
     ).toEqual({
-      levels: [{ id: "max", label: "max" }],
+      levels: [
+        { id: "off", label: "off" },
+        { id: "max", label: "max" },
+      ],
       defaultLevel: "max",
       preserveWhenCatalogReasoningFalse: true,
     });

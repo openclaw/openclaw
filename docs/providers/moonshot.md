@@ -267,10 +267,11 @@ onboarding.
       </Step>
     </Steps>
 
-    Kimi K3 always uses deep thinking at `max`. OpenClaw ignores stale K2
-    thinking toggles for `kimi/k3` and `kimi/k3[1m]` and sends the K3
-    adaptive/max request contract. The 1M model requires an Allegretto or
-    higher Kimi membership; use `kimi/k3` on Moderato.
+    Kimi Code K3 defaults to deep thinking at `max`. `/think off` sends
+    `thinking.type: "disabled"`; `/think max` sends K3's adaptive-thinking
+    request with max effort. Stale lower thinking levels resolve to the
+    supported `max` level. The 1M model requires an Allegretto or higher Kimi
+    membership; use `kimi/k3` on Moderato.
 
     See the official [Kimi Code model table](https://www.kimi.com/code/docs/en/kimi-code/models.html) for current plan availability.
 
@@ -349,12 +350,18 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 
 <AccordionGroup>
   <Accordion title="Native thinking mode">
-    Kimi K3 always reasons at maximum effort. OpenClaw exposes only `/think max`,
-    sends `reasoning_effort: "max"`, and ignores stale lower or `off` settings.
-    K3 supports `auto`, `none`, `required`, and pinned tool choices, so OpenClaw
-    preserves the requested `tool_choice`. For multi-turn tool use, OpenClaw
-    preserves the assistant reasoning content required by Moonshot's replay
-    contract.
+    Moonshot API Kimi K3 always reasons at maximum effort. OpenClaw exposes only
+    `/think max`, sends `reasoning_effort: "max"`, and ignores stale lower or
+    `off` settings.
+
+    Kimi Code K3 exposes `/think off|max`. Its Anthropic-compatible endpoint
+    receives `thinking.type: "disabled"` for off, or adaptive thinking with
+    `output_config.effort: "max"` for max. This applies to both `kimi/k3` and
+    `kimi/k3[1m]`.
+    Moonshot API K3 supports `auto`, `none`, `required`, and pinned tool choices,
+    so OpenClaw preserves the requested `tool_choice`. For multi-turn tool use,
+    OpenClaw preserves the assistant reasoning content required by Moonshot's
+    replay contract.
 
     Kimi K2.7 Code always uses native thinking. Moonshot requires clients to
     omit the `thinking` field for this model, so OpenClaw exposes only `on` and

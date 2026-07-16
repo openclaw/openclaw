@@ -1,9 +1,11 @@
 // Tests the real fs-safe boundary used by session-export artifacts.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { writeSessionExportFile } from "./commands-export-session-file.js";
+const { writeSessionExportFile } = await vi.importActual<
+  typeof import("./commands-export-session-file.js")
+>("./commands-export-session-file.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

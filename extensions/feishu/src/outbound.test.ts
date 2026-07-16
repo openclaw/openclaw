@@ -20,8 +20,15 @@ const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
-  () => (params: { mediaUrl?: string; audioAsVoice?: boolean }) =>
-    params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
+  () =>
+    (params: {
+      mediaUrl?: string;
+      audioAsVoice?: boolean;
+      ttsSupplement?: { visibleTextAlreadyDelivered?: boolean };
+    }) =>
+      params.ttsSupplement
+        ? params.ttsSupplement.visibleTextAlreadyDelivered === true
+        : params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
 );
 
 vi.mock("./media.js", () => ({
@@ -348,6 +355,82 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     await fs.writeFile(file, "image-data");
     return { dir, file };
   }
+
+  it("sends missing TTS text before its voice supplement", async () => {
+    const payload = {
+      text: "Readable answer",
+      mediaUrl: "https://example.com/reply.ogg",
+      audioAsVoice: true,
+      ttsSupplement: { spokenText: "Readable answer" },
+    };
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: payload.text,
+      accountId: "main",
+      payload,
+    });
+
+    expect(sendMessageCall()?.text).toBe("Readable answer");
+    expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/reply.ogg");
+    expect(sendMediaCall()?.audioAsVoice).toBe(true);
+    expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("sends only TTS media when its text is already visible", async () => {
+    const payload = {
+      text: "Readable answer",
+      mediaUrl: "https://example.com/reply.ogg",
+      audioAsVoice: true,
+      ttsSupplement: {
+        spokenText: "Readable answer",
+        visibleTextAlreadyDelivered: true,
+      },
+    };
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: payload.text,
+      accountId: "main",
+      payload,
+    });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/reply.ogg");
+  });
+
+  it("preserves a structured card before its TTS supplement", async () => {
+    const card = {
+      schema: "2.0",
+      body: { elements: [{ tag: "markdown", content: "Readable answer" }] },
+    };
+    const payload = {
+      text: "Readable answer",
+      mediaUrl: "https://example.com/reply.ogg",
+      audioAsVoice: true,
+      ttsSupplement: { spokenText: "Readable answer" },
+      channelData: { feishu: { card } },
+    };
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: payload.text,
+      accountId: "main",
+      payload,
+    });
+
+    expect(sendCardCall()?.card).toMatchObject(card);
+    expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/reply.ogg");
+    expect(sendCardFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
 
   it("sends an absolute existing local image path as media", async () => {
     const { dir, file } = await createTmpImage();
@@ -1729,6 +1812,25 @@ describe("feishuOutbound.sendPayload native cards", () => {
       "Review this\n\n- Approve: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
     );
     expectFeishuResult(result, "reply_msg");
+  });
+
+  it("keeps TTS supplements on the document-comment delivery path", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "Readable answer",
+      accountId: "main",
+      payload: {
+        text: "Readable answer",
+        mediaUrl: "https://example.com/reply.ogg",
+        audioAsVoice: true,
+        ttsSupplement: { spokenText: "Readable answer" },
+      },
+    });
+
+    expect(deliverCommentThreadTextMock).toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
   it("rejects card-only document comments instead of reporting an empty delivery", async () => {
