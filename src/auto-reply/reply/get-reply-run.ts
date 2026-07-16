@@ -1467,7 +1467,6 @@ export async function runPreparedReply(
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
-<<<<<<< HEAD
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat ? { provenance: { kind: "heartbeat" as const } } : {}),
