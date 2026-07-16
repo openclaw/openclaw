@@ -1,5 +1,5 @@
 /** Covers provider registration validation for ids, duplicates, and required hooks. */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import type { ProviderPlugin } from "./types.js";
@@ -295,4 +295,64 @@ describe("normalizeRegisteredProvider", () => {
       });
     },
   );
+});
+
+describe("deprecated discovery provider warning dedupe cache", () => {
+  let normalizeRegisteredProviderFn: typeof normalizeRegisteredProvider;
+
+  function normalizeDiscoveryProvider(id: string, diagnostics: PluginDiagnostic[]) {
+    normalizeRegisteredProviderFn({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      provider: makeProvider({
+        id,
+        discovery: {
+          run: async () => ({
+            provider: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              models: [],
+            },
+          }),
+        },
+      }),
+      pushDiagnostic: (diag) => diagnostics.push(diag),
+    });
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    const mod = await import("./provider-validation.js");
+    normalizeRegisteredProviderFn = mod.normalizeRegisteredProvider;
+  });
+
+  it("refreshes recent keys across registrations and re-warns evicted keys", () => {
+    const diagnostics: PluginDiagnostic[] = [];
+
+    for (let i = 0; i < 4096; i += 1) {
+      normalizeDiscoveryProvider(`legacy-discovery-${i}`, diagnostics);
+    }
+    expect(
+      diagnostics.filter((diag) => diag.message.includes("deprecated discovery")),
+    ).toHaveLength(4096);
+
+    normalizeDiscoveryProvider("legacy-discovery-0", diagnostics);
+    expect(
+      diagnostics.filter((diag) => diag.message.includes("deprecated discovery")),
+    ).toHaveLength(4096);
+
+    normalizeDiscoveryProvider("overflow-discovery", diagnostics);
+    expect(
+      diagnostics.filter((diag) => diag.message.includes("deprecated discovery")),
+    ).toHaveLength(4097);
+
+    normalizeDiscoveryProvider("legacy-discovery-0", diagnostics);
+    expect(
+      diagnostics.filter((diag) => diag.message.includes("deprecated discovery")),
+    ).toHaveLength(4097);
+
+    normalizeDiscoveryProvider("legacy-discovery-1", diagnostics);
+    expect(
+      diagnostics.filter((diag) => diag.message.includes("deprecated discovery")),
+    ).toHaveLength(4098);
+  });
 });

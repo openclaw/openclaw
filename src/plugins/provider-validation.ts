@@ -1,11 +1,17 @@
 /** Validates and normalizes provider plugin definitions before registry registration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { createDedupeCache } from "../infra/dedupe.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
 
-const warnedDeprecatedDiscoveryProviders = new Set<string>();
+const MAX_WARNED_DEPRECATED_DISCOVERY_PROVIDERS = 4096;
+// Warning state spans provider registrations; bounding it means evicted keys can re-warn.
+const warnedDeprecatedDiscoveryProviders = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_DEPRECATED_DISCOVERY_PROVIDERS,
+});
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;
 type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"]>["modelPicker"]>;
@@ -365,8 +371,8 @@ export function normalizeRegisteredProvider(params: {
   }
   if (!catalog && discovery) {
     const warningKey = `${params.pluginId}:${id}:discovery`;
-    if (!warnedDeprecatedDiscoveryProviders.has(warningKey)) {
-      warnedDeprecatedDiscoveryProviders.add(warningKey);
+    // Warning state spans provider registrations; bounding it means evicted keys can re-warn.
+    if (!warnedDeprecatedDiscoveryProviders.check(warningKey)) {
       pushPluginValidationDiagnostic({
         level: "warn",
         pluginId: params.pluginId,

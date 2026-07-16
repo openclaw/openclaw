@@ -977,6 +977,84 @@ describe("provider-runtime", () => {
     expect(warning).not.toContain("\n");
   });
 
+  it("bounds the external auth fallback warning cache and re-warns evicted plugin ids", () => {
+    function setupFallbackPlugin(pluginId: string, providerId: string) {
+      resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([pluginId]);
+      resolvePluginProvidersMock.mockReturnValue([
+        {
+          id: providerId,
+          pluginId,
+          label: `Fallback ${providerId}`,
+          auth: [],
+          resolveExternalOAuthProfiles: () => [
+            {
+              profileId: `${providerId}:external`,
+              credential: {
+                type: "oauth",
+                provider: providerId,
+                access: "access",
+                refresh: "refresh",
+                expires: Date.now() + 60_000,
+              },
+            },
+          ],
+        },
+      ]);
+    }
+
+    for (let i = 0; i < 4096; i += 1) {
+      setupFallbackPlugin(`fallback-cache-key-${i}`, `fallback-provider-${i}`);
+      resolveExternalAuthProfilesWithPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      });
+    }
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(4096);
+
+    setupFallbackPlugin("fallback-cache-key-0", "fallback-provider-0");
+    resolveExternalAuthProfilesWithPlugins({
+      env: process.env,
+      context: {
+        env: process.env,
+        store: { version: 1, profiles: {} },
+      },
+    });
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(4096);
+
+    setupFallbackPlugin("fallback-cache-overflow", "fallback-provider-overflow");
+    resolveExternalAuthProfilesWithPlugins({
+      env: process.env,
+      context: {
+        env: process.env,
+        store: { version: 1, profiles: {} },
+      },
+    });
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(4097);
+
+    setupFallbackPlugin("fallback-cache-key-0", "fallback-provider-0");
+    resolveExternalAuthProfilesWithPlugins({
+      env: process.env,
+      context: {
+        env: process.env,
+        store: { version: 1, profiles: {} },
+      },
+    });
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(4097);
+
+    setupFallbackPlugin("fallback-cache-key-1", "fallback-provider-1");
+    resolveExternalAuthProfilesWithPlugins({
+      env: process.env,
+      context: {
+        env: process.env,
+        store: { version: 1, profiles: {} },
+      },
+    });
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(4098);
+  });
+
   it("resolves declared external auth plugins with different provider ids", () => {
     resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo-plugin"]);
     resolvePluginProvidersMock.mockReturnValue([
