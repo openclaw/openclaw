@@ -795,14 +795,13 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     ) {
       return false;
     }
-    // Generic live profiles do not select a transport; dedicated channel commands own those
-    // adapters. Treating a scenario declaration as the selected channel misroutes the profile.
     const channel =
       profileReport.channelDriver === "qa-channel"
         ? "qa-channel"
-        : profileReport.channelDriver === "crabline"
-          ? (scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL)
-          : undefined;
+        : (scenario.execution.channel ??
+          (profileReport.channelDriver === "crabline"
+            ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL
+            : undefined));
     return scenarioMatchesQaProviderLane({
       scenario,
       providerMode: normalizedProviderMode,
@@ -995,7 +994,8 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     throw new Error("--channel override requires --channel-driver crabline or live.");
   }
   const liveChannelId = channelDriver === "live" ? opts.channel?.trim() : undefined;
-  const liveAdapterFactories = liveChannelId ? listLiveTransportQaAdapterFactories() : undefined;
+  const liveAdapterFactories =
+    channelDriver === "live" ? listLiveTransportQaAdapterFactories() : undefined;
   const liveAdapterFactory = liveChannelId
     ? liveAdapterFactories?.find((factory) => factory.id === liveChannelId)
     : undefined;
@@ -1126,10 +1126,10 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       evidenceMode: opts.evidenceMode,
       transportId,
       channelDriver,
-      ...(liveChannelId
+      ...(liveAdapterFactories
         ? {
             adapterFactories: liveAdapterFactories,
-            channelId: liveChannelId,
+            ...(liveChannelId ? { channelId: liveChannelId } : {}),
             adapterOptions: {
               repoRoot,
               sutAccountId: opts.sutAccountId,

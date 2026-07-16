@@ -521,7 +521,7 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.channelDriverSelection).toBeUndefined();
   });
 
-  it("keeps channel-specific scenarios out of generic live profile runs", async () => {
+  it("keeps portable channel scenarios in driver-selected profile runs", async () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "release",
@@ -532,7 +532,10 @@ describe("qa cli runtime", () => {
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.scenarioIds).toContain("channel-chat-baseline");
-    expect(suiteArgs.scenarioIds).not.toContain("telegram-help-command");
+    expect(suiteArgs.scenarioIds).toContain("telegram-help-command");
+    expect(suiteArgs.adapterFactories).toBe(
+      listLiveTransportQaAdapterFactories.mock.results[0]?.value,
+    );
   });
 
   it("runs the all profile through the live taxonomy profile path", async () => {
@@ -781,14 +784,19 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("keeps live taxonomy metadata unchanged without an explicit adapter channel", async () => {
+  it("loads contributed adapters without preselecting a scenario channel", async () => {
     await runQaSuiteCommand({
       channelDriver: "live",
       scenarioIds: ["channel-chat-baseline"],
     });
 
     expect(runQaSuite).toHaveBeenCalledWith(
-      expect.not.objectContaining({ adapterFactories: expect.anything() }),
+      expect.objectContaining({
+        adapterFactories: listLiveTransportQaAdapterFactories.mock.results[0]?.value,
+      }),
+    );
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.not.objectContaining({ channelId: expect.anything() }),
     );
   });
 
