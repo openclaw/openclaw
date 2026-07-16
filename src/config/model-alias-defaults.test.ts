@@ -95,6 +95,41 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
   }
 
+  function buildProviderTokenDefaultsConfig(params: {
+    providerContextWindow: number;
+    providerMaxTokens: number;
+    modelContextWindow?: number;
+    modelMaxTokens?: number;
+  }) {
+    return {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            api: "openai-completions",
+            contextWindow: params.providerContextWindow,
+            maxTokens: params.providerMaxTokens,
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                ...(params.modelContextWindow !== undefined
+                  ? { contextWindow: params.modelContextWindow }
+                  : {}),
+                ...(params.modelMaxTokens !== undefined
+                  ? { maxTokens: params.modelMaxTokens }
+                  : {}),
+              },
+            ],
+          },
+        },
+      },
+    } as never;
+  }
+
   function buildCustomProviderManifestRegistry() {
     return {
       plugins: [
@@ -427,6 +462,47 @@ describe("applyModelDefaults", () => {
     expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
     expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
     expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("inherits provider-level token limits when model limits are omitted", () => {
+    const cfg = buildProviderTokenDefaultsConfig({
+      providerContextWindow: 50_000,
+      providerMaxTokens: 4_096,
+    });
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(50_000);
+    expect(model?.maxTokens).toBe(4_096);
+  });
+
+  it("keeps model token limits ahead of provider-level defaults", () => {
+    const cfg = buildProviderTokenDefaultsConfig({
+      providerContextWindow: 50_000,
+      providerMaxTokens: 4_096,
+      modelContextWindow: 32_000,
+      modelMaxTokens: 16_000,
+    });
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(32_000);
+    expect(model?.maxTokens).toBe(16_000);
+  });
+
+  it("clamps an inherited provider maxTokens to the effective context window", () => {
+    const cfg = buildProviderTokenDefaultsConfig({
+      providerContextWindow: 4_096,
+      providerMaxTokens: 8_192,
+    });
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(4_096);
+    expect(model?.maxTokens).toBe(4_096);
   });
 
   it("clamps maxTokens to contextWindow", () => {
