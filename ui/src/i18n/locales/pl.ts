@@ -2502,10 +2502,10 @@ export const pl: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Brak danych do przedstawienia na wykresie.",
+        invalid: "Ten wykres zawiera nieprawidłowe dane lub opcje.",
+        label: "Wykres",
+        summary: "{title}: {count} punktów danych, w zakresie od {min} do {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

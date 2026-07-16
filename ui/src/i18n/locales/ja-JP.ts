@@ -2492,10 +2492,10 @@ export const ja_JP: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "グラフに表示するデータがありません。",
+        invalid: "このグラフには無効なデータまたはオプションがあります。",
+        label: "グラフ",
+        summary: "{title}: {count} 件のデータポイント、範囲は {min} から {max} です。",
       },
       sessions: {
         empty: "No sessions yet.",

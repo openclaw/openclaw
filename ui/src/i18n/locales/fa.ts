@@ -2478,10 +2478,10 @@ export const fa: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "داده‌ای برای نمایش در نمودار وجود ندارد.",
+        invalid: "این نمودار دارای داده‌ها یا گزینه‌های نامعتبر است.",
+        label: "نمودار",
+        summary: "{title}: {count} نقطهٔ داده، در بازهٔ {min} تا {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

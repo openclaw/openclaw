@@ -2492,10 +2492,10 @@ export const uk: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Немає даних для побудови діаграми.",
+        invalid: "Ця діаграма містить некоректні дані або параметри.",
+        label: "Діаграма",
+        summary: "{title}: {count} точок даних у діапазоні від {min} до {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

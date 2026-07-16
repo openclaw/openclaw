@@ -2499,10 +2499,10 @@ export const ru: TranslationMap = {
         more: "+{count} ещё",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Нет данных для построения диаграммы.",
+        invalid: "Эта диаграмма содержит недопустимые данные или параметры.",
+        label: "Диаграмма",
+        summary: "{title}: {count} точек данных, диапазон от {min} до {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

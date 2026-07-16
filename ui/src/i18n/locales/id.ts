@@ -2482,10 +2482,10 @@ export const id: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Tidak ada data untuk ditampilkan dalam grafik.",
+        invalid: "Grafik ini memiliki data atau opsi yang tidak valid.",
+        label: "Grafik",
+        summary: "{title}: {count} titik data, dengan rentang dari {min} hingga {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

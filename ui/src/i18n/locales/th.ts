@@ -2446,10 +2446,10 @@ export const th: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "ไม่มีข้อมูลสำหรับสร้างแผนภูมิ",
+        invalid: "แผนภูมินี้มีข้อมูลหรือตัวเลือกที่ไม่ถูกต้อง",
+        label: "แผนภูมิ",
+        summary: "{title}: จุดข้อมูล {count} จุด ตั้งแต่ {min} ถึง {max}",
       },
       sessions: {
         empty: "No sessions yet.",

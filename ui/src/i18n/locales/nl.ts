@@ -2494,10 +2494,10 @@ export const nl: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Geen gegevens om in een grafiek weer te geven.",
+        invalid: "Deze grafiek bevat ongeldige gegevens of opties.",
+        label: "Grafiek",
+        summary: "{title}: {count} gegevenspunten, variërend van {min} tot {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

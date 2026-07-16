@@ -2529,10 +2529,10 @@ export const fr: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Aucune donnée à afficher dans le graphique.",
+        invalid: "Ce graphique contient des données ou des options non valides.",
+        label: "Graphique",
+        summary: "{title} : {count} points de données, allant de {min} à {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

@@ -2457,10 +2457,10 @@ export const hi: TranslationMap = {
         more: "+{count} और",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "चार्ट बनाने के लिए कोई डेटा नहीं है।",
+        invalid: "इस चार्ट में अमान्य डेटा या विकल्प हैं।",
+        label: "चार्ट",
+        summary: "{title}: {count} डेटा बिंदु, {min} से {max} तक।",
       },
       sessions: {
         empty: "No sessions yet.",

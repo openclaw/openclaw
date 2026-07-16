@@ -2471,10 +2471,10 @@ export const ko: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "차트에 표시할 데이터가 없습니다.",
+        invalid: "이 차트의 데이터 또는 옵션이 유효하지 않습니다.",
+        label: "차트",
+        summary: "{title}: 데이터 포인트 {count}개, 범위는 {min}~{max}입니다.",
       },
       sessions: {
         empty: "No sessions yet.",

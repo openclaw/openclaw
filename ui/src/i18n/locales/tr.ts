@@ -2501,10 +2501,10 @@ export const tr: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Grafik oluşturmak için veri yok.",
+        invalid: "Bu grafikte geçersiz veriler veya seçenekler var.",
+        label: "Grafik",
+        summary: "{title}: {min} ile {max} arasında değişen {count} veri noktası.",
       },
       sessions: {
         empty: "No sessions yet.",

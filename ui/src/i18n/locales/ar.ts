@@ -2461,10 +2461,10 @@ export const ar: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "لا توجد بيانات لعرضها في المخطط.",
+        invalid: "يحتوي هذا المخطط على بيانات أو خيارات غير صالحة.",
+        label: "مخطط",
+        summary: "{title}: {count} من نقاط البيانات، تتراوح من {min} إلى {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

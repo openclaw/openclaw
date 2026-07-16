@@ -2430,10 +2430,10 @@ export const zh_CN: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "没有可用于绘制图表的数据。",
+        invalid: "此图表包含无效的数据或选项。",
+        label: "图表",
+        summary: "{title}：{count} 个数据点，范围从 {min} 到 {max}。",
       },
       sessions: {
         empty: "No sessions yet.",

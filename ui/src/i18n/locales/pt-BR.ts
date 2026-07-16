@@ -2490,10 +2490,10 @@ export const pt_BR: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Não há dados para exibir no gráfico.",
+        invalid: "Este gráfico contém dados ou opções inválidos.",
+        label: "Gráfico",
+        summary: "{title}: {count} pontos de dados, variando de {min} a {max}.",
       },
       sessions: {
         empty: "No sessions yet.",

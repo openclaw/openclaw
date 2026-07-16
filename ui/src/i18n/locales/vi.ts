@@ -2485,10 +2485,10 @@ export const vi: TranslationMap = {
         more: "+{count} more",
       },
       chart: {
-        empty: "No data to chart.",
-        invalid: "This chart has invalid data or options.",
-        label: "Chart",
-        summary: "{title}: {count} data points, ranging from {min} to {max}.",
+        empty: "Không có dữ liệu để vẽ biểu đồ.",
+        invalid: "Biểu đồ này có dữ liệu hoặc tùy chọn không hợp lệ.",
+        label: "Biểu đồ",
+        summary: "{title}: {count} điểm dữ liệu, nằm trong khoảng từ {min} đến {max}.",
       },
       sessions: {
         empty: "No sessions yet.",
