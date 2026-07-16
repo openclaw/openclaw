@@ -70,6 +70,9 @@ export type GatewayClient = {
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
+    /** Host-owned exact media set for a scoped automatic recovery delivery. */
+    internalDeliveryMediaUrls?: string[];
+    internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
   };

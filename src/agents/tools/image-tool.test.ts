@@ -22,7 +22,8 @@ import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
-import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { createImageTool } from "./image-tool.js";
+import { testing, resolveImageModelConfigForTool } from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
 function jsonRoundTrip<T>(value: T): T {

@@ -214,7 +214,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
