@@ -12,6 +12,7 @@ import {
   formatUnknownText,
   parseSessionKeyParts,
   setUiTimeFormatPreference,
+  toNumber,
   truncateText,
 } from "./format.ts";
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
@@ -299,5 +300,73 @@ describe("text truncation", () => {
   it("preserves ordinary truncation behavior", () => {
     expect(clampText("abc", 2)).toBe("a…");
     expect(truncateText("abc", 2)).toEqual({ text: "ab", truncated: true, total: 3 });
+  });
+});
+
+describe("toNumber", () => {
+  it("parses positive integer strings", () => {
+    expect(toNumber("10", 0)).toBe(10);
+    expect(toNumber("1", 0)).toBe(1);
+    expect(toNumber("999", 0)).toBe(999);
+  });
+
+  it("parses negative integer strings", () => {
+    expect(toNumber("-10", 0)).toBe(-10);
+    expect(toNumber("-1", 0)).toBe(-1);
+  });
+
+  it("parses negative decimal strings", () => {
+    expect(toNumber("-3.5", 0)).toBe(-3.5);
+    expect(toNumber("-0.25", 0)).toBe(-0.25);
+  });
+
+  it("parses zero", () => {
+    expect(toNumber("0", -1)).toBe(0);
+    expect(toNumber("-0", -1)).toBe(0);
+  });
+
+  it("parses decimal strings", () => {
+    expect(toNumber("3.5", 0)).toBe(3.5);
+    expect(toNumber(".5", 0)).toBe(0.5);
+    expect(toNumber("0.25", 0)).toBe(0.25);
+  });
+
+  it("rejects hex notation", () => {
+    expect(toNumber("0x10", 0)).toBe(0);
+    expect(toNumber("0xFF", 0)).toBe(0);
+  });
+
+  it("rejects scientific notation", () => {
+    expect(toNumber("1e3", 0)).toBe(0);
+    expect(toNumber("1.5e2", 0)).toBe(0);
+  });
+
+  it("rejects leading-plus notation", () => {
+    expect(toNumber("+1", 0)).toBe(0);
+    expect(toNumber("+10", 0)).toBe(0);
+  });
+
+  it("rejects empty and whitespace-only strings", () => {
+    expect(toNumber("", 0)).toBe(0);
+    expect(toNumber("   ", 0)).toBe(0);
+  });
+
+  it("rejects non-numeric strings", () => {
+    expect(toNumber("abc", 0)).toBe(0);
+    expect(toNumber("70junk", 0)).toBe(0);
+    expect(toNumber("12.5.3", 0)).toBe(0);
+  });
+
+  it("returns fallback for all rejected inputs", () => {
+    expect(toNumber("0x10", 42)).toBe(42);
+    expect(toNumber("1e3", -1)).toBe(-1);
+    expect(toNumber("+1", 99)).toBe(99);
+    expect(toNumber("junk", 5)).toBe(5);
+  });
+
+  it("handles leading/trailing whitespace", () => {
+    expect(toNumber("  10  ", 0)).toBe(10);
+    expect(toNumber("  -5  ", 0)).toBe(-5);
+    expect(toNumber("  0x10  ", 0)).toBe(0);
   });
 });

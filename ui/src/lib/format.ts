@@ -139,8 +139,17 @@ export function truncateText(
   };
 }
 
+const STRICT_DECIMAL_RE = /^-?(?:\d+(?:\.\d*)?|\.\d+)$/;
+
 export function toNumber(value: string, fallback: number): number {
-  const n = Number(value);
+  const trimmed = value.trim();
+  // Reject hex (0x10), scientific (1e3), and leading-plus (+1) notation
+  // so that form fields do not silently accept non-decimal input.
+  // Preserve an optional leading minus sign for negative plain decimals.
+  if (!STRICT_DECIMAL_RE.test(trimmed)) {
+    return fallback;
+  }
+  const n = Number(trimmed);
   return Number.isFinite(n) ? n : fallback;
 }
 
