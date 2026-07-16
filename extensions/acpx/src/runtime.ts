@@ -29,6 +29,10 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import {
+  isDisabledClaudeAcpEffortConfig,
+  normalizeClaudeAcpModelOverride,
+} from "./claude-acp-config.js";
 import { splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
@@ -336,7 +340,6 @@ const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
 const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
-const CLAUDE_ACP_OPENCLAW_PREFIX = "anthropic/";
 const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
@@ -575,17 +578,6 @@ function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
   return override.reasoningEffort
     ? `${override.model}/${override.reasoningEffort}`
     : override.model;
-}
-
-function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
-  const raw = rawModel?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  if (!raw.toLowerCase().startsWith(CLAUDE_ACP_OPENCLAW_PREFIX)) {
-    return raw;
-  }
-  return raw.slice(CLAUDE_ACP_OPENCLAW_PREFIX.length).trim() || undefined;
 }
 
 function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
@@ -1293,6 +1285,14 @@ export class AcpxRuntime implements AcpRuntime {
     const key = input.key.trim().toLowerCase();
     const isCodexAcp = isCodexAcpCommand(command);
     if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcpCommand(command))) {
+      return;
+    }
+    if (isClaudeAcpCommand(command) && isDisabledClaudeAcpEffortConfig(key, input.value)) {
+      await delegate.setConfigOption({
+        ...input,
+        key: "effort",
+        value: "default",
+      });
       return;
     }
     if (isCodexAcp) {
