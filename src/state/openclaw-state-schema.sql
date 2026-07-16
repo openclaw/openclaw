@@ -873,7 +873,7 @@ CREATE TABLE IF NOT EXISTS channel_health_escalations (
   window_started_at_ms INTEGER NOT NULL,
   escalation_count INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS acp_sessions (
   session_key TEXT NOT NULL PRIMARY KEY,
