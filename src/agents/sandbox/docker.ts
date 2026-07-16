@@ -10,7 +10,6 @@ import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import {
   sanitizeEnvVars,
   sanitizeExplicitSandboxEnvVars,
-  type EnvSanitizationOptions,
 } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -322,12 +321,6 @@ export function buildSandboxCreateArgs(params: {
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
   allowContainerNamespaceJoin?: boolean;
-  /**
-   * @deprecated Docker container creation now treats cfg.env as explicit sandbox
-   * configuration and ignores host-env name filters. This field is kept so SDK
-   * callers with existing object literals do not hit excess-property failures.
-   */
-  envSanitizationOptions?: EnvSanitizationOptions;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({

@@ -165,10 +165,6 @@ interface DefaultResourceLoaderOptions {
   };
   systemPromptTransform?: (base: string | undefined) => string | undefined;
   appendSystemPromptTransform?: (base: string[]) => string[];
-  /** @deprecated Public SDK alias. Use systemPromptTransform. */
-  systemPromptOverride?: (base: string | undefined) => string | undefined;
-  /** @deprecated Public SDK alias. Use appendSystemPromptTransform. */
-  appendSystemPromptOverride?: (base: string[]) => string[];
 }
 
 export class DefaultResourceLoader implements ResourceLoader {
@@ -258,9 +254,8 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.promptsOverride = options.promptsOverride;
     this.themesOverride = options.themesOverride;
     this.agentsFilesOverride = options.agentsFilesOverride;
-    this.systemPromptTransform = options.systemPromptTransform ?? options.systemPromptOverride;
-    this.appendSystemPromptTransform =
-      options.appendSystemPromptTransform ?? options.appendSystemPromptOverride;
+    this.systemPromptTransform = options.systemPromptTransform;
+    this.appendSystemPromptTransform = options.appendSystemPromptTransform;
 
     this.extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
     this.skills = [];

@@ -156,7 +156,6 @@ vi.mock("../../agents/model-fallback.js", () => ({
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   compactEmbeddedAgentSession: (params: unknown) => state.compactEmbeddedAgentSessionMock(params),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
