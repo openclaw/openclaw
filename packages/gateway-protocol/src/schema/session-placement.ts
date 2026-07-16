@@ -1,20 +1,18 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
+import { SESSION_PLACEMENT_STATES } from "./session-placement-state.js";
+
+export {
+  isCloudWorkerPlacementState,
+  SESSION_PLACEMENT_STATES,
+  type SessionPlacementState,
+} from "./session-placement-state.js";
 
 /** Durable gateway ownership states for one session execution placement. */
-export const SessionPlacementStateSchema = Type.Union([
-  Type.Literal("local"),
-  Type.Literal("requested"),
-  Type.Literal("provisioning"),
-  Type.Literal("syncing"),
-  Type.Literal("starting"),
-  Type.Literal("active"),
-  Type.Literal("draining"),
-  Type.Literal("reconciling"),
-  Type.Literal("reclaimed"),
-  Type.Literal("failed"),
-]);
+export const SessionPlacementStateSchema = Type.Union(
+  SESSION_PLACEMENT_STATES.map((state) => Type.Literal(state)),
+);
 
 const SessionPlacementTimingProperties = {
   generation: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -214,15 +212,8 @@ export const SessionPlacementProtocolSchemas = {
   SessionsReclaimResult: SessionsReclaimResultSchema,
 } as const;
 
-export type SessionPlacementState = Static<typeof SessionPlacementStateSchema>;
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
-
-export function isCloudWorkerPlacementState(
-  state: SessionPlacementState | undefined,
-): state is Exclude<SessionPlacementState, "local" | "reclaimed"> {
-  return state !== undefined && state !== "local" && state !== "reclaimed";
-}
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;
 export type SessionsReclaimResult = Static<typeof SessionsReclaimResultSchema>;

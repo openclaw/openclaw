@@ -1,12 +1,14 @@
 import { html, nothing } from "lit";
-import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/index.js";
+// Deep import on purpose: the protocol barrel carries typebox and every
+// schema, which must stay out of the Control UI startup bundle.
+import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
-export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/index.js";
+export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
 export function isStoppableCloudWorkerPlacement(
   placement: GatewaySessionRow["placement"],
