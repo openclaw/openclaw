@@ -17,13 +17,15 @@ import type {
   UnifiedModelCatalogEntry,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runGitHubCopilotDeviceFlow } from "./login.js";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+  fetchWithSsrFGuard: vi.fn<typeof fetchWithSsrFGuard>(async (params) => ({
     response: await fetch(params.url, params.init),
+    finalUrl: params.url,
     release: vi.fn(async () => {}),
   })),
   resolveCopilotApiToken: vi.fn(),
@@ -84,6 +86,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
     response: await fetch(params.url, params.init),
+    finalUrl: params.url,
     release: vi.fn(async () => {}),
   }));
   clearRuntimeAuthProfileStoreSnapshots();

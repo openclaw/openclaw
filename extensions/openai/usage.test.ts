@@ -17,7 +17,7 @@ async function fetchAdminUsage(params: {
     resolveApiKeyFromConfigAndStore: () => undefined,
     resolveOAuthToken: async () => null,
   });
-  if (!auth.token) {
+  if (!("token" in auth) || !auth.token) {
     throw new Error("expected encoded OpenAI admin token");
   }
   return await fetchOpenAIUsage({

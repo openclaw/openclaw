@@ -346,6 +346,7 @@ describe("openrouter image generation provider", () => {
 
     const result = await buildOpenRouterImageGenerationProvider().generateImage({
       provider: "openrouter",
+      model: "google/gemini-3.1-flash-image-preview",
       prompt: "draw image fallbacks",
       cfg: {},
     });
@@ -375,6 +376,7 @@ describe("openrouter image generation provider", () => {
     await expect(
       buildOpenRouterImageGenerationProvider().generateImage({
         provider: "openrouter",
+        model: "google/gemini-3.1-flash-image-preview",
         prompt: "draw invalid fallback",
         cfg: {},
       }),

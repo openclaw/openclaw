@@ -54,9 +54,14 @@ function captureOpenCodeSessionRegistrations(pluginConfig: unknown = {}) {
   registerOpenCodeSessionCatalog({
     pluginConfig,
     runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
-    registerSessionCatalog: (catalog) => catalogs.push(catalog),
-    registerNodeHostCommand: (command) => commands.push(command),
-    registerNodeInvokePolicy: (policy) => policies.push(policy),
+    registerSessionCatalog: (catalog: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0]) =>
+      catalogs.push(catalog),
+    registerNodeHostCommand: (
+      command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
+    ) => commands.push(command),
+    registerNodeInvokePolicy: (
+      policy: Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0],
+    ) => policies.push(policy),
   } as unknown as OpenClawPluginApi);
   return { catalogs, commands, policies };
 }
