@@ -204,6 +204,13 @@ class ChatController internal constructor(
   private val _pendingToolCalls = MutableStateFlow<List<ChatPendingToolCall>>(emptyList())
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
 
+  private val _planSteps = MutableStateFlow<List<ChatPlanStep>>(emptyList())
+  val planSteps: StateFlow<List<ChatPlanStep>> = _planSteps.asStateFlow()
+
+  // Owning run for the current plan snapshot; run-scoped terminal events must
+  // not clear another run's checklist (parallel/delayed runs share a session).
+  private var planRunId: String? = null
+
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
 
@@ -337,6 +344,7 @@ class ChatController internal constructor(
     pendingToolCallsById.clear()
     publishPendingToolCalls()
     _streamingAssistantText.value = null
+    clearPlanSteps()
     _historyLoading.value = false
     _sessionId.value = null
     // Failed connect attempts pass through onGatewayScopeChanging, which empties the published
@@ -442,6 +450,7 @@ class ChatController internal constructor(
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
+        clearPlanSteps()
       }
       appliedMainSessionKey = "main"
       beginHistoryLoad(
@@ -1120,6 +1129,7 @@ class ChatController internal constructor(
     pendingToolCallsById.clear()
     publishPendingToolCalls()
     _streamingAssistantText.value = null
+    clearPlanSteps()
     _sessionId.value = null
     _historyLoading.value = markLoading
     if (clearMessages) {
@@ -1289,6 +1299,7 @@ class ChatController internal constructor(
     _streamingAssistantText.value = null
     pendingToolCallsById.clear()
     publishPendingToolCalls()
+    clearPlanSteps()
 
     // Dispatch ownership lives in the controller scope: cancelling the calling UI scope
     // (leaving the chat screen mid-send) after the durable claim must not strand a Sending
@@ -1332,6 +1343,7 @@ class ChatController internal constructor(
             pendingToolCallsById.clear()
             publishPendingToolCalls()
             _streamingAssistantText.value = null
+            clearPlanSteps()
             if (ack.isTerminalSuccess) {
               unresolvedRepliesByRunId.remove(actualRunId)
               refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
@@ -1599,6 +1611,7 @@ class ChatController internal constructor(
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
+        clearPlanSteps()
         refreshHistoryForRecovery()
       }
       "chat" -> {
@@ -2798,6 +2811,7 @@ class ChatController internal constructor(
             pendingToolCallsById.clear()
             publishPendingToolCalls()
             _streamingAssistantText.value = null
+            clearPlanStepsFor(runId)
             updateLocalizedErrorText(
               if (state == "error") {
                 payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed")
@@ -2831,6 +2845,7 @@ class ChatController internal constructor(
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
+        clearPlanStepsFor(runId)
         val terminalRunIds = runId?.let(::setOf) ?: unresolvedRepliesByRunId.keys.toSet()
         refreshCurrentHistoryBestEffort(
           runIdsToReconcile = terminalRunIds,
@@ -2920,12 +2935,19 @@ class ChatController internal constructor(
           publishPendingToolCalls()
         }
       }
+      "plan" -> {
+        if (runId.isNullOrBlank()) return
+        if (data?.get("phase").asStringOrNull() != "update") return
+        planRunId = runId
+        _planSteps.value = parseChatPlanSteps(data?.get("steps"))
+      }
       "error" -> {
         updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
         clearPendingRuns()
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
+        clearPlanSteps()
       }
     }
   }
@@ -2948,6 +2970,17 @@ class ChatController internal constructor(
   private fun publishPendingToolCalls() {
     _pendingToolCalls.value =
       pendingToolCallsById.values.sortedBy { it.startedAtMs }
+  }
+
+  private fun clearPlanSteps() {
+    planRunId = null
+    _planSteps.value = emptyList()
+  }
+
+  private fun clearPlanStepsFor(runId: String?) {
+    if (runId == null || planRunId == null || planRunId == runId) {
+      clearPlanSteps()
+    }
   }
 
   /**
@@ -3061,6 +3094,7 @@ class ChatController internal constructor(
     pendingToolCallsById.clear()
     publishPendingToolCalls()
     _streamingAssistantText.value = null
+    clearPlanSteps()
   }
 
   private fun clearPendingRuns(

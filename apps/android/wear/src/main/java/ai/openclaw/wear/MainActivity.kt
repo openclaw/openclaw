@@ -104,7 +104,11 @@ internal fun OpenClawWearApp(
     interaction = WearInteractionState.SENDING
     speaker.stop()
     scope.launch {
-      val submitted = client.sendMessage(message)
+      val submitted =
+        client.sendMessage(
+          message = message,
+          sessionId = snapshot?.activeSessionId,
+        )
       if (submitted.snapshot == null) {
         reportFailure(submitted)
         actionBusy = false
@@ -142,24 +146,6 @@ internal fun OpenClawWearApp(
         view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
         if (autoSpeak) speaker.speak(completedReply)
       }
-    }
-  }
-
-  fun selectAgent(agentId: String) {
-    if (actionBusy) return
-    actionBusy = true
-    interaction = WearInteractionState.AGENT_WORKING
-    speaker.stop()
-    scope.launch {
-      val result = client.selectAgent(agentId)
-      if (result.snapshot == null) {
-        reportFailure(result)
-      } else {
-        applyResult(result)
-        interaction = WearInteractionState.READY
-        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-      }
-      actionBusy = false
     }
   }
 
@@ -319,7 +305,6 @@ internal fun OpenClawWearApp(
               view.performHapticFeedback(HapticFeedbackConstants.REJECT)
             }
         },
-        onSelectAgent = ::selectAgent,
         onSelectSession = ::selectSession,
         onRefresh = ::refresh,
         onThemeModeChange = { selectedMode ->

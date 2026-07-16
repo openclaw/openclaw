@@ -22,6 +22,10 @@ import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js"
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import {
+  formatExternalSupervisorUpdateRequired,
+  isGatewayExternallySupervised,
+} from "../../infra/gateway-supervision.js";
+import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
 } from "../../infra/package-update-steps.js";
@@ -542,6 +546,11 @@ async function updateCommandInternal(
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
+    return;
+  }
+  if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
+    defaultRuntime.error(formatExternalSupervisorUpdateRequired());
+    defaultRuntime.exit(1);
     return;
   }
   if (opts.dryRun !== true) {
@@ -1461,7 +1470,11 @@ async function updateCommandInternal(
           processEnv: process.env,
           serviceEnv: gatewayServiceEnv,
         });
-        restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
+        restartScriptPath = await prepareRestartScript(
+          serviceState.env,
+          gatewayPort,
+          serviceOwnershipConfirmed ? serviceState.command?.programArguments : undefined,
+        );
         // An ambiguous wrapper may be stopped and restored, but only proven
         // ownership authorizes rewriting the service definition.
         refreshGatewayServiceEnvLocal = serviceOwnershipConfirmed;

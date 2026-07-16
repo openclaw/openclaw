@@ -1,4 +1,5 @@
 // Discord plugin module implements inbound job behavior.
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelInfoSafe,
@@ -23,7 +24,7 @@ export type DiscordInboundJob = {
   queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayKeys?: string[];
+  replayClaims?: readonly ChannelReplayClaimHandle[];
 };
 
 function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
@@ -42,7 +43,7 @@ function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): 
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
+  options?: { replayClaims?: readonly ChannelReplayClaimHandle[] },
 ): DiscordInboundJob {
   const {
     runtime,
@@ -77,7 +78,7 @@ export function buildDiscordInboundJob(
       threadBindings,
       discordRestFetch,
     },
-    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
+    replayClaims: options?.replayClaims,
   };
 }
 

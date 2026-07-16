@@ -8,6 +8,7 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
@@ -2218,6 +2219,7 @@ class NodeRuntime private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
@@ -6547,7 +6549,7 @@ class NodeRuntime private constructor(
       sanitizeGatewayLogText(message)
         .trim()
         .replace(Regex("\\s+"), " ")
-        .take(240)
+        .takeUtf16Safe(240)
         .ifEmpty { "Log entry" }
     return GatewayLogEntry(
       time = time,

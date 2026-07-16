@@ -36,6 +36,7 @@ export type GuidedOnboardingDeps = {
   ) => Promise<void>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<void>;
+  runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
 };
 
 type GuidedOnboardingHandoff = { workspace: string };
@@ -409,6 +410,14 @@ async function runGuidedOnboardingFlow(
   }
 
   await prompter.note(resultLines.join("\n"), t("wizard.guided.appliedTitle"));
+  const persistedSnapshot = await readConfigFileSnapshot();
+  const persistedConfig = persistedSnapshot.valid
+    ? (persistedSnapshot.sourceConfig ?? persistedSnapshot.config)
+    : acknowledgedConfig;
+  const runMemoryImport =
+    deps.runSetupMemoryImportStep ??
+    (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
+  await runMemoryImport({ config: persistedConfig, prompter, runtime });
   return { workspace };
 }
 

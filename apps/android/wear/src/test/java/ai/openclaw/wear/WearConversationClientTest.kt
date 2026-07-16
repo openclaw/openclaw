@@ -1,28 +1,32 @@
 package ai.openclaw.wear
 
-import ai.openclaw.wear.shared.WEAR_CONVERSATION_PROTOCOL_VERSION
 import ai.openclaw.wear.shared.WearConversationErrorCode
-import ai.openclaw.wear.shared.WearConversationResponse
-import ai.openclaw.wear.shared.WearConversationResult
+import ai.openclaw.wear.shared.WearConversationPayloadCodec
 import ai.openclaw.wear.shared.WearConversationSnapshot
+import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearGatewayState
+import ai.openclaw.wear.shared.WearMessage
+import ai.openclaw.wear.shared.WearRpcError
+import ai.openclaw.wear.shared.toWireCode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class WearConversationClientTest {
   @Test
-  fun mapsSnapshotToReadyClientResult() {
+  fun mapsSharedEnvelopeSnapshotToReadyClientResult() {
     val snapshot =
       WearConversationSnapshot(
         generatedAtEpochMillis = 1234L,
         gatewayState = WearGatewayState.CONNECTED,
       )
     val response =
-      WearConversationResponse(
-        requestId = "request-1",
-        result = WearConversationResult.OK,
-        snapshot = snapshot,
+      WearDecodeResult.Success(
+        WearMessage.Response(
+          requestId = "request-1",
+          ok = true,
+          result = WearConversationPayloadCodec.encodeSnapshot(snapshot),
+        ),
       )
 
     val result = response.toClientResult(expectedRequestId = "request-1")
@@ -34,10 +38,16 @@ class WearConversationClientTest {
   @Test
   fun mapsGatewayOfflineToActionableFailure() {
     val response =
-      WearConversationResponse(
-        requestId = "request-2",
-        result = WearConversationResult.ERROR,
-        errorCode = WearConversationErrorCode.GATEWAY_OFFLINE,
+      WearDecodeResult.Success(
+        WearMessage.Response(
+          requestId = "request-2",
+          ok = false,
+          error =
+            WearRpcError(
+              code = WearConversationErrorCode.GATEWAY_OFFLINE.toWireCode(),
+              message = "Gateway is offline",
+            ),
+        ),
       )
 
     val result = response.toClientResult(expectedRequestId = "request-2")
@@ -49,11 +59,16 @@ class WearConversationClientTest {
   @Test
   fun rejectsMismatchedRequestIdentity() {
     val response =
-      WearConversationResponse(
-        protocolVersion = WEAR_CONVERSATION_PROTOCOL_VERSION,
-        requestId = "different-request",
-        result = WearConversationResult.ERROR,
-        errorCode = WearConversationErrorCode.PHONE_NOT_READY,
+      WearDecodeResult.Success(
+        WearMessage.Response(
+          requestId = "different-request",
+          ok = false,
+          error =
+            WearRpcError(
+              code = WearConversationErrorCode.PHONE_NOT_READY.toWireCode(),
+              message = "Phone runtime is not ready",
+            ),
+        ),
       )
 
     val result = response.toClientResult(expectedRequestId = "request-3")

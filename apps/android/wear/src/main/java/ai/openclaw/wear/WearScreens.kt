@@ -60,7 +60,6 @@ internal fun OpenClawWearScreens(
   autoSpeak: Boolean,
   onTalk: () -> Unit,
   onType: () -> Unit,
-  onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onRefresh: () -> Unit,
   onThemeModeChange: (WearThemeMode) -> Unit,
@@ -106,8 +105,6 @@ internal fun OpenClawWearScreens(
         AGENTS_PAGE ->
           AgentsPage(
             agents = snapshot.agents,
-            actionBusy = actionBusy,
-            onSelectAgent = onSelectAgent,
           )
         SESSIONS_PAGE ->
           SessionsPage(
@@ -222,8 +219,6 @@ private fun ChatPage(
 @Composable
 private fun AgentsPage(
   agents: List<WearAgentSummary>,
-  actionBusy: Boolean,
-  onSelectAgent: (String) -> Unit,
 ) {
   WearPage(pageLabel = stringResource(R.string.agents)) {
     if (agents.isEmpty()) {
@@ -246,11 +241,11 @@ private fun AgentsPage(
               if (agent.selected) {
                 stringResource(R.string.active_agent)
               } else {
-                stringResource(R.string.select_agent)
+                stringResource(R.string.available_agent)
               },
             selected = agent.selected,
-            enabled = !actionBusy && !agent.selected,
-            onClick = { onSelectAgent(agent.id) },
+            enabled = false,
+            onClick = {},
           )
         }
       }

@@ -1,7 +1,25 @@
 plugins {
-  alias(libs.plugins.kotlin.jvm)
-  alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.android.library)
   alias(libs.plugins.ktlint)
+  alias(libs.plugins.kotlin.serialization)
+}
+
+android {
+  namespace = "ai.openclaw.wear.shared"
+  compileSdk = 37
+
+  defaultConfig {
+    minSdk = 31
+  }
+
+  compileOptions {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+  }
+
+  lint {
+    warningsAsErrors = true
+  }
 }
 
 kotlin {
@@ -11,12 +29,8 @@ kotlin {
   }
 }
 
-java {
-  sourceCompatibility = JavaVersion.VERSION_17
-  targetCompatibility = JavaVersion.VERSION_17
-}
-
 ktlint {
+  android.set(true)
   ignoreFailures.set(false)
   filter {
     exclude("**/build/**")
@@ -24,6 +38,6 @@ ktlint {
 }
 
 dependencies {
-  implementation(libs.kotlinx.serialization.json)
+  api(libs.kotlinx.serialization.json)
   testImplementation(libs.junit)
 }

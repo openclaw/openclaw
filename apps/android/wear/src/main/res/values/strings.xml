@@ -28,7 +28,7 @@
     <string name="no_agents">No agents available</string>
     <string name="no_agents_detail">Open OpenClaw on the paired phone and refresh.</string>
     <string name="active_agent">Active agent</string>
-    <string name="select_agent">Select agent</string>
+    <string name="available_agent">Available on paired phone</string>
     <string name="no_sessions">No sessions available</string>
     <string name="no_sessions_detail">Start or open a session in OpenClaw on the paired phone.</string>
     <string name="current_session">Current session</string>

@@ -914,7 +914,7 @@ async function prepareCronRunContext(params: {
   const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
   const modelApi =
     findModelInCatalog(thinkingCatalog, provider, model)?.api ??
-    configuredProvider?.models.find((candidate) => candidate.id === model)?.api ??
+    configuredProvider?.models?.find((candidate) => candidate.id === model)?.api ??
     configuredProvider?.api;
   const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
     cfg: cfgWithAgentDefaults,

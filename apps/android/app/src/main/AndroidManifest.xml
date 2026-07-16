@@ -52,15 +52,14 @@
             android:exported="false"
             android:foregroundServiceType="${nodeForegroundServiceType}" />
         <service
-            android:name=".wear.WearStatusBridgeService"
+            android:name=".wear.WearProxyService"
             android:exported="true"
             tools:ignore="ExportedService">
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
                 <data android:scheme="wear" />
                 <data android:host="*" />
-                <data android:path="/openclaw/v1/status" />
-                <data android:path="/openclaw/v1/conversation" />
+                <data android:path="/openclaw/wear/v1/request" />
             </intent-filter>
         </service>
         <service

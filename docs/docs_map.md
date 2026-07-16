@@ -1565,6 +1565,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Run the Gateway
   - H3: Options
   - H2: Restart the Gateway
+  - H3: External supervisors
   - H3: Gateway profiling
   - H2: Query a running Gateway
   - H3: gateway health
@@ -4114,6 +4115,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Env var substitution in config
   - H2: Secret refs vs ${ENV} strings
   - H2: Path-related env vars
+  - H2: Agent helper tool downloads
   - H2: Logging
   - H3: OPENCLAWHOME
   - H2: nvm users: webfetch TLS failures
@@ -6103,6 +6105,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/baseten.md
+
+- Route: /plugins/reference/baseten
+- Headings:
+  - H1: Baseten plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/bonjour.md
 
 - Route: /plugins/reference/bonjour
@@ -7662,6 +7673,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Configuration options
   - H2: Notes
+  - H2: Related
+
+## providers/baseten.md
+
+- Route: /providers/baseten
+- Headings:
+  - H2: Install plugin
+  - H2: Getting started
+  - H2: Inkling
+  - H2: Bundled fallback catalog
+  - H2: Manual config
   - H2: Related
 
 ## providers/bedrock-mantle.md
