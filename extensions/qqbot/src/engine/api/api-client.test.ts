@@ -81,6 +81,7 @@ describe("ApiClient", () => {
         },
         signal: expect.any(AbortSignal),
       },
+      timeoutMs: 30_000,
       auditContext: "qqbot-api",
       policy: {
         hostnameAllowlist: ["qqbot.test"],
