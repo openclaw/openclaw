@@ -47,6 +47,7 @@ import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
 import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
+  resolvePreauthHandshakeTimeoutMs,
   resolveSafeTimeoutDelayMs,
 } from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
@@ -534,8 +535,15 @@ export class GatewayClient {
     }
     // Allow node screen snapshots and other large responses.
     this.deps.beforeConnect();
+    // Challenge timeout arms only after `open`. Bound the opening handshake so a
+    // peer that accepts TCP without upgrading cannot hang createSocket forever.
+    const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
+      env: this.opts.env,
+      configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+    });
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      handshakeTimeout: handshakeTimeoutMs,
       ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {

@@ -91,6 +91,41 @@ function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
 }
 
 describe("plugin tools MCP server", () => {
+  it("passes the managed ACP session agent into plugin tool factories", async () => {
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+    const runtimeRegistry = createMockPluginRegistry([]);
+    ensureStandalonePluginToolRegistryLoadedMock.mockReturnValue(runtimeRegistry);
+    const config = { plugins: { enabled: true } } as never;
+
+    resolvePluginToolsForMcp({
+      config,
+      agentSessionKey: "agent:research:acp:session-1",
+    });
+
+    const expectedContext = {
+      config,
+      agentId: "research",
+      sessionKey: "agent:research:acp:session-1",
+    };
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+      context: expectedContext,
+    });
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expectedContext, runtimeRegistry }),
+    );
+  });
+
+  it("rejects a non-agent session identity from the managed bridge", async () => {
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    expect(() =>
+      resolvePluginToolsForMcp({
+        config: { plugins: { enabled: true } } as never,
+        agentSessionKey: "research-session",
+      }),
+    ).toThrow("must be a canonical agent session key");
+  });
+
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
     const runtimeRegistry = createMockPluginRegistry([]);

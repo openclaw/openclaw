@@ -1,4 +1,5 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import WebSocket from "ws";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
 import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
@@ -10,6 +11,9 @@ type FetchLike = typeof fetch;
 // force unbounded allocation through response.json().
 const REEF_RELAY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const REEF_RELAY_ERROR_JSON_MAX_BYTES = 64 * 1024;
+// Relay envelopes are capped at 48 KiB. Leave room for inbox metadata while
+// rejecting oversized or compressed frames before ws materializes the message.
+const REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 
 export class ReefRelayError extends Error {
   constructor(
@@ -184,6 +188,10 @@ export interface WebSocketLike {
   addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
   addEventListener(type: "open" | "close" | "error", listener: () => void): void;
   close(): void;
+}
+
+export function createReefWebSocket(url: string): WebSocketLike {
+  return new WebSocket(url, { maxPayload: REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES });
 }
 
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {

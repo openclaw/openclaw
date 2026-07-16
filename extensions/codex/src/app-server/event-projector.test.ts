@@ -164,12 +164,21 @@ function requireArray(value: unknown, label: string): unknown[] {
 
 function expectUsageFields(
   usage: unknown,
-  expected: { input: number; output: number; cacheRead: number; total: number },
+  expected: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite?: number;
+    total: number;
+  },
 ) {
   const record = requireRecord(usage, "usage");
   expect(record.input).toBe(expected.input);
   expect(record.output).toBe(expected.output);
   expect(record.cacheRead).toBe(expected.cacheRead);
+  if (expected.cacheWrite !== undefined) {
+    expect(record.cacheWrite).toBe(expected.cacheWrite);
+  }
   expect(record.total ?? record.totalTokens).toBe(expected.total);
 }
 
@@ -313,20 +322,15 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(agentMessageDelta("hel"));
     await projector.handleNotification(agentMessageDelta("lo"));
     await projector.handleNotification(
-      forCurrentTurn("thread/tokenUsage/updated", {
-        tokenUsage: {
-          total: {
-            totalTokens: 900_000,
-            inputTokens: 700_000,
-            cachedInputTokens: 100_000,
-            outputTokens: 100_000,
-          },
-          last: {
-            totalTokens: 12,
-            inputTokens: 5,
-            cachedInputTokens: 2,
-            outputTokens: 7,
-          },
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          cacheWriteInputTokens: 1,
+          outputTokens: 7,
+          reasoningOutputTokens: 3,
         },
       }),
     );
@@ -345,12 +349,29 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
     expect(result.currentAttemptAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
-    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
-    expectUsageFields(result.lastAssistant?.usage, {
-      input: 3,
+    expectUsageFields(result.attemptUsage, {
+      input: 2,
       output: 7,
       cacheRead: 2,
+      cacheWrite: 1,
       total: 12,
+    });
+    expect(result.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
+    });
+    expectUsageFields(result.lastAssistant?.usage, {
+      input: 2,
+      output: 7,
+      cacheRead: 2,
+      cacheWrite: 1,
+      total: 12,
+    });
+    expect(result.lastAssistant?.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
@@ -604,10 +625,22 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
-  it("does not treat cumulative-only token usage as fresh context usage", async () => {
+  it("ignores cumulative thread usage after exact response usage", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          outputTokens: 7,
+          reasoningOutputTokens: 0,
+        },
+      }),
+    );
     await projector.handleNotification(
       forCurrentTurn("thread/tokenUsage/updated", {
         tokenUsage: {
@@ -624,12 +657,228 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.assistantTexts).toEqual(["done"]);
-    expect(result.attemptUsage).toBeUndefined();
+    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
+    expect(result.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
+    });
+  });
+
+  it("keeps cumulative-only thread usage unknown", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: {
+          total: {
+            totalTokens: 1_000_000,
+            inputTokens: 999_000,
+            cachedInputTokens: 500,
+            outputTokens: 500,
+          },
+          last: {
+            totalTokens: 12,
+            inputTokens: 5,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+          },
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["done"]);
+    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
+    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
     expectUsageFields(result.lastAssistant?.usage, {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      total: 0,
+      input: 3,
+      output: 7,
+      cacheRead: 2,
+      total: 12,
+    });
+    expect(result.lastAssistant?.usage.contextUsage).toEqual({ state: "unavailable" });
+  });
+
+  it.each([
+    ["incomplete", { totalTokens: 12 }],
+    [
+      "incoherent total",
+      {
+        totalTokens: 6,
+        inputTokens: 5,
+        cachedInputTokens: 2,
+        outputTokens: 7,
+        reasoningOutputTokens: 0,
+      },
+    ],
+    [
+      "impossible cache counts",
+      {
+        totalTokens: 12,
+        inputTokens: 5,
+        cachedInputTokens: 4,
+        cacheWriteInputTokens: 2,
+        outputTokens: 7,
+        reasoningOutputTokens: 0,
+      },
+    ],
+  ])("keeps %s response usage unknown", async (_label, usage) => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", { responseId: "response-1", usage }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["done"]);
+    expect(result.attemptUsage).toBeUndefined();
+    expect(result.lastAssistant?.usage.contextUsage).toBeUndefined();
+  });
+
+  it("clears prior response usage when the final response omits usage", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          outputTokens: 7,
+          reasoningOutputTokens: 0,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: {
+          last: {
+            totalTokens: 12,
+            inputTokens: 5,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+          },
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", { responseId: "response-2", usage: null }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
+    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+    expect(result.lastAssistant?.usage.contextUsage).toEqual({ state: "unavailable" });
+  });
+
+  it.each(["failed", "interrupted"])(
+    "invalidates exact response usage when the turn ends %s",
+    async (status) => {
+      const projector = await createProjector();
+
+      await projector.handleNotification(
+        forCurrentTurn("rawResponse/completed", {
+          responseId: "response-1",
+          usage: {
+            totalTokens: 12,
+            inputTokens: 5,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+            reasoningOutputTokens: 0,
+          },
+        }),
+      );
+      await projector.handleNotification(turnWithStatus(status));
+
+      expect(projector.buildResult(buildEmptyToolTelemetry()).attemptUsage).toBeUndefined();
+    },
+  );
+
+  it("invalidates exact response usage on retryable errors and explicit aborts", async () => {
+    const projector = await createProjector();
+    const exactUsage = {
+      totalTokens: 12,
+      inputTokens: 5,
+      cachedInputTokens: 2,
+      outputTokens: 7,
+      reasoningOutputTokens: 0,
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: exactUsage,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("error", { error: { message: "retry" }, willRetry: true }),
+    );
+    expect(projector.buildResult(buildEmptyToolTelemetry()).attemptUsage).toBeUndefined();
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-2",
+        usage: exactUsage,
+      }),
+    );
+    projector.markAborted();
+    expect(projector.buildResult(buildEmptyToolTelemetry()).attemptUsage).toBeUndefined();
+  });
+
+  it("restores exact response usage after recovering a completed assistant timeout", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "msg-1", text: "done" },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: {
+          last: {
+            totalTokens: 12,
+            inputTokens: 5,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+          },
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          outputTokens: 7,
+          reasoningOutputTokens: 0,
+        },
+      }),
+    );
+
+    projector.markTimedOut();
+    const timedOut = projector.buildResult(buildEmptyToolTelemetry());
+    expect(timedOut.aborted).toBe(true);
+    expect(timedOut.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+
+    expect(projector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout()).toBe(true);
+    const recovered = projector.buildResult(buildEmptyToolTelemetry());
+    expect(recovered.aborted).toBe(false);
+    expect(recovered.promptError).toBeNull();
+    expect(recovered.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
     });
   });
 

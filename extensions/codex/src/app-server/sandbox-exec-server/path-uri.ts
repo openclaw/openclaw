@@ -1,23 +1,10 @@
 /** Converts Codex PathUri protocol values into sandbox-backend path strings. */
 import { fileURLToPath } from "node:url";
 
-const URI_SCHEME_RE = /^([A-Za-z][A-Za-z0-9+.-]*):/u;
-const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/u;
 const WINDOWS_DRIVE_PATH_RE = /^\/[A-Za-z]:(?:\/|$)/u;
 
-/** Resolves one Codex exec-server path while retaining legacy native absolute paths. */
+/** Resolves one Codex exec-server PathUri into a POSIX sandbox path. */
 export function resolveExecServerPath(rawPath: string, label: string): string {
-  const scheme = WINDOWS_ABSOLUTE_PATH_RE.test(rawPath)
-    ? undefined
-    : URI_SCHEME_RE.exec(rawPath)?.[1]?.toLowerCase();
-  if (!scheme) {
-    // Codex versions before PathUri sent native absolute paths here.
-    return rawPath;
-  }
-  if (scheme !== "file") {
-    throw new Error(`${label} URI must use the file scheme, received ${scheme}.`);
-  }
-
   let pathUrl: URL;
   try {
     pathUrl = new URL(rawPath);
@@ -25,6 +12,11 @@ export function resolveExecServerPath(rawPath: string, label: string): string {
     throw new Error(
       `${label} must be a valid file URI: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
+    );
+  }
+  if (pathUrl.protocol !== "file:") {
+    throw new Error(
+      `${label} URI must use the file scheme, received ${pathUrl.protocol.slice(0, -1)}.`,
     );
   }
   if (pathUrl.search || pathUrl.hash) {
