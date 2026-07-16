@@ -1527,6 +1527,9 @@ describe("ci workflow guards", () => {
     );
     expect(cacheStep.with?.key).toContain(`platform-${appCompileSdk}.0-`);
     expect(installStep.run).toContain(`"${packageId}"`);
+    expect(installStep.run).toContain(
+      'yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]',
+    );
   });
 
   it("loads Android CI setup from the workflow revision for frozen targets", () => {
@@ -1568,7 +1571,7 @@ describe("ci workflow guards", () => {
       (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
     );
 
-    expect(source).toContain('{ check_name: "android-test-play", task: "test-play" }');
+    expect(source).toContain('task: useCompatibleAndroidCi ? "test-play-compat" : "test-play"');
     expect(source).toContain(
       '{ check_name: "android-test-third-party", task: "test-third-party" }',
     );
@@ -1795,7 +1798,8 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      // Concurrent Knip scans need cores and memory headroom.
+      runner: "blacksmith-16vcpu-ubuntu-2404",
     });
     expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
     expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
@@ -1983,17 +1987,29 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("bounds the workflow sanity ShellCheck download", () => {
+  it("bounds the workflow sanity tool downloads", () => {
     const workflow = readWorkflowSanityWorkflow();
-    const installStep = expectDefined(
+    const shellcheckStep = expectDefined(
       workflow.jobs.actionlint.steps.find(
         (step: WorkflowStep) => step.name === "Install ShellCheck",
       ),
       "ShellCheck install step",
     );
+    const actionlintStep = expectDefined(
+      workflow.jobs.actionlint.steps.find(
+        (step: WorkflowStep) => step.name === "Install actionlint",
+      ),
+      "actionlint install step",
+    );
 
-    expect(installStep.run).toContain("curl --connect-timeout 10 --max-time 120");
-    expect(installStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+    expect(shellcheckStep.run).toContain("curl --connect-timeout 10 --max-time 120");
+    expect(shellcheckStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+    expect(actionlintStep.run).toContain("--connect-timeout 10");
+    expect(actionlintStep.run).toContain("--max-time 120");
+    expect(actionlintStep.run).toContain("--retry 5");
+    expect(actionlintStep.run).toContain("--retry-delay 2");
+    expect(actionlintStep.run).toContain("--retry-all-errors");
+    expect(actionlintStep.run.match(/curl "\$\{curl_args\[@\]\}"/gu)).toHaveLength(2);
   });
 
   it("runs generated baseline drift checks in workflow sanity", () => {
@@ -2325,10 +2341,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
     expect(modern.status, modern.output).toBe(0);
-    expect(modern.calls).toEqual([
+    // The scripts launch concurrently; completion order is nondeterministic.
+    expect(modern.calls.toSorted()).toEqual([
       "deadcode:dependencies",
-      "deadcode:unused-files",
       "deadcode:exports",
+      "deadcode:unused-files",
     ]);
 
     const frozenWithExports = runDependencyCheckFixture({
@@ -2336,10 +2353,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
     expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
-    expect(frozenWithExports.calls).toEqual([
+    expect(frozenWithExports.calls.toSorted()).toEqual([
       "deadcode:dependencies",
-      "deadcode:unused-files",
       "deadcode:exports",
+      "deadcode:unused-files",
     ]);
 
     const frozen = runDependencyCheckFixture({
@@ -2352,14 +2369,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ],
     });
     expect(frozen.status, frozen.output).toBe(0);
-    expect(frozen.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+    expect(frozen.calls.toSorted()).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
 
     const currentWithoutExports = runDependencyCheckFixture({
       historicalTarget: false,
       scripts: ["deadcode:dependencies", "deadcode:unused-files"],
     });
     expect(currentWithoutExports.status).toBe(1);
-    expect(currentWithoutExports.calls).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
+    // The missing-script contract violation now fails fast before launching
+    // the concurrent scans instead of wasting two Knip runs first.
+    expect(currentWithoutExports.calls).toEqual([]);
     expect(currentWithoutExports.output).toContain(
       "Current CI targets must provide the deadcode:exports package script.",
     );
@@ -2506,6 +2525,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
     ).run;
     expect(androidRun).toContain("build-play-compat)");
+    expect(androidRun).toContain("test-play-compat)");
     expect(androidRun).toContain(":app:assemblePlayDebug");
 
     const legacy = runCiManifestFixture({ bundledPlanner: false });
@@ -2520,7 +2540,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       JSON.parse(expectDefined(legacy.outputs.android_matrix, "legacy Android matrix output"))
         .include,
     ).toEqual([
-      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-play", task: "test-play-compat" },
       { check_name: "android-test-third-party", task: "test-third-party" },
       { check_name: "android-build-play", task: "build-play-compat" },
     ]);
@@ -2814,7 +2834,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checkShard.run).toContain('has_package_script "deadcode:dependencies"');
     expect(checkShard.run).toContain('has_package_script "deadcode:unused-files"');
     expect(checkShard.run).toContain('has_package_script "deadcode:exports"');
-    expect(checkShard.run).toContain("pnpm deadcode:exports");
+    // The concurrent launcher invokes scripts through the dc_scripts array.
+    expect(checkShard.run).toContain("dc_scripts+=(deadcode:exports)");
     expect(checkShard.run).toContain(
       "Current CI targets must provide the deadcode:exports package script.",
     );

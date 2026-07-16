@@ -268,6 +268,39 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
+  it.each(["k3", "k3[1m]"])("forces %s adaptive max thinking", (modelId) => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
+      thinking: { type: "disabled", budget_tokens: 8192 },
+      output_config: { effort: "low", format: { type: "json_schema" } },
+      reasoning: { effort: "low" },
+      reasoning_effort: "low",
+      reasoningEffort: "low",
+    });
+
+    const wrapped = wrapKimiProviderStream({
+      provider: "kimi",
+      modelId,
+      extraParams: { thinking: "off" },
+      thinkingLevel: "off",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: modelId,
+      } as Model<"anthropic-messages">,
+      KIMI_CONTEXT,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max", format: { type: "json_schema" } },
+    });
+  });
+
   it("strips Anthropic cache_control markers before Kimi requests are sent", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
       system: [{ type: "text", text: "stable", cache_control: { type: "ephemeral", ttl: "1h" } }],

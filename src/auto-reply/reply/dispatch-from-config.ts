@@ -184,6 +184,7 @@ import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
   setChannelSourceTurnId,
+  shouldMintChannelSourceTurnId,
 } from "./source-turn-id.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -982,16 +983,18 @@ async function dispatchReplyFromConfigInner(
 
   const durableSourceTurnId =
     readChannelSourceTurnId(ctx) ??
-    buildChannelSourceTurnId({
-      provider: resolveOriginMessageProvider({
-        originatingChannel: replyRoute.channel,
-        provider: ctx.Provider ?? ctx.Surface,
-      }),
-      accountId: replyRoute.accountId,
-      conversationId: replyRoute.to,
-      messageId:
-        normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
-    });
+    (shouldMintChannelSourceTurnId(ctx.Provider ?? ctx.Surface)
+      ? buildChannelSourceTurnId({
+          provider: resolveOriginMessageProvider({
+            originatingChannel: replyRoute.channel,
+            provider: ctx.Provider ?? ctx.Surface,
+          }),
+          accountId: replyRoute.accountId,
+          conversationId: replyRoute.to,
+          messageId:
+            normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
+        })
+      : undefined);
   // Compute once before hooks. The prepared agent turn reuses this exact route-scoped id.
   setChannelSourceTurnId(ctx, durableSourceTurnId);
   if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {

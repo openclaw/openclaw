@@ -349,7 +349,13 @@ async function classifyWithReview(
     ...verdict,
   });
   if (verdict.decision === "deny") {
-    throw new PipelineError("guard", "guard denied message", verdict);
+    throw new PipelineError(
+      "guard",
+      direction === "outbound"
+        ? "Reef outbound guard denied the message. Do not retry or rephrase it automatically; ask the owner before sending related content."
+        : "guard denied message",
+      verdict,
+    );
   }
   if (verdict.decision === "review") {
     const approval = await options.reviewGate?.({

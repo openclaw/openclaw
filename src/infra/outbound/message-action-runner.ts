@@ -403,11 +403,15 @@ async function resolveChannel(
   toolContext?: { currentChannelProvider?: string },
   action?: ChannelMessageActionName,
 ) {
+  const channel = readStringParam(params, "channel");
+  // Explicit reads must never switch to the source conversation when their
+  // requested provider is unknown or unavailable.
+  const fallbackChannel =
+    action === "read" && channel ? undefined : toolContext?.currentChannelProvider;
   const selection = await resolveMessageChannelSelection({
     cfg,
-    channel: readStringParam(params, "channel"),
-    fallbackChannel: toolContext?.currentChannelProvider,
-    requireExplicitChannelAvailable: action === "read",
+    channel,
+    fallbackChannel,
   });
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;

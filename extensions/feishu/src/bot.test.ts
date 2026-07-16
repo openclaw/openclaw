@@ -4508,7 +4508,6 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
       resolveDebounceText: ({ event }) =>
         (JSON.parse(event.message.content) as { text: string }).text,
       hasProcessedMessage: vi.fn(async () => false),
-      recordProcessedMessage: vi.fn(async () => true),
     });
 
     await handler(createTextEvent("msg-text-first", "1710000000000", "first"));
@@ -4569,7 +4568,6 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
       handleMessage,
       resolveDebounceText: () => "",
       hasProcessedMessage: vi.fn(async () => false),
-      recordProcessedMessage: vi.fn(async () => true),
     });
 
     const firstEvent = createAudioEvent("file_audio_receive_first");
@@ -4581,16 +4579,16 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     expect(handleMessage).toHaveBeenCalledTimes(2);
     const firstCall = mockCallArg<{
       event?: FeishuMessageEvent;
-      processingClaimHeld?: boolean;
+      processingClaim?: { commit: () => Promise<boolean> };
     }>(handleMessage, 0, 0);
     expect(firstCall.event).toEqual(firstEvent);
-    expect(firstCall.processingClaimHeld).toBe(true);
+    expect(firstCall.processingClaim?.commit).toBeTypeOf("function");
     const secondCall = mockCallArg<{
       event?: FeishuMessageEvent;
-      processingClaimHeld?: boolean;
+      processingClaim?: { commit: () => Promise<boolean> };
     }>(handleMessage, 1, 0);
     expect(secondCall.event).toEqual(secondEvent);
-    expect(secondCall.processingClaimHeld).toBe(true);
+    expect(secondCall.processingClaim?.commit).toBeTypeOf("function");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

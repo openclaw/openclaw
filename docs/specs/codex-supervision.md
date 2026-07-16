@@ -113,8 +113,9 @@ or assume that daemon implicitly.
 ## Catalog flow
 
 The generic Gateway method `sessions.catalog.list` dispatches to the `codex`
-catalog provider, which always requests `archived: false` and
-the interactive `cli` and `vscode` source kinds. It combines:
+catalog provider, which always requests `archived: false` and lets App Server
+apply its interactive-source default: `cli`, `vscode`, Atlas, and ChatGPT. It
+combines:
 
 1. Gateway-local `thread/list` results from the supervision App Server,
    which defaults to managed user-home stdio.
@@ -264,11 +265,11 @@ snapshot; it is not the durable continuation thread. Starting a distinct
 canonical harness thread on the first turn prevents OpenClaw from becoming a
 competing source writer merely because process-local status failed to see a
 Desktop-owned turn. The visible-history mirror and pinned snapshot may omit work
-that has not yet completed in an active source. The original CLI or VS Code
-source remains eligible for both native and OpenClaw catalogs. The canonical
-branch remains a native Codex thread in the supervision store, but native clients
-may filter its `appServer` source kind, so Codex Desktop visibility is not a
-contract.
+that has not yet completed in an active source. The original CLI, VS Code,
+Atlas, or ChatGPT source remains eligible for both native and OpenClaw catalogs.
+The canonical branch remains a native Codex thread in the supervision store,
+but native clients may filter its `appServer` source kind, so Codex Desktop
+visibility is not a contract.
 
 ## Archive behavior
 

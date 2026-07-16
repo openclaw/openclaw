@@ -43,6 +43,9 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 setupRunAttemptTestHooks();
 
+const PNG_1X1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 let steeringSessionIndex = 0;
 
 function createSteeringParams() {
@@ -72,7 +75,7 @@ async function waitAndQueueActiveRunMessage(
 }
 
 describe("runCodexAppServerAttempt steering", () => {
-  it("forwards queued user input to the active app-server turn", async () => {
+  it("forwards queued text and images to the active app-server turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
 
@@ -82,7 +85,12 @@ describe("runCodexAppServerAttempt steering", () => {
     await waitForMethod("turn/start");
 
     let handle:
-      | { queueMessage: (text: string, options?: { debounceMs?: number }) => Promise<void> }
+      | {
+          queueMessage: (
+            text: string,
+            options?: Parameters<typeof queueActiveRunMessageForTest>[2],
+          ) => Promise<void>;
+        }
       | undefined;
     await vi.waitFor(() => {
       handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
@@ -90,7 +98,10 @@ describe("runCodexAppServerAttempt steering", () => {
       )?.[1] as typeof handle;
       expect(handle).toBeDefined();
     }, fastWait);
-    const delivered = handle!.queueMessage("more context", { debounceMs: 0 });
+    const delivered = handle!.queueMessage("more context", {
+      debounceMs: 0,
+      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+    });
     let deliverySettled = false;
     void delivered.finally(() => {
       deliverySettled = true;
@@ -146,7 +157,10 @@ describe("runCodexAppServerAttempt steering", () => {
     expect(steer?.params).toEqual({
       threadId: "thread-1",
       expectedTurnId: "turn-1",
-      input: [{ type: "text", text: "more context", text_elements: [] }],
+      input: [
+        { type: "text", text: "more context", text_elements: [] },
+        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+      ],
       clientUserMessageId: "openclaw:turn-1:steer:1",
     });
   });

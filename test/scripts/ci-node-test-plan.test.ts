@@ -187,7 +187,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
 
     expect(compact.length).toBeGreaterThanOrEqual(12);
-    expect(compact.length).toBeLessThanOrEqual(24);
+    expect(compact.length).toBeLessThanOrEqual(28);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);

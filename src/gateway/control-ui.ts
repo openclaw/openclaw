@@ -1,10 +1,8 @@
-// Gateway Control UI HTTP handler.
-// Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
 import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
+import { detectMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -39,6 +37,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -50,6 +49,7 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
+  type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
@@ -80,6 +80,7 @@ import {
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
   resolveTrustedHttpOperatorScopes,
+  setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
@@ -94,18 +95,6 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
-
-function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
-  // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
-  const fallback = filename.replace(/[^\x20-\x7e]|[%"\\]/g, "_") || "download";
-  const extended = encodeURIComponent(filename).replace(
-    /[\x27()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  const kind = kindFromMime(mime);
-  const inline = kind === "image" || kind === "audio" || kind === "video";
-  return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
-}
 
 type ControlUiRequestOptions = {
   basePath?: string;
@@ -283,9 +272,11 @@ async function authorizeControlUiReadRequest(
     rateLimiter?: AuthRateLimiter;
     allowQueryToken?: boolean;
     requiredOperatorMethod?: string;
+    onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
   },
 ): Promise<boolean> {
   if (!opts?.auth) {
+    opts?.onPluginFrameGrants?.([]);
     return true;
   }
 
@@ -306,7 +297,12 @@ async function authorizeControlUiReadRequest(
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   });
+  const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
+    opts.auth,
+    opts.trustedProxies,
+  );
   let resolvedAuthResult = authResult;
+  let verifiedDeviceScopes: string[] | undefined;
   if (
     !resolvedAuthResult.ok &&
     token &&
@@ -322,13 +318,12 @@ async function authorizeControlUiReadRequest(
         retryAfterMs: deviceRateCheck.retryAfterMs,
       };
     } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, {
-        requiredSharedGatewaySessionGeneration: resolveSharedGatewaySessionGeneration(
-          opts.auth,
-          opts.trustedProxies,
-        ),
-      });
-      if (deviceTokenOk) {
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, sharedAuthGeneration);
+      const deviceScopes = deviceTokenOk
+        ? await resolveControlUiDeviceReadTokenScopes(token)
+        : null;
+      if (deviceScopes) {
+        verifiedDeviceScopes = deviceScopes;
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
@@ -342,7 +337,20 @@ async function authorizeControlUiReadRequest(
     return false;
   }
 
-  const trustDeclaredOperatorScopes = resolvedAuthResult.method === "trusted-proxy";
+  const authMethod = resolvedAuthResult.method;
+  const trustDeclaredOperatorScopes = authMethod === "trusted-proxy" || authMethod === "tailscale";
+  if (opts.onPluginFrameGrants) {
+    opts.onPluginFrameGrants(
+      setPluginAuthCookie(
+        req,
+        res,
+        authMethod,
+        trustDeclaredOperatorScopes,
+        sharedAuthGeneration,
+        verifiedDeviceScopes,
+      ),
+    );
+  }
   if (!trustDeclaredOperatorScopes) {
     return true;
   }
@@ -364,7 +372,7 @@ async function authorizeControlUiReadRequest(
 
 async function authorizeControlUiDeviceReadToken(
   token: string,
-  opts: { requiredSharedGatewaySessionGeneration?: string },
+  requiredSharedGatewaySessionGeneration: string | undefined,
 ): Promise<boolean> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
@@ -380,13 +388,28 @@ async function authorizeControlUiDeviceReadToken(
       token,
       role: CONTROL_UI_OPERATOR_ROLE,
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
-      requiredSharedGatewaySessionGeneration: opts.requiredSharedGatewaySessionGeneration,
+      requiredSharedGatewaySessionGeneration,
     });
     if (verified.ok) {
       return true;
     }
   }
   return false;
+}
+
+async function resolveControlUiDeviceReadTokenScopes(token: string): Promise<string[] | null> {
+  const pairing = await listDevicePairing();
+  for (const device of pairing.paired) {
+    const operatorBearer = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
+    if (
+      operatorBearer &&
+      !operatorBearer.revokedAtMs &&
+      verifyPairingToken(token, operatorBearer.token)
+    ) {
+      return operatorBearer.scopes;
+    }
+  }
+  return null;
 }
 
 type AssistantMediaAvailability =
@@ -916,12 +939,16 @@ export async function handleControlUiHttpRequest(
   applyControlUiSecurityHeaders(res);
 
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
+    let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
     if (
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
         trustedProxies: opts?.trustedProxies,
         allowRealIpFallback: opts?.allowRealIpFallback,
         rateLimiter: opts?.rateLimiter,
+        onPluginFrameGrants: (grants) => {
+          pluginFrameGrants = grants;
+        },
       }))
     ) {
       return true;
@@ -963,6 +990,11 @@ export async function handleControlUiHttpRequest(
       seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
       terminalEnabled,
+      pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
+        pluginId,
+        path: grantPath,
+        match,
+      })),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

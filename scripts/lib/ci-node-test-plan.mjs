@@ -28,7 +28,9 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-const COMPACT_NODE_TEST_JOB_SECONDS = 260;
+// Fleet-loaded runners inflate measured hints by ~20-25%; a 220s packing cap
+// keeps the slowest bin near the 5-minute PR wall-clock budget under load.
+const COMPACT_NODE_TEST_JOB_SECONDS = 220;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
@@ -42,9 +44,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-auth", 32],
   ["agentic-agents-core-isolated", 10],
   ["agentic-agents-core-models", 66],
-  ["agentic-agents-core-runner-cli-1", 110],
-  ["agentic-agents-core-runner-cli-2", 110],
-  ["agentic-agents-core-runner-cli-3", 110],
+  ["agentic-agents-core-runner-cli-1", 60],
+  ["agentic-agents-core-runner-cli-2", 190],
+  ["agentic-agents-core-runner-cli-3", 60],
   ["agentic-agents-core-runner-commands", 30],
   ["agentic-agents-core-runner-embedded", 20],
   ["agentic-agents-core-runner-sessions", 18],
@@ -138,7 +140,7 @@ function isExclusiveCompactGroup(group) {
 // scales with the runner class. infra-process spawns child processes per test
 // and hit worker-startup timeouts under contention before serialization.
 const PINNED_WORKER_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$/u;
+  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-gateway-(?:core|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 
 function applyCompactGroupWorkerPins(group) {

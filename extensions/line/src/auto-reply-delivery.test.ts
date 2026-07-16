@@ -92,7 +92,6 @@ describe("deliverLineAutoReply", () => {
       createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
       pushMessagesLine,
       createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
-      createImageMessage,
       buildMediaMessage,
       createLocationMessage,
       ...overrides,
@@ -562,10 +561,9 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("keeps the image route for generic media without LINE-specific options", async () => {
-    // Parity with the push path (docs/channels/line.md): a bare media URL with no
-    // LINE media options stays on the image route and does not attempt resolution.
-    // A .mp4 proves it: if the generic path wrongly resolved by kind it would infer
-    // "video" (missing preview → build failure), so an image bubble means image route.
+    // A bare media URL stays on the image route, but shares validation with
+    // LINE-specific media. A .mp4 proves the explicit image fallback prevents
+    // extension-based video inference.
     const { deps, replyMessageLine, buildMediaMessage } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
@@ -582,7 +580,16 @@ describe("deliverLineAutoReply", () => {
     });
 
     expect(result.status).toBe("delivered");
-    expect(buildMediaMessage).not.toHaveBeenCalled();
+    expect(buildMediaMessage).toHaveBeenCalledWith(
+      "https://example.com/clip.mp4",
+      {
+        mediaKind: "image",
+        previewImageUrl: undefined,
+        durationMs: undefined,
+        trackingId: undefined,
+      },
+      "line:user:1",
+    );
     expect(replyMessageLine).toHaveBeenCalledWith(
       "token",
       [createImageMessage("https://example.com/clip.mp4")],
@@ -643,7 +650,7 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("does not expose credentials from media-only validation failures", async () => {
-    const lineData = { mediaKind: "image" as const };
+    const lineData = {};
     const mediaUrl = new URL("http://example.com/image.jpg");
     mediaUrl.username = ["line", "user"].join("-");
     mediaUrl.password = ["line", "fixture"].join("-");

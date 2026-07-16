@@ -550,7 +550,7 @@ async function waitForChatAgentRunOk(client: GatewayClient, runId: string): Prom
     },
   );
   if (result?.status !== "ok") {
-    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
+    throw new Error(`agent.wait failed for ${runId}: ${JSON.stringify(result)}`);
   }
 }
 

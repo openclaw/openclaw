@@ -65,6 +65,7 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
+  planStatus?: PlanStatus | null;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
 
@@ -328,6 +329,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  host.planStatus = null;
 }
 
 export type CompactionStatus = {
@@ -345,6 +347,21 @@ export type FallbackStatus = {
   reason?: string;
   attempts: string[];
   occurredAt: number;
+};
+
+export type PlanStatus = {
+  /** Owning run: run-scoped terminal cleanup must not clear another run's plan. */
+  runId?: string;
+  explanation?: string;
+  steps: Array<{
+    step: string;
+    status: "pending" | "in_progress" | "completed";
+  }>;
+};
+
+type PlanHost = ToolStreamHost & {
+  planStatus?: PlanStatus | null;
+  requestUpdate?: () => void;
 };
 
 type CompactionHost = ToolStreamHost & {
@@ -674,6 +691,60 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   return true;
 }
 
+function parsePlanSteps(value: unknown): PlanStatus["steps"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const steps: PlanStatus["steps"] = [];
+  // Plan contract allows at most one in_progress step; demote extras so the
+  // collapsed summary has one unambiguous current step (matches iOS/Android).
+  let hasActiveStep = false;
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const step = toTrimmedString(entry);
+      if (step) {
+        steps.push({ step, status: "pending" });
+      }
+      continue;
+    }
+    const item = readRecord(entry);
+    const step = toTrimmedString(item?.step);
+    const status = item?.status;
+    if (!step || (status !== "pending" && status !== "in_progress" && status !== "completed")) {
+      continue;
+    }
+    const normalizedStatus = status === "in_progress" && hasActiveStep ? "pending" : status;
+    hasActiveStep ||= status === "in_progress";
+    steps.push({ step, status: normalizedStatus });
+  }
+  return steps;
+}
+
+function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
+  // Plan snapshots are run-owned: a stale or spawned-run event in the same
+  // session must not overwrite (or clear) the active run's checklist. Mirrors
+  // the compaction/fallback acceptance policy (session-scoped when idle).
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return;
+  }
+  const data = payload.data ?? {};
+  if (data.phase !== "update") {
+    return;
+  }
+  const steps = parsePlanSteps(data.steps);
+  const explanation = toTrimmedString(data.explanation);
+  const runId = toTrimmedString(payload.runId);
+  host.planStatus =
+    steps.length > 0
+      ? {
+          ...(runId ? { runId } : {}),
+          ...(explanation ? { explanation } : {}),
+          steps,
+        }
+      : null;
+  host.requestUpdate?.();
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -705,6 +776,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (handlePreambleProgressEvent(host, payload)) {
+    return;
+  }
+
+  if (payload.stream === "plan") {
+    handlePlanEvent(host as PlanHost, payload);
     return;
   }
 

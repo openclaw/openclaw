@@ -24,12 +24,7 @@ import type { HooksConfig } from "./types.hooks.js";
 import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
-import type {
-  AudioConfig,
-  BroadcastConfig,
-  CommandsConfig,
-  MessagesConfig,
-} from "./types.messages.js";
+import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.messages.js";
 import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
@@ -218,8 +213,6 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  /** Audio command and media handling settings. */
-  audio?: AudioConfig;
   media?: {
     /** Preserve original uploaded filenames when storing inbound media. */
     preserveFilenames?: boolean;

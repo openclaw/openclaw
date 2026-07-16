@@ -186,8 +186,16 @@ jobs:
           # GitHub release downloads occasionally return transient 5xx responses.
           # Retry all curl errors here so workflow-sanity does not fail closed on
           # a one-off release edge outage.
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          curl_args=(
+            --connect-timeout 10
+            --max-time 120
+            --retry 5
+            --retry-delay 2
+            --retry-all-errors
+            -sSfL
+          )
+          curl "${curl_args[@]}" -o "${archive}" "${base_url}/${archive}"
+          curl "${curl_args[@]}" -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           grep " ${archive}\$" checksums.txt | sha256sum -c -
           tar -xzf "${archive}" actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint

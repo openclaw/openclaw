@@ -23,7 +23,6 @@ import type {
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
-import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
 import { requestCodexAppServerClientJson } from "./app-server/request.js";
 import {
   reclaimCurrentCodexSessionGeneration,
@@ -167,7 +166,6 @@ function createCodexSessionCatalogControlFromRequests(params: {
             modelProviders: [],
             sortKey: "recency_at",
             sortDirection: "desc",
-            sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
             ...(cwd ? { cwd } : {}),
             ...(cursor ? { cursor } : {}),
           },
