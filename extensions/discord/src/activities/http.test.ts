@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
@@ -31,10 +34,17 @@ async function startServer(
   options: {
     fetchGuard?: typeof fetchWithSsrFGuard;
     now?: () => number;
-    readVendorAsset?: () => Promise<Buffer>;
+    vendorAssetPath?: string;
+    readVendorAsset?: (assetPath: string) => Promise<Buffer>;
+    logError?: (message: string) => void;
   } = {},
 ): Promise<string> {
-  const route = createDiscordActivityHttpHandler({ runtime, ...options });
+  const route = createDiscordActivityHttpHandler({
+    runtime,
+    ...options,
+    vendorAssetPath:
+      options.vendorAssetPath ?? path.join(os.tmpdir(), "missing-discord-activity-sdk.mjs"),
+  });
   const server = createServer((req, res) => {
     void route.handleHttpRequest(req, res).then((handled) => {
       if (!handled) {
@@ -88,13 +98,18 @@ async function createWidget(
   runtime: DiscordActivitiesRuntime,
   params?: { createdAt?: number; channelId?: string; accountId?: string },
 ) {
+  const createdAt = params?.createdAt ?? 1;
   const widgetId = await runtime.store.createWidget({
     html: "<!doctype html><html><body><script>document.body.dataset.ready='yes'</script></body></html>",
     title: "Activity status",
     channelId: params?.channelId ?? "777",
     accountId: params?.accountId ?? "default",
-    createdAt: params?.createdAt ?? 1,
+    createdAt,
   });
+  await runtime.store.markWidgetDelivered(
+    widgetId,
+    String(1_000_000_000_000_000_000n + BigInt(createdAt)),
+  );
   return widgetId;
 }
 
@@ -468,6 +483,214 @@ describe("Discord Activity widget routes", () => {
     expect(secondCsp).toContain("connect-src 'none'");
   });
 
+  it("retires the matching pending launch when its custom ID resolves", async () => {
+    const runtime = createActivityTestRuntime();
+    await createWidget(runtime, { createdAt: 1 });
+    const launchedId = await createWidget(runtime, { createdAt: 2 });
+    await runtime.store.recordPendingLaunch({
+      accountId: "default",
+      channelId: "777",
+      discordUserId: "42",
+      widgetId: launchedId,
+      createdAt: 3,
+    });
+    const session = await runtime.store.createSession({
+      discordUserId: "42",
+      accountId: "default",
+    });
+    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+
+    const response = await fetch(
+      `${base}/discord/activity/api/widget?custom_id=${encodeURIComponent(buildDiscordActivityCustomId(launchedId))}&instance_id=instance-1`,
+      { headers: { Authorization: `Bearer ${session}` } },
+    );
+
+    expect(response.status).toBe(200);
+    // Lifecycle closed: a later click on a different widget must not be poisoned.
+    await expect(
+      runtime.store.consumePendingLaunch("default", "777", "42"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps a different-widget pending launch when a custom ID resolves", async () => {
+    const runtime = createActivityTestRuntime();
+    const requestedId = await createWidget(runtime, { createdAt: 1 });
+    const pendingId = await createWidget(runtime, { createdAt: 2 });
+    await runtime.store.recordPendingLaunch({
+      accountId: "default",
+      channelId: "777",
+      discordUserId: "42",
+      widgetId: pendingId,
+      createdAt: 3,
+    });
+    const session = await runtime.store.createSession({
+      discordUserId: "42",
+      accountId: "default",
+    });
+    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+
+    const response = await fetch(
+      `${base}/discord/activity/api/widget?custom_id=${encodeURIComponent(buildDiscordActivityCustomId(requestedId))}&instance_id=instance-1`,
+      { headers: { Authorization: `Bearer ${session}` } },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ id: requestedId });
+    await expect(runtime.store.consumePendingLaunch("default", "777", "42")).resolves.toMatchObject(
+      { widgetId: pendingId },
+    );
+  });
+
+  it.each(["", "ocactivity1_mangled"])(
+    "resolves %j custom ID through the pending launch",
+    async (customId) => {
+      const runtime = createActivityTestRuntime();
+      const pendingId = await createWidget(runtime, { createdAt: 1 });
+      await createWidget(runtime, { createdAt: 2 });
+      await runtime.store.recordPendingLaunch({
+        accountId: "default",
+        channelId: "777",
+        discordUserId: "42",
+        widgetId: pendingId,
+        createdAt: 3,
+      });
+      const session = await runtime.store.createSession({
+        discordUserId: "42",
+        accountId: "default",
+      });
+      const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+
+      const response = await fetch(
+        `${base}/discord/activity/api/widget?custom_id=${encodeURIComponent(customId)}&instance_id=instance-1`,
+        { headers: { Authorization: `Bearer ${session}` } },
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ id: pendingId });
+    },
+  );
+
+  it("falls through to the newest widget when overlapping launches target different widgets", async () => {
+    const runtime = createActivityTestRuntime();
+    const firstId = await createWidget(runtime, { createdAt: 1 });
+    const newestId = await createWidget(runtime, { createdAt: 2 });
+    const record = (widgetId: string, createdAt: number) =>
+      runtime.store.recordPendingLaunch({
+        accountId: "default",
+        channelId: "777",
+        discordUserId: "42",
+        widgetId,
+        createdAt,
+      });
+    await Promise.all([record(firstId, 3), record(newestId, 4)]);
+    const session = await runtime.store.createSession({
+      discordUserId: "42",
+      accountId: "default",
+    });
+    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+
+    const response = await fetch(`${base}/discord/activity/api/widget?instance_id=instance-1`, {
+      headers: { Authorization: `Bearer ${session}` },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ id: newestId });
+    await expect(
+      runtime.store.consumePendingLaunch("default", "777", "42"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps a pending launch when the same widget is clicked twice", async () => {
+    const runtime = createActivityTestRuntime();
+    const widgetId = await createWidget(runtime, { createdAt: 1 });
+    const record = (createdAt: number) =>
+      runtime.store.recordPendingLaunch({
+        accountId: "default",
+        channelId: "777",
+        discordUserId: "42",
+        widgetId,
+        createdAt,
+      });
+    await record(2);
+    await record(3);
+
+    await expect(runtime.store.consumePendingLaunch("default", "777", "42")).resolves.toMatchObject(
+      { widgetId },
+    );
+  });
+
+  it("consumes a pending launch after one widget resolution", async () => {
+    const runtime = createActivityTestRuntime();
+    const pendingId = await createWidget(runtime, { createdAt: 1 });
+    const newestId = await createWidget(runtime, { createdAt: 2 });
+    await runtime.store.recordPendingLaunch({
+      accountId: "default",
+      channelId: "777",
+      discordUserId: "42",
+      widgetId: pendingId,
+      createdAt: 3,
+    });
+    const session = await runtime.store.createSession({
+      discordUserId: "42",
+      accountId: "default",
+    });
+    const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
+    const url = `${base}/discord/activity/api/widget?instance_id=instance-1`;
+
+    const first = await fetch(url, { headers: { Authorization: `Bearer ${session}` } });
+    const second = await fetch(url, { headers: { Authorization: `Bearer ${session}` } });
+
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({ id: pendingId });
+    expect(second.status).toBe(200);
+    await expect(second.json()).resolves.toMatchObject({ id: newestId });
+  });
+
+  it("keeps pending launches isolated by Discord account", async () => {
+    const runtime = createActivityTestRuntime();
+    await runtime.store.recordPendingLaunch({
+      accountId: "account-b",
+      channelId: "777",
+      discordUserId: "42",
+      widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+      createdAt: 1,
+    });
+
+    await expect(
+      runtime.store.consumePendingLaunch("account-a", "777", "42"),
+    ).resolves.toBeUndefined();
+    await expect(
+      runtime.store.consumePendingLaunch("account-b", "777", "42"),
+    ).resolves.toMatchObject({ widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+  });
+
+  it("keeps the newest-widget fallback when pending launch lookup fails", async () => {
+    const runtime = createActivityTestRuntime();
+    await createWidget(runtime, { createdAt: 1 });
+    const newestId = await createWidget(runtime, { createdAt: 2 });
+    const session = await runtime.store.createSession({
+      discordUserId: "42",
+      accountId: "default",
+    });
+    const consumePendingLaunch = vi
+      .spyOn(runtime.store, "consumePendingLaunch")
+      .mockRejectedValue(new Error("store offline"));
+    const logError = vi.fn();
+    const base = await startServer(runtime, {
+      fetchGuard: guardedJsonFetch(),
+      logError,
+    });
+    const url = `${base}/discord/activity/api/widget?custom_id=missing&instance_id=instance-1`;
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${session}` } });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ id: newestId });
+    }
+    expect(consumePendingLaunch).toHaveBeenCalledTimes(2);
+    expect(logError).toHaveBeenCalledOnce();
+  });
+
   it("rejects a custom ID outside the validated instance channel", async () => {
     const runtime = createActivityTestRuntime();
     const widgetId = await createWidget(runtime, { channelId: "888" });
@@ -525,21 +748,21 @@ describe("Discord Activity widget routes", () => {
     );
   });
 
-  it("returns 404 when multiple widgets match the Activity Instance API channel", async () => {
+  it("uses the latest widget when a client omits the custom ID", async () => {
     const runtime = createActivityTestRuntime();
     await createWidget(runtime, { channelId: "777", createdAt: 1 });
-    await createWidget(runtime, { channelId: "777", createdAt: 2 });
+    const newestId = await createWidget(runtime, { channelId: "777", createdAt: 2 });
     const session = await runtime.store.createSession({
       discordUserId: "42",
       accountId: "default",
     });
     const base = await startServer(runtime, { fetchGuard: guardedJsonFetch() });
-    const response = await fetch(
-      `${base}/discord/activity/api/widget?custom_id=missing&instance_id=instance-1`,
-      { headers: { Authorization: `Bearer ${session}` } },
-    );
+    const response = await fetch(`${base}/discord/activity/api/widget?instance_id=instance-1`, {
+      headers: { Authorization: `Bearer ${session}` },
+    });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ id: newestId });
   });
 
   it("returns 404 when the Activity instance cannot be resolved", async () => {
@@ -577,6 +800,29 @@ describe("Discord Activity widget routes", () => {
 });
 
 describe("Discord Activity shell assets", () => {
+  it("serves the generated SDK from a dist plugin root", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-activity-dist-"));
+    const vendorAssetPath = path.join(
+      root,
+      "dist",
+      "extensions",
+      "discord",
+      "assets",
+      "embedded-app-sdk.mjs",
+    );
+    try {
+      await fs.mkdir(path.dirname(vendorAssetPath), { recursive: true });
+      await fs.writeFile(vendorAssetPath, "export class DiscordSDK {}\n");
+      const base = await startServer(createActivityTestRuntime(), { vendorAssetPath });
+
+      const vendor = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
+      expect(vendor.status).toBe(200);
+      await expect(vendor.text()).resolves.toContain("DiscordSDK");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("serves the shell, module, and generated SDK asset", async () => {
     // The SDK bundle is a gitignored build artifact absent from synced checkouts, so
     // the vendor read is injected; generation is covered by bundled-plugin-assets tests.
@@ -606,5 +852,20 @@ describe("Discord Activity shell assets", () => {
     });
     const vendor = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
     expect(vendor.status).toBe(404);
+  });
+
+  it("retries the vendor asset read after a transient failure", async () => {
+    const readVendorAsset = vi
+      .fn<(assetPath: string) => Promise<Buffer>>()
+      .mockRejectedValueOnce(new Error("transient read failure"))
+      .mockResolvedValue(Buffer.from("export class DiscordSDK {}\n"));
+    const base = await startServer(createActivityTestRuntime(), { readVendorAsset });
+
+    const first = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
+    expect(first.status).toBe(404);
+    const second = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
+    expect(second.status).toBe(200);
+    await expect(second.text()).resolves.toContain("DiscordSDK");
+    expect(readVendorAsset).toHaveBeenCalledTimes(2);
   });
 });

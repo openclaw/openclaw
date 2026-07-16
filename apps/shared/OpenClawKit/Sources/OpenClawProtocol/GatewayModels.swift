@@ -2564,6 +2564,162 @@ public struct PushTestResult: Codable, Sendable {
     }
 }
 
+public struct UiSplitCommand: Codable, Sendable {
+    public let kind: String
+    public let direction: AnyCodable
+    public let sessionkey: String
+
+    public init(
+        kind: String,
+        direction: AnyCodable,
+        sessionkey: String)
+    {
+        self.kind = kind
+        self.direction = direction
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case direction
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiClosePaneCommand: Codable, Sendable {
+    public let kind: String
+    public let sessionkey: String
+
+    public init(
+        kind: String,
+        sessionkey: String)
+    {
+        self.kind = kind
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiFocusCommand: Codable, Sendable {
+    public let kind: String
+    public let sessionkey: String
+
+    public init(
+        kind: String,
+        sessionkey: String)
+    {
+        self.kind = kind
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiSidebarCommand: Codable, Sendable {
+    public let kind: String
+    public let visible: Bool
+
+    public init(
+        kind: String,
+        visible: Bool)
+    {
+        self.kind = kind
+        self.visible = visible
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case visible
+    }
+}
+
+public struct UiPanelCommand: Codable, Sendable {
+    public let kind: String
+    public let panel: AnyCodable
+    public let _open: Bool
+    public let dock: AnyCodable?
+    public let terminalsessionid: String?
+
+    public init(
+        kind: String,
+        panel: AnyCodable,
+        _open: Bool,
+        dock: AnyCodable? = nil,
+        terminalsessionid: String? = nil)
+    {
+        self.kind = kind
+        self.panel = panel
+        self._open = _open
+        self.dock = dock
+        self.terminalsessionid = terminalsessionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case panel
+        case _open = "open"
+        case dock
+        case terminalsessionid = "terminalSessionId"
+    }
+}
+
+public struct UiNavigateCommand: Codable, Sendable {
+    public let kind: String
+    public let sessionkey: String
+
+    public init(
+        kind: String,
+        sessionkey: String)
+    {
+        self.kind = kind
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiCommandParams: Codable, Sendable {
+    public let command: UiCommand
+    public let sessionkey: String?
+
+    public init(
+        command: UiCommand,
+        sessionkey: String? = nil)
+    {
+        self.command = command
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiCommandResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+    }
+}
+
 public struct SecretsReloadParams: Codable, Sendable {}
 
 public struct SecretsResolveParams: Codable, Sendable {
@@ -4587,6 +4743,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let agentid: String?
     public let label: String?
     public let model: String?
+    public let thinkinglevel: String?
     public let catalogid: String?
     public let parentsessionkey: String?
     public let fork: Bool?
@@ -4605,6 +4762,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         agentid: String? = nil,
         label: String? = nil,
         model: String? = nil,
+        thinkinglevel: String? = nil,
         catalogid: String? = nil,
         parentsessionkey: String? = nil,
         fork: Bool? = nil,
@@ -4622,6 +4780,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.agentid = agentid
         self.label = label
         self.model = model
+        self.thinkinglevel = thinkinglevel
         self.catalogid = catalogid
         self.parentsessionkey = parentsessionkey
         self.fork = fork
@@ -4641,6 +4800,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case agentid = "agentId"
         case label
         case model
+        case thinkinglevel = "thinkingLevel"
         case catalogid = "catalogId"
         case parentsessionkey = "parentSessionKey"
         case fork
@@ -8076,9 +8236,26 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let agentid: String
     public let name: String?
     public let workspace: String?
-    public let model: String?
+    public let modelvalue: AnyCodable?
+    public var model: String? { modelvalue?.value as? String }
     public let emoji: String?
     public let avatar: String?
+
+    public init(
+        agentid: String,
+        name: String? = nil,
+        workspace: String? = nil,
+        modelvalue: AnyCodable?,
+        emoji: String? = nil,
+        avatar: String? = nil)
+    {
+        self.agentid = agentid
+        self.name = name
+        self.workspace = workspace
+        self.modelvalue = modelvalue
+        self.emoji = emoji
+        self.avatar = avatar
+    }
 
     public init(
         agentid: String,
@@ -8088,21 +8265,44 @@ public struct AgentsUpdateParams: Codable, Sendable {
         emoji: String? = nil,
         avatar: String? = nil)
     {
-        self.agentid = agentid
-        self.name = name
-        self.workspace = workspace
-        self.model = model
-        self.emoji = emoji
-        self.avatar = avatar
+        self.init(
+            agentid: agentid,
+            name: name,
+            workspace: workspace,
+            modelvalue: model.map { AnyCodable($0) },
+            emoji: emoji,
+            avatar: avatar)
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case name
         case workspace
-        case model
+        case modelvalue = "model"
         case emoji
         case avatar
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.agentid = try container.decode(String.self, forKey: .agentid)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.workspace = try container.decodeIfPresent(String.self, forKey: .workspace)
+        self.modelvalue = container.contains(.modelvalue)
+            ? try container.decode(AnyCodable.self, forKey: .modelvalue)
+            : nil
+        self.emoji = try container.decodeIfPresent(String.self, forKey: .emoji)
+        self.avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(agentid, forKey: .agentid)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(workspace, forKey: .workspace)
+        try container.encodeIfPresent(modelvalue, forKey: .modelvalue)
+        try container.encodeIfPresent(emoji, forKey: .emoji)
+        try container.encodeIfPresent(avatar, forKey: .avatar)
     }
 }
 
@@ -11087,6 +11287,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
     public let cwd: String
     public let confined: Bool
     public let attached: Bool
+    public let owner: AnyCodable?
     public let createdatms: Int
 
     public init(
@@ -11096,6 +11297,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         cwd: String,
         confined: Bool,
         attached: Bool,
+        owner: AnyCodable? = nil,
         createdatms: Int)
     {
         self.sessionid = sessionid
@@ -11104,6 +11306,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         self.cwd = cwd
         self.confined = confined
         self.attached = attached
+        self.owner = owner
         self.createdatms = createdatms
     }
 
@@ -11114,6 +11317,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         case cwd
         case confined
         case attached
+        case owner
         case createdatms = "createdAtMs"
     }
 }
@@ -11425,6 +11629,8 @@ public struct AllowedApprovalSnapshot: Codable, Sendable {
     public let expiresatms: Int
     public let presentation: ApprovalPresentation
     public let resolvedatms: Int
+    public let source: [String: AnyCodable]?
+    public let resolver: [String: AnyCodable]?
     public let status: String
     public let decision: ApprovalAllowDecision
     public let reason: ApprovalAllowedReason
@@ -11436,6 +11642,8 @@ public struct AllowedApprovalSnapshot: Codable, Sendable {
         expiresatms: Int,
         presentation: ApprovalPresentation,
         resolvedatms: Int,
+        source: [String: AnyCodable]? = nil,
+        resolver: [String: AnyCodable]? = nil,
         status: String,
         decision: ApprovalAllowDecision,
         reason: ApprovalAllowedReason)
@@ -11446,6 +11654,8 @@ public struct AllowedApprovalSnapshot: Codable, Sendable {
         self.expiresatms = expiresatms
         self.presentation = presentation
         self.resolvedatms = resolvedatms
+        self.source = source
+        self.resolver = resolver
         self.status = status
         self.decision = decision
         self.reason = reason
@@ -11458,6 +11668,8 @@ public struct AllowedApprovalSnapshot: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case presentation
         case resolvedatms = "resolvedAtMs"
+        case source
+        case resolver
         case status
         case decision
         case reason
@@ -11471,6 +11683,8 @@ public struct DeniedApprovalSnapshot: Codable, Sendable {
     public let expiresatms: Int
     public let presentation: ApprovalPresentation
     public let resolvedatms: Int
+    public let source: [String: AnyCodable]?
+    public let resolver: [String: AnyCodable]?
     public let status: String
     public let decision: String
     public let reason: ApprovalDeniedReason
@@ -11482,6 +11696,8 @@ public struct DeniedApprovalSnapshot: Codable, Sendable {
         expiresatms: Int,
         presentation: ApprovalPresentation,
         resolvedatms: Int,
+        source: [String: AnyCodable]? = nil,
+        resolver: [String: AnyCodable]? = nil,
         status: String,
         decision: String,
         reason: ApprovalDeniedReason)
@@ -11492,6 +11708,8 @@ public struct DeniedApprovalSnapshot: Codable, Sendable {
         self.expiresatms = expiresatms
         self.presentation = presentation
         self.resolvedatms = resolvedatms
+        self.source = source
+        self.resolver = resolver
         self.status = status
         self.decision = decision
         self.reason = reason
@@ -11504,6 +11722,8 @@ public struct DeniedApprovalSnapshot: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case presentation
         case resolvedatms = "resolvedAtMs"
+        case source
+        case resolver
         case status
         case decision
         case reason
@@ -11517,6 +11737,8 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
     public let expiresatms: Int
     public let presentation: ApprovalPresentation
     public let resolvedatms: Int
+    public let source: [String: AnyCodable]?
+    public let resolver: [String: AnyCodable]?
     public let status: String
     public let reason: ApprovalExpiredReason
 
@@ -11527,6 +11749,8 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
         expiresatms: Int,
         presentation: ApprovalPresentation,
         resolvedatms: Int,
+        source: [String: AnyCodable]? = nil,
+        resolver: [String: AnyCodable]? = nil,
         status: String,
         reason: ApprovalExpiredReason)
     {
@@ -11536,6 +11760,8 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
         self.expiresatms = expiresatms
         self.presentation = presentation
         self.resolvedatms = resolvedatms
+        self.source = source
+        self.resolver = resolver
         self.status = status
         self.reason = reason
     }
@@ -11547,6 +11773,8 @@ public struct ExpiredApprovalSnapshot: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case presentation
         case resolvedatms = "resolvedAtMs"
+        case source
+        case resolver
         case status
         case reason
     }
@@ -11559,6 +11787,8 @@ public struct CancelledApprovalSnapshot: Codable, Sendable {
     public let expiresatms: Int
     public let presentation: ApprovalPresentation
     public let resolvedatms: Int
+    public let source: [String: AnyCodable]?
+    public let resolver: [String: AnyCodable]?
     public let status: String
     public let reason: ApprovalCancelledReason
 
@@ -11569,6 +11799,8 @@ public struct CancelledApprovalSnapshot: Codable, Sendable {
         expiresatms: Int,
         presentation: ApprovalPresentation,
         resolvedatms: Int,
+        source: [String: AnyCodable]? = nil,
+        resolver: [String: AnyCodable]? = nil,
         status: String,
         reason: ApprovalCancelledReason)
     {
@@ -11578,6 +11810,8 @@ public struct CancelledApprovalSnapshot: Codable, Sendable {
         self.expiresatms = expiresatms
         self.presentation = presentation
         self.resolvedatms = resolvedatms
+        self.source = source
+        self.resolver = resolver
         self.status = status
         self.reason = reason
     }
@@ -11589,6 +11823,8 @@ public struct CancelledApprovalSnapshot: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case presentation
         case resolvedatms = "resolvedAtMs"
+        case source
+        case resolver
         case status
         case reason
     }
@@ -11619,6 +11855,46 @@ public struct ApprovalGetResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case approval
+    }
+}
+
+public struct ApprovalHistoryParams: Codable, Sendable {
+    public let cursor: String?
+    public let limit: Int?
+    public let kind: ApprovalKind?
+
+    public init(
+        cursor: String? = nil,
+        limit: Int? = nil,
+        kind: ApprovalKind? = nil)
+    {
+        self.cursor = cursor
+        self.limit = limit
+        self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cursor
+        case limit
+        case kind
+    }
+}
+
+public struct ApprovalHistoryResult: Codable, Sendable {
+    public let items: [TerminalApprovalSnapshot]
+    public let nextcursor: String?
+
+    public init(
+        items: [TerminalApprovalSnapshot],
+        nextcursor: String? = nil)
+    {
+        self.items = items
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case nextcursor = "nextCursor"
     }
 }
 
@@ -13605,6 +13881,49 @@ public enum GatewaySuspendStatusResult: Codable, Sendable {
         switch self {
         case .running(let value): try value.encode(to: encoder)
         case .ready(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum UiCommand: Codable, Sendable {
+    case split(UiSplitCommand)
+    case closePane(UiClosePaneCommand)
+    case focus(UiFocusCommand)
+    case sidebar(UiSidebarCommand)
+    case panel(UiPanelCommand)
+    case navigate(UiNavigateCommand)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "split": self = try .split(UiSplitCommand(from: decoder))
+        case "close-pane": self = try .closePane(UiClosePaneCommand(from: decoder))
+        case "focus": self = try .focus(UiFocusCommand(from: decoder))
+        case "sidebar": self = try .sidebar(UiSidebarCommand(from: decoder))
+        case "panel": self = try .panel(UiPanelCommand(from: decoder))
+        case "navigate": self = try .navigate(UiNavigateCommand(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown UiCommand discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .split(let value): try value.encode(to: encoder)
+        case .closePane(let value): try value.encode(to: encoder)
+        case .focus(let value): try value.encode(to: encoder)
+        case .sidebar(let value): try value.encode(to: encoder)
+        case .panel(let value): try value.encode(to: encoder)
+        case .navigate(let value): try value.encode(to: encoder)
         }
     }
 }

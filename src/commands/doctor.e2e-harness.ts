@@ -288,6 +288,14 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourceDir: "/tmp/state/media/outgoing/records",
       hasLegacy: false,
     },
+    apns: {
+      sourcePath: "/tmp/state/push/apns-registrations.json",
+      hasLegacy: false,
+    },
+    workspace: {
+      sources: [],
+      hasLegacy: false,
+    },
     webPush: {
       subscriptionsPath: "/tmp/state/push/web-push-subscriptions.json",
       vapidKeysPath: "/tmp/state/push/vapid-keys.json",
@@ -311,11 +319,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       knownChannelIds: [],
       defaultAccountIds: {},
       accountIds: {},
-      hasLegacy: false,
-    },
-    execApprovals: {
-      sourcePath: "/tmp/state/exec-approvals.legacy.json",
-      targetPath: "/tmp/state/exec-approvals.json",
       hasLegacy: false,
     },
     channelPlans: {

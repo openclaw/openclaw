@@ -64,6 +64,7 @@ type EmbeddedAgentQueueFailureReason =
   | "not_streaming"
   | "stale_run"
   | "compacting"
+  | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch"
   | "transcript_commit_wait_unsupported"
@@ -294,19 +295,6 @@ function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): vo
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
     }
   }
-}
-
-/**
- * @deprecated Use queueEmbeddedAgentMessageWithOutcomeAsync for delivery decisions.
- * This boolean helper only reports immediate queue eligibility; it cannot surface
- * async runtime rejection from the active run.
- */
-export function queueEmbeddedAgentMessage(
-  sessionId: string,
-  text: string,
-  options?: EmbeddedAgentQueueMessageOptions,
-): boolean {
-  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
 }
 
 /**

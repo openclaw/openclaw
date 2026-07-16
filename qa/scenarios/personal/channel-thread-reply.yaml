@@ -29,7 +29,7 @@ scenario:
   execution:
     kind: flow
     summary: Verify fake personal replies stay routed to the requested QA conversation and thread.
-    driver: qa-channel
+    channel: qa-channel
     config:
       dmUserId: qa-alice
       dmUserName: QA Alice

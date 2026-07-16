@@ -1,10 +1,13 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
 use crate::DesktopState;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Manager};
+use tauri_plugin_autostart::ManagerExt;
 
 const OPEN_ID: &str = "open-dashboard";
+const CHECK_UPDATES_ID: &str = "check-for-updates";
+const START_AT_LOGIN_ID: &str = "start-at-login";
 const START_ID: &str = "start-gateway";
 const STOP_ID: &str = "stop-gateway";
 const RESTART_ID: &str = "restart-gateway";
@@ -14,6 +17,8 @@ pub struct TrayHandles {
     _tray: TrayIcon<tauri::Wry>,
     status: MenuItem<tauri::Wry>,
     open: MenuItem<tauri::Wry>,
+    _check_updates: MenuItem<tauri::Wry>,
+    _start_at_login: CheckMenuItem<tauri::Wry>,
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
     restart: MenuItem<tauri::Wry>,
@@ -44,34 +49,61 @@ pub fn build(app: &App, state: DesktopState) -> tauri::Result<TrayHandles> {
         None::<&str>,
     )?;
     let open = MenuItem::with_id(app, OPEN_ID, "Open Dashboard", true, None::<&str>)?;
+    let check_updates = MenuItem::with_id(
+        app,
+        CHECK_UPDATES_ID,
+        "Check for Updates",
+        true,
+        None::<&str>,
+    )?;
+    let autostart_enabled = match app.autolaunch().is_enabled() {
+        Ok(enabled) => enabled,
+        Err(error) => {
+            eprintln!("Could not read autostart state: {error}");
+            false
+        }
+    };
+    let start_at_login = CheckMenuItem::with_id(
+        app,
+        START_AT_LOGIN_ID,
+        "Start at Login",
+        true,
+        autostart_enabled,
+        None::<&str>,
+    )?;
     let start = MenuItem::with_id(app, START_ID, "Start Gateway", false, None::<&str>)?;
     let stop = MenuItem::with_id(app, STOP_ID, "Stop Gateway", false, None::<&str>)?;
     let restart = MenuItem::with_id(app, RESTART_ID, "Restart Gateway", false, None::<&str>)?;
     let quit = MenuItem::with_id(app, QUIT_ID, "Quit OpenClaw", true, None::<&str>)?;
     let separator_one = PredefinedMenuItem::separator(app)?;
     let separator_two = PredefinedMenuItem::separator(app)?;
+    let separator_three = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
         &[
             &status,
             &separator_one,
             &open,
+            &check_updates,
+            &start_at_login,
+            &separator_two,
             &start,
             &stop,
             &restart,
-            &separator_two,
+            &separator_three,
             &quit,
         ],
     )?;
 
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
     let menu_state = state.clone();
+    let menu_start_at_login = start_at_login.clone();
     let tray_builder = TrayIconBuilder::with_id("openclaw-main")
         .icon(tray_icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
-            handle_menu(app, &menu_state, event.id().as_ref());
+            handle_menu(app, &menu_state, &menu_start_at_login, event.id().as_ref());
         })
         // Linux tray backends expose the Open action through the menu; Tauri also
         // emits this direct click event on platforms that support it.
@@ -95,6 +127,8 @@ pub fn build(app: &App, state: DesktopState) -> tauri::Result<TrayHandles> {
         _tray: tray,
         status,
         open,
+        _check_updates: check_updates,
+        _start_at_login: start_at_login,
         start,
         stop,
         restart,
@@ -109,20 +143,58 @@ pub fn show_window(app: &AppHandle) {
     }
 }
 
-fn handle_menu(app: &AppHandle, state: &DesktopState, id: &str) {
+pub fn open_dashboard(app: &AppHandle, state: &DesktopState) {
+    show_window(app);
+    spawn_connect(app.clone(), state.clone());
+}
+
+fn handle_menu(
+    app: &AppHandle,
+    state: &DesktopState,
+    start_at_login: &CheckMenuItem<tauri::Wry>,
+    id: &str,
+) {
     match id {
         QUIT_ID => {
             state.quit();
             app.exit(0);
         }
-        OPEN_ID => {
+        OPEN_ID => open_dashboard(app, state),
+        CHECK_UPDATES_ID => {
             show_window(app);
-            spawn_connect(app.clone(), state.clone());
+            crate::updater::spawn_check(app.clone());
         }
+        START_AT_LOGIN_ID => toggle_autostart(app, start_at_login),
         START_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Start),
         STOP_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Stop),
         RESTART_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Restart),
         _ => {}
+    }
+}
+
+fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
+    let manager = app.autolaunch();
+    let enabled = match manager.is_enabled() {
+        Ok(enabled) => enabled,
+        Err(error) => {
+            eprintln!("Could not read autostart state: {error}");
+            return;
+        }
+    };
+    let next = !enabled;
+    let result = if next {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    match result {
+        Ok(()) => {
+            let _ = item.set_checked(next);
+        }
+        Err(error) => {
+            eprintln!("Could not update autostart state: {error}");
+            let _ = item.set_checked(enabled);
+        }
     }
 }
 

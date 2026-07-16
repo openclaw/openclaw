@@ -93,15 +93,12 @@ The default approval socket follows the same root:
 `$OPENCLAW_STATE_DIR/exec-approvals.sock`, or
 `~/.openclaw/exec-approvals.sock` when the variable is unset.
 
-Releases before 2026.6.6 always kept the file in `~/.openclaw`. If
-`OPENCLAW_STATE_DIR` points somewhere else and an approvals file still exists
-in the default directory, run `openclaw doctor --fix` directly once to import
-it into the state directory (the original is archived with a `.migrated`
-suffix). Interactive doctor can also preview and confirm the import. Automated
-update and Gateway watch repair runs never import across state directories: a
-temporary or staging state directory must not capture the default
-installation's approvals. The same boundary applies to legacy
-`plugin-binding-approvals.json` imports into shared SQLite state.
+State directories are independent trust scopes. When `OPENCLAW_STATE_DIR`
+points somewhere else, OpenClaw never imports or archives
+`~/.openclaw/exec-approvals.json`; configure approvals separately for the
+custom state directory. Doctor also imports legacy
+`plugin-binding-approvals.json` only when it belongs to the active state
+directory.
 
 Example schema:
 
@@ -116,8 +113,7 @@ Example schema:
     "security": "deny",
     "ask": "on-miss",
     "askFallback": "deny",
-    "autoAllowSkills": false,
-    "denylist": [{ "pattern": "git push*--force*", "reason": "history rewrite" }]
+    "autoAllowSkills": false
   },
   "agents": {
     "main": {
@@ -241,6 +237,20 @@ Set globally under `tools.exec.commandHighlighting` or per agent under
 Use it to force a human in the loop on a small set of dangerous commands
 (`git push --force`, `rm -rf` patterns, etc.) without giving up a broadly
 permissive default policy.
+
+Configure the STOP list in `openclaw.json`, not `exec-approvals.json`:
+
+```json5
+{
+  tools: {
+    exec: {
+      denylist: [
+        { pattern: "git push*--force*", reason: "history rewrite" },
+      ],
+    },
+  },
+}
+```
 
 `openclaw.json` is the single persisted owner for exec STOP rules. The
 global list and per-agent list are unioned (deny in either layer denies):

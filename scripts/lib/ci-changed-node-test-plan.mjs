@@ -91,6 +91,42 @@ export function hasQaSmokeAffectingChange(changedPaths, options = {}) {
   return hasImportGraphImpactOnTargets(sourcePaths, [QA_SMOKE_RUNTIME_ENTRY], cwd);
 }
 
+// Surfaces the prompt-snapshot check exercises outside its generator's
+// relative import graph: the snapshot fixtures and generator scripts, the
+// codex extension (its test API loads through a dynamic bundled-plugin module
+// id the graph walk cannot see), and the gate's own orchestration — changes
+// to the gate must not be able to skip the gated lane.
+const PROMPT_SNAPSHOT_SURFACE_RE =
+  /^(?:test\/(?:helpers\/agents|fixtures\/agents\/prompt-snapshots)|extensions\/codex)\/|^scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.[cm]?[jt]s)$|^scripts\/lib\/ci-changed-node-test-plan\.mjs$|^\.github\/(?:workflows\/ci\.yml$|actions\/)|^(?:package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml)$/u;
+// The generator renders real prompt-layer stacks, so its runtime blast radius
+// is the snapshot helper's import graph (auto-reply prompts, channel typing,
+// plugin-sdk agent harness, codex catalog fixtures).
+const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.ts";
+
+/**
+ * True when a changed path can influence generated prompt snapshots: it
+ * touches the snapshot surface directly, or the generator's import graph
+ * reaches it. Diffs outside both cannot change generator output, so the
+ * manifest may skip the check lane.
+ */
+export function hasPromptSnapshotAffectingChange(changedPaths, options = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  if (changedPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
+    return true;
+  }
+  const sourcePaths = changedPaths.filter(
+    (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
+  );
+  if (sourcePaths.length === 0) {
+    return false;
+  }
+  // Deleted sources cannot be graphed; fail safe to running the check.
+  if (sourcePaths.some((changedPath) => !existsSync(path.join(cwd, changedPath)))) {
+    return true;
+  }
+  return hasImportGraphImpactOnTargets(sourcePaths, [PROMPT_SNAPSHOT_ENTRY], cwd);
+}
+
 function createBoundaryShard() {
   // Boundary tests scan the source tree (including test files) and build
   // their own fixtures; they do not consume the built dist artifact. When the

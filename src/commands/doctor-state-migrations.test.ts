@@ -1740,6 +1740,103 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
   });
 
+  it("skips plugin-state imports when the namespace lacks room for every missing entry", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test namespace-capped cache",
+        sourcePath,
+        targetPath: "plugin state:test.namespace-capped-cache",
+        pluginId: "telegram",
+        namespace: "test.namespace-capped-cache",
+        maxEntries: 2,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [
+          { key: "legacy-first", value: { body: "first" } },
+          { key: "legacy-second", value: { body: "second" } },
+        ],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.namespace-capped-cache",
+        maxEntries: 2,
+      });
+      await store.register("current", { body: "current" });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      "Skipped migrating Test namespace-capped cache because plugin state namespace test.namespace-capped-cache has room for 1 of 2 missing entries; left legacy source in place",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.namespace-capped-cache",
+        maxEntries: 2,
+      });
+      expect(await store.lookup("current")).toStrictEqual({ body: "current" });
+      expect(await store.lookup("legacy-first")).toBeUndefined();
+      expect(await store.lookup("legacy-second")).toBeUndefined();
+    });
+  });
+
+  it("archives fully covered plugin-state imports when the namespace is full", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test covered cache",
+        sourcePath,
+        targetPath: "plugin state:test.covered-cache",
+        pluginId: "telegram",
+        namespace: "test.covered-cache",
+        maxEntries: 1,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [{ key: "covered", value: { body: "legacy" } }],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.covered-cache",
+        maxEntries: 1,
+      });
+      await store.register("covered", { body: "current" });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      `Archived Test covered cache legacy source → ${sourcePath}.migrated`,
+    );
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+  });
+
   it("keeps plugin-state import source when plugin cap eviction drops an imported row", async () => {
     const root = await makeTempRoot();
     const maxPluginStateEntries = 40;
@@ -2723,148 +2820,9 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
-  it("migrates default exec approvals into an explicit state dir", async () => {
-    const root = await makeTempRoot();
-    const stateDir = path.join(root, "custom-state");
-    const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
-    const legacySocketPath = path.join(root, ".openclaw", "exec-approvals.sock");
-    const targetPath = path.join(stateDir, "exec-approvals.json");
-    const targetSocketPath = path.join(stateDir, "exec-approvals.sock");
-    writeJson5(sourcePath, {
-      version: 1,
-      socket: {
-        path: legacySocketPath,
-        token: "legacy-token",
-      },
-      defaults: {
-        security: "deny",
-        ask: "always",
-      },
-      agents: {
-        main: {
-          allowlist: [{ pattern: "git status" }],
-        },
-      },
-    });
-
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      crossStateDirImports: true,
-    });
-    expect(detected.preview).toContain(`- Exec approvals: ${sourcePath} → ${targetPath}`);
-
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(`Migrated exec approvals → ${targetPath}`);
-    expect(result.changes).toContain(`Archived legacy exec approvals → ${sourcePath}.migrated`);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-    const migrated = JSON.parse(fs.readFileSync(targetPath, "utf8")) as {
-      socket?: { path?: string; token?: string };
-      defaults?: Record<string, unknown>;
-      agents?: Record<string, { allowlist?: Array<Record<string, unknown>> }>;
-    };
-    expect(migrated.socket?.path).toBe(targetSocketPath);
-    expect(migrated.socket?.token).toBe("legacy-token");
-    expect(migrated.defaults).toEqual({
-      security: "deny",
-      ask: "always",
-    });
-    expect(migrated.agents?.main?.allowlist?.[0]?.pattern).toBe("git status");
-  });
-
-  it("skips exec approvals migration when the target appears after detection", async () => {
-    const root = await makeTempRoot();
-    const stateDir = path.join(root, "custom-state");
-    const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
-    const targetPath = path.join(stateDir, "exec-approvals.json");
-    writeJson5(sourcePath, {
-      version: 1,
-      socket: {
-        token: "legacy-token",
-      },
-      defaults: {
-        security: "deny",
-      },
-    });
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      crossStateDirImports: true,
-    });
-    writeJson5(targetPath, {
-      version: 1,
-      socket: {
-        path: path.join(stateDir, "exec-approvals.sock"),
-        token: "current-token",
-      },
-      defaults: {
-        security: "full",
-        ask: "off",
-      },
-    });
-
-    const result = await runLegacyStateMigrations({ detected });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).not.toContain(`Migrated exec approvals → ${targetPath}`);
-    const current = JSON.parse(fs.readFileSync(targetPath, "utf8")) as {
-      socket?: { token?: string };
-      defaults?: Record<string, unknown>;
-    };
-    expect(current.socket?.token).toBe("current-token");
-    expect(current.defaults).toEqual({
-      security: "full",
-      ask: "off",
-    });
-  });
-
-  it("auto-migrates exec approvals without a valid config snapshot when doctor opts in", async () => {
-    const root = await makeTempRoot();
-    const stateDir = path.join(root, "custom-state");
-    const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
-    const targetPath = path.join(stateDir, "exec-approvals.json");
-    writeJson5(sourcePath, {
-      version: 1,
-      socket: {
-        token: "legacy-token",
-      },
-      defaults: {
-        security: "deny",
-        ask: "always",
-      },
-    });
-
-    const result = await autoMigrateLegacyTaskStateSidecars({
-      env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
-      homedir: () => root,
-      crossStateDirImports: true,
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(`Migrated exec approvals → ${targetPath}`);
-    expect(result.changes).toContain(`Archived legacy exec approvals → ${sourcePath}.migrated`);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
-    const migrated = JSON.parse(fs.readFileSync(targetPath, "utf8")) as {
-      socket?: { token?: string };
-      defaults?: Record<string, unknown>;
-    };
-    expect(migrated.socket?.token).toBe("legacy-token");
-    expect(migrated.defaults).toEqual({
-      security: "deny",
-      ask: "always",
-    });
-  });
-
-  it("keeps default exec approvals in place without the cross-state-dir opt-in", async () => {
-    // Regression: the implicit preflight (every CLI command, gateway startup)
-    // must never archive files that belong to the default state dir just
-    // because OPENCLAW_STATE_DIR points somewhere else.
+  it("never imports default exec approvals into a custom state dir", async () => {
+    // Regression: every custom state root is an independent trust scope.
+    // Even direct doctor repair must not copy or archive default approvals.
     const root = await makeTempRoot();
     const stateDir = path.join(root, "custom-state");
     const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
@@ -2881,22 +2839,23 @@ describe("doctor legacy state migrations", () => {
     });
     const sourceRaw = fs.readFileSync(sourcePath, "utf8");
 
-    const result = await autoMigrateLegacyTaskStateSidecars({
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
       env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       homedir: () => root,
     });
+    expect(detected.preview.some((entry) => entry.includes("Exec approvals"))).toBe(false);
+
+    const result = await runLegacyStateMigrations({ detected });
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).not.toContain(`Migrated exec approvals → ${targetPath}`);
-    expect(result.notices?.join("\n")).toContain(
-      "Exec approvals in the default state dir were not imported",
-    );
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
     expect(fs.existsSync(targetPath)).toBe(false);
   });
 
-  it("keeps default exec approvals in place when autoMigrateLegacyState runs without the opt-in", async () => {
+  it("keeps default exec approvals in place during automatic state migration", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "custom-state");
     const sourcePath = path.join(root, ".openclaw", "exec-approvals.json");
@@ -2921,9 +2880,6 @@ describe("doctor legacy state migrations", () => {
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).not.toContain(`Migrated exec approvals → ${targetPath}`);
-    expect(result.notices?.join("\n")).toContain(
-      "Exec approvals in the default state dir were not imported",
-    );
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
     expect(fs.existsSync(targetPath)).toBe(false);

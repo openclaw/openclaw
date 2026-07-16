@@ -777,18 +777,18 @@ describe("plugin-sdk subpath exports", () => {
       "listDirectoryEntriesFromSources",
       "listResolvedDirectoryEntriesFromSources",
     ]);
-    expectSourceContains(
-      "memory-core-host-runtime-core",
-      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
-    );
-    expectSourceContains(
-      "memory-core-host-runtime-cli",
-      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
-    );
-    expectSourceContains(
-      "memory-core-host-runtime-files",
-      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
-    );
+    expectSourceContract("memory-core-host-runtime-core", {
+      mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
+    });
+    expectSourceContract("memory-core-host-runtime-cli", {
+      mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-cli.js";'],
+    });
+    expectSourceContract("memory-core-host-runtime-files", {
+      mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-files.js";'],
+    });
     expectSourceMentions("plugin-test-runtime", [
       "registerSingleProviderPlugin",
       "registerProviderPlugin",
@@ -878,26 +878,6 @@ describe("plugin-sdk subpath exports", () => {
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
     expect(deprecatedChannelRuntimeMatches).toStrictEqual([]);
-  });
-
-  it("keeps deprecated comparable channel target helpers behind compatibility shims", () => {
-    const matches = findRepoFilesContaining({
-      roots: [
-        resolve(REPO_ROOT, "src"),
-        resolve(REPO_ROOT, "extensions"),
-        resolve(REPO_ROOT, "test"),
-      ],
-      pattern:
-        /\b(?:ComparableChannelTarget|resolveComparableTargetFor(?:Channel|LoadedChannel)|comparableChannelTargets(?:Match|ShareRoute))\b/u,
-      exclude: [
-        "src/channels/plugins/target-parsing-loaded.ts",
-        "src/channels/plugins/target-parsing.test.ts",
-        "src/plugins/compat/registry.ts",
-        "src/plugins/compat/registry.test.ts",
-        "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-      ],
-    });
-    expect(matches).toStrictEqual([]);
   });
 
   it("keeps deprecated channel route key aliases behind compatibility shims", () => {

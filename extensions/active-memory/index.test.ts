@@ -13,6 +13,7 @@ import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
@@ -131,6 +132,11 @@ describe("active-memory plugin", () => {
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
   const runEmbeddedAgent = vi.fn();
+  // Default: recall routes are not CLI-dispatch-eligible; tests that prove the
+  // raised budget override this per-case.
+  const resolveCliBackendDispatchEligibility = vi.fn(
+    () => undefined as { provider: string } | undefined,
+  );
   const runtimeRunEmbeddedAgent = vi.fn(async (params: Record<string, unknown>) => {
     const sessionId =
       typeof params.sessionId === "string" && params.sessionId.length > 0
@@ -219,6 +225,7 @@ describe("active-memory plugin", () => {
     runtime: {
       agent: {
         runEmbeddedAgent: runtimeRunEmbeddedAgent,
+        resolveCliBackendDispatchEligibility,
         session: {
           resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
           loadSessionStore: vi.fn(() => hoisted.sessionStore),
@@ -625,6 +632,9 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().authProfileFailurePolicy).toBe("local");
+    // Subscription-only claude-cli setups route recall through the CLI
+    // backend instead of the direct-API passthrough.
+    expect(lastEmbeddedRunParams().cliBackendDispatch).toBe("subscription-auth");
   });
 
   it("runs recall on a dedicated active-memory lane", async () => {
@@ -3323,10 +3333,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -3370,10 +3380,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout from SQLite runtime transcript rows", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -4373,10 +4383,10 @@ describe("active-memory plugin", () => {
   it("does not recover transcript partials after a later unavailable search times out", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4432,10 +4442,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial when unavailable debug arrives after the last poll", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4492,7 +4502,7 @@ describe("active-memory plugin", () => {
     testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4560,10 +4570,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial after an unmirrored custom memory tool fails", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       toolsAllow: ["memory_lookup_custom"],
       logging: true,
     };
@@ -6497,6 +6507,67 @@ describe("active-memory plugin", () => {
     expect(testing.normalizePluginConfig({ fastMode: false }).fastMode).toBe(false);
     expect(testing.normalizePluginConfig({ fastMode: "auto" }).fastMode).toBe("auto");
     expect(testing.normalizePluginConfig({ fastMode: "on" }).fastMode).toBeUndefined();
+  });
+
+  it("raises the default recall budget only when CLI dispatch is eligible", () => {
+    const defaults = testing.normalizePluginConfig({});
+    expect(defaults.timeoutMs).toBe(15_000);
+    expect(defaults.timeoutMsIsDefault).toBe(true);
+    expect(applyCliRuntimeRecallTimeoutDefault(defaults, true).timeoutMs).toBe(45_000);
+    expect(applyCliRuntimeRecallTimeoutDefault(defaults, false).timeoutMs).toBe(15_000);
+    // Explicit operator config always wins.
+    const explicit = testing.normalizePluginConfig({ timeoutMs: 20_000 });
+    expect(explicit.timeoutMsIsDefault).toBe(false);
+    expect(applyCliRuntimeRecallTimeoutDefault(explicit, true).timeoutMs).toBe(20_000);
+  });
+
+  it("applies the CLI dispatch recall budget to the embedded run", async () => {
+    api.pluginConfig = { agents: ["main"], logging: true };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    resolveCliBackendDispatchEligibility.mockReturnValueOnce({ provider: "claude-cli" });
+    runEmbeddedAgent.mockImplementationOnce(async () => ({
+      payloads: [{ text: "- lemon pepper wings" }],
+    }));
+    await requireHook("before_prompt_build")(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+        modelProviderId: "claude-cli",
+        modelId: "claude-opus-4-8",
+      },
+    );
+    // 45s CLI-dispatch default + 0ms setup grace.
+    expect(lastEmbeddedRunParams().timeoutMs).toBe(45_000);
+    // Budgeting consults the runner's own eligibility decision.
+    expect(resolveCliBackendDispatchEligibility).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "claude-cli", model: "claude-opus-4-8" }),
+    );
+  });
+
+  it("keeps the plain recall budget when CLI dispatch is not eligible", async () => {
+    // API-key and missing-backend routes resolve to no eligibility: the run
+    // stays on the direct passthrough, so the plain 15s default applies.
+    api.pluginConfig = { agents: ["main"], logging: true };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    resolveCliBackendDispatchEligibility.mockReturnValueOnce(undefined);
+    runEmbeddedAgent.mockImplementationOnce(async () => ({
+      payloads: [{ text: "- lemon pepper wings" }],
+    }));
+    await requireHook("before_prompt_build")(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+        modelProviderId: "claude-cli",
+        modelId: "claude-opus-4-8",
+      },
+    );
+    expect(lastEmbeddedRunParams().timeoutMs).toBe(15_000);
   });
 
   it("normalizes setup grace config with a zero default and bounded opt-in", () => {

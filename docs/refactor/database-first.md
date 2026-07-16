@@ -146,9 +146,17 @@ without exceptions outside doctor/import/export/debug boundaries.
 - Backup: `sqlite-runtime`. Backup stages compact SQLite snapshots, omits live
   WAL/SHM sidecars, verifies SQLite integrity, and records backup runs in the
   global database.
+- Workspace setup: `sqlite-runtime`. Setup completion, workspace attestations,
+  and generated bootstrap hashes live in typed shared SQLite tables. Runtime
+  does not read or write the retired workspace JSON and `.attested` sidecars;
+  Doctor owns their validated import and verified removal.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
+- Exec approvals: `file-runtime`. TypeScript and macOS still read and write the
+  active state directory's `exec-approvals.json`; the reserved
+  `exec_approvals_config` schema has no runtime owner yet. A future cutover must
+  add same-state doctor import and move both runtimes together.
 - E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
   rows. The runtime-context Docker script creates legacy JSONL only inside the
   doctor migration seed and names the legacy session index path explicitly.
@@ -311,7 +319,8 @@ The branch already has a real shared SQLite base:
   `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_jobs`, `commitments`,
   `delivery_queue_entries`, `model_capability_cache`,
-  `workspace_setup_state`, `native_hook_relay_bridges`,
+  `workspace_setup_state`, `workspace_path_aliases`, `workspace_attestations`,
+  `workspace_generated_bootstrap_hashes`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
   `tui_last_sessions`, `acp_sessions`, `acp_replay_sessions`,
   `acp_replay_events`, `task_runs`, `task_delivery_state`, `flow_runs`,
@@ -451,17 +460,21 @@ The branch already has a real shared SQLite base:
   instead of scanning a whole namespace or relying on `LIKE` path matching.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
   run artifact, and scoped cache stores for workers.
-- Workspace bootstrap completion markers now live in typed shared
-  `workspace_setup_state` rows keyed by resolved workspace path instead of
-  `.openclaw/workspace-state.json`; runtime no longer reads or rewrites the
-  legacy workspace marker, and helper APIs no longer pass around a fake
-  `.openclaw/setup-state` path just to derive storage identity.
-- Exec approvals now live in the typed shared SQLite `exec_approvals_config`
-  singleton row. Doctor imports legacy `~/.openclaw/exec-approvals.json`;
-  runtime writes no longer create, rewrite, or report that file as its active
-  store location. The macOS companion reads and writes the same
-  `state/openclaw.sqlite` table row; it keeps only the Unix prompt socket on disk
-  because that is IPC, not durable runtime state.
+- Workspace bootstrap completion, attestation recency, and generated bootstrap
+  hashes now live in typed shared `workspace_setup_state`,
+  `workspace_path_aliases`, `workspace_attestations`, and
+  `workspace_generated_bootstrap_hashes` rows keyed by canonical workspace
+  identity. Persisted lexical and real-path aliases keep vanished-workspace
+  protection stable after a configured symlink disappears; repointed aliases
+  fail closed. Runtime no longer reads or writes
+  `openclaw-workspace-state.json`, `.openclaw/workspace-state.json`, state-dir
+  `workspace-attestations/*.attested`, or sibling `<workspace>.attested`
+  sidecars. `openclaw doctor --fix` validates and claims legacy sources,
+  imports them into SQLite with migration receipts, verifies the canonical
+  rows, and only then removes the claimed files.
+- The shared schema reserves an `exec_approvals_config` singleton row, but the
+  runtime cutover remains pending. TypeScript and the macOS companion still use
+  the state-scoped JSON file and must move to SQLite together.
 - Device identity, device auth, and bootstrap runtime modules now keep their
   SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers. Device identity uses typed `device_identities` rows and device auth
@@ -518,11 +531,16 @@ The branch already has a real shared SQLite base:
 - Web push, APNs, Voice Wake, update checks, and config health now use typed shared SQLite
   tables for subscriptions, VAPID keys, node registrations, trigger rows,
   routing rows, update-notification state, and config health entries instead of
-  whole opaque JSON blobs. Web push and APNs snapshot writes now reconcile
-  subscriptions/registrations by primary key instead of clearing their tables;
-  config health does the same by config path.
-  Their runtime modules keep SQLite snapshot readers/writers separate from
-  doctor-only legacy JSON import helpers.
+  whole opaque JSON blobs. Web Push and APNs writes upsert only the affected
+  primary-key row; config health reconciles by config path. Their runtime
+  modules remain separate from Doctor-only legacy JSON import helpers.
+- APNs runtime reads and writes only `apns_registrations`. Explicit
+  `openclaw doctor --fix` strictly imports the retired
+  `push/apns-registrations.json`, preserves existing canonical rows, verifies
+  the transaction, records a receipt, and removes the secret-bearing JSON.
+  Receipt-backed retries perform cleanup only, while
+  `apns_registration_tombstones` cover invalidations before first repair, so
+  stale relay grants or device tokens cannot resurrect.
 - Node-host config now uses a typed singleton row in the shared SQLite database.
   Runtime fails closed while the old `node.json` file or an interrupted claim
   remains; explicit `openclaw doctor --fix` strictly imports and removes it
@@ -1490,12 +1508,16 @@ skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, r
 skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
 web_push_vapid_keys(key_id, public_key, private_key, subject, updated_at_ms)
-apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, topic, environment, distribution, token_debug_suffix, updated_at_ms)
+apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, relay_origin, topic, environment, distribution, token_debug_suffix, updated_at_ms)
+apns_registration_tombstones(node_id, deleted_at_ms)
 node_host_config(config_key, version, node_id, token, display_name, gateway_host, gateway_port, gateway_tls, gateway_tls_fingerprint, gateway_context_path, updated_at_ms)
 device_identities(identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms)
 device_auth_tokens(device_id, role, token, scopes_json, updated_at_ms)
 macos_port_guardian_records(pid, port, command, mode, timestamp)
 workspace_setup_state(workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at)
+workspace_path_aliases(alias_key, alias_path, workspace_key, workspace_path, updated_at_ms)
+workspace_attestations(workspace_key, attested_at_ms, updated_at_ms)
+workspace_generated_bootstrap_hashes(workspace_key, filename, sha256)
 native_hook_relay_bridges(relay_id, pid, hostname, port, token, expires_at_ms, updated_at_ms)
 model_capability_cache(provider_id, model_id, name, input_text, input_image, reasoning, supports_tools, context_window, max_tokens, cost_input, cost_output, cost_cache_read, cost_cache_write, updated_at_ms)
 agent_model_catalogs(catalog_key, agent_dir, raw_json, updated_at)
@@ -2187,7 +2209,10 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `auth-profiles.json`
 - `auth-state.json`
 - `exec-approvals.json`
+- `openclaw-workspace-state.json`
 - `workspace-state.json`
+- `workspace-attestations/*.attested`
+- sibling `<workspace>.attested`
 - Matrix `credentials*.json` and `recovery-key.json`
 - `cron/runs/*.jsonl`
 - `cron/jobs.json`
@@ -2202,7 +2227,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `identity/device-auth.json`
 - `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
 - `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
-- `push/apns-registrations.json`
+- `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)
 - `process-leases.json`
 - `gateway-instance-id`
 - `session-toggles.json`
@@ -2246,7 +2271,6 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Discord `model-picker-preferences.json`
 - Discord `command-deploy-cache.json`
 - sandbox registry shard JSON files
-- native hook relay `/tmp` bridge JSON files
 - `plugin-state/state.sqlite`
 - ad-hoc `openclaw-state.sqlite` runtime sidecars
 - `tasks/runs.sqlite`

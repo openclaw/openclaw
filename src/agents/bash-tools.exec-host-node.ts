@@ -430,7 +430,6 @@ export async function executeNodeHostCommand(
       });
       if (
         execHostShared.shouldResolveExecApprovalUnavailableInline({
-          trigger: params.trigger,
           unavailableReason,
           preResolvedDecision,
         })

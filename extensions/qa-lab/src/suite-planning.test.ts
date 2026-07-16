@@ -371,7 +371,6 @@ describe("qa suite planning helpers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("strict-live-lane", {
         channel: "matrix",
-        driver: "live",
         runtimeParityTier: "live-only",
         config: {
           requiredProviderMode: "live-frontier",
@@ -804,40 +803,35 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "live-only"]);
   });
 
-  it("filters channel-driver-specific scenarios from implicit suite selections", () => {
+  it("keeps implicit scenario membership identical across channel drivers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
-      makeQaSuiteTestScenario("qa-channel-only", {
-        driver: "qa-channel",
+      makeQaSuiteTestScenario("telegram", {
+        channel: "telegram",
       }),
-      makeQaSuiteTestScenario("crabline-only", {
-        driver: "crabline",
+      makeQaSuiteTestScenario("matrix", {
+        channel: "matrix",
       }),
     ];
 
-    expect(
+    const selectForDriver = (channelDriver: "crabline" | "live") =>
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
-      }).map((scenario) => scenario.id),
-    ).toEqual(["generic", "qa-channel-only"]);
+        channelDriver,
+        channel: "telegram",
+      }).map((scenario) => scenario.id);
 
-    expect(
-      selectQaFlowSuiteScenarios({
-        scenarios,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        channelDriver: "crabline",
-      }).map((scenario) => scenario.id),
-    ).toEqual(["generic", "crabline-only"]);
+    expect(selectForDriver("crabline")).toEqual(["generic", "telegram"]);
+    expect(selectForDriver("live")).toEqual(selectForDriver("crabline"));
   });
 
   it("rejects explicitly requested scenarios that do not match the current lane", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("qa-channel-only", {
-        driver: "qa-channel",
+        channel: "qa-channel",
       }),
     ];
 
@@ -848,9 +842,10 @@ describe("qa suite planning helpers", () => {
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
         channelDriver: "crabline",
+        channel: "telegram",
       }),
     ).toThrow(
-      "selected QA scenario(s) do not match the current QA lane: qa-channel-only (channelDriver=qa-channel)",
+      "selected QA scenario(s) do not match the current QA lane: qa-channel-only (channel=qa-channel)",
     );
 
     expect(
