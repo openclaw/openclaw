@@ -34,11 +34,13 @@ const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
-const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
+const startManagedServiceUpdateHandoffMock = vi.fn(async (params?: { handoffId?: string }) => ({
   status: "started" as const,
   pid: 12345,
   command: "openclaw update --yes --timeout 1800",
   logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
+  handoffId: params?.handoffId,
+  ownsHandoff: true,
 }));
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
@@ -239,6 +241,16 @@ beforeEach(() => {
   refreshLatestUpdateRestartSentinelMock.mockResolvedValue(null);
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockClear();
+  startManagedServiceUpdateHandoffMock.mockImplementation(
+    async (params?: { handoffId?: string }) => ({
+      status: "started" as const,
+      pid: 12345,
+      command: "openclaw update --yes --timeout 1800",
+      logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
+      handoffId: params?.handoffId,
+      ownsHandoff: true,
+    }),
+  );
   scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
   runPostCoreFinalizeAfterGatewayUpdateMock.mockClear();
@@ -530,6 +542,29 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({ restartDrainTimeoutMs: undefined }),
     );
+  });
+
+  it("does not replace sentinel ownership or schedule restart when joining a handoff", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+    startManagedServiceUpdateHandoffMock.mockResolvedValueOnce({
+      status: "started",
+      pid: 12345,
+      command: "openclaw update --yes --timeout 1800",
+      logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
+      handoffId: "handoff-existing",
+      ownsHandoff: false,
+    });
+
+    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
+    expect(payload?.ok).toBe(true);
+    expect(payload?.handoff?.status).toBe("started");
+    expect(payload?.sentinel?.persisted).toBe(false);
   });
 
   it("arms the managed restart before optional sentinel persistence", async () => {

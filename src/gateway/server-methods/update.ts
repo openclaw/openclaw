@@ -171,6 +171,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       | { status: "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
+    let ownsManagedServiceHandoff = true;
     const sentinelMeta: UpdateRestartSentinelMeta = {
       ...(sessionKey ? { sessionKey } : {}),
       ...(deliveryContext ? { deliveryContext } : {}),
@@ -273,25 +274,29 @@ export const updateHandlers: GatewayRequestHandlers = {
               handoffId,
               supervisor,
             });
+            ownsManagedServiceHandoff = started.ownsHandoff;
+            sentinelMeta.handoffId = started.handoffId ?? handoffId;
             handoff = {
               status: "started",
               ...(started.pid ? { pid: started.pid } : {}),
               command: started.command,
             };
-            // Once the detached helper exists, arm its parent exit without an
-            // intervening await so persistence failures cannot orphan it.
-            managedHandoffRestart = scheduleGatewaySigusr1Restart({
-              delayMs: managedRestartDelayMs,
-              reason: "update.run",
-              skipDeferral: true,
-              skipCooldown: true,
-              audit: {
-                actor: actor.actor,
-                deviceId: actor.deviceId,
-                clientIp: actor.clientIp,
-                changedPaths: [],
-              },
-            });
+            // The owner pairs helper creation with parent exit before any
+            // persistence can fail. Joiners leave both to the active owner.
+            if (ownsManagedServiceHandoff) {
+              managedHandoffRestart = scheduleGatewaySigusr1Restart({
+                delayMs: managedRestartDelayMs,
+                reason: "update.run",
+                skipDeferral: true,
+                skipCooldown: true,
+                audit: {
+                  actor: actor.actor,
+                  deviceId: actor.deviceId,
+                  clientIp: actor.clientIp,
+                  changedPaths: [],
+                },
+              });
+            }
             result = {
               status: "skipped",
               mode: installSurface.mode,
@@ -395,13 +400,15 @@ export const updateHandlers: GatewayRequestHandlers = {
       meta: sentinelMeta,
     });
 
-    let sentinelPersisted: boolean;
-    try {
-      await writeRestartSentinel(payload);
-      sentinelPersisted = true;
-      recordLatestUpdateRestartSentinel(payload);
-    } catch {
-      sentinelPersisted = false;
+    let sentinelPersisted = false;
+    if (ownsManagedServiceHandoff) {
+      try {
+        await writeRestartSentinel(payload);
+        sentinelPersisted = true;
+        recordLatestUpdateRestartSentinel(payload);
+      } catch {
+        // Best effort: the response still reports the update outcome.
+      }
     }
 
     // Only restart the gateway when the update actually succeeded.

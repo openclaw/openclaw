@@ -81,6 +81,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
   tempDirs.clear();
+  vi.resetModules();
 });
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -395,6 +396,73 @@ exit 1
 }
 
 describe("managed service update handoff", () => {
+  it("joins an active handoff instead of spawning a concurrent updater", async () => {
+    const child = createSpawnMock();
+    spawnMock.mockReturnValue(child);
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const first = startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      timeoutMs: 1_800_000,
+      restartDrainTimeoutMs: 300_000,
+      restartDelayMs: 500,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      supervisor: "launchd",
+      env: { OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.test" },
+      handoffId: "handoff-first",
+      meta: { handoffId: "handoff-first" },
+    });
+    const second = startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      timeoutMs: 1_800_000,
+      restartDrainTimeoutMs: 300_000,
+      restartDelayMs: 500,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      supervisor: "launchd",
+      env: { OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.test" },
+      handoffId: "handoff-second",
+      meta: { handoffId: "handoff-second" },
+    });
+
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+    signalHandoffReady(child);
+
+    await expect(first).resolves.toMatchObject({
+      status: "started",
+      handoffId: "handoff-first",
+      ownsHandoff: true,
+    });
+    await expect(second).resolves.toMatchObject({
+      status: "started",
+      handoffId: "handoff-first",
+      ownsHandoff: false,
+    });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    child.emit("exit", 0, null);
+    const nextChild = createSpawnMock();
+    spawnMock.mockReturnValueOnce(nextChild);
+    const next = startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      restartDrainTimeoutMs: 300_000,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      handoffId: "handoff-next",
+      meta: { handoffId: "handoff-next" },
+    });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2));
+    signalHandoffReady(nextChild);
+    await expect(next).resolves.toMatchObject({
+      handoffId: "handoff-next",
+      ownsHandoff: true,
+    });
+  });
+
   it("reports started only after the detached helper signals readiness", async () => {
     const child = createSpawnMock();
     spawnMock.mockReturnValueOnce(child);
@@ -424,7 +492,7 @@ describe("managed service update handoff", () => {
     signalHandoffReady(child);
     await expect(resultPromise).resolves.toMatchObject({ status: "started", pid: 24680 });
     expect(child.unref).toHaveBeenCalledTimes(1);
-    expect(child.listenerCount("exit")).toBe(0);
+    expect(child.listenerCount("exit")).toBe(1);
     expect(child.listenerCount("error")).toBe(0);
     expect(child.stdout.destroyed).toBe(true);
   });
@@ -791,6 +859,10 @@ describe("managed service update handoff", () => {
         serviceRecovery?: unknown;
       };
       expect(helperParams.serviceRecovery).toEqual(testCase.expected);
+      const child = spawnMock.mock.results.at(-1)?.value as
+        | ReturnType<typeof createSpawnMock>
+        | undefined;
+      child?.emit("exit", 0, null);
     }
   });
 
