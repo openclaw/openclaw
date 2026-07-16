@@ -9,10 +9,10 @@ read_when:
 
 # Durable Core Residual-Gap Compatibility Check Plan
 
-This plan turns the durable-core residual-gap proposal into candidate
-compatibility checks for future durable runtime work. It is a review anchor only;
-it does not require runtime proof from docs-only changes that do not alter
-runtime behavior.
+This plan turns the durable-core residual-gap RFC candidate into possible
+compatibility checks for future durable runtime work. It is a review anchor only,
+not an accepted proof contract, source of truth, or owner decision. It does not
+require runtime proof from docs-only changes that do not alter runtime behavior.
 
 ## Scope
 
@@ -24,10 +24,10 @@ replay, or external channel delivery.
 
 ## Root-Cause Coverage
 
-Future durable-core implementation work should show how general runtime root
-causes would be handled as durable facts, not as product-specific conventions.
-The architecture proposal defines the candidate coverage; implementation changes
-own executable proof.
+If maintainers adopt a durable-core boundary, future implementation work should
+show how general runtime root causes would be handled as durable facts, not as
+product-specific conventions. The architecture proposal defines candidate
+coverage for owner review; implementation changes own executable proof.
 
 | Root cause                      | Candidate durable-core response                                                                                                                                   | Primary proof area              |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
@@ -38,9 +38,10 @@ own executable proof.
 | Delivery and attention unknowns | Internal handoff and any claimed external delivery record target, attempt, acknowledgement, failure, no-handler, and unresolved states with bounded inspection    | Delivery and inspection         |
 | Side-effect uncertainty         | Automatic replay is denied unless operation authority, input material, side-effect class, idempotency, dedupe/CAS or reconciliation, and retention gates all pass | Replay authority and safeguards |
 
-Reviewers can use these as candidate durable-runtime compatibility checks. A
-future implementation change may cover a narrow slice, but it should still name
-which root-cause rows it covers and which rows remain deferred.
+Reviewers can use these as candidate durable-runtime compatibility checks only
+after confirming the relevant owner boundary. A future implementation change may
+cover a narrow slice, but it should still name which root-cause rows it covers
+and which rows remain deferred.
 
 ## Compatibility Check Hygiene
 
@@ -53,6 +54,10 @@ which root-cause rows it covers and which rows remain deferred.
   copied from another worktree.
 
 ## Docs-Only Validation Gate
+
+For this PR, the only applicable validation is documentation hygiene and scope
+hygiene. The pages do not land runtime behavior, and they do not supersede
+TaskFlow, background-task, session, delivery, Gateway, or SQLite ownership.
 
 | Check         | Candidate validation                                                        |
 | ------------- | --------------------------------------------------------------------------- |
@@ -142,7 +147,8 @@ Runtime changes should include local or remote tests for their touched surface.
 Live OpenClaw E proof is relevant only when the change claims runtime, session,
 wake, worker, or delivery behavior that local tests cannot prove with
 maintainer-grade confidence. Docs-only changes can state that live proof is not
-applicable when they claim no runtime behavior.
+applicable when they claim no runtime behavior. This plan remains subordinate to
+maintainer decisions about whether durable core is a shared subsystem at all.
 
 ## Related
 

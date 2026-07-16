@@ -9,27 +9,31 @@ read_when:
 
 # Durable Core Residual-Gap Architecture Proposal
 
-This page is a durable-runtime architecture proposal. It describes a residual
-gap between existing TaskFlow/database-first owners and future runtime recovery
-work. It does not claim that runtime behavior, external delivery, replay, worker
-recovery, or CLI/Gateway control behavior is implemented by this document.
+This page is an unapproved durable-runtime RFC candidate. It describes the
+residual gap between existing TaskFlow/database-first owners and possible future
+runtime recovery work. It is not an accepted architecture, not the durable
+runtime source of truth, and not a maintainer decision about ownership or stack
+order. It does not claim that runtime behavior, external delivery, replay,
+worker recovery, schema migration, or CLI/Gateway control behavior is
+implemented by this document.
 
-## General Durable Runtime RFC
+## Candidate General Durable Runtime RFC
 
-Durable core is the shared, opt-in runtime substrate beneath OpenClaw agent,
-session, subagent, task, channel, and operator surfaces. Its job is to define
-the cross-owner invariants for runtime facts that must survive process restarts:
-accepted work identity, ordered steps and events, parent/child links, bounded
-refs, leases, recovery states, wake/attention obligations, delivery evidence,
-and read-only inspection state.
+Durable core would be a shared, opt-in runtime substrate beneath OpenClaw
+agent, session, subagent, task, channel, and operator surfaces. Its job would be
+to define cross-owner invariants for runtime facts that must survive process
+restarts: accepted work identity, ordered steps and events, parent/child links,
+bounded refs, leases, recovery states, wake/attention obligations, delivery
+evidence, and read-only inspection state.
 
-The durable runtime layer builds on the existing local state owners in
-`openclaw.sqlite`. The target base already persists audit events, state leases,
-task and subagent runs, durable delivery queues, task delivery state, and flow
-runs. This RFC is not a competing ledger for those owners. It names the residual
-contracts needed when facts cross owner boundaries: stable refs, append-only
-event evidence, lease expiry, terminal immutability, wake/attention routing,
-dedupe, inspection, and fail-closed recovery.
+If maintainers adopt this RFC, the durable runtime layer would build on the
+existing local state owners in `openclaw.sqlite`. The target base already
+persists audit events, state leases, task and subagent runs, durable delivery
+queues, task delivery state, and flow runs. This RFC candidate must not become a
+competing ledger for those owners. It names residual contracts that may need an
+owner decision when facts cross boundaries: stable refs, append-only event
+evidence, lease expiry, terminal immutability, wake/attention routing, dedupe,
+inspection, and fail-closed recovery.
 
 The RFC boundary is intentionally conservative:
 
@@ -51,23 +55,23 @@ and process restarts. Existing durable owners already record important parts of
 that work in `openclaw.sqlite`, including audit events, leases, task/subagent
 state, delivery queue entries, task delivery state, and flow runs.
 
-The remaining architecture problem is cross-owner consistency. A task row,
+The remaining architecture question is cross-owner consistency. A task row,
 subagent run, delivery queue entry, flow run, and audit event can each be valid
 on its own while still leaving unclear whether a parent is waiting on fan-in,
 whether a side effect already happened, whether a wake was delivered, or what a
-restart may safely reclaim. Durable core gives those owners shared invariants so
-OpenClaw can answer what it accepted, what ran, what is waiting, what failed,
-what became stale after restart, and which bounded recovery action is safe to
-present to an owner or operator.
+restart may safely reclaim. If adopted, durable core would give those owners
+shared invariants so OpenClaw can answer what it accepted, what ran, what is
+waiting, what failed, what became stale after restart, and which bounded
+recovery action is safe to present to an owner or operator.
 
 ## Why The Residual Gap Matters
 
-This residual-gap proposal exists because the remaining failure modes are
-cross-cutting rather than isolated to one channel, one prompt, or one UI. The
-repeated pattern is not merely "a message did not arrive"; it is that OpenClaw
-can accept work, delegate it, defer it, or route it through a channel without a
-shared durable obligation that later code can inspect, recover, acknowledge, or
-fail closed.
+This residual-gap proposal exists because the suspected remaining failure modes
+are cross-cutting rather than isolated to one channel, one prompt, or one UI.
+The repeated pattern is not merely "a message did not arrive"; it is that
+OpenClaw can accept work, delegate it, defer it, or route it through a channel
+without a shared durable obligation that later code can inspect, recover,
+acknowledge, or fail closed.
 
 The remaining root causes implementation work must address are:
 
@@ -96,12 +100,19 @@ channel, or UI bugs. This page documents the proposed boundary and proof model;
 implementation and runtime claims belong to the changes that add and validate
 code.
 
-## Implementation Position
+## Ownership And Source-Of-Truth Position
 
-Durable runtime implementation should extend the existing state owners where
-they already own the fact, then add shared contracts only for cross-owner
-questions those tables cannot answer alone. New records should be source-backed
-by a concrete invariant, migration, recovery path, or inspection need.
+Until maintainers explicitly adopt a durable-core boundary, existing TaskFlow,
+background-task, session, delivery, Gateway, and SQLite-backed owners remain the
+source of truth for their own behavior. This RFC candidate is only a review
+artifact for the residual cross-owner questions those owners may not answer
+alone.
+
+If adopted, durable runtime implementation should extend the existing state
+owners where they already own the fact, then add shared contracts only for
+cross-owner questions those tables cannot answer alone. New records should be
+source-backed by a concrete invariant, migration, recovery path, or inspection
+need.
 
 Architecture review should check whether each proposed durable fact has a clear
 owner, retention posture, privacy posture, disabled-runtime behavior, stale-owner
@@ -111,9 +122,9 @@ new shared record, prefer the existing owner.
 ## Durable Core Boundary
 
 Durable core is proposed as a local-first runtime substrate, not a product UI
-and not a general workflow engine. If adopted, it should record enough state to
-inspect, explain, and recover agent/session/task work without requiring external
-orchestration.
+and not a general workflow engine. If maintainers adopt this boundary, it should
+record enough state to inspect, explain, and recover agent/session/task work
+without requiring external orchestration.
 
 | Area             | Durable core owns                                                                    | Out of scope for durable core                                                            |
 | ---------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
@@ -134,7 +145,9 @@ The proposal prioritizes trustworthy inspection and diagnostics first. The core
 recovery goal is to persist committed facts and surface attention to the owner
 of the work. If a runtime, worker, Gateway request, child run, channel delivery,
 or process dies halfway, an accepted durable-core design should record the
-facts, expose diagnostics, and surface pending owner/main-agent work.
+facts, expose diagnostics, and surface pending owner/main-agent work. Until that
+maintainer decision exists, this page is not a promise that OpenClaw will add a
+new durable-core subsystem.
 
 The proposal does not promise:
 
@@ -177,6 +190,8 @@ handoff unless implementation work proves it directly.
 ## Non Goals
 
 - No runtime code, schema, worker, CLI, Gateway, or transport changes from this
+  docs-only RFC.
+- No accepted ownership, source-of-truth, or stack-order decision from this
   docs-only RFC.
 - No default-on durable runtime behavior.
 - No product-specific task-card or Workboard policy in durable core.

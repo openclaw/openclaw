@@ -8772,10 +8772,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /specs/durable-core-proposal-architecture
 - Headings:
   - H1: Durable Core Residual-Gap Architecture Proposal
-  - H2: General Durable Runtime RFC
+  - H2: Candidate General Durable Runtime RFC
   - H2: What Problem This Solves
   - H2: Why The Residual Gap Matters
-  - H2: Implementation Position
+  - H2: Ownership And Source-Of-Truth Position
   - H2: Durable Core Boundary
   - H2: Intended User Value
   - H2: Core Invariants
