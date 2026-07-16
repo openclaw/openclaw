@@ -11,6 +11,11 @@ import type { GatewayService } from "../../daemon/service.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
+  type GatewayLockIdentity,
+  isSameGatewayLockIdentity,
+  readActiveGatewayLockIdentity,
+} from "../../infra/gateway-lock.js";
+import {
   classifyPortListener,
   formatPortDiagnostics,
   inspectPortUsage,
@@ -633,25 +638,102 @@ export async function waitForGatewayHealthyListener(params: {
   port: number;
   attempts?: number;
   delayMs?: number;
+  previousLockIdentity?: GatewayLockIdentity;
+  waitIndefinitelyForPreviousOwner?: boolean;
 }): Promise<GatewayPortHealthSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
+  const previousLockIdentity = params.previousLockIdentity;
 
   const probeAuth = await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined);
-  let snapshot = await inspectGatewayPortHealth({
-    port: params.port,
-    auth: probeAuth,
-  });
+  let snapshot: GatewayPortHealthSnapshot = previousLockIdentity
+    ? {
+        portUsage: {
+          port: params.port,
+          status: "unknown",
+          listeners: [],
+          hints: [],
+          errors: [
+            `Previous gateway lock owner ${previousLockIdentity.ownerId ?? previousLockIdentity.pid} is still active.`,
+          ],
+        },
+        healthy: false,
+      }
+    : await inspectGatewayPortHealth({
+        port: params.port,
+        auth: probeAuth,
+      });
 
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (snapshot.healthy) {
-      return snapshot;
+  let attempt = 0;
+  if (previousLockIdentity) {
+    let previousOwnerReleased = false;
+    for (;;) {
+      let currentLockIdentity: GatewayLockIdentity | undefined;
+      try {
+        currentLockIdentity = await readActiveGatewayLockIdentity();
+      } catch {
+        if (params.waitIndefinitelyForPreviousOwner && !previousOwnerReleased) {
+          await sleep(delayMs);
+          continue;
+        }
+        if (attempt >= attempts) {
+          return snapshot;
+        }
+        attempt += 1;
+        await sleep(delayMs);
+        continue;
+      }
+
+      if (!previousOwnerReleased) {
+        if (
+          currentLockIdentity &&
+          isSameGatewayLockIdentity(previousLockIdentity, currentLockIdentity)
+        ) {
+          if (params.waitIndefinitelyForPreviousOwner) {
+            await sleep(delayMs);
+            continue;
+          }
+        } else {
+          previousOwnerReleased = true;
+          if (params.waitIndefinitelyForPreviousOwner) {
+            attempt = 0;
+          }
+        }
+      }
+
+      if (
+        previousOwnerReleased &&
+        currentLockIdentity &&
+        !isSameGatewayLockIdentity(previousLockIdentity, currentLockIdentity)
+      ) {
+        snapshot = await inspectGatewayPortHealth({
+          port: params.port,
+          auth: probeAuth,
+        });
+        break;
+      }
+
+      if (attempt >= attempts) {
+        return snapshot;
+      }
+      attempt += 1;
+      await sleep(delayMs);
     }
+  }
+
+  if (snapshot.healthy) {
+    return snapshot;
+  }
+  while (attempt < attempts) {
+    attempt += 1;
     await sleep(delayMs);
     snapshot = await inspectGatewayPortHealth({
       port: params.port,
       auth: probeAuth,
     });
+    if (snapshot.healthy) {
+      return snapshot;
+    }
   }
 
   return snapshot;
