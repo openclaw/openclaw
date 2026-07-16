@@ -92,10 +92,12 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
+      timeSeriesError: null,
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
+      sessionLogsError: null,
       sessionLogsExpanded: false,
       logFilters: {
         roles: [],

@@ -1,5 +1,50 @@
 {
-  "fallbacks": {},
-  "sourceHash": "10b83d878a3c7ea00454f120f6c71bb62d2c55f8c9e667e1476a33764465ef66",
+  "fallbacks": {
+    "usage.details.conversationLoadErrorTitle": [
+      "ar",
+      "de",
+      "es",
+      "fa",
+      "fr",
+      "hi",
+      "id",
+      "it",
+      "ja-JP",
+      "ko",
+      "nl",
+      "pl",
+      "pt-BR",
+      "ru",
+      "th",
+      "tr",
+      "uk",
+      "vi",
+      "zh-CN",
+      "zh-TW"
+    ],
+    "usage.details.timelineLoadErrorTitle": [
+      "ar",
+      "de",
+      "es",
+      "fa",
+      "fr",
+      "hi",
+      "id",
+      "it",
+      "ja-JP",
+      "ko",
+      "nl",
+      "pl",
+      "pt-BR",
+      "ru",
+      "th",
+      "tr",
+      "uk",
+      "vi",
+      "zh-CN",
+      "zh-TW"
+    ]
+  },
+  "sourceHash": "c7dde85f32e93d6d371668b317a4ce8d8c8c4d8ae3ece40c31f80c1dc878e971",
   "version": 1
 }

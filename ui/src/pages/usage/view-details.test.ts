@@ -65,6 +65,8 @@ function mount(
     selectedDays?: string[];
     timeZone?: "local" | "utc";
   } = {},
+  timeSeriesError: string | null = null,
+  sessionLogsError: string | null = null,
 ) {
   const container = document.createElement("div");
   render(
@@ -72,6 +74,7 @@ function mount(
       session(),
       { points },
       false,
+      timeSeriesError,
       "per-turn",
       vi.fn(),
       breakdownMode,
@@ -85,6 +88,7 @@ function mount(
       filters.timeZone ?? "local",
       [],
       false,
+      sessionLogsError,
       false,
       vi.fn(),
       { roles: [], tools: [], hasTools: false, query: "" },
@@ -260,5 +264,13 @@ describe("renderSessionDetailPanel filtered usage", () => {
       null,
     );
     expect(container.textContent).not.toContain("Invalid Date");
+  });
+
+  it("renders timeline and conversation error states", () => {
+    const container = mount([], null, null, "total", {}, "timeline RPC failed", "logs RPC failed");
+    expect(container.textContent).toContain("Could not load timeline");
+    expect(container.textContent).toContain("timeline RPC failed");
+    expect(container.textContent).toContain("Could not load conversation");
+    expect(container.textContent).toContain("logs RPC failed");
   });
 });

@@ -750,6 +750,24 @@ details.usage-filter-select summary::-webkit-details-marker,
   border-style: solid;
 }
 
+.usage-error-block {
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg));
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.usage-error-title {
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+
+.usage-error-message {
+  color: color-mix(in srgb, var(--danger) 70%, var(--text));
+}
+
 .usage-overview-card {
   display: grid;
   gap: 14px;

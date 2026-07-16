@@ -3230,6 +3230,8 @@ export const en: TranslationMap = {
       of: "of",
       timelineFiltered: "timeline filtered",
       conversation: "Conversation",
+      conversationLoadErrorTitle: "Could not load conversation",
+      timelineLoadErrorTitle: "Could not load timeline",
       noMessages: "No messages",
       tool: "Tool",
       toolResult: "Tool result",

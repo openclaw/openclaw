@@ -79,10 +79,12 @@ type UsageDetailState = {
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
   timeSeriesLoading: boolean;
+  timeSeriesError: string | null;
   timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
   timeSeriesCursorEnd: number | null; // End of selected range (null = no selection)
   sessionLogs: SessionLogEntry[] | null;
   sessionLogsLoading: boolean;
+  sessionLogsError: string | null;
   sessionLogsExpanded: boolean;
   logFilters: {
     roles: SessionLogRole[];

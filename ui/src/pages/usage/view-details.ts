@@ -247,6 +247,7 @@ function renderSessionDetailPanel(
   session: UsageSessionEntry,
   timeSeries: { points: TimeSeriesPoint[] } | null,
   timeSeriesLoading: boolean,
+  timeSeriesError: string | null,
   timeSeriesMode: "cumulative" | "per-turn",
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void,
   timeSeriesBreakdownMode: "total" | "by-type",
@@ -260,6 +261,7 @@ function renderSessionDetailPanel(
   timeZone: "local" | "utc",
   sessionLogs: SessionLogEntry[] | null,
   sessionLogsLoading: boolean,
+  sessionLogsError: string | null,
   sessionLogsExpanded: boolean,
   onToggleSessionLogsExpanded: () => void,
   logFilters: {
@@ -346,6 +348,7 @@ function renderSessionDetailPanel(
           ${renderTimeSeriesCompact(
             timeSeries,
             timeSeriesLoading,
+            timeSeriesError,
             timeSeriesMode,
             onTimeSeriesModeChange,
             timeSeriesBreakdownMode,
@@ -363,6 +366,7 @@ function renderSessionDetailPanel(
           ${renderSessionLogsCompact(
             sessionLogs,
             sessionLogsLoading,
+            sessionLogsError,
             sessionLogsExpanded,
             onToggleSessionLogsExpanded,
             logFilters,
@@ -389,6 +393,7 @@ function renderSessionDetailPanel(
 function renderTimeSeriesCompact(
   timeSeries: { points: TimeSeriesPoint[] } | null,
   loading: boolean,
+  error: string | null,
   mode: "cumulative" | "per-turn",
   onModeChange: (mode: "cumulative" | "per-turn") => void,
   breakdownMode: "total" | "by-type",
@@ -405,6 +410,16 @@ function renderTimeSeriesCompact(
     return html`
       <div class="session-timeseries-compact">
         <div class="usage-empty-block">${t("usage.loading.badge")}</div>
+      </div>
+    `;
+  }
+  if (error) {
+    return html`
+      <div class="session-timeseries-compact">
+        <div class="usage-error-block">
+          <div class="usage-error-title">${t("usage.details.timelineLoadErrorTitle")}</div>
+          <div class="usage-error-message">${error}</div>
+        </div>
       </div>
     `;
   }
@@ -1052,6 +1067,7 @@ function renderContextPanel(
 function renderSessionLogsCompact(
   logs: SessionLogEntry[] | null,
   loading: boolean,
+  error: string | null,
   expandedAll: boolean,
   onToggleExpandedAll: () => void,
   filters: {
@@ -1073,6 +1089,17 @@ function renderSessionLogsCompact(
       <div class="session-logs-compact">
         <div class="session-logs-header">${t("usage.details.conversation")}</div>
         <div class="usage-empty-block">${t("usage.loading.badge")}</div>
+      </div>
+    `;
+  }
+  if (error) {
+    return html`
+      <div class="session-logs-compact">
+        <div class="session-logs-header">${t("usage.details.conversation")}</div>
+        <div class="usage-error-block">
+          <div class="usage-error-title">${t("usage.details.conversationLoadErrorTitle")}</div>
+          <div class="usage-error-message">${error}</div>
+        </div>
       </div>
     `;
   }

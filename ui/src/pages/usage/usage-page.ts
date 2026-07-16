@@ -85,10 +85,12 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() private usageTimeSeries: SessionUsageTimeSeries | null = null;
   @state() private usageTimeSeriesLoading = false;
+  @state() private usageTimeSeriesError: string | null = null;
   @state() private usageTimeSeriesCursorStart: number | null = null;
   @state() private usageTimeSeriesCursorEnd: number | null = null;
   @state() private usageSessionLogs: SessionLogEntry[] | null = null;
   @state() private usageSessionLogsLoading = false;
+  @state() private usageSessionLogsError: string | null = null;
   @state() private usageSessionLogsExpanded = false;
   @state() private usageQuery = "";
   @state() private usageQueryDraft = "";
@@ -367,13 +369,16 @@ class UsagePage extends OpenClawLightDomElement {
     }
     const requestId = ++this.timeSeriesRequestId;
     this.usageTimeSeriesLoading = true;
+    this.usageTimeSeriesError = null;
     try {
       const result = await requestSessionUsageTimeSeries(client, sessionKey);
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
         this.usageTimeSeries = result;
       }
-    } catch {
-      // Optional detail endpoint.
+    } catch (error) {
+      if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
+        this.usageTimeSeriesError = toUsageErrorMessage(error);
+      }
     } finally {
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
         this.usageTimeSeriesLoading = false;
@@ -388,6 +393,7 @@ class UsagePage extends OpenClawLightDomElement {
     }
     const requestId = ++this.logsRequestId;
     this.usageSessionLogsLoading = true;
+    this.usageSessionLogsError = null;
     try {
       const payload = await requestSessionUsageLogs(client, sessionKey);
       if (!this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
@@ -396,8 +402,10 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageSessionLogs = Array.isArray(payload.logs)
         ? (payload.logs as SessionLogEntry[])
         : null;
-    } catch {
-      // Optional detail endpoint.
+    } catch (error) {
+      if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
+        this.usageSessionLogsError = toUsageErrorMessage(error);
+      }
     } finally {
       if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
         this.usageSessionLogsLoading = false;
@@ -414,7 +422,9 @@ class UsagePage extends OpenClawLightDomElement {
   private clearDetails() {
     this.invalidateDetailRequests();
     this.usageTimeSeries = null;
+    this.usageTimeSeriesError = null;
     this.usageSessionLogs = null;
+    this.usageSessionLogsError = null;
     this.usageTimeSeriesCursorStart = null;
     this.usageTimeSeriesCursorEnd = null;
   }
@@ -524,10 +534,12 @@ class UsagePage extends OpenClawLightDomElement {
         timeSeriesBreakdownMode: this.usageTimeSeriesBreakdownMode,
         timeSeries: this.usageTimeSeries,
         timeSeriesLoading: this.usageTimeSeriesLoading,
+        timeSeriesError: this.usageTimeSeriesError,
         timeSeriesCursorStart: this.usageTimeSeriesCursorStart,
         timeSeriesCursorEnd: this.usageTimeSeriesCursorEnd,
         sessionLogs: this.usageSessionLogs,
         sessionLogsLoading: this.usageSessionLogsLoading,
+        sessionLogsError: this.usageSessionLogsError,
         sessionLogsExpanded: this.usageSessionLogsExpanded,
         logFilters: {
           roles: this.usageLogFilterRoles,
