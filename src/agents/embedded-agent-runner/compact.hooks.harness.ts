@@ -48,6 +48,9 @@ export const hookRunner = {
 };
 
 export const ensureRuntimePluginsLoaded: Mock<(params?: unknown) => void> = vi.fn();
+export const acquireSessionWriteLockMock = vi.fn(async (_params?: unknown) => ({
+  release: vi.fn(async () => {}),
+}));
 export const resolveContextEngineMock = vi.fn(async () => ({
   info: { ownsCompaction: true as boolean },
   compact: contextEngineCompactMock,
@@ -521,6 +524,7 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   ensureRuntimePluginsLoaded.mockReset();
+  acquireSessionWriteLockMock.mockClear();
 
   resolveContextEngineMock.mockReset();
   resolveContextEngineMock.mockResolvedValue({
@@ -744,7 +748,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+    acquireSessionWriteLock: acquireSessionWriteLockMock,
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
     resolveSessionWriteLockOptions: vi.fn(() => ({

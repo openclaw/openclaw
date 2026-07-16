@@ -5,6 +5,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  acquireSessionWriteLockMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildAgentRuntimePlanMock,
@@ -329,6 +330,18 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       details: { ok: true },
     });
     resetCompactSessionStateMocks();
+  });
+
+  it("reenters the active session lock during direct compaction", async () => {
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(acquireSessionWriteLockMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: TEST_SESSION_FILE,
+        allowReentrant: true,
+      }),
+    );
   });
 
   it("fails closed before generic compaction for a model-locked native session", async () => {
