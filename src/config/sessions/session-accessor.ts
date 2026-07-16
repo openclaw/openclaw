@@ -181,6 +181,19 @@ export {
 } from "./session-accessor.transcript.js";
 export { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 export {
+  readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptMessageAnchorPage,
+  readSessionTranscriptMessageEventById,
+  readSessionTranscriptMessageEventCount,
+  readSessionTranscriptMessageEventPage,
+  readSessionTranscriptMessageEvents,
+} from "./session-accessor.sqlite-active-events.js";
+export type {
+  SessionTranscriptMessageAnchorPage,
+  SessionTranscriptMessageEvent,
+  SessionTranscriptMessageEventPage,
+} from "./session-accessor.sqlite-active-events.js";
+export {
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,

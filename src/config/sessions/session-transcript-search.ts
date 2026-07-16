@@ -72,9 +72,14 @@ async function reconcileSessionTranscriptIndex(params: {
         if (rows.length === 0) {
           return;
         }
-        const events = rows.map((row) => JSON.parse(row.event_json) as unknown);
-        const maxSeq = rows[rows.length - 1]?.seq ?? -1;
-        rebuildSessionTranscriptIndexInTransaction(agentDatabase.db, sessionId, events, maxSeq);
+        rebuildSessionTranscriptIndexInTransaction(
+          agentDatabase.db,
+          sessionId,
+          rows.map((row) => ({
+            event: JSON.parse(row.event_json) as unknown,
+            seq: row.seq,
+          })),
+        );
       },
       { agentId: params.agentId, ...(params.env ? { env: params.env } : {}) },
       { operationLabel: "sessions.search.reconcile" },

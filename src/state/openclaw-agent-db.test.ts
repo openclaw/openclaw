@@ -1560,6 +1560,78 @@ describe("openclaw agent database", () => {
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
+  it("adds the active transcript projection when upgrading v9 databases", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(
+      stateDir,
+      "agents",
+      "worker-1",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const currentSchema = fs.readFileSync(
+      new URL("./openclaw-agent-schema.sql", import.meta.url),
+      "utf8",
+    );
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(currentSchema);
+    db.exec(`
+      DROP TABLE session_transcript_active_events;
+      ALTER TABLE session_transcript_index_state DROP COLUMN active_event_count;
+      ALTER TABLE session_transcript_index_state DROP COLUMN active_message_count;
+      INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+      VALUES ('primary', 'agent', 9, 'worker-1', NULL, 1, 1);
+      INSERT INTO sessions
+        (session_id, session_key, created_at, updated_at)
+      VALUES ('session-1', 'agent:worker-1:main', 10, 20);
+      INSERT INTO transcript_events
+        (session_id, seq, event_json, created_at)
+      VALUES
+        ('session-1', 0, '{"type":"session","id":"session-1"}', 10),
+        ('session-1', 1, '{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":"hello"}}', 20);
+      INSERT INTO session_transcript_index_state
+        (session_id, indexed_seq, leaf_event_id, needs_rebuild, updated_at)
+      VALUES ('session-1', 1, 'm1', 0, 20);
+      PRAGMA user_version = 9;
+    `);
+    db.close();
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = database.db
+      .prepare("PRAGMA table_info(session_transcript_index_state)")
+      .all() as Array<{ name?: unknown }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["active_event_count", "active_message_count"]),
+    );
+    expect(
+      database.db
+        .prepare(
+          "SELECT indexed_seq, needs_rebuild, active_event_count, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+        )
+        .get("session-1"),
+    ).toEqual({
+      active_event_count: 0,
+      active_message_count: 0,
+      indexed_seq: 1,
+      needs_rebuild: 1,
+    });
+    expect(
+      database.db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_transcript_active_events'",
+        )
+        .get(),
+    ).toEqual({ name: "session_transcript_active_events" });
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  });
+
   it("inspects registered database ownership without mutating the database", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawAgentDatabase({

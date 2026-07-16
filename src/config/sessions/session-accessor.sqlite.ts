@@ -52,6 +52,19 @@ export {
 export { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 export { previewSqliteSessionDiskBudget } from "./session-accessor.sqlite-maintenance.js";
 export {
+  readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptMessageAnchorPage,
+  readSessionTranscriptMessageEventById,
+  readSessionTranscriptMessageEventCount,
+  readSessionTranscriptMessageEventPage,
+  readSessionTranscriptMessageEvents,
+} from "./session-accessor.sqlite-active-events.js";
+export type {
+  SessionTranscriptMessageAnchorPage,
+  SessionTranscriptMessageEvent,
+  SessionTranscriptMessageEventPage,
+} from "./session-accessor.sqlite-active-events.js";
+export {
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync,
