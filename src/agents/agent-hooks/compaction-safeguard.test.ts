@@ -2731,6 +2731,12 @@ describe("compaction-safeguard double-compaction guard", () => {
                 name: "tools/sessions_send",
                 arguments: { sessionKey: "agent:wasp", message: "say wasp" },
               },
+              {
+                type: "toolCall",
+                id: "call-3",
+                name: "sessions_send",
+                arguments: { sessionKey: "agent:ant", message: "say ant" },
+              },
             ],
             timestamp: now + 1,
           },
@@ -2744,8 +2750,21 @@ describe("compaction-safeguard double-compaction guard", () => {
             role: "toolResult",
             toolCallId: "call-1",
             toolName: "functions.sessions_send",
-            content: [{ type: "text", text: "bee replied" }],
+            content: [{ type: "text", text: '{"status":"ok","reply":"bee replied"}' }],
             timestamp: now + 2,
+          },
+        },
+        {
+          type: "message",
+          id: "tool-3",
+          parentId: "tool-1",
+          timestamp: new Date(now + 3).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "call-3",
+            toolName: "sessions_send",
+            content: [{ type: "text", text: '{"status":"error","error":"ant unavailable"}' }],
+            timestamp: now + 3,
           },
         },
       ],
@@ -2778,9 +2797,13 @@ describe("compaction-safeguard double-compaction guard", () => {
     const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
     const messages = requireArray(summarizeCall.messages);
     expect(messages.map((message) => requireRecord(message).role)).toEqual(["user", "assistant"]);
-    expect(JSON.stringify(messages)).toContain("sessions_send completed");
-    expect(JSON.stringify(messages)).toContain("sessions_send delivery status unknown");
+    expect(JSON.stringify(messages)).toContain("sessions_send result received");
+    expect(JSON.stringify(messages)).toContain("sessions_send result missing");
     expect(JSON.stringify(messages)).toContain("bee replied");
+    expect(JSON.stringify(messages)).toContain("ant unavailable");
+    expect(JSON.stringify(messages)).toContain("agent:wasp");
+    expect(JSON.stringify(messages)).toContain("say wasp");
+    expect(JSON.stringify(messages)).not.toContain("sessions_send completed");
     expect(JSON.stringify(messages)).not.toContain("functions.sessions_send");
     expect(JSON.stringify(messages)).not.toContain("tools/sessions_send");
   });

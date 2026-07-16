@@ -248,7 +248,12 @@ function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
         if (!block || typeof block !== "object") {
           return block;
         }
-        const record = block as { type?: unknown; id?: unknown; name?: unknown };
+        const record = block as {
+          type?: unknown;
+          id?: unknown;
+          name?: unknown;
+          arguments?: unknown;
+        };
         if (
           typeof record.type !== "string" ||
           !TOOL_CALL_BLOCK_TYPES.has(record.type) ||
@@ -260,14 +265,15 @@ function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
         const callId = typeof record.id === "string" ? record.id.trim() : "";
         const resultText = callId ? resultTextByCallId.get(callId) : undefined;
         const resolved = Boolean(callId && resolvedCallIds.has(callId));
+        const requestText = JSON.stringify({ callId: callId || undefined, args: record.arguments });
         return {
           type: "text",
           text:
             resolved && resultText
-              ? `sessions_send completed; delivery call omitted from replay.\nResult: ${resultText}`
+              ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: ${resultText}`
               : resolved
-                ? "sessions_send completed; delivery call omitted from replay."
-                : "sessions_send delivery status unknown; delivery call omitted from replay.",
+                ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: [empty]`
+                : `sessions_send result missing; delivery call omitted from replay.\nRequest: ${requestText}`,
         };
       });
       return replaced ? [{ ...message, content } as AgentMessage] : [message];
