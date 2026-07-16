@@ -92,6 +92,8 @@ final class OpenClawMascotAnimator {
     // Explicit consumer headwear overrides the mood-owned accessory channel.
     private var requestedAccessory: OpenClawMascotAccessory = .none
     private var accessorySetAt: TimeInterval = 0
+    /// Hard-hat amount from the last rendered frame; gates the hat-tip exit.
+    private var lastHardHat: CGFloat = 0
 
     // Auto-sleep: idle mascots doze off and need a click to wake up. Night
     // owls (23:00-05:00 local) nod off about twice as fast. Only mascots with
@@ -117,7 +119,9 @@ final class OpenClawMascotAnimator {
         self.mood = mood
         self.lastInteractionAt = time
         self.rescheduleMoodBeat(at: time)
-        if wasWorking {
+        // Tip only a hat that actually seated: a working state cancelled
+        // mid-don would otherwise synthesize a full hard hat just to lift it.
+        if wasWorking, self.lastHardHat >= 0.9 {
             self.startGesture(.hatTip, at: time)
         } else if let entrance = Self.entranceGesture(for: mood) {
             self.startGesture(entrance, at: time)
@@ -210,8 +214,15 @@ final class OpenClawMascotAnimator {
             let progress = CGFloat((time - self.accessorySetAt) / 0.5).clamped(to: 0...1)
             pose.accessoryAmount = OpenClawMascotGesture.easeOut(progress)
         }
+        // One hat at a time: the working hard hat (including its hat-tip exit)
+        // owns the crown; any mood- or consumer-requested accessory waits
+        // until the hard hat is fully gone.
+        if pose.hardHat > 0.01 {
+            pose.accessoryAmount = 0
+        }
 
         pose.clampChannels()
+        self.lastHardHat = pose.hardHat
         return pose
     }
 

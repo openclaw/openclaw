@@ -156,6 +156,51 @@ struct OpenClawMascotAnimatorTests {
         #expect(animator.pose(at: 3.5).hardHat == 0)
     }
 
+    @Test func `hard hat suppresses requested headwear until the tip finishes`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.working, at: 0)
+        animator.setAccessory(.gradCap, at: 0)
+
+        // While working (and through the hat-tip exit) the hard hat owns the
+        // crown: the requested cap must not co-render.
+        var time: TimeInterval = 0.2
+        while time < 3 {
+            let pose = animator.pose(at: time)
+            if pose.hardHat > 0.01 {
+                #expect(pose.accessoryAmount == 0, "two hats at t=\(time)")
+            }
+            time += 1.0 / 30
+        }
+        animator.setMood(.happy, at: 3)
+        while time < 4.4 {
+            let pose = animator.pose(at: time)
+            if pose.hardHat > 0.01 {
+                #expect(pose.accessoryAmount == 0, "two hats at t=\(time)")
+            }
+            time += 1.0 / 30
+        }
+        let after = animator.pose(at: 4.5)
+        #expect(after.hardHat == 0)
+        #expect(after.accessory == .gradCap)
+        #expect(after.accessoryAmount == 1)
+    }
+
+    @Test func `cancelled working exit skips the phantom hat tip`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.working, at: 0)
+        // The don is still in flight; the hat never seated.
+        _ = animator.pose(at: 0.15)
+        animator.setMood(.happy, at: 0.15)
+
+        var time: TimeInterval = 0.16
+        while time < 1.5 {
+            #expect(animator.pose(at: time).hardHat < 0.05, "phantom hat at t=\(time)")
+            time += 1.0 / 30
+        }
+    }
+
     @Test func `affection taps trigger hearts`() {
         let animator = self.makeAnimator()
         _ = animator.pose(at: 0)

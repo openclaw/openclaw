@@ -27,7 +27,9 @@ public struct OpenClawMascotView: View {
 
     private var staticPose: OpenClawMascotPose {
         var pose = OpenClawMascotPose.staticPose(for: self.mood)
-        if self.accessory != .none {
+        // One hat at a time: the working static pose already wears the hard
+        // hat, so a requested accessory stays off (mirrors the animator).
+        if self.accessory != .none, pose.hardHat == 0 {
             pose.accessory = self.accessory
             pose.accessoryAmount = 1
         }
