@@ -413,6 +413,30 @@ describe("handleAllowlistCommand", () => {
     }
   });
 
+  it("keeps group allowlist edits out of the DM pairing store", async () => {
+    await withTempConfigPath(
+      { channels: { telegram: { groupAllowFrom: ["123"] } } },
+      async (configPath) => {
+        const params = buildAllowlistParams("/allowlist add group 789", {
+          commands: { text: true, config: true },
+          channels: { telegram: { groupAllowFrom: ["123"] } },
+        } as OpenClawConfig);
+        params.command.senderIsOwner = true;
+
+        const result = await handleAllowlistCommand(params, true);
+
+        expect(result?.shouldContinue).toBe(false);
+        const written = await readJsonFile<OpenClawConfig>(configPath);
+        expect(written.channels?.telegram?.groupAllowFrom).toEqual(["123", "789"]);
+        expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+        expect(result?.reply?.text).toContain(
+          "group allowlist added: channels.telegram.groupAllowFrom.",
+        );
+        expect(result?.reply?.text).not.toContain("pairing store");
+      },
+    );
+  });
+
   it("uses the configured default account for omitted-account list", async () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -699,6 +723,25 @@ describe("handleAllowlistCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("DM allowlist added in pairing store");
     expect(addChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      entry: "789",
+      accountId: "default",
+    });
+  });
+
+  it("keeps all-scope store edits on the DM pairing store", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"], configWrites: true } },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist remove all --store 789", cfg);
+    params.command.senderIsOwner = true;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("DM allowlist removed in pairing store");
+    expect(removeChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
       channel: "telegram",
       entry: "789",
       accountId: "default",
