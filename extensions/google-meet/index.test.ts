@@ -25,16 +25,20 @@ import {
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
-import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
+import { convertGoogleMeetTtsAudioForBridge } from "./src/realtime-audio-format.js";
 import {
-  convertGoogleMeetTtsAudioForBridge,
+  createLocalMeetRealtimeAudioTransport,
+  type MeetRealtimeAudioSpawn,
+} from "./src/realtime-local-audio-transport.js";
+import { createNodeMeetRealtimeAudioTransport } from "./src/realtime-node-audio-transport.js";
+import {
   isGoogleMeetLikelyAssistantEchoTranscript,
   GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
   recordGoogleMeetOutputActivity,
   resolveGoogleMeetRealtimeProvider,
   resolveGoogleMeetRealtimeTranscriptionProvider,
-  startCommandAgentAudioBridge,
-  startCommandRealtimeAudioBridge,
+  startMeetAgentRealtimeEngine,
+  startMeetRealtimeEngine,
 } from "./src/realtime.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import {
@@ -54,6 +58,85 @@ import type { GoogleMeetSession } from "./src/transports/types.js";
 type GoogleMeetManifestConfigSchema = JsonSchemaObject & {
   properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;
 };
+
+type TestLocalAgentEngineParams = Omit<
+  Parameters<typeof startMeetAgentRealtimeEngine>[0],
+  "transport"
+> & {
+  inputCommand: string[];
+  outputCommand: string[];
+  spawn?: MeetRealtimeAudioSpawn;
+};
+
+async function startTestLocalAgentAudioBridge(params: TestLocalAgentEngineParams) {
+  const { inputCommand, outputCommand, spawn, ...engineParams } = params;
+  const transport = createLocalMeetRealtimeAudioTransport({
+    inputCommand,
+    outputCommand,
+    bargeInInputCommand: params.config.chrome.bargeInInputCommand,
+    bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
+    bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
+    bargeInCooldownMs: params.config.chrome.bargeInCooldownMs,
+    logger: params.logger,
+    spawn,
+  });
+  return await startMeetAgentRealtimeEngine({ ...engineParams, transport });
+}
+
+type TestLocalRealtimeEngineParams = Omit<
+  Parameters<typeof startMeetRealtimeEngine>[0],
+  "transport"
+> & {
+  inputCommand: string[];
+  outputCommand: string[];
+  spawn?: MeetRealtimeAudioSpawn;
+};
+
+async function startTestLocalRealtimeAudioBridge(params: TestLocalRealtimeEngineParams) {
+  const { inputCommand, outputCommand, spawn, ...engineParams } = params;
+  const transport = createLocalMeetRealtimeAudioTransport({
+    inputCommand,
+    outputCommand,
+    bargeInInputCommand: params.config.chrome.bargeInInputCommand,
+    bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
+    bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
+    bargeInCooldownMs: params.config.chrome.bargeInCooldownMs,
+    logger: params.logger,
+    spawn,
+  });
+  return await startMeetRealtimeEngine({ ...engineParams, transport });
+}
+
+type TestNodeRealtimeEngineParams = Omit<
+  Parameters<typeof startMeetRealtimeEngine>[0],
+  "transport"
+> & {
+  nodeId: string;
+  bridgeId: string;
+};
+
+async function startTestNodeRealtimeAudioBridge(params: TestNodeRealtimeEngineParams) {
+  const { nodeId, bridgeId, ...engineParams } = params;
+  const transport = createNodeMeetRealtimeAudioTransport({
+    runtime: params.runtime,
+    nodeId,
+    bridgeId,
+    logger: params.logger,
+    logPrefix: "node",
+  });
+  return {
+    type: "node-command-pair" as const,
+    nodeId,
+    bridgeId,
+    ...(await startMeetRealtimeEngine({
+      ...engineParams,
+      logPrefix: "node",
+      talkSessionId: `google-meet:${params.meetingSessionId}:${bridgeId}:node-realtime`,
+      talkContext: { nodeId, bridgeId },
+      transport,
+    })),
+  };
+}
 
 const voiceCallMocks = vi.hoisted(() => ({
   createVoiceCallGateway: vi.fn(
@@ -6710,7 +6793,7 @@ describe("google-meet plugin", () => {
       },
     };
 
-    const handle = await startCommandAgentAudioBridge({
+    const handle = await startTestLocalAgentAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { provider: "openai", agentId: "jay", introMessage: "" },
       }),
@@ -6770,6 +6853,43 @@ describe("google-meet plugin", () => {
     await handle.stop();
   });
 
+  it("aborts agent engine startup when the transport already failed", async () => {
+    const createSession = vi.fn();
+    const provider: RealtimeTranscriptionProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      defaultModel: "gpt-4o-transcribe",
+      autoSelectOrder: 1,
+      resolveConfig: ({ rawConfig }) => rawConfig,
+      isConfigured: () => true,
+      createSession,
+    };
+    const stop = vi.fn(async () => {});
+    await expect(
+      startMeetAgentRealtimeEngine({
+        config: resolveGoogleMeetConfig({
+          realtime: { provider: "openai", agentId: "jay", introMessage: "" },
+        }),
+        fullConfig: {} as never,
+        runtime: {} as never,
+        meetingSessionId: "meet-fatal",
+        logger: noopLogger,
+        providers: [provider],
+        transport: {
+          // Pre-registration fatal replays synchronously; startup must abort before createSession.
+          onFatal: (handler) => handler(),
+          startInput: vi.fn(),
+          stop,
+          writeOutput: vi.fn(async () => {}),
+          clearOutput: vi.fn(async () => {}),
+          dispose: vi.fn(async () => {}),
+        },
+      }),
+    ).rejects.toThrow("transport failed before transcription provider setup");
+    expect(createSession).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalled();
+  });
+
   it("stops the Chrome agent audio bridge when child stdio streams error", async () => {
     const sttSession = {
       connect: vi.fn(async () => {}),
@@ -6822,7 +6942,7 @@ describe("google-meet plugin", () => {
     });
     const spawnMock = vi.fn().mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
 
-    const handle = await startCommandAgentAudioBridge({
+    const handle = await startTestLocalAgentAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { provider: "openai", agentId: "jay", introMessage: "" },
       }),
@@ -6957,7 +7077,7 @@ describe("google-meet plugin", () => {
       },
     };
 
-    const handle = await startCommandRealtimeAudioBridge({
+    const handle = await startTestLocalRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime", agentId: "jay" },
       }),
@@ -7154,7 +7274,7 @@ describe("google-meet plugin", () => {
     const inputProcess = makeProcess({ stdin: null, stdout: inputStdout });
     const spawnMock = vi.fn().mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
 
-    const handle = await startCommandRealtimeAudioBridge({
+    const handle = await startTestLocalRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
       }),
@@ -7250,7 +7370,7 @@ describe("google-meet plugin", () => {
         },
       };
 
-      const handle = await startCommandRealtimeAudioBridge({
+      const handle = await startTestLocalRealtimeAudioBridge({
         config: resolveGoogleMeetConfig({ realtime: { provider: "openai", agentId: "jay" } }),
         fullConfig: {} as never,
         runtime: runtime as never,
@@ -7434,7 +7554,7 @@ describe("google-meet plugin", () => {
       .mockReturnValueOnce(bargeInProcess)
       .mockReturnValueOnce(replacementOutputProcess);
 
-    const handle = await startCommandRealtimeAudioBridge({
+    const handle = await startTestLocalRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         chrome: {
           bargeInInputCommand: ["capture-human"],
@@ -7536,7 +7656,7 @@ describe("google-meet plugin", () => {
       },
     };
 
-    const handle = await startNodeRealtimeAudioBridge({
+    const handle = await startTestNodeRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
       }),
@@ -7720,10 +7840,10 @@ describe("google-meet plugin", () => {
         }),
       },
     };
-    let handle: Awaited<ReturnType<typeof startNodeRealtimeAudioBridge>> | undefined;
+    let handle: Awaited<ReturnType<typeof startTestNodeRealtimeAudioBridge>> | undefined;
 
     try {
-      handle = await startNodeRealtimeAudioBridge({
+      handle = await startTestNodeRealtimeAudioBridge({
         config: resolveGoogleMeetConfig({
           realtime: { provider: "openai", model: "gpt-realtime" },
         }),
@@ -7788,7 +7908,7 @@ describe("google-meet plugin", () => {
     };
 
     try {
-      const handle = await startNodeRealtimeAudioBridge({
+      const handle = await startTestNodeRealtimeAudioBridge({
         config: resolveGoogleMeetConfig({
           realtime: { provider: "openai", model: "gpt-realtime" },
         }),
