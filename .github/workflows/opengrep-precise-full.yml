@@ -41,10 +41,10 @@ jobs:
           # Download first so a timed-out transfer cannot execute a partial installer.
           installer="$(mktemp "${RUNNER_TEMP}/opengrep-install.XXXXXX")"
           trap 'rm -f "$installer"' EXIT
-          curl -fsSL --connect-timeout 10 --max-time 120 \
+          curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 \
             -o "$installer" \
             "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh"
-          bash "$installer" -v "$OPENGREP_VERSION"
+          timeout --signal=TERM --kill-after=10s 300s bash "$installer" -v "$OPENGREP_VERSION"
           echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
 
       - name: Verify opengrep
