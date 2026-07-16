@@ -908,11 +908,20 @@ struct GatewayProcessManagerTests {
         let manager = GatewayProcessManager.shared
         manager.setTestingConnection(connection)
         manager.setTestingDesiredActive(true)
+        manager.setTestingSkipControlChannelRefresh(true)
         manager.setTestingLastFailureReason("health failed")
-        manager._testSetLaunchAgentReadinessFailure(port: 19101, pid: 4242)
+        manager.setTestingStatus(.failed("Gateway did not start in time"))
+        let readinessPort = GatewayEnvironment.gatewayPort()
+        manager._testSetLaunchAgentReadinessFailure(port: readinessPort, pid: 4242)
+        let descriptor = PortGuardian.Descriptor(
+            pid: 4343,
+            command: "openclaw-gateway",
+            executablePath: "/tmp/openclaw-gateway")
+        await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: readinessPort)
         defer {
             manager.setTestingConnection(nil)
             manager.setTestingDesiredActive(false)
+            manager.setTestingSkipControlChannelRefresh(false)
             manager.setTestingLastFailureReason(nil)
             manager._testClearLaunchAgentReadinessFailure()
         }
@@ -921,6 +930,8 @@ struct GatewayProcessManagerTests {
         #expect(ready)
         #expect(manager.lastFailureReason == nil)
         #expect(!manager._testHasLaunchAgentReadinessFailure())
+        #expect(manager.status == .running(details: "pid 4343"))
+        await PortGuardian.shared.setTestingDescriptor(nil, forPort: readinessPort)
     }
 
     @Test func `stale readiness wait cannot clear a newer launch failure`() async throws {

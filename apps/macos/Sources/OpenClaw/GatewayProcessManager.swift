@@ -616,17 +616,19 @@ final class GatewayProcessManager {
         }
     }
 
-    private func refreshControlChannelIfNeeded(reason: String) {
+    private func refreshControlChannelIfNeeded(reason: String, force: Bool = false) {
         #if DEBUG
         if self.testingSkipControlChannelRefresh {
             return
         }
         #endif
-        switch ControlChannel.shared.state {
-        case .connected, .connecting:
-            return
-        case .disconnected, .degraded:
-            break
+        if !force {
+            switch ControlChannel.shared.state {
+            case .connected, .connecting:
+                return
+            case .disconnected, .degraded:
+                break
+            }
         }
         self.appendLog("[gateway] refreshing control channel (\(reason))\n")
         self.logger.debug("gateway control channel refresh reason=\(reason)")
@@ -642,12 +644,25 @@ final class GatewayProcessManager {
             do {
                 let remainingMs = max(1, deadline.timeIntervalSinceNow * 1000)
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
+                let readinessPort = readinessCandidate?.failure.port
+                    ?? GatewayEnvironment.gatewayPort()
+                let instance = await PortGuardian.shared.describe(port: readinessPort)
                 guard self.desiredActive, self.gatewayStartGeneration == startGeneration else {
                     return false
                 }
+                let details = instance.map { "pid \($0.pid)" }
                 self.launchAgentReadinessCandidate = nil
                 self.launchAgentReadinessFailure = nil
                 self.clearLastFailure()
+                if case .attachedExisting = self.status {
+                    self.status = .attachedExisting(details: details)
+                } else {
+                    self.status = .running(details: details)
+                }
+                // A repaired process can leave the old socket briefly marked connected. Force an
+                // endpoint refresh so control state follows the PID whose health just succeeded.
+                self.refreshControlChannelIfNeeded(reason: "gateway readiness recovered", force: true)
+                self.refreshLog()
                 return true
             } catch {
                 let retryDelay = min(0.3, max(0, deadline.timeIntervalSinceNow))
@@ -727,6 +742,10 @@ extension GatewayProcessManager {
 
     func setTestingLastFailureReason(_ reason: String?) {
         self.lastFailureReason = reason
+    }
+
+    func setTestingStatus(_ status: Status) {
+        self.status = status
     }
 
     func _testAttachExistingGatewayIfAvailable(port: Int) async -> Bool {
