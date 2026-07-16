@@ -41,7 +41,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **APNs shared-state startup:** declare the canonical registration tombstone table as SQLite `STRICT` so fresh and upgraded Gateways pass schema verification instead of restart-looping.
 - **Cron lifecycle conflict retries:** preserve execution-phase retry decisions across scheduled, manual, and startup-recovered runs so post-execution claim conflicts cannot replay completed messages or tools. Fixes #108428. Thanks @yetval.
 - **Discord gateway metadata deadline:** carry the existing lookup deadline through DNS and proxy preflight, request headers, and response bodies so stalled gateway startup aborts cleanly. (#104580) Thanks @hugenshen.
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
