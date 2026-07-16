@@ -11,7 +11,7 @@ function requestBodyJson(init: RequestInit | undefined): unknown {
 
 describe("ClickClack setup-code claim", () => {
   it("claims over guarded HTTPS without bearer authentication", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json({
         token: "test-token",
         bot: {
