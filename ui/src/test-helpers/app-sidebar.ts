@@ -236,6 +236,7 @@ export function createContext(
   agentsList: AgentsListResult | null = null,
 ): ApplicationContext<RouteId> {
   const selectedAgentId = sessions.state.agentId ?? "main";
+  const selectionState = { selectedId: selectedAgentId, scopeId: selectedAgentId };
   return {
     gateway,
     sessions,
@@ -244,9 +245,14 @@ export function createContext(
       subscribe: () => () => undefined,
     },
     agentSelection: {
-      state: { selectedId: selectedAgentId, scopeId: selectedAgentId },
-      set: () => undefined,
-      setScope: () => undefined,
+      state: selectionState,
+      set: (agentId: string | null) => {
+        selectionState.selectedId = agentId;
+        selectionState.scopeId = agentId;
+      },
+      setScope: (agentId: string | null) => {
+        selectionState.scopeId = agentId;
+      },
       subscribe: () => () => undefined,
     },
   } as unknown as ApplicationContext<RouteId>;
