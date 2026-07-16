@@ -1,6 +1,9 @@
 package ai.openclaw.wear.shared
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -163,6 +166,20 @@ class WearProtocolTest {
       WearDecodeResult.Success(bracketsInString),
       WearProtocolCodec.decode(WearProtocolCodec.encode(bracketsInString)),
     )
+
+    var nestedPayload: JsonElement = JsonPrimitive(0)
+    repeat(nesting) {
+      nestedPayload = JsonArray(listOf(nestedPayload))
+    }
+    val deeplyNestedMessage =
+      WearMessage.Request(
+        requestId = "req-3",
+        method = WearRpcMethod.ChatSend,
+        params = buildJsonObject { put("payload", nestedPayload) },
+      )
+    assertThrows(IllegalArgumentException::class.java) {
+      WearProtocolCodec.encode(deeplyNestedMessage)
+    }
   }
 
   @Test
