@@ -29883,7 +29883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 65,
+      "line": 71,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "Stopped",
       "surface": "apple",
@@ -29891,7 +29891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 66,
+      "line": 72,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "Starting…",
       "surface": "apple",
@@ -29899,7 +29899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 75,
+      "line": 81,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "Failed: \\(reason)",
       "surface": "apple",
@@ -29907,7 +29907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 558,
+      "line": 564,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "not linked",
       "surface": "apple",
@@ -29915,7 +29915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 571,
+      "line": 577,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "unknown error",
       "surface": "apple",

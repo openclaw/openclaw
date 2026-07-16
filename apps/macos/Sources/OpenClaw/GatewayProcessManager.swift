@@ -53,6 +53,12 @@ final class GatewayProcessManager {
         }
     }
 
+    private enum GatewayProbeFailureDisposition: Equatable {
+        case retryWithoutRepair
+        case retryWithRepair
+        case fail
+    }
+
     enum Status: Equatable {
         case stopped
         case starting
@@ -644,6 +650,7 @@ final class GatewayProcessManager {
         let readinessRevision = self.launchAgentReadinessRevision
         // Best-effort: wait for the gateway to accept connections.
         let deadline = Date().addingTimeInterval(6)
+        var latestRetryDisposition: GatewayProbeFailureDisposition?
         while Date() < deadline {
             guard !Task.isCancelled else { return }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
@@ -687,10 +694,8 @@ final class GatewayProcessManager {
                 if Task.isCancelled || !self.isCurrentGatewayStart(startGeneration) {
                     return
                 }
-                if self.probeFailureIsCancellation(error) {
-                    return
-                }
-                if !self.probeFailureMayNeedLaunchAgentRepair(error) {
+                switch self.probeFailureDisposition(error) {
+                case .fail:
                     await self.finishResponsiveGatewayProbeFailure(
                         error,
                         port: port,
@@ -698,6 +703,11 @@ final class GatewayProcessManager {
                         expectedCandidate: self.launchAgentReadinessCandidate,
                         expectedReadinessRevision: readinessRevision)
                     return
+                case .retryWithRepair:
+                    latestRetryDisposition = .retryWithRepair
+                case .retryWithoutRepair:
+                    // A responsive transient invalidates older connection-failure evidence.
+                    latestRetryDisposition = .retryWithoutRepair
                 }
                 let retryDelay = min(0.4, max(0, deadline.timeIntervalSinceNow))
                 if retryDelay > 0 {
@@ -709,11 +719,17 @@ final class GatewayProcessManager {
         // Only a PID that survived this entire readiness cycle may be replaced later. launchd can
         // restart the service while polling; that replacement needs its own full startup chance.
         guard !Task.isCancelled else { return }
-        await self.finishLaunchAgentReadinessFailure(
-            port: port,
-            startingPID: readinessPID,
-            startGeneration: startGeneration,
-            expectedReadinessRevision: readinessRevision)
+        if latestRetryDisposition == .retryWithRepair {
+            await self.finishLaunchAgentReadinessFailure(
+                port: port,
+                startingPID: readinessPID,
+                startGeneration: startGeneration,
+                expectedReadinessRevision: readinessRevision)
+        } else {
+            self.finishGatewayReadinessDeadlineWithoutRepair(
+                startGeneration: startGeneration,
+                expectedReadinessRevision: readinessRevision)
+        }
     }
 
     private func finishLaunchAgentReadinessFailure(
@@ -763,10 +779,32 @@ final class GatewayProcessManager {
         self.logger.warning("gateway responsive health probe failed reason=\(reason)")
     }
 
-    private func probeFailureMayNeedLaunchAgentRepair(_ error: Error) -> Bool {
-        if error is GatewayHealthProbeTimeout { return true }
+    private func finishGatewayReadinessDeadlineWithoutRepair(
+        startGeneration: UInt64,
+        expectedReadinessRevision: UInt64)
+    {
+        guard self.isCurrentGatewayStart(startGeneration) else { return }
+        guard self.launchAgentReadinessRevision == expectedReadinessRevision else { return }
+        // Transient RPC/cancellation responses do not prove the endpoint is unreachable. End the
+        // startup cleanly, but do not retain a PID that would authorize destructive repair.
+        self.setLaunchAgentReadinessState(
+            candidate: nil,
+            failure: self.launchAgentReadinessFailure)
+        self.status = .failed("Gateway did not become ready in time")
+        self.lastFailureReason = "gateway readiness deadline elapsed"
+        self.logger.warning("gateway readiness deadline elapsed without endpoint failure")
+    }
+
+    private func probeFailureDisposition(_ error: Error) -> GatewayProbeFailureDisposition {
+        if self.probeFailureIsCancellation(error) { return .retryWithoutRepair }
+        if let response = error as? GatewayResponseError,
+           response.code.uppercased() == "UNAVAILABLE"
+        {
+            return .retryWithoutRepair
+        }
+        if error is GatewayHealthProbeTimeout { return .retryWithRepair }
         let nsError = error as NSError
-        guard nsError.domain == NSURLErrorDomain else { return false }
+        guard nsError.domain == NSURLErrorDomain else { return .fail }
         switch URLError.Code(rawValue: nsError.code) {
         case .timedOut,
              .cannotFindHost,
@@ -775,9 +813,9 @@ final class GatewayProcessManager {
              .dnsLookupFailed,
              .notConnectedToInternet,
              .resourceUnavailable:
-            return true
+            return .retryWithRepair
         default:
-            return false
+            return .fail
         }
     }
 
@@ -832,6 +870,7 @@ final class GatewayProcessManager {
             ?? GatewayEnvironment.gatewayPort()
         let deadline = Date().addingTimeInterval(timeout)
         let endpointPIDBeforeProbe = self.lastObservedGatewayPID
+        var latestRetryDisposition: GatewayProbeFailureDisposition?
         while Date() < deadline {
             guard !Task.isCancelled else { return false }
             guard self.isCurrentGatewayStart(startGeneration) else { return false }
@@ -878,10 +917,8 @@ final class GatewayProcessManager {
                 if Task.isCancelled || !self.isCurrentGatewayStart(startGeneration) {
                     return false
                 }
-                if self.probeFailureIsCancellation(error) {
-                    return false
-                }
-                if !self.probeFailureMayNeedLaunchAgentRepair(error) {
+                switch self.probeFailureDisposition(error) {
+                case .fail:
                     await self.finishResponsiveGatewayProbeFailure(
                         error,
                         port: readinessCandidate?.failure.port ?? GatewayEnvironment.gatewayPort(),
@@ -889,6 +926,11 @@ final class GatewayProcessManager {
                         expectedCandidate: readinessCandidate,
                         expectedReadinessRevision: readinessRevision)
                     return false
+                case .retryWithRepair:
+                    latestRetryDisposition = .retryWithRepair
+                case .retryWithoutRepair:
+                    // A responsive transient invalidates older connection-failure evidence.
+                    latestRetryDisposition = .retryWithoutRepair
                 }
                 let retryDelay = min(0.3, max(0, deadline.timeIntervalSinceNow))
                 if retryDelay > 0 {
@@ -901,6 +943,10 @@ final class GatewayProcessManager {
         guard self.launchAgentReadinessRevision == readinessRevision else { return false }
         guard self.launchAgentReadinessCandidate == readinessCandidate else { return false }
         self.appendLog("[gateway] readiness wait timed out\n")
+        guard latestRetryDisposition == .retryWithRepair else {
+            self.logger.warning("gateway readiness wait ended without endpoint failure evidence")
+            return false
+        }
         if let readinessCandidate,
            readinessCandidate.generation == startGeneration
         {
@@ -992,7 +1038,22 @@ extension GatewayProcessManager {
     }
 
     func _testProbeFailureMayNeedLaunchAgentRepair(_ code: URLError.Code) -> Bool {
-        self.probeFailureMayNeedLaunchAgentRepair(URLError(code))
+        if case .retryWithRepair = self.probeFailureDisposition(URLError(code)) {
+            return true
+        }
+        return false
+    }
+
+    func _testGatewayResponseRetriesWithoutRepair(_ code: String) -> Bool {
+        let error = GatewayResponseError(
+            method: "health",
+            code: code,
+            message: "test",
+            details: nil)
+        if case .retryWithoutRepair = self.probeFailureDisposition(error) {
+            return true
+        }
+        return false
     }
 
     func setTestingDesiredActive(_ active: Bool) {
