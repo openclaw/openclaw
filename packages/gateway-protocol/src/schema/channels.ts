@@ -189,6 +189,7 @@ export const TalkEventSchema = Type.Object(
 /** Creates a browser-facing Talk client session. */
 export const TalkClientCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
+  voiceSessionId: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
@@ -204,10 +205,33 @@ export const TalkClientCreateParamsSchema = closedObject({
 /** Tool-call request from a browser/client session back into the agent runtime. */
 export const TalkClientToolCallParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  voiceSessionId: Type.Optional(NonEmptyString),
   callId: NonEmptyString,
   name: NonEmptyString,
   args: Type.Optional(Type.Unknown()),
   relaySessionId: Type.Optional(NonEmptyString),
+});
+
+/** One finalized transcript item from a client-owned Talk session. */
+export const TalkClientTranscriptParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  voiceSessionId: NonEmptyString,
+  entryId: NonEmptyString,
+  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+  text: NonEmptyString,
+  timestamp: Type.Optional(Type.Number()),
+});
+
+/** Logical close for a client-owned Talk session. */
+export const TalkClientCloseParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  voiceSessionId: NonEmptyString,
+});
+
+/** Result for client-owned transcript and close mutations. */
+export const TalkClientMutationResultSchema = closedObject({
+  ok: Type.Boolean(),
+  imported: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 /** Agent run identity returned after accepting a Talk client tool call. */
@@ -454,6 +478,7 @@ export const TalkSessionOkResultSchema = closedObject({
 const BrowserRealtimeWebRtcSdpSessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("webrtc"),
+  voiceSessionId: Type.Optional(NonEmptyString),
   clientSecret: NonEmptyString,
   offerUrl: Type.Optional(Type.String()),
   offerHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -466,6 +491,7 @@ const BrowserRealtimeWebRtcSdpSessionSchema = closedObject({
 const BrowserRealtimeJsonPcmWebSocketSessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("provider-websocket"),
+  voiceSessionId: Type.Optional(NonEmptyString),
   protocol: NonEmptyString,
   clientSecret: NonEmptyString,
   websocketUrl: NonEmptyString,
@@ -480,6 +506,7 @@ const BrowserRealtimeJsonPcmWebSocketSessionSchema = closedObject({
 const BrowserRealtimeGatewayRelaySessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("gateway-relay"),
+  voiceSessionId: Type.Optional(NonEmptyString),
   relaySessionId: NonEmptyString,
   audio: BrowserRealtimeAudioContractSchema,
   model: Type.Optional(Type.String()),
@@ -491,6 +518,7 @@ const BrowserRealtimeGatewayRelaySessionSchema = closedObject({
 const BrowserRealtimeManagedRoomSessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("managed-room"),
+  voiceSessionId: Type.Optional(NonEmptyString),
   roomUrl: NonEmptyString,
   token: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
@@ -534,6 +562,20 @@ const TalkRealtimeConfigSchema = closedObject({
   brain: Type.Optional(TalkBrainSchema),
   consultRouting: Type.Optional(
     Type.Union([Type.Literal("provider-direct"), Type.Literal("force-agent-consult")]),
+  ),
+  consultPolicy: Type.Optional(
+    Type.Union([Type.Literal("auto"), Type.Literal("substantive"), Type.Literal("always")]),
+  ),
+  toolPolicy: Type.Optional(Type.Union([Type.Literal("owner"), Type.Literal("none")])),
+  voiceSession: Type.Optional(
+    closedObject({
+      enabled: Type.Optional(Type.Boolean()),
+      persistTranscript: Type.Optional(Type.Boolean()),
+      confirmationPolicy: Type.Optional(
+        Type.Union([Type.Literal("none"), Type.Literal("high-impact-outbound")]),
+      ),
+      postCallSummary: Type.Optional(Type.Union([Type.Literal("off"), Type.Literal("mutations")])),
+    }),
   ),
 });
 
@@ -738,6 +780,9 @@ export type TalkClientSteerParams = Static<typeof TalkClientSteerParamsSchema>;
 export type TalkAgentControlResult = Static<typeof TalkAgentControlResultSchema>;
 export type TalkClientToolCallParams = Static<typeof TalkClientToolCallParamsSchema>;
 export type TalkClientToolCallResult = Static<typeof TalkClientToolCallResultSchema>;
+export type TalkClientTranscriptParams = Static<typeof TalkClientTranscriptParamsSchema>;
+export type TalkClientCloseParams = Static<typeof TalkClientCloseParamsSchema>;
+export type TalkClientMutationResult = Static<typeof TalkClientMutationResultSchema>;
 export type TalkSessionCreateParams = Static<typeof TalkSessionCreateParamsSchema>;
 export type TalkSessionCreateResult = Static<typeof TalkSessionCreateResultSchema>;
 export type TalkSessionJoinParams = Static<typeof TalkSessionJoinParamsSchema>;

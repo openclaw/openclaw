@@ -88,6 +88,34 @@ function normalizeRealtimeTransport(value: unknown): TalkRealtimeConfig["transpo
     : undefined;
 }
 
+function normalizeRealtimeConsultPolicy(value: unknown): TalkRealtimeConfig["consultPolicy"] {
+  return value === "auto" || value === "substantive" || value === "always" ? value : undefined;
+}
+
+function normalizeRealtimeToolPolicy(value: unknown): TalkRealtimeConfig["toolPolicy"] {
+  return value === "owner" || value === "none" ? value : undefined;
+}
+
+function normalizeRealtimeVoiceSession(value: unknown): TalkRealtimeConfig["voiceSession"] {
+  const record = getRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  return {
+    enabled: typeof record.enabled === "boolean" ? record.enabled : undefined,
+    persistTranscript:
+      typeof record.persistTranscript === "boolean" ? record.persistTranscript : undefined,
+    confirmationPolicy:
+      record.confirmationPolicy === "none" || record.confirmationPolicy === "high-impact-outbound"
+        ? record.confirmationPolicy
+        : undefined,
+    postCallSummary:
+      record.postCallSummary === "off" || record.postCallSummary === "mutations"
+        ? record.postCallSummary
+        : undefined,
+  };
+}
+
 function getVoiceCallProviderConfig<TConfig extends Record<string, unknown>>(
   config: OpenClawConfig,
   sectionName: "realtime" | "streaming",
@@ -250,6 +278,9 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     reasoningEffort: normalizeOptionalString(talkRealtime?.reasoningEffort),
     brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
     consultRouting: normalizeOptionalLowercaseString(talkRealtime?.consultRouting),
+    consultPolicy: normalizeRealtimeConsultPolicy(talkRealtime?.consultPolicy),
+    toolPolicy: normalizeRealtimeToolPolicy(talkRealtime?.toolPolicy),
+    voiceSession: normalizeRealtimeVoiceSession(talkRealtime?.voiceSession),
   };
 }
 

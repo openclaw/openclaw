@@ -100,6 +100,9 @@ function compactLaunchParams(
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private closed = false;
+  private voiceSessionId: string | undefined;
+  private transcriptSeq = 0;
+  private transcriptWrites: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -113,13 +116,41 @@ export class RealtimeTalkSession {
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
     const session = await this.createSession();
+    this.voiceSessionId = session.voiceSessionId;
     if (this.closed) {
+      this.closeLogicalVoiceSession();
       return;
     }
+    const callbacks: RealtimeTalkCallbacks = {
+      ...this.callbacks,
+      onTranscript: (entry) => {
+        this.callbacks.onTranscript?.(entry);
+        if (!entry.final || !this.voiceSessionId) {
+          return;
+        }
+        this.transcriptSeq += 1;
+        const voiceSessionId = this.voiceSessionId;
+        const entryId = `${voiceSessionId}:${this.transcriptSeq}`;
+        this.transcriptWrites = this.transcriptWrites
+          .then(async () => {
+            await this.client.request("talk.client.transcript", {
+              sessionKey: this.sessionKey,
+              voiceSessionId,
+              entryId,
+              role: entry.role,
+              text: entry.text,
+              timestamp: Date.now(),
+            });
+          })
+          .catch(() => undefined);
+      },
+    };
     this.transport = createTransport(session, {
       client: this.client,
       sessionKey: this.sessionKey,
-      callbacks: this.callbacks,
+      voiceSessionId: session.voiceSessionId,
+      flushTranscriptWrites: async () => await this.transcriptWrites,
+      callbacks,
       inputDeviceId: this.localOptions.inputDeviceId,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
@@ -181,5 +212,23 @@ export class RealtimeTalkSession {
     this.callbacks.onStatus?.("idle");
     this.transport?.stop();
     this.transport = null;
+    this.closeLogicalVoiceSession();
+  }
+
+  private closeLogicalVoiceSession(): void {
+    const voiceSessionId = this.voiceSessionId;
+    this.voiceSessionId = undefined;
+    this.transcriptSeq = 0;
+    if (!voiceSessionId) {
+      return;
+    }
+    this.transcriptWrites = this.transcriptWrites
+      .then(async () => {
+        await this.client.request("talk.client.close", {
+          sessionKey: this.sessionKey,
+          voiceSessionId,
+        });
+      })
+      .catch(() => undefined);
   }
 }

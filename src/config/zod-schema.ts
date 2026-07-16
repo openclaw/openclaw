@@ -288,6 +288,16 @@ const TalkRealtimeSchema = z
     reasoningEffort: z.string().min(1).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
+    consultPolicy: z.enum(["auto", "substantive", "always"]).optional(),
+    toolPolicy: z.enum(["owner", "none"]).optional(),
+    voiceSession: z
+      .strictObject({
+        enabled: z.boolean().optional(),
+        persistTranscript: z.boolean().optional(),
+        confirmationPolicy: z.enum(["none", "high-impact-outbound"]).optional(),
+        postCallSummary: z.enum(["off", "mutations"]).optional(),
+      })
+      .optional(),
   })
   .superRefine((realtime, ctx) => {
     const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");

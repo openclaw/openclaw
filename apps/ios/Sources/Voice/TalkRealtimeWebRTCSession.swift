@@ -38,6 +38,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private let gateway: GatewayNodeSession
     private let sessionKey: String
     private weak var delegate: TalkRealtimeWebRTCSessionDelegate?
+    private var requestedVoiceSessionId: String?
 
     private var factory: RTCPeerConnectionFactory?
     private var peerConnection: RTCPeerConnection?
@@ -55,6 +56,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var assistantAudioFinishTask: Task<Void, Never>?
     private var ownsAudioSessionActivation = false
     private var audioLevelPollTask: Task<Void, Never>?
+    private var transcriptWriteTask: Task<Void, Never>?
 
     private struct ToolBuffer {
         var name: String
@@ -72,11 +74,21 @@ final class TalkRealtimeWebRTCSession: NSObject {
         let providerStarted: Bool?
     }
 
-    init(gateway: GatewayNodeSession, sessionKey: String, delegate: TalkRealtimeWebRTCSessionDelegate) {
+    init(
+        gateway: GatewayNodeSession,
+        sessionKey: String,
+        voiceSessionId: String? = nil,
+        delegate: TalkRealtimeWebRTCSessionDelegate)
+    {
         self.gateway = gateway
         self.sessionKey = sessionKey
+        self.requestedVoiceSessionId = voiceSessionId
         self.delegate = delegate
         super.init()
+    }
+
+    var voiceSessionId: String? {
+        self.session?.voiceSessionId ?? self.requestedVoiceSessionId
     }
 
     func start(
@@ -284,6 +296,36 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
+    private func recordFinalTranscript(role: String, text: String) {
+        guard let voiceSessionId = self.voiceSessionId else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let previousWrite = self.transcriptWriteTask
+        self.transcriptWriteTask = Task { [gateway, sessionKey] in
+            await previousWrite?.value
+            let params: [String: Any] = [
+                "sessionKey": sessionKey,
+                "voiceSessionId": voiceSessionId,
+                "entryId": UUID().uuidString,
+                "role": role,
+                "text": trimmed,
+                "timestamp": Date().timeIntervalSince1970 * 1000,
+            ]
+            guard JSONSerialization.isValidJSONObject(params),
+                  let data = try? JSONSerialization.data(withJSONObject: params),
+                  let json = String(data: data, encoding: .utf8)
+            else { return }
+            _ = try? await gateway.request(
+                method: "talk.client.transcript",
+                paramsJSON: json,
+                timeoutSeconds: 5)
+        }
+    }
+
+    func flushTranscriptWrites() async {
+        await self.transcriptWriteTask?.value
+    }
+
     private func handleRealtimeEvent(_ event: TalkRealtimeServerEvent) {
         if !self.seenRealtimeEventTypes.contains(event.type) {
             self.seenRealtimeEventTypes.insert(event.type)
@@ -306,6 +348,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
              "conversation.item.input_audio_transcription.completed":
             if let text = event.transcript ?? event.text {
                 self.delegate?.realtimeSession(self, didReceiveUserTranscript: text)
+                self.recordFinalTranscript(role: "user", text: text)
             }
         case "conversation.output_transcript.delta",
              "response.output_text.delta",
@@ -324,6 +367,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
              "response.output_audio_transcript.done":
             if let text = event.transcript ?? event.text {
                 self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: text)
+                self.recordFinalTranscript(role: "assistant", text: text)
             }
         case "response.function_call_arguments.delta":
             self.bufferToolDelta(event)
@@ -473,12 +517,16 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
         do {
             let args = try Self.decodeJSONObject(argsJSON)
-            let params: [String: Any] = [
+            await self.flushTranscriptWrites()
+            var params: [String: Any] = [
                 "sessionKey": sessionKey,
                 "callId": callId,
                 "name": Self.consultToolName,
                 "args": args,
             ]
+            if let voiceSessionId = self.voiceSessionId {
+                params["voiceSessionId"] = voiceSessionId
+            }
             let historySince = Date().timeIntervalSince1970
             let data = try JSONSerialization.data(withJSONObject: params)
             guard let json = String(data: data, encoding: .utf8) else {
@@ -882,7 +930,12 @@ extension TalkRealtimeWebRTCSession {
     {
         self.trace("gateway talk.client.create start")
         let startedAt = ProcessInfo.processInfo.systemUptime
-        let params = TalkRealtimeClientCreateParams(provider: provider, model: model, voice: voice)
+        let params = TalkRealtimeClientCreateParams(
+            sessionKey: self.sessionKey,
+            voiceSessionId: self.requestedVoiceSessionId,
+            provider: provider,
+            model: model,
+            voice: voice)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
         let res = try await gateway.request(method: "talk.client.create", paramsJSON: json, timeoutSeconds: 12)

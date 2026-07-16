@@ -249,6 +249,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
   "talk.realtime.consultRouting":
     "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenClaw.",
+  "talk.realtime.consultPolicy":
+    "When the realtime model should call OpenClaw: auto uses the built-in prompt, substantive consults for facts, memory, tools, and workspace context, and always consults before substantive answers.",
+  "talk.realtime.toolPolicy":
+    "Expose the owner-authorized OpenClaw consult tool to realtime Talk, or set none to disable it.",
+  "talk.realtime.voiceSession":
+    "Optional server-owned logical voice-session ledger for transcript continuity, confirmation, and post-call mutation summaries. Disabled by default.",
+  "talk.realtime.voiceSession.enabled":
+    "Enable logical voice-session ids and finalized transcript forwarding for client-owned Talk transports.",
+  "talk.realtime.voiceSession.persistTranscript":
+    "Append the complete finalized voice transcript to the normal agent session when Talk closes.",
+  "talk.realtime.voiceSession.confirmationPolicy":
+    "Require a server-bound spoken confirmation before high-impact or outbound voice actions.",
+  "talk.realtime.voiceSession.postCallSummary":
+    "Send one last-route digest when a mutating tool execution started during the voice session.",
   "talk.consultThinkingLevel":
     "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
   "talk.consultFastMode":
@@ -335,6 +349,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Advanced ceiling for a single live tool result before truncation. Leave unset to use the model-context auto cap; explicit values affect both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
+  "agents.defaults.realtimeContext":
+    "Cached agent profile and explicitly selected workspace snapshots injected when creating client-owned realtime Talk sessions. Disabled by default; per-agent settings inherit these defaults.",
+  "agents.defaults.realtimeContext.enabled":
+    "Build and cache a bounded realtime context pack for this agent. The first build reads local workspace files; later sessions use the last-good SQLite cache while old packs refresh in the background.",
+  "agents.defaults.realtimeContext.profileFiles":
+    "Trusted agent profile files included in realtime instructions. Allowed values are IDENTITY.md, USER.md, and SOUL.md.",
+  "agents.defaults.realtimeContext.sourceFiles":
+    "Explicit workspace-relative snapshot files included as reference data. Absolute paths, traversal, and symlink escapes are rejected; current facts and actions should still use agent consult.",
+  "agents.defaults.realtimeContext.maxChars":
+    "Maximum total characters in the realtime context pack, including profile and snapshot sources. Default: 24000.",
+  "agents.defaults.realtimeContext.refreshEveryMinutes":
+    "Age after which a cached pack is served immediately and refreshed in the background. Default: 120 minutes.",
+  "agents.defaults.realtimeContext.staleAfterMinutes":
+    "Age after which the pack is explicitly marked stale so the realtime model consults OpenClaw before relying on time-sensitive details. Default: 360 minutes.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
   "agents.list[].skillsLimits":
@@ -343,6 +371,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
   "agents.list[].contextLimits":
     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
+  "agents.list[].realtimeContext":
+    "Per-agent realtime context-pack overrides merged over agents.defaults.realtimeContext.",
   "agents.list[].contextLimits.memoryGetMaxChars":
     "Per-agent override for the default memory_get max character budget.",
   "agents.list[].contextLimits.memoryGetDefaultLines":

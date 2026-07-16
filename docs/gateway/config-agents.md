@@ -172,6 +172,48 @@ gets the concise recovery notice.
 }
 ```
 
+### `agents.defaults.realtimeContext`
+
+Builds a bounded, last-good context pack for client-owned realtime Talk
+sessions. It combines trusted profile files with explicitly selected,
+workspace-relative snapshot files. The pack is stored in the agent's SQLite
+state so session creation can use the cached copy immediately while an old copy
+refreshes in the background.
+
+```json5
+{
+  agents: {
+    defaults: {
+      realtimeContext: {
+        enabled: true,
+        profileFiles: ["IDENTITY.md", "USER.md", "SOUL.md"],
+        sourceFiles: ["state/registry/CONTEXT.md", "state/registry/RECENT.md"],
+        maxChars: 24000,
+        refreshEveryMinutes: 120,
+        staleAfterMinutes: 360,
+      },
+    },
+  },
+}
+```
+
+- `profileFiles` accepts only `IDENTITY.md`, `USER.md`, and `SOUL.md` and is
+  treated as trusted profile guidance.
+- `sourceFiles` accepts up to 32 workspace-relative files. Absolute paths,
+  traversal, symlink escapes, non-files, and files larger than 1 MB are skipped.
+  Snapshot contents are labeled as reference data, not executable instructions.
+- `maxChars` bounds the complete pack. Defaults to `24000`.
+- `refreshEveryMinutes` defaults to `120`. The last-good pack is returned while
+  refresh runs.
+- `staleAfterMinutes` defaults to `360` and cannot be shorter than the refresh
+  interval. Stale packs tell the realtime model to consult OpenClaw before
+  relying on time-sensitive details.
+
+Use `agents.list[].realtimeContext` for per-agent overrides. Fields merge over
+the shared defaults. The realtime model should still call
+`openclaw_agent_consult` for current facts, exact memory, or actions; the pack is
+an orientation layer, not a replacement for the normal agent.
+
 ### Context budget ownership map
 
 OpenClaw has multiple high-volume prompt/context budgets, and they are
@@ -184,6 +226,7 @@ knob.
 | `agents.defaults.startupContext.*`                             | One-shot reset/startup model-run prelude, including recent daily `memory/*.md` files. Bare chat `/new` and `/reset` are acknowledged without invoking the model |
 | `skills.limits.*`                                              | The compact skills list injected into the system prompt                                                                                                         |
 | `agents.defaults.contextLimits.*`                              | Bounded runtime excerpts and injected runtime-owned blocks                                                                                                      |
+| `agents.defaults.realtimeContext.*`                            | Cached profile and selected workspace snapshots for client-owned realtime Talk sessions                                                                         |
 | `memory.qmd.limits.*`                                          | Indexed memory-search snippet and injection sizing                                                                                                              |
 
 Matching per-agent overrides:
@@ -192,6 +235,7 @@ Matching per-agent overrides:
 - `agents.list[].contextInjection`
 - `agents.list[].bootstrapMaxChars`
 - `agents.list[].bootstrapTotalMaxChars`
+- `agents.list[].realtimeContext.*`
 - `agents.list[].contextLimits.*`
 
 #### `agents.defaults.startupContext`

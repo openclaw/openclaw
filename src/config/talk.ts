@@ -187,6 +187,40 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   ) {
     normalized.consultRouting = source.consultRouting;
   }
+  if (
+    source.consultPolicy === "auto" ||
+    source.consultPolicy === "substantive" ||
+    source.consultPolicy === "always"
+  ) {
+    normalized.consultPolicy = source.consultPolicy;
+  }
+  if (source.toolPolicy === "owner" || source.toolPolicy === "none") {
+    normalized.toolPolicy = source.toolPolicy;
+  }
+  if (isRecord(source.voiceSession)) {
+    const voiceSession: NonNullable<TalkRealtimeConfig["voiceSession"]> = {};
+    if (typeof source.voiceSession.enabled === "boolean") {
+      voiceSession.enabled = source.voiceSession.enabled;
+    }
+    if (typeof source.voiceSession.persistTranscript === "boolean") {
+      voiceSession.persistTranscript = source.voiceSession.persistTranscript;
+    }
+    if (
+      source.voiceSession.confirmationPolicy === "none" ||
+      source.voiceSession.confirmationPolicy === "high-impact-outbound"
+    ) {
+      voiceSession.confirmationPolicy = source.voiceSession.confirmationPolicy;
+    }
+    if (
+      source.voiceSession.postCallSummary === "off" ||
+      source.voiceSession.postCallSummary === "mutations"
+    ) {
+      voiceSession.postCallSummary = source.voiceSession.postCallSummary;
+    }
+    if (Object.keys(voiceSession).length > 0) {
+      normalized.voiceSession = voiceSession;
+    }
+  }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 

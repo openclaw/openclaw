@@ -45,6 +45,20 @@ describe("realtime voice agent consult tool", () => {
     });
   });
 
+  it("preserves a server-issued voice confirmation id", () => {
+    expect(
+      parseRealtimeVoiceAgentConsultArgs({
+        question: "Send the message now.",
+        confirmationId: "confirm-123",
+      }),
+    ).toStrictEqual({
+      confirmationId: "confirm-123",
+      context: undefined,
+      question: "Send the message now.",
+      responseStyle: undefined,
+    });
+  });
+
   it("builds a delegated voice request prompt with recent transcript", () => {
     const prompt = buildRealtimeVoiceAgentConsultPrompt({
       args: { question: "Do we support realtime tools?" },

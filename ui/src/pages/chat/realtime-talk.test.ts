@@ -217,6 +217,59 @@ describe("RealtimeTalkSession", () => {
     expect(relayCtor).not.toHaveBeenCalled();
   });
 
+  it("persists finalized transcripts before closing the logical voice session", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        return {
+          provider: "openai",
+          transport: "webrtc",
+          clientSecret: "secret",
+          voiceSessionId: "voice-browser-1",
+        };
+      }
+      return { ok: true };
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await session.start();
+    const transportContext = webRtcCtor.mock.calls[0]?.[1] as {
+      callbacks: {
+        onTranscript?: (entry: {
+          role: "user" | "assistant";
+          text: string;
+          final: boolean;
+        }) => void;
+      };
+    };
+    transportContext.callbacks.onTranscript?.({
+      role: "user",
+      text: "Confirm the exact action.",
+      final: true,
+    });
+    session.stop();
+
+    await vi.waitFor(() => {
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "talk.client.create",
+        "talk.client.transcript",
+        "talk.client.close",
+      ]);
+    });
+    expect(request).toHaveBeenCalledWith(
+      "talk.client.transcript",
+      expect.objectContaining({
+        sessionKey: "main",
+        voiceSessionId: "voice-browser-1",
+        role: "user",
+        text: "Confirm the exact action.",
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("talk.client.close", {
+      sessionKey: "main",
+      voiceSessionId: "voice-browser-1",
+    });
+  });
+
   it("passes launch options to client-owned realtime session creation", async () => {
     const request = vi.fn(async () => ({
       provider: "openai",

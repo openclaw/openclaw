@@ -24,6 +24,27 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+export const AgentRealtimeContextSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    profileFiles: z.array(z.enum(["IDENTITY.md", "USER.md", "SOUL.md"])).optional(),
+    sourceFiles: z.array(z.string().min(1)).max(32).optional(),
+    maxChars: z.number().int().min(1_000).max(50_000).optional(),
+    refreshEveryMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 60)
+      .optional(),
+    staleAfterMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(7 * 24 * 60)
+      .optional(),
+  })
+  .strict();
+
 function validateSandboxBindEntries(
   binds: readonly string[] | undefined,
   ctx: z.RefinementCtx,
@@ -1053,6 +1074,7 @@ export const AgentEntrySchema = z
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    realtimeContext: AgentRealtimeContextSchema.optional(),
     experimental: z
       .object({
         localModelLean: z.boolean().optional(),

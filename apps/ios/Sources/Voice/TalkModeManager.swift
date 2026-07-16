@@ -238,6 +238,7 @@ final class TalkModeManager: NSObject {
     private var recognitionGeneration: UInt64 = 0
     private var silenceTask: Task<Void, Never>?
     private var realtimeSession: TalkRealtimeWebRTCSession?
+    private var activeRealtimeVoiceSessionId: String?
     private var realtimeSessionReadyAt: Date?
     private var rapidRealtimeRestartCount = 0
     private var bypassRealtimeOnNextStart = false
@@ -833,6 +834,7 @@ final class TalkModeManager: NSObject {
         self.silenceTask?.cancel()
         self.silenceTask = nil
         self.resetRealtimeRestartState()
+        self.closeLogicalRealtimeVoiceSessions()
         self.stopRealtimeSession()
         self.stopRecognition()
         self.stopSpeaking()
@@ -2098,10 +2100,14 @@ final class TalkModeManager: NSObject {
         }
         guard self.isCurrentStartAttempt(attemptID) else { return .ignored }
         let prefetchedSession = self.consumePrefetchedRealtimeSession()
+        if let prefetchedVoiceSessionId = prefetchedSession?.voiceSessionId {
+            self.activeRealtimeVoiceSessionId = prefetchedVoiceSessionId
+        }
         GatewayDiagnostics.log("talk.timeline realtime start attempt sessionKey=\(self.mainSessionKey)")
         let session = TalkRealtimeWebRTCSession(
             gateway: gateway,
             sessionKey: mainSessionKey,
+            voiceSessionId: self.activeRealtimeVoiceSessionId,
             delegate: self)
         self.realtimeSession = session
         // WebRTC owns the shared AVAudioSession internally; track the attempt
@@ -2118,6 +2124,7 @@ final class TalkModeManager: NSObject {
                 return .ignored
             }
             self.markRealtimeSessionReady()
+            self.activeRealtimeVoiceSessionId = session.voiceSessionId
             GatewayDiagnostics.log(
                 "talk.timeline realtime start ready elapsedMs=\(Self.elapsedMs(since: startedAt))")
             GatewayDiagnostics.log("talk realtime: started direct OpenAI WebRTC session")
@@ -2312,7 +2319,12 @@ final class TalkModeManager: NSObject {
         model: String?,
         voice: String?) async throws -> TalkRealtimeClientSession
     {
-        let params = TalkRealtimeClientCreateParams(provider: provider, model: model, voice: voice)
+        let params = TalkRealtimeClientCreateParams(
+            sessionKey: self.mainSessionKey,
+            voiceSessionId: self.activeRealtimeVoiceSessionId,
+            provider: provider,
+            model: model,
+            voice: voice)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
         let res = try await gateway.request(
@@ -2361,6 +2373,37 @@ final class TalkModeManager: NSObject {
             self.isSpeaking = false
             self.isUserSpeechDetected = false
             self.playbackLevel = nil
+        }
+    }
+
+    private func closeLogicalRealtimeVoiceSessions() {
+        let transcriptOwner = self.realtimeSession
+        let transcriptOwnerId = transcriptOwner?.voiceSessionId
+        let ids = Set([
+            self.activeRealtimeVoiceSessionId,
+            self.prefetchedRealtimeSession?.voiceSessionId,
+        ].compactMap { $0 })
+        self.activeRealtimeVoiceSessionId = nil
+        self.prefetchedRealtimeSession = nil
+        guard let gateway = self.gateway else { return }
+        let sessionKey = self.mainSessionKey
+        for voiceSessionId in ids {
+            Task {
+                if transcriptOwnerId == voiceSessionId {
+                    await transcriptOwner?.flushTranscriptWrites()
+                }
+                let params: [String: Any] = [
+                    "sessionKey": sessionKey,
+                    "voiceSessionId": voiceSessionId,
+                ]
+                guard let data = try? JSONSerialization.data(withJSONObject: params),
+                      let json = String(data: data, encoding: .utf8)
+                else { return }
+                _ = try? await gateway.request(
+                    method: "talk.client.close",
+                    paramsJSON: json,
+                    timeoutSeconds: 10)
+            }
         }
     }
 

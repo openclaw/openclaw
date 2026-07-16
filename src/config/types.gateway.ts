@@ -82,6 +82,21 @@ export type TalkRealtimeConfig = {
   brain?: "agent-consult" | "direct-tools" | "none";
   /** How Gateway relay handles final user transcripts when the provider skips a consult. */
   consultRouting?: "provider-direct" | "force-agent-consult";
+  /** Provider-facing policy for when the realtime model should consult OpenClaw. */
+  consultPolicy?: "auto" | "substantive" | "always";
+  /** Whether the owner-authorized OpenClaw consult tool is exposed. */
+  toolPolicy?: "owner" | "none";
+  /** Optional durable logical-session features for client-owned Talk. */
+  voiceSession?: {
+    /** Enable a server-owned logical session id and transcript ledger (default: false). */
+    enabled?: boolean;
+    /** Import the finalized voice transcript into the normal agent session on close. */
+    persistTranscript?: boolean;
+    /** Deterministic spoken-confirmation enforcement for high-impact actions. */
+    confirmationPolicy?: "none" | "high-impact-outbound";
+    /** Send a primary-channel digest only when a mutating action actually started. */
+    postCallSummary?: "off" | "mutations";
+  };
 };
 
 export type ResolvedTalkConfig = {

@@ -9,7 +9,11 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeTalkSection } from "../config/talk.js";
-import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
+import {
+  buildRealtimeVoiceAgentConsultChatMessage,
+  buildRealtimeVoiceAgentConsultPrompt,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
+} from "../talk/agent-consult-tool.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import type {
   GatewayClient,
@@ -64,6 +68,7 @@ export async function startTalkRealtimeAgentConsult(params: {
   sessionKey: string;
   callId: string;
   args: unknown;
+  transcript?: RealtimeVoiceAgentConsultTranscriptEntry[];
   relaySessionId?: string;
   connId?: string;
 }): Promise<
@@ -71,7 +76,14 @@ export async function startTalkRealtimeAgentConsult(params: {
 > {
   let message: string;
   try {
-    message = buildRealtimeVoiceAgentConsultChatMessage(params.args);
+    message = params.transcript
+      ? buildRealtimeVoiceAgentConsultPrompt({
+          args: params.args,
+          transcript: params.transcript,
+          surface: "OpenClaw Talk",
+          userLabel: "User",
+        })
+      : buildRealtimeVoiceAgentConsultChatMessage(params.args);
   } catch (err) {
     return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
   }

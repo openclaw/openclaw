@@ -1,6 +1,8 @@
 import Foundation
 
 struct TalkRealtimeClientCreateParams: Encodable {
+    var sessionKey: String?
+    var voiceSessionId: String?
     var mode = "realtime"
     var provider: String?
     var transport = "webrtc"
@@ -12,6 +14,7 @@ struct TalkRealtimeClientCreateParams: Encodable {
 struct TalkRealtimeClientSession: Decodable {
     let provider: String
     let transport: String
+    let voiceSessionId: String?
     let clientSecret: String
     let offerUrl: String?
     let offerHeaders: [String: String]?

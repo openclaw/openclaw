@@ -71,6 +71,7 @@ import {
 } from "../skills/loading/source.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
+import { resolveClientVoiceToolConfirmationPolicy } from "../talk/client-voice-confirmation.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
@@ -81,6 +82,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { buildToolMutationState } from "./tool-mutation.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -1498,6 +1500,20 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
       ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
     });
+    const voiceConfirmationPolicy = resolveClientVoiceToolConfirmationPolicy({
+      sessionKey: args.ctx?.sessionKey,
+      toolName,
+      toolParams: normalizedParams,
+    });
+    if (!voiceConfirmationPolicy.allowed) {
+      return {
+        blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
+        reason: voiceConfirmationPolicy.reason,
+        params,
+      };
+    }
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return { blocked: false, params };
     }
@@ -1763,6 +1779,7 @@ export function wrapToolWithBeforeToolCallHook(
         ...diagnosticIdentity,
         ...(toolCallId && { toolCallId }),
         paramsSummary: summarizeToolParams(toolParams),
+        mutatingAction: buildToolMutationState(normalizedToolName, toolParams).mutatingAction,
       });
       const recordPreExecutionError = (
         error: unknown,

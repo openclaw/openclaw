@@ -103,6 +103,22 @@ export type AgentStartupContextConfig = {
   maxTotalChars?: number;
 };
 
+/** Cached workspace context injected into realtime voice provider instructions. */
+export type AgentRealtimeContextConfig = {
+  /** Enable the realtime context pack for this agent (default: false). */
+  enabled?: boolean;
+  /** Stable profile files. Only IDENTITY.md, USER.md, and SOUL.md are accepted. */
+  profileFiles?: Array<"IDENTITY.md" | "USER.md" | "SOUL.md">;
+  /** Workspace-relative trusted snapshot files included after the stable profile. */
+  sourceFiles?: string[];
+  /** Maximum characters in the complete provider instruction fragment (default: 24000). */
+  maxChars?: number;
+  /** Age at which a cached pack is refreshed asynchronously (default: 120 minutes). */
+  refreshEveryMinutes?: number;
+  /** Age at which a cached pack is explicitly labeled stale (default: 360 minutes). */
+  staleAfterMinutes?: number;
+};
+
 export type AgentContextLimitsConfig = {
   /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
   memoryGetMaxChars?: number;
@@ -266,6 +282,8 @@ export type AgentDefaultsConfig = {
   silentReply?: SilentReplyPolicyShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
+  /** Cached workspace context for realtime voice sessions. */
+  realtimeContext?: AgentRealtimeContextConfig;
   /** Provider-independent prompt overlays applied by model family. */
   promptOverlays?: PromptOverlaysConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
