@@ -1,4 +1,4 @@
-// Tests for status publishing in monitorWebSocket and monitorWebhook. These
+// Test support for status publishing in monitorWebSocket and monitorWebhook. These
 // tests exercise the status sink wiring used by the gateway health monitor.
 // See PROPOSAL.md for the incident background.
 

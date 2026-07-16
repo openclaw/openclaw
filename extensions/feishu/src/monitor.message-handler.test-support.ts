@@ -1,4 +1,4 @@
-// Feishu tests cover monitor.message handler plugin behavior.
+// Feishu test support covers monitor.message handler plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./event-types.js";

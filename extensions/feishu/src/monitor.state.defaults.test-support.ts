@@ -1,4 +1,4 @@
-// Feishu tests cover monitor.stateefaults plugin behavior.
+// Feishu test support covers monitor state defaults.
 import { describe, expect, it } from "vitest";
 import {
   resolveFeishuWebhookAnomalyDefaults,
