@@ -62,6 +62,7 @@ import {
   loadDiscordTargetResolverModule,
   loadDiscordThreadBindingsManagerModule,
 } from "./channel.loaders.js";
+import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -724,6 +725,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             log: ctx.log,
           });
           ctx.log?.info(`[${account.accountId}] starting provider`);
+          let commandDeployHashStore;
+          try {
+            commandDeployHashStore = openDiscordCommandDeployHashStore(
+              getDiscordRuntime().state.openKeyedStore,
+            );
+          } catch (error) {
+            ctx.log?.warn?.(
+              `[${account.accountId}] Discord command deploy cache unavailable; continuing without persistence: ${formatErrorMessage(error)}`,
+            );
+          }
           return (await loadDiscordProviderRuntime()).monitorDiscordProvider({
             token,
             accountId: account.accountId,
@@ -734,6 +745,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             mediaMaxMb: account.config.mediaMaxMb,
             historyLimit: account.config.historyLimit,
             setStatus: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
+            commandDeployHashStore,
           });
         },
       },

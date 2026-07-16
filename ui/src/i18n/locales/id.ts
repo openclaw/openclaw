@@ -654,6 +654,8 @@ export const id: TranslationMap = {
     archiveSession: "Arsipkan sesi",
     archiveSessionCount: "Arsipkan {count}",
     restoreSession: "Pulihkan sesi",
+    stopCloudWorker: "Hentikan worker cloud…",
+    stopCloudWorkerConfirm: 'Hentikan worker cloud untuk "{session}"?',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Hapus {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

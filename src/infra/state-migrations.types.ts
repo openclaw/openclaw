@@ -100,6 +100,23 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  managedOutgoingImages: {
+    sourceDir: string;
+    hasLegacy: boolean;
+  };
+  webPush: {
+    subscriptionsPath: string;
+    vapidKeysPath: string;
+    hasLegacy: boolean;
+  };
+  nodeHost: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  subagentRegistry: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   execApprovals: {

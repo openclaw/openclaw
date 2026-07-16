@@ -889,14 +889,6 @@ export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefi
   return DEFAULT_PROVIDER;
 }
 
-export const testing = {
-  resolveFallbackCandidates: resolveModelCandidateChain,
-  resolveImageFallbackCandidates,
-  resolveCooldownDecision,
-  resolveSessionSuspensionReason,
-  shouldDiscardDeferredSessionSuspension,
-} as const;
-
 export function resolveModelCandidateChain(
   params: {
     cfg: OpenClawConfig | undefined;
@@ -1410,6 +1402,13 @@ function shouldDiscardDeferredSessionSuspension(params: {
     isTranscriptNotContinuableError(params.error) ||
     isLikelyContextOverflowError(formatErrorMessage(params.error))
   );
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelFallbackTestApi")] = {
+    resolveCooldownDecision,
+    shouldDiscardDeferredSessionSuspension,
+  };
 }
 
 export async function runWithModelFallback<T>(

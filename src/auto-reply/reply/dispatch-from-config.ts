@@ -194,10 +194,11 @@ function createReplyDispatchEvent(
   }) as PluginHookReplyDispatchEvent;
 }
 
-/** Test-only hooks for overriding selected dispatch dependencies. */
-export const testing = {
-  createReplyDispatchEvent,
-};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.dispatchFromConfigTestApi")] = {
+    createReplyDispatchEvent,
+  };
+}
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 

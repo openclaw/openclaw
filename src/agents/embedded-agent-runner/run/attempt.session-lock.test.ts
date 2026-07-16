@@ -22,10 +22,8 @@ import {
   SessionWriteLockStaleError,
   SessionWriteLockTimeoutError,
 } from "../../session-write-lock-error.js";
-import {
-  acquireSessionWriteLock,
-  resetSessionWriteLockStateForTest,
-} from "../../session-write-lock.js";
+import { acquireSessionWriteLock } from "../../session-write-lock.js";
+import { resetSessionWriteLockStateForTest } from "../../session-write-lock.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,

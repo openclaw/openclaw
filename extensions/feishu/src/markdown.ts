@@ -5,13 +5,16 @@ import { gfmTable } from "micromark-extension-gfm-table";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { MentionTarget } from "./mention-target.types.js";
 
-type PositionedMarkdownNode = {
+export type FeishuMarkdownNode = {
   type: string;
+  depth?: number;
+  identifier?: string;
+  url?: string;
   position?: {
     start: { offset?: number };
     end: { offset?: number };
   };
-  children?: PositionedMarkdownNode[];
+  children?: FeishuMarkdownNode[];
 };
 
 type FeishuPostMessageElement =
@@ -19,6 +22,14 @@ type FeishuPostMessageElement =
   | { tag: "md"; text: string };
 
 const FEISHU_POST_MAX_BYTES = 30 * 1024;
+
+/** One parser contract for Feishu message and document Markdown decisions. */
+export function parseFeishuMarkdown(text: string): FeishuMarkdownNode {
+  return fromMarkdown(text, {
+    extensions: [gfmTable()],
+    mdastExtensions: [gfmTableFromMarkdown()],
+  }) as FeishuMarkdownNode;
+}
 
 function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostMessageElement[] {
   if (!mentions?.length) {
@@ -66,10 +77,7 @@ export function assertFeishuPostWithinEnvelope(content: string, label: string): 
 }
 
 function collectSoftBreakOffsets(text: string): number[] {
-  const root = fromMarkdown(text, {
-    extensions: [gfmTable()],
-    mdastExtensions: [gfmTableFromMarkdown()],
-  }) as PositionedMarkdownNode;
+  const root = parseFeishuMarkdown(text);
   const offsets: number[] = [];
   const pending = [root];
 
