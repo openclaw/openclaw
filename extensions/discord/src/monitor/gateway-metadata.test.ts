@@ -170,15 +170,18 @@ describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
       fetchImpl: fetchDiscordGatewayMetadataGuarded,
     }).catch((error: unknown) => error);
 
-    await vi.waitFor(() => expect(stalledLookup.lookupFn).toHaveBeenCalledOnce());
-    const guardedParams = mockFetchWithSsrFGuard.mock.calls[0]?.[0];
-    expect(guardedParams.signal).toBe(guardedParams.init.signal);
-    expect(guardedParams).not.toHaveProperty("timeoutMs");
+    try {
+      await vi.waitFor(() => expect(stalledLookup.lookupFn).toHaveBeenCalledOnce());
+      const guardedParams = mockFetchWithSsrFGuard.mock.calls[0]?.[0];
+      expect(guardedParams.signal).toBe(guardedParams.init.signal);
+      expect(guardedParams).not.toHaveProperty("timeoutMs");
 
-    await expect(fetchPromise).resolves.toBeInstanceOf(Error);
-    expect(guardSettled).toBe(true);
-    expect(fetchImpl).not.toHaveBeenCalled();
-    stalledLookup.release();
+      await expect(fetchPromise).resolves.toBeInstanceOf(Error);
+      await vi.waitFor(() => expect(guardSettled).toBe(true));
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      stalledLookup.release();
+    }
     await Promise.resolve();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
