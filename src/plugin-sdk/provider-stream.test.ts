@@ -63,34 +63,37 @@ function expectDefaultThinkingBudget(payload: Record<string, unknown>) {
 }
 
 describe("createMoonshotThinkingWrapper", () => {
-  it("sanitizes K2.7 after an async caller replaces the payload", async () => {
-    let finalPayload: Record<string, unknown> | undefined;
-    const baseStreamFn: StreamFn = async (model, _context, options) => {
-      const payload = { model: model.id };
-      const replacement = await options?.onPayload?.(payload, model);
-      finalPayload = requireRecord(replacement ?? payload, "final payload");
-      return {} as never;
-    };
-    const wrapped = createMoonshotThinkingWrapper(baseStreamFn, "disabled", "all");
+  it.each(["kimi-k2.7-code", "kimi-k2.7-code-highspeed"])(
+    "sanitizes %s after an async caller replaces the payload",
+    async (modelId) => {
+      let finalPayload: Record<string, unknown> | undefined;
+      const baseStreamFn: StreamFn = async (model, _context, options) => {
+        const payload = { model: model.id };
+        const replacement = await options?.onPayload?.(payload, model);
+        finalPayload = requireRecord(replacement ?? payload, "final payload");
+        return {} as never;
+      };
+      const wrapped = createMoonshotThinkingWrapper(baseStreamFn, "disabled", "all");
 
-    await wrapped({ api: "openai-completions", id: "kimi-k2.7-code" } as never, {} as never, {
-      onPayload: async () => ({
-        model: "kimi-k2.7-code",
-        thinking: { type: "disabled" },
-        reasoning_effort: "low",
-        temperature: 0,
-        top_p: 0.5,
-        tool_choice: "required",
-      }),
-    });
+      await wrapped({ api: "openai-completions", id: modelId } as never, {} as never, {
+        onPayload: async () => ({
+          model: modelId,
+          thinking: { type: "disabled" },
+          reasoning_effort: "low",
+          temperature: 0,
+          top_p: 0.5,
+          tool_choice: "required",
+        }),
+      });
 
-    const payload = requirePayload(finalPayload);
-    expect(payload).not.toHaveProperty("thinking");
-    expect(payload).not.toHaveProperty("reasoning_effort");
-    expect(payload).not.toHaveProperty("temperature");
-    expect(payload).not.toHaveProperty("top_p");
-    expect(payload.tool_choice).toBe("auto");
-  });
+      const payload = requirePayload(finalPayload);
+      expect(payload).not.toHaveProperty("thinking");
+      expect(payload).not.toHaveProperty("reasoning_effort");
+      expect(payload).not.toHaveProperty("temperature");
+      expect(payload).not.toHaveProperty("top_p");
+      expect(payload.tool_choice).toBe("auto");
+    },
+  );
 
   it("forces the direct Moonshot K3 payload contract after async caller replacement", async () => {
     let finalPayload: Record<string, unknown> | undefined;
@@ -277,9 +280,9 @@ describe("buildProviderStreamFamilyHooks", () => {
       requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         thinkingLevel: "high",
-        modelId: "kilo/auto",
+        modelId: "kilo-auto/balanced",
       } as never),
-    )({ provider: "kilocode", id: "kilo/auto" } as never, {} as never, {});
+    )({ provider: "kilocode", id: "kilo-auto/balanced" } as never, {} as never, {});
     const kilocodeAutoPayload = requirePayload(capturedPayload);
     expectDefaultThinkingBudget(kilocodeAutoPayload);
     expect(kilocodeAutoPayload).not.toHaveProperty("reasoning");

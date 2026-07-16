@@ -2501,6 +2501,12 @@ export const pl: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "Brak danych do przedstawienia na wykresie.",
+        invalid: "Ten wykres zawiera nieprawidłowe dane lub opcje.",
+        label: "Wykres",
+        summary: "{title}: {count} punktów danych, w zakresie od {min} do {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

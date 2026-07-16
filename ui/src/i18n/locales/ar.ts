@@ -2460,6 +2460,12 @@ export const ar: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "لا توجد بيانات لعرضها في المخطط.",
+        invalid: "يحتوي هذا المخطط على بيانات أو خيارات غير صالحة.",
+        label: "مخطط",
+        summary: "{title}: {count} من نقاط البيانات، تتراوح من {min} إلى {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

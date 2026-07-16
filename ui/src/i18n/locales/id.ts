@@ -2481,6 +2481,12 @@ export const id: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "Tidak ada data untuk ditampilkan dalam grafik.",
+        invalid: "Grafik ini memiliki data atau opsi yang tidak valid.",
+        label: "Grafik",
+        summary: "{title}: {count} titik data, dengan rentang dari {min} hingga {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

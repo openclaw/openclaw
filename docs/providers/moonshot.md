@@ -19,32 +19,31 @@ Moonshot and Kimi Coding are **separate providers**, each shipped as a separate 
 
 [//]: # "moonshot-kimi-k2-ids:start"
 
-| Model ref                         | Name                   | Reasoning  | Input       | Context   | Max output |
-| --------------------------------- | ---------------------- | ---------- | ----------- | --------- | ---------- |
-| `moonshot/kimi-k2.6`              | Kimi K2.6              | No         | text, image | 262,144   | 262,144    |
-| `moonshot/kimi-k3`                | Kimi K3                | Always max | text, image | 1,048,576 | 1,048,576  |
-| `moonshot/kimi-k2.7-code`         | Kimi K2.7 Code         | Always on  | text, image | 262,144   | 262,144    |
-| `moonshot/kimi-k2.5`              | Kimi K2.5              | No         | text, image | 262,144   | 262,144    |
-| `moonshot/kimi-k2-thinking`       | Kimi K2 Thinking       | Yes        | text        | 262,144   | 262,144    |
-| `moonshot/kimi-k2-thinking-turbo` | Kimi K2 Thinking Turbo | Yes        | text        | 262,144   | 262,144    |
-| `moonshot/kimi-k2-turbo`          | Kimi K2 Turbo          | No         | text        | 256,000   | 16,384     |
+| Model ref                           | Name                     | Reasoning  | Input       | Context   | Max output |
+| ----------------------------------- | ------------------------ | ---------- | ----------- | --------- | ---------- |
+| `moonshot/kimi-k2.6`                | Kimi K2.6                | No         | text, image | 262,144   | 262,144    |
+| `moonshot/kimi-k3`                  | Kimi K3                  | Always max | text, image | 1,048,576 | 1,048,576  |
+| `moonshot/kimi-k2.7-code`           | Kimi K2.7 Code           | Always on  | text, image | 262,144   | 262,144    |
+| `moonshot/kimi-k2.7-code-highspeed` | Kimi K2.7 Code HighSpeed | Always on  | text, image | 262,144   | 262,144    |
+| `moonshot/kimi-k2.5`                | Kimi K2.5                | No         | text, image | 262,144   | 262,144    |
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
 Catalog cost estimates use Moonshot's published pay-as-you-go rates. The
 [Kimi K3 pricing](https://platform.kimi.ai/docs/pricing/chat-k3) is $0.30/MTok
 cache hit, $3.00/MTok input, and $15.00/MTok output; Kimi K2.7 Code is
-$0.19/MTok cache hit, $0.95/MTok input, $4.00/MTok output; Kimi K2.6 is
+$0.19/MTok cache hit, $0.95/MTok input, and $4.00/MTok output; its HighSpeed
+variant is $0.38/MTok cache hit, $1.90/MTok input, and $8.00/MTok output. Kimi K2.6 is
 $0.16/MTok cache hit, $0.95/MTok input, $4.00/MTok output; Kimi K2.5 is
-$0.10/MTok cache hit, $0.60/MTok input, $3.00/MTok output. Other catalog
-entries keep zero-cost placeholders unless you override them in config.
+$0.10/MTok cache hit, $0.60/MTok input, $3.00/MTok output.
 
 Kimi K3 always reasons at `reasoning_effort: "max"`. OpenClaw exposes only
 `/think max`, omits the K2-only `thinking` field, and removes sampling
 overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
 `frequency_penalty`) that K3 fixes to provider defaults. Kimi K2.7 Code also
 always uses native thinking but requires both `thinking` and
-`reasoning_effort` to be omitted. Kimi K2.6 remains the onboarding default.
+`reasoning_effort` to be omitted; the HighSpeed variant uses the same contract.
+Kimi K2.6 remains the onboarding default.
 See Moonshot's [Kimi K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart).
 
 ## Getting started
@@ -127,10 +126,8 @@ onboarding.
             "moonshot/kimi-k2.6": { alias: "Kimi K2.6" },
             "moonshot/kimi-k3": { alias: "Kimi K3" },
             "moonshot/kimi-k2.7-code": { alias: "Kimi K2.7 Code" },
+            "moonshot/kimi-k2.7-code-highspeed": { alias: "Kimi K2.7 Code HighSpeed" },
             "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
-            "moonshot/kimi-k2-thinking": { alias: "Kimi K2 Thinking" },
-            "moonshot/kimi-k2-thinking-turbo": { alias: "Kimi K2 Thinking Turbo" },
-            "moonshot/kimi-k2-turbo": { alias: "Kimi K2 Turbo" },
             // moonshot-kimi-k2-aliases:end
           },
         },
@@ -185,6 +182,15 @@ onboarding.
                 maxTokens: 262144,
               },
               {
+                id: "kimi-k2.7-code-highspeed",
+                name: "Kimi K2.7 Code HighSpeed",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
+              {
                 id: "kimi-k2.5",
                 name: "Kimi K2.5",
                 reasoning: false,
@@ -192,33 +198,6 @@ onboarding.
                 cost: { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
-              },
-              {
-                id: "kimi-k2-thinking",
-                name: "Kimi K2 Thinking",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
-              {
-                id: "kimi-k2-thinking-turbo",
-                name: "Kimi K2 Thinking Turbo",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
-              {
-                id: "kimi-k2-turbo",
-                name: "Kimi K2 Turbo",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 256000,
-                maxTokens: 16384,
               },
               // moonshot-kimi-k2-models:end
             ],
@@ -234,7 +213,7 @@ onboarding.
     **Best for:** code-focused tasks via the Kimi Coding endpoint.
 
     <Note>
-    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Kimi K3 uses `kimi/k3` for a 256K context or `kimi/k3[1m]` for the 1M tier. Kimi K2.7 Code keeps the stable ref `kimi/kimi-for-coding`; legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to that model id.
+    Kimi Coding uses a different API key and provider prefix (`kimi/...`) than Moonshot (`moonshot/...`). Current refs are `kimi/k3` for a 256K context, `kimi/k3[1m]` for the 1M tier, `kimi/kimi-for-coding`, and `kimi/kimi-for-coding-highspeed`. Legacy refs `kimi/kimi-code` and `kimi/k2p5` remain accepted and normalize to `kimi/kimi-for-coding`.
     </Note>
 
     <Steps>

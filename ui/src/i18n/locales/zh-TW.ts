@@ -2432,6 +2432,12 @@ export const zh_TW: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "沒有可供繪製圖表的資料。",
+        invalid: "此圖表包含無效的資料或選項。",
+        label: "圖表",
+        summary: "{title}：{count} 個資料點，範圍從 {min} 到 {max}。",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

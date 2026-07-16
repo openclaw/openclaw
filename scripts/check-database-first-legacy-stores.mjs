@@ -109,6 +109,8 @@ const legacyStorePatterns = [
   /\btasks\/(?:runs\.sqlite|flows\/registry\.sqlite)\b/u,
   /\bopenclaw-state\.sqlite\b/u,
   /\bopenclaw-native-hook-relays\b/u,
+  /(?:^|\/)(?:meta|file-meta)\.json$/u,
+  /(?:^|\/)viewer\.html$/u,
 ];
 
 const allowedRuntimeMigrationPaths = [

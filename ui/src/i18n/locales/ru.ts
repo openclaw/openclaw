@@ -2498,6 +2498,12 @@ export const ru: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} ещё",
       },
+      chart: {
+        empty: "Нет данных для построения диаграммы.",
+        invalid: "Эта диаграмма содержит недопустимые данные или параметры.",
+        label: "Диаграмма",
+        summary: "{title}: {count} точек данных, диапазон от {min} до {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

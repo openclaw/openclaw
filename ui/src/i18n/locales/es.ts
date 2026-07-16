@@ -2504,6 +2504,12 @@ export const es: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "No hay datos para representar.",
+        invalid: "Este gráfico contiene datos u opciones no válidos.",
+        label: "Gráfico",
+        summary: "{title}: {count} puntos de datos, con valores de {min} a {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

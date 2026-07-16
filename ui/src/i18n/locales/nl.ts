@@ -2493,6 +2493,12 @@ export const nl: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "Geen gegevens om in een grafiek weer te geven.",
+        invalid: "Deze grafiek bevat ongeldige gegevens of opties.",
+        label: "Grafiek",
+        summary: "{title}: {count} gegevenspunten, variërend van {min} tot {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

@@ -39,6 +39,7 @@ import {
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
 } from "./markdown.js";
+import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import {
   sendMediaFeishu,
   shouldSuppressFeishuTextForVoiceMedia,
@@ -788,7 +789,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           });
         } catch (err) {
           console.error(`[feishu] local image path auto-send failed:`, err);
-          // fall through to plain text as last resort
+          return await sendOutboundText({
+            cfg,
+            to,
+            text: await buildFeishuMediaFallbackText({}),
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            replyInThread,
+          });
         }
       }
 
@@ -863,11 +871,17 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
       const commentTarget = parseFeishuCommentTarget(to);
       if (commentTarget) {
-        const commentText = [text?.trim(), mediaUrl?.trim()].filter(Boolean).join("\n\n");
+        const commentText = mediaUrl?.trim()
+          ? await buildFeishuMediaFallbackText({
+              text,
+              mediaUrl,
+              mediaLinkStyle: "plain",
+            })
+          : (text?.trim() ?? "");
         return await sendOutboundText({
           cfg,
           to,
-          text: commentText || mediaUrl || text || "",
+          text: commentText,
           accountId: accountId ?? undefined,
           replyToMessageId,
           replyInThread,
@@ -916,10 +930,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         } catch (err) {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
-          // Fallback to URL link if upload fails
-          const fallbackText = [textSent ? undefined : text?.trim(), `📎 ${mediaUrl}`]
-            .filter(Boolean)
-            .join("\n\n");
+          const fallbackText = await buildFeishuMediaFallbackText({
+            text: textSent ? undefined : text,
+            mediaUrl,
+          });
           const fallbackResult = await sendOutboundText({
             cfg,
             to,

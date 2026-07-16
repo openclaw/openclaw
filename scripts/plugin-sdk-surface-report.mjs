@@ -245,8 +245,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared channel replay-guard factory and claim handle.
       // +6: lightweight speech settings types, normalizers, and config resolver.
       // Harvest: retired AudioConfig type -1.
+      // +4: bounded plugin blob store options, entry, entry info, and store types.
       // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
-      7997,
+      8001,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

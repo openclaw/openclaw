@@ -2513,6 +2513,12 @@ export const de: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "Keine Daten für das Diagramm.",
+        invalid: "Dieses Diagramm enthält ungültige Daten oder Optionen.",
+        label: "Diagramm",
+        summary: "{title}: {count} Datenpunkte im Bereich von {min} bis {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

@@ -2491,6 +2491,12 @@ export const ja_JP: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "グラフに表示するデータがありません。",
+        invalid: "このグラフには無効なデータまたはオプションがあります。",
+        label: "グラフ",
+        summary: "{title}: {count} 件のデータポイント、範囲は {min} から {max} です。",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

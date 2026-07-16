@@ -2484,6 +2484,12 @@ export const vi: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "Không có dữ liệu để vẽ biểu đồ.",
+        invalid: "Biểu đồ này có dữ liệu hoặc tùy chọn không hợp lệ.",
+        label: "Biểu đồ",
+        summary: "{title}: {count} điểm dữ liệu, nằm trong khoảng từ {min} đến {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

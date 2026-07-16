@@ -2477,6 +2477,12 @@ export const fa: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "داده‌ای برای نمایش در نمودار وجود ندارد.",
+        invalid: "این نمودار دارای داده‌ها یا گزینه‌های نامعتبر است.",
+        label: "نمودار",
+        summary: "{title}: {count} نقطهٔ داده، در بازهٔ {min} تا {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

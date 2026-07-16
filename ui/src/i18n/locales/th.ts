@@ -2445,6 +2445,12 @@ export const th: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "ไม่มีข้อมูลสำหรับสร้างแผนภูมิ",
+        invalid: "แผนภูมินี้มีข้อมูลหรือตัวเลือกที่ไม่ถูกต้อง",
+        label: "แผนภูมิ",
+        summary: "{title}: จุดข้อมูล {count} จุด ตั้งแต่ {min} ถึง {max}",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

@@ -333,6 +333,9 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     logging: createRuntimeLogging(),
     state: {
       resolveStateDir,
+      openBlobStore: () => {
+        throw new Error("openBlobStore is only available through the plugin runtime proxy.");
+      },
       openKeyedStore: () => {
         throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
       },

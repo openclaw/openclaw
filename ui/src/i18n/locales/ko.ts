@@ -2470,6 +2470,12 @@ export const ko: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "차트에 표시할 데이터가 없습니다.",
+        invalid: "이 차트의 데이터 또는 옵션이 유효하지 않습니다.",
+        label: "차트",
+        summary: "{title}: 데이터 포인트 {count}개, 범위는 {min}~{max}입니다.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

@@ -2429,6 +2429,12 @@ export const zh_CN: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "没有可用于绘制图表的数据。",
+        invalid: "此图表包含无效的数据或选项。",
+        label: "图表",
+        summary: "{title}：{count} 个数据点，范围从 {min} 到 {max}。",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

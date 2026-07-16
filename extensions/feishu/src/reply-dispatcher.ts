@@ -20,6 +20,7 @@ import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
 import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
+import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import {
@@ -82,12 +83,6 @@ function rememberStreamingStartFailure(accountId: string, now = Date.now()): num
   const backoffUntil = now + STREAMING_START_FAILURE_BACKOFF_MS;
   streamingStartBackoffUntilByAccount.set(accountId, backoffUntil);
   return backoffUntil;
-}
-
-function formatMediaFallbackText(text: string | undefined, mediaUrl: string): string {
-  const trimmedText = text?.trim() ?? "";
-  const attachmentText = `📎 ${mediaUrl}`;
-  return trimmedText ? `${trimmedText}\n\n${attachmentText}` : attachmentText;
 }
 
 function normalizeEpochMs(timestamp: number | undefined): number | undefined {
@@ -581,10 +576,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         options?.fallbackText === undefined
           ? undefined
           : async ({ mediaUrl }) => {
-              const fallbackText = formatMediaFallbackText(
-                sentFallbackText ? undefined : options.fallbackText,
+              const fallbackText = await buildFeishuMediaFallbackText({
+                text: sentFallbackText ? undefined : options.fallbackText,
                 mediaUrl,
-              );
+              });
               sentFallbackText = true;
               await sendChunkedTextReply({
                 text: fallbackText,

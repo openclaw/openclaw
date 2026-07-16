@@ -2500,6 +2500,12 @@ export const tr: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "Grafik oluşturmak için veri yok.",
+        invalid: "Bu grafikte geçersiz veriler veya seçenekler var.",
+        label: "Grafik",
+        summary: "{title}: {min} ile {max} arasında değişen {count} veri noktası.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

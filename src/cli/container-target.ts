@@ -30,6 +30,7 @@ type ContainerRuntimeExec = {
 };
 
 const CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV = "OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL";
+const CONTAINER_RUNTIME_PROBE_TIMEOUT_MS = 10_000;
 
 export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
   let container: string | null = null;
@@ -74,8 +75,17 @@ function isContainerRunning(params: {
     params.exec.command,
     [...params.exec.argsPrefix, "inspect", "--format", "{{.State.Running}}", params.containerName],
     params.exec.command === "sudo"
-      ? { encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }
-      : { encoding: "utf8" },
+      ? {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          stdio: ["inherit", "pipe", "inherit"],
+          timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS,
+        }
+      : {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS,
+        },
   );
   return result.status === 0 && result.stdout.trim() === "true";
 }

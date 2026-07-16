@@ -2528,6 +2528,12 @@ export const fr: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "Aucune donnée à afficher dans le graphique.",
+        invalid: "Ce graphique contient des données ou des options non valides.",
+        label: "Graphique",
+        summary: "{title} : {count} points de données, allant de {min} à {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

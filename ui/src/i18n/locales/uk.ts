@@ -2491,6 +2491,12 @@ export const uk: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} more",
       },
+      chart: {
+        empty: "Немає даних для побудови діаграми.",
+        invalid: "Ця діаграма містить некоректні дані або параметри.",
+        label: "Діаграма",
+        summary: "{title}: {count} точок даних у діапазоні від {min} до {max}.",
+      },
       sessions: {
         empty: "No sessions yet.",
       },

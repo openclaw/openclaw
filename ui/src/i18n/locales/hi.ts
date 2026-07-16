@@ -2456,6 +2456,12 @@ export const hi: TranslationMap = {
         empty: "No rows to show.",
         more: "+{count} और",
       },
+      chart: {
+        empty: "चार्ट बनाने के लिए कोई डेटा नहीं है।",
+        invalid: "इस चार्ट में अमान्य डेटा या विकल्प हैं।",
+        label: "चार्ट",
+        summary: "{title}: {count} डेटा बिंदु, {min} से {max} तक।",
+      },
       sessions: {
         empty: "No sessions yet.",
       },
