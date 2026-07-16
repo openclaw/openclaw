@@ -333,6 +333,30 @@ describe("exa web search provider", () => {
     expect(streamed.getReadCount()).toBeLessThan(64);
   });
 
+  it("times out when an Exa search response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = testing.readExaSearchResults(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"results":'));
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+        { timeoutMs: 50 },
+      );
+      const settled = expect(pending).rejects.toThrow(
+        "Exa API response stalled: no data received for 50ms",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds Exa API error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"exa upstream unavailable ".repeat(1024)}tail`, {
       status: 503,

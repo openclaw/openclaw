@@ -77,12 +77,17 @@ type ExaSearchResponse = {
 
 async function readExaSearchResults(
   response: Response,
-  opts?: { maxBytes?: number },
+  opts?: { maxBytes?: number; timeoutMs?: number },
 ): Promise<ExaSearchResult[]> {
   const maxBytes = opts?.maxBytes ?? EXA_SEARCH_JSON_MAX_BYTES;
+  // withTrustedWebSearchEndpoint resolves after headers; keep the search
+  // timeout on the success body so a stalled Exa stream cannot hang web_search.
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    chunkTimeoutMs: opts?.timeoutMs,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Exa API response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
   try {
     return normalizeExaResults(JSON.parse(new TextDecoder().decode(bytes)));
@@ -429,7 +434,9 @@ async function runExaSearch(params: {
         const detail = await readExaErrorDetail(res);
         throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
       }
-      return readExaSearchResults(res);
+      return readExaSearchResults(res, {
+        timeoutMs: Math.max(1, Math.floor(params.timeoutSeconds * 1000)),
+      });
     },
   );
 }
