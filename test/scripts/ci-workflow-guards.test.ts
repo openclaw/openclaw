@@ -1919,6 +1919,19 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds the workflow sanity ShellCheck download", () => {
+    const workflow = readWorkflowSanityWorkflow();
+    const installStep = expectDefined(
+      workflow.jobs.actionlint.steps.find(
+        (step: WorkflowStep) => step.name === "Install ShellCheck",
+      ),
+      "ShellCheck install step",
+    );
+
+    expect(installStep.run).toContain("curl --connect-timeout 10 --max-time 120");
+    expect(installStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+  });
+
   it("runs generated baseline drift checks in workflow sanity", () => {
     const workflow = readWorkflowSanityWorkflow();
     const steps = workflow.jobs["generated-doc-baselines"].steps;

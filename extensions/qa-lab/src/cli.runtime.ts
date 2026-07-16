@@ -70,7 +70,6 @@ import {
 } from "./run-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import {
-  listQaScenariosForExecutionProfile,
   QA_RUNTIME_PARITY_TIERS,
   readQaScenarioPack,
   type QaRuntimeParityTier,
@@ -788,15 +787,29 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   const normalizedProviderMode = normalizeQaProviderMode(providerMode);
   const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
-  const scenarios = taxonomyScenarios.filter((scenario) =>
-    scenarioMatchesQaProviderLane({
+  const scenarios = taxonomyScenarios.filter((scenario) => {
+    // qa-channel is the built-in harness channel, so another driver cannot implement it.
+    if (
+      scenario.execution.channel === "qa-channel" &&
+      profileReport.channelDriver !== "qa-channel"
+    ) {
+      return false;
+    }
+    const channel =
+      profileReport.channelDriver === "qa-channel"
+        ? "qa-channel"
+        : (scenario.execution.channel ??
+          (profileReport.channelDriver === "crabline"
+            ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL
+            : undefined));
+    return scenarioMatchesQaProviderLane({
       scenario,
       providerMode: normalizedProviderMode,
       primaryModel,
       channelDriver: profileReport.channelDriver,
-      channel: scenario.execution.channel,
-    }),
-  );
+      channel,
+    });
+  });
   if (scenarios.length === 0) {
     throw new Error(
       `qa run --qa-profile ${profile} did not resolve any executable QA scenarios for provider mode ${normalizedProviderMode}.`,
@@ -847,6 +860,7 @@ function selectQaScenarioDefinitionsForChannelResolution(params: {
   providerMode: QaProviderMode;
   primaryModel: string;
   channelDriver?: QaScorecardChannelDriver | null;
+  channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const scenarios = readQaScenarioPack().scenarios;
@@ -863,7 +877,7 @@ function selectQaScenarioDefinitionsForChannelResolution(params: {
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
       channelDriver: params.channelDriver,
-      channel: scenario.execution.channel,
+      channel: params.channel ?? scenario.execution.channel,
       claudeCliAuthMode: params.claudeCliAuthMode,
     }),
   );
@@ -987,14 +1001,6 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (liveChannelId && !liveAdapterFactory) {
     throw new Error(`unknown live QA adapter: ${liveChannelId}`);
   }
-  // liveChannelId exists only for the live driver, and explicit IDs always win.
-  // This keeps adapter profiles out of non-live and explicit-selection paths.
-  const liveScenarioIds =
-    liveAdapterFactory && scenarioIds.length === 0
-      ? listQaScenariosForExecutionProfile(`${liveChannelId}:adapter`).map(
-          (scenario) => scenario.id,
-        )
-      : scenarioIds;
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -1008,6 +1014,9 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
           providerMode,
           primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
           channelDriver,
+          // Without an override, discover every declared channel here; the host suite launcher
+          // owns partitioning mixed Crabline runs, while explicit scenario IDs bypass this filter.
+          channel: opts.channel,
           claudeCliAuthMode,
         })
       : [];
@@ -1138,7 +1147,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       failFast: opts.failFast,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
-      scenarioIds: liveChannelId ? liveScenarioIds : hostScenarioIds,
+      scenarioIds: liveChannelId ? scenarioIds : hostScenarioIds,
       ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
       ...(liveChannelId
         ? { concurrency: 1 }

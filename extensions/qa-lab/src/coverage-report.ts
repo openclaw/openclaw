@@ -24,7 +24,6 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   executionPath?: string;
   runtimeParityTier?: string;
   requiredProviderMode?: string;
-  driver?: string;
   requiredProvider?: string;
   requiredModel?: string;
 };
@@ -163,7 +162,6 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
-    driver: scenario.execution.driver,
     requiredProvider: stringifyConfigValue(config.requiredProvider),
     requiredModel: stringifyConfigValue(config.requiredModel),
   };
@@ -440,7 +438,6 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   const metadata = [
     match.runtimeParityTier ? `runtimeParityTier=${match.runtimeParityTier}` : "",
     match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
-    match.driver ? `channelDriver=${match.driver}` : "",
     match.requiredProvider ? `provider=${match.requiredProvider}` : "",
     match.requiredModel ? `model=${match.requiredModel}` : "",
   ].filter(Boolean);
@@ -453,20 +450,18 @@ function uniqueScenarioValues(values: (string | undefined)[]) {
 
 function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
-  const requiredDrivers = uniqueScenarioValues(matches.map((match) => match.driver));
   const channels = uniqueScenarioValues(matches.map((match) => match.channel));
-  const selectedDriver =
-    requiredDrivers.length === 1 ? requiredDrivers[0] : channels.length === 1 ? "live" : undefined;
-  const driverArg =
-    selectedDriver && selectedDriver !== "qa-channel" ? ` --channel-driver ${selectedDriver}` : "";
-  const channelArg = driverArg && channels.length === 1 ? ` --channel ${channels[0]}` : "";
+  const [channel] = channels;
+  const selectedDriver = channels.length === 1 && channel !== "qa-channel" ? "live" : undefined;
+  const driverArg = selectedDriver ? ` --channel-driver ${selectedDriver}` : "";
+  const channelArg = driverArg && channel ? ` --channel ${channel}` : "";
   return `pnpm openclaw qa suite${driverArg}${channelArg} ${scenarioArgs}`;
 }
 
 function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
   const groups = new Map<string, QaScenarioSearchMatch[]>();
   for (const match of matches) {
-    const key = JSON.stringify([match.executionKind, match.channel, match.driver]);
+    const key = JSON.stringify([match.executionKind, match.channel]);
     const group = groups.get(key) ?? [];
     group.push(match);
     groups.set(key, group);

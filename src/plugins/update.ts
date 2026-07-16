@@ -73,6 +73,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
+import { setPluginEnabledInConfig } from "./toggle-config.js";
 
 /** Logger surface used by plugin update flows. */
 type PluginUpdateLogger = {
@@ -1311,22 +1312,16 @@ function resetDisabledPluginSlots(
 }
 
 function disablePluginAfterUpdateFailure(config: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const pluginsConfig = config.plugins ?? {};
-  const existingEntry = pluginsConfig.entries?.[pluginId];
+  const disabled = setPluginEnabledInConfig(config, pluginId, false, {
+    updateChannelConfig: false,
+  });
+  const pluginsConfig = disabled.plugins ?? {};
   return {
-    ...config,
+    ...disabled,
     plugins: {
       ...pluginsConfig,
-      // Update failure changes activation, not operator-authored trust policy.
-      // Removing the final allow entry would widen discovery to other plugins.
+      // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
       slots: resetDisabledPluginSlots(pluginsConfig.slots, pluginId),
-      entries: {
-        ...pluginsConfig.entries,
-        [pluginId]: {
-          ...existingEntry,
-          enabled: false,
-        },
-      },
     },
   };
 }

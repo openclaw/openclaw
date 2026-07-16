@@ -2958,6 +2958,35 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("does not create trust policy when disabling a failed plugin", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "registry timeout",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          entries: { demo: { enabled: true } },
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "@acme/demo",
+              installPath: "/tmp/demo",
+            },
+          },
+        },
+      },
+      pluginIds: ["demo"],
+      disableOnFailure: true,
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo?.enabled).toBe(false);
+    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.config.plugins?.deny).toBeUndefined();
+  });
+
   it("keeps an existing ClawHub plugin enabled when a risky update is not acknowledged", async () => {
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
@@ -3170,7 +3199,7 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it("disables an existing ClawHub plugin when its current release is blocked", async () => {
+  it("disables a blocked ClawHub plugin without changing trust policy", async () => {
     const warn = vi.fn();
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
