@@ -38,6 +38,7 @@ import {
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.shared.js";
@@ -107,10 +108,6 @@ export function createFastTestModelSelectionState(params: {
   };
 }
 
-function shouldLogModelSelectionTiming(): boolean {
-  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
-}
-
 const modelCatalogRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/model-catalog.runtime.js"),
 );
@@ -163,7 +160,7 @@ export async function createModelSelectionState(params: {
   hasResolvedHeartbeatModelOverride?: boolean;
   isHeartbeat?: boolean;
 }): Promise<ModelSelectionState> {
-  const timingEnabled = shouldLogModelSelectionTiming();
+  const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", params.cfg);
   const startMs = timingEnabled ? Date.now() : 0;
   const logStage = (stage: string, extra?: string) => {
     if (!timingEnabled) {
