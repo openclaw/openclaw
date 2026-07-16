@@ -201,6 +201,71 @@ describe("loadWorkspace", () => {
     expect(state.activeSlug).toBe("archive");
   });
 
+  it("applies retained navigation when an older request supplies the first document", async () => {
+    const state = getWorkspaceState({});
+    const requests: Array<{
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve, reject) => {
+            requests.push({ resolve, reject });
+          }),
+      ) as never,
+    });
+
+    const requestedLoad = loadWorkspace(state, client, { requestedSlug: "archive" });
+    const failedSilentLoad = loadWorkspace(state, client, { silent: true });
+    requests[1]?.reject(new Error("temporary failure"));
+    await failedSilentLoad;
+
+    requests[0]?.resolve({ doc: sampleWorkspace(), workspaceVersion: 3 });
+    await requestedLoad;
+
+    expect(state.workspace?.workspaceVersion).toBe(3);
+    expect(state.activeSlug).toBe("archive");
+    expect(state.error).toBe("temporary failure");
+  });
+
+  it("consumes retained navigation when the successful document lacks the requested tab", async () => {
+    const state = getWorkspaceState({});
+    const requests: Array<{
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve, reject) => {
+            requests.push({ resolve, reject });
+          }),
+      ) as never,
+    });
+
+    const requestedLoad = loadWorkspace(state, client, { requestedSlug: "future" });
+    const failedSilentLoad = loadWorkspace(state, client, { silent: true });
+    requests[1]?.reject(new Error("temporary failure"));
+    await failedSilentLoad;
+    requests[0]?.resolve({ doc: sampleWorkspace(), workspaceVersion: 3 });
+    await requestedLoad;
+    expect(state.activeSlug).toBe("main");
+
+    const laterWorkspace = sampleWorkspace({
+      workspaceVersion: 4,
+      tabs: [
+        ...sampleWorkspace().tabs,
+        { slug: "future", title: "Future", hidden: false, widgets: [] },
+      ],
+    });
+    const laterLoad = loadWorkspace(state, client, { silent: true });
+    requests[2]?.resolve({ doc: laterWorkspace, workspaceVersion: 4 });
+    await laterLoad;
+
+    expect(state.activeSlug).toBe("main");
+  });
+
   it("cancels older navigation intent on a newer foreground reload", async () => {
     const state = getWorkspaceState({});
     state.workspace = sampleWorkspace();

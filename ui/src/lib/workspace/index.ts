@@ -8,6 +8,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { buildSessionUsageDateParams } from "../sessions/usage.ts";
+import { resolveActiveSlug } from "./tab-selection.ts";
+export {
+  customWidgetName,
+  customWidgetStatus,
+  findTab,
+  hiddenTabs,
+  orderedTabs,
+  visibleTabs,
+} from "./tab-selection.ts";
 import {
   WORKSPACE_GRID_COLUMNS,
   workspaceAgentProvenance,
@@ -263,82 +272,6 @@ function normalizeWorkspace(payload: unknown): WorkspaceDocument {
   };
 }
 
-/** The `custom:<name>` widget name, or null for builtin/unknown kinds. */
-export function customWidgetName(kind: string): string | null {
-  return kind.startsWith("custom:") ? kind.slice("custom:".length) || null : null;
-}
-
-/** Registry status for a custom widget kind, or null when not a tracked custom widget. */
-export function customWidgetStatus(
-  workspace: WorkspaceDocument,
-  kind: string,
-): WorkspaceWidgetStatus | null {
-  const name = customWidgetName(kind);
-  if (!name) {
-    return null;
-  }
-  return workspace.widgetsRegistry[name]?.status ?? null;
-}
-
-/**
- * Tabs in display order: honor `prefs.tabOrder` first, then any doc-order tabs the
- * ordering omits, so a partial `tabOrder` still shows every tab.
- */
-export function orderedTabs(workspace: WorkspaceDocument): WorkspaceTab[] {
-  const bySlug = new Map(workspace.tabs.map((tab) => [tab.slug, tab]));
-  const ordered: WorkspaceTab[] = [];
-  const seen = new Set<string>();
-  for (const slug of workspace.prefs.tabOrder) {
-    const tab = bySlug.get(slug);
-    if (tab && !seen.has(slug)) {
-      ordered.push(tab);
-      seen.add(slug);
-    }
-  }
-  for (const tab of workspace.tabs) {
-    if (!seen.has(tab.slug)) {
-      ordered.push(tab);
-      seen.add(tab.slug);
-    }
-  }
-  return ordered;
-}
-
-export function visibleTabs(workspace: WorkspaceDocument): WorkspaceTab[] {
-  return orderedTabs(workspace).filter((tab) => !tab.hidden);
-}
-
-export function hiddenTabs(workspace: WorkspaceDocument): WorkspaceTab[] {
-  return orderedTabs(workspace).filter((tab) => tab.hidden);
-}
-
-export function findTab(
-  workspace: WorkspaceDocument,
-  slug: string | null,
-): WorkspaceTab | undefined {
-  if (!slug) {
-    return undefined;
-  }
-  return workspace.tabs.find((tab) => tab.slug === slug);
-}
-
-/**
- * Resolve which tab is active: prefer the requested slug if it exists and is not
- * hidden; otherwise fall back to the first visible tab (or first tab of any kind).
- */
-function resolveActiveSlug(workspace: WorkspaceDocument, requested: string | null): string | null {
-  const requestedTab = findTab(workspace, requested);
-  if (requestedTab) {
-    return requestedTab.slug;
-  }
-  const visible = visibleTabs(workspace);
-  const firstVisible = visible[0];
-  if (firstVisible) {
-    return firstVisible.slug;
-  }
-  return orderedTabs(workspace)[0]?.slug ?? null;
-}
-
 function applyActiveWorkspaceSlug(
   state: WorkspaceUiState,
   workspace: WorkspaceDocument,
@@ -429,8 +362,17 @@ export async function loadWorkspace(
       // Request generation owns navigation and status, but workspaceVersion owns
       // document freshness when handlers complete out of order.
       if (currentVersion === undefined || workspace.workspaceVersion > currentVersion) {
+        const retainedIntent = workspaceLoadIntents.get(state);
+        const retainedIntentIsCurrent =
+          retainedIntent?.activeSlugRevision === state.activeSlugRevision;
         state.workspace = workspace;
-        state.activeSlug = resolveActiveSlug(workspace, state.activeSlug);
+        state.activeSlug = resolveActiveSlug(
+          workspace,
+          retainedIntentIsCurrent ? retainedIntent.slug : state.activeSlug,
+        );
+        if (retainedIntentIsCurrent && workspaceLoadIntents.get(state) === retainedIntent) {
+          workspaceLoadIntents.delete(state);
+        }
         state.loaded = true;
         staleDocumentApplied = true;
       }
