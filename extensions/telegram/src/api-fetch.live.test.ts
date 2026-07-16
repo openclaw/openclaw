@@ -30,7 +30,9 @@ describe("fetchTelegramChatId live HTTP behavior", () => {
       socket.on("close", () => sockets.delete(socket));
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     let captureSettled = false;
     const captureFetch: typeof fetch = async (input, init) => {
@@ -52,7 +54,9 @@ describe("fetchTelegramChatId live HTTP behavior", () => {
       await expect(
         Promise.race([
           responseClosed.then(() => "closed"),
-          new Promise<string>((resolve) => setTimeout(() => resolve("stalled"), 1_000)),
+          new Promise<string>((resolve) => {
+            setTimeout(() => resolve("stalled"), 1_000);
+          }),
         ]),
       ).resolves.toBe("closed");
       await expect.poll(() => captureSettled, { timeout: 1_000 }).toBe(true);
@@ -61,7 +65,9 @@ describe("fetchTelegramChatId live HTTP behavior", () => {
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });

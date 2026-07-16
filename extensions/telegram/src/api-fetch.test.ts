@@ -199,7 +199,9 @@ describe("fetchTelegramChatId", () => {
         chatId: "@user",
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
-      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 250)),
+      new Promise<"stalled">((resolve) => {
+        setTimeout(() => resolve("stalled"), 250);
+      }),
     ]);
 
     expect(result).toBeNull();
@@ -241,7 +243,9 @@ describe("fetchTelegramChatId", () => {
         chatId: "@user",
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
-      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 250)),
+      new Promise<"stalled">((resolve) => {
+        setTimeout(() => resolve("stalled"), 250);
+      }),
     ]);
 
     expect(result).toBeNull();
