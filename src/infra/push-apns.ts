@@ -83,7 +83,7 @@ type ApnsPushWakeResult = ApnsPushResult;
 const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
 const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
 const PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH = 256;
-export const PLUGIN_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.plugin-approval";
+const PLUGIN_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.plugin-approval";
 
 type ApnsPushType = "alert" | "background";
 
