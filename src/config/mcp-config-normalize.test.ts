@@ -16,6 +16,20 @@ describe("canonicalizeConfiguredMcpServer", () => {
     expect(result).not.toHaveProperty("disabled");
   });
 
+  it("normalizes disabled: false to enabled: true", () => {
+    const result = canonicalizeConfiguredMcpServer({
+      disabled: false,
+      command: "claude",
+      args: ["mcp", "serve"],
+    });
+    expect(result).toEqual({
+      enabled: true,
+      command: "claude",
+      args: ["mcp", "serve"],
+    });
+    expect(result).not.toHaveProperty("disabled");
+  });
+
   it("leaves enabled: false unchanged", () => {
     const result = canonicalizeConfiguredMcpServer({
       enabled: false,
@@ -29,7 +43,7 @@ describe("canonicalizeConfiguredMcpServer", () => {
     });
   });
 
-  it("does not overwrite existing enabled with disabled: true", () => {
+  it("removes disabled and keeps existing enabled when disabled: true", () => {
     const result = canonicalizeConfiguredMcpServer({
       enabled: true,
       disabled: true,
@@ -38,23 +52,25 @@ describe("canonicalizeConfiguredMcpServer", () => {
     });
     expect(result).toEqual({
       enabled: true,
-      disabled: true,
       command: "echo",
       args: ["hello"],
     });
+    expect(result).not.toHaveProperty("disabled");
   });
 
-  it("ignores disabled: false", () => {
+  it("removes disabled and keeps existing enabled when disabled: false", () => {
     const result = canonicalizeConfiguredMcpServer({
+      enabled: false,
       disabled: false,
-      command: "claude",
-      args: ["mcp", "serve"],
+      command: "echo",
+      args: ["hello"],
     });
     expect(result).toEqual({
-      disabled: false,
-      command: "claude",
-      args: ["mcp", "serve"],
+      enabled: false,
+      command: "echo",
+      args: ["hello"],
     });
+    expect(result).not.toHaveProperty("disabled");
   });
 
   it("passes through servers without disabled", () => {

@@ -38,9 +38,11 @@ export function canonicalizeConfiguredMcpServer(
   server: Record<string, unknown>,
 ): Record<string, unknown> {
   const next = { ...server };
-  // Normalize `disabled: true` → canonical `enabled: false` so the flag is never silently ignored.
-  if (next.disabled === true && next.enabled === undefined) {
-    next.enabled = false;
+  // Normalize legacy `disabled` → canonical `enabled` and remove the legacy key.
+  if (typeof next.disabled === "boolean") {
+    if (next.enabled === undefined) {
+      next.enabled = !next.disabled;
+    }
     delete next.disabled;
   }
   const transportAlias = resolveOpenClawMcpTransportAlias(next.type);
