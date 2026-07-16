@@ -684,6 +684,15 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
   });
 }
 
+async function runMeetingTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { runDoctorMeetingTranscripts } = await import("../commands/doctor-meeting-transcripts.js");
+  const { resolveStateDir } = await import("../config/paths.js");
+  await runDoctorMeetingTranscripts({
+    transcriptsDir: nodePath.join(resolveStateDir(), "transcripts"),
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
   await noteSessionSnapshotHealth({
@@ -1854,6 +1863,56 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:meeting-transcripts",
+      label: "Meeting transcripts",
+      healthChecks: {
+        id: "core/doctor/meeting-transcripts",
+        description: "File-backed meeting-capture transcripts not yet imported to SQLite.",
+        defaultEnabled: false,
+        detect: async () => {
+          const { runDoctorMeetingTranscripts } =
+            await import("../commands/doctor-meeting-transcripts.js");
+          const { resolveStateDir } = await import("../config/paths.js");
+          const report = await runDoctorMeetingTranscripts({
+            transcriptsDir: nodePath.join(resolveStateDir(), "transcripts"),
+          });
+          if (report.foundSessions === 0) {
+            return [];
+          }
+          const finding: HealthFinding = {
+            checkId: "core/doctor/meeting-transcripts",
+            severity: "info",
+            message: `Found ${report.foundSessions} session(s) in file storage. Run openclaw doctor --fix to import.`,
+          };
+          return [finding];
+        },
+        repair: async () => {
+          const { runDoctorMeetingTranscripts } =
+            await import("../commands/doctor-meeting-transcripts.js");
+          const { resolveStateDir } = await import("../config/paths.js");
+          const report = await runDoctorMeetingTranscripts({
+            transcriptsDir: nodePath.join(resolveStateDir(), "transcripts"),
+            shouldRepair: true,
+          });
+          const changes: string[] = [];
+          if (report.importedSessions > 0) {
+            changes.push(
+              `Imported ${report.importedSessions} meeting transcript session(s) and ${report.importedUtterances} utterance(s) to SQLite`,
+            );
+          }
+          if (report.issues.length > 0) {
+            changes.push(...report.issues);
+          }
+          return {
+            status: report.issues.length === 0 ? ("repaired" as const) : ("failed" as const),
+            changes,
+            effects: [],
+          };
+        },
+      },
+      run: runMeetingTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",

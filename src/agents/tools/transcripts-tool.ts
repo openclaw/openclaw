@@ -9,6 +9,10 @@ import { Type } from "typebox";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import {
   type ResolvedTranscriptsAutoStartConfig,
   resolveTranscriptsConfig,
 } from "../../transcripts/config.js";
@@ -67,7 +71,14 @@ const TranscriptsSchema = Type.Object(
 );
 
 function createStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
-  return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
+  let stateDb: OpenClawStateDatabase | undefined;
+  try {
+    stateDb = openOpenClawStateDatabase({ env: process.env }) as OpenClawStateDatabase;
+  } catch {
+    // SQLite runtime may be unavailable (e.g. Node <24.15.0 with SQLite 3.51.2).
+    // Fall back to file-backed store when the shared state DB cannot open.
+  }
+  return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), stateDb);
 }
 
 async function waitForPendingAutoStartsToSettle(
@@ -412,7 +423,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       if (!config.enabled || config.autoStart.length === 0) {
         return;
       }
-      const store = new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
+      const store = createStore(ctx);
       for (const entry of config.autoStart) {
         startEntry(
           {
@@ -441,7 +452,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           }`,
         );
       }
-      const store = new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
+      const store = createStore(ctx);
       for (const sessionId of startedSessionIds) {
         await stopTranscripts({
           ctx,

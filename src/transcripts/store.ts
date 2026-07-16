@@ -4,8 +4,13 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import type { DatabaseSync } from "node:sqlite";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -53,10 +58,6 @@ function sameSessionIdentity(
   right: TranscriptSessionDescriptor,
 ): boolean {
   return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
-}
-
-function toSqlValue(value: unknown): import("node:sqlite").SQLInputValue {
-  return (value === undefined ? null : value) as import("node:sqlite").SQLInputValue;
 }
 
 function nowMs(): number {
@@ -143,60 +144,11 @@ export class TranscriptsStore {
     this.stateDb = stateDb;
   }
 
-  private dbExec(sql: string, params: import("node:sqlite").SQLInputValue[]): unknown[] {
+  private kyselyDb(): import("kysely").Kysely<OpenClawStateKyselyDatabase> {
     if (!this.stateDb) {
       throw new Error("TranscriptsStore SQLite operations require an OpenClawStateDatabase handle");
     }
-    const stmt = this.stateDb.db.prepare(sql);
-    return stmt.all(...params);
-  }
-
-  private dbRun(sql: string, params: import("node:sqlite").SQLInputValue[]): void {
-    if (!this.stateDb) {
-      throw new Error("TranscriptsStore SQLite operations require an OpenClawStateDatabase handle");
-    }
-    const stmt = this.stateDb.db.prepare(sql);
-    stmt.run(...params);
-  }
-
-  private dbGet(
-    sql: string,
-    params: import("node:sqlite").SQLInputValue[],
-  ): Record<string, unknown> | undefined {
-    if (!this.stateDb) {
-      throw new Error("TranscriptsStore SQLite operations require an OpenClawStateDatabase handle");
-    }
-    const stmt = this.stateDb.db.prepare(sql);
-    return stmt.get(...params) as Record<string, unknown> | undefined;
-  }
-
-  private writeSessionSql(session: TranscriptSessionDescriptor): void {
-    const ts = nowMs();
-    const row = rowFromSession(session);
-    this.dbRun(
-      `INSERT OR REPLACE INTO transcript_sessions
-       (session_id, provider_id, title, account_id, guild_id, channel_id, meeting_url,
-        thread_ts, file_id, source_json,
-        started_at, stopped_at, metadata_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        toSqlValue(row.session_id),
-        toSqlValue(row.provider_id),
-        toSqlValue(row.title),
-        toSqlValue(row.account_id),
-        toSqlValue(row.guild_id),
-        toSqlValue(row.channel_id),
-        toSqlValue(row.meeting_url),
-        toSqlValue(row.thread_ts),
-        toSqlValue(row.file_id),
-        toSqlValue(row.source_json),
-        toSqlValue(row.started_at),
-        toSqlValue(row.stopped_at),
-        toSqlValue(row.metadata_json),
-        toSqlValue(ts),
-        toSqlValue(ts),
-      ],
-    );
+    return getNodeSqliteKysely<OpenClawStateKyselyDatabase>(this.stateDb.db);
   }
 
   /** Resolve the dated directory for a transcript session. */
@@ -268,8 +220,48 @@ export class TranscriptsStore {
   /** Persist transcript session metadata. */
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
     if (this.stateDb) {
-      runOpenClawStateWriteTransaction(() => {
-        this.writeSessionSql(session);
+      const ts = nowMs();
+      const row = rowFromSession(session);
+      runOpenClawStateWriteTransaction((database) => {
+        const db = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("transcript_sessions")
+            .values({
+              session_id: row.session_id as string,
+              provider_id: row.provider_id as string,
+              title: row.title as string | null,
+              account_id: row.account_id as string | null,
+              guild_id: row.guild_id as string | null,
+              channel_id: row.channel_id as string | null,
+              meeting_url: row.meeting_url as string | null,
+              thread_ts: row.thread_ts as string | null,
+              file_id: row.file_id as string | null,
+              source_json: row.source_json as string,
+              started_at: row.started_at as string,
+              stopped_at: row.stopped_at as string | null,
+              metadata_json: row.metadata_json as string | null,
+              created_at: ts,
+              updated_at: ts,
+            })
+            .onConflict((conflict) =>
+              conflict.columns(["session_id", "started_at"]).doUpdateSet({
+                provider_id: row.provider_id as string,
+                title: row.title as string | null,
+                account_id: row.account_id as string | null,
+                guild_id: row.guild_id as string | null,
+                channel_id: row.channel_id as string | null,
+                meeting_url: row.meeting_url as string | null,
+                thread_ts: row.thread_ts as string | null,
+                file_id: row.file_id as string | null,
+                source_json: row.source_json as string,
+                stopped_at: row.stopped_at as string | null,
+                metadata_json: row.metadata_json as string | null,
+                updated_at: ts,
+              }),
+            ),
+        );
       });
       return;
     }
@@ -286,27 +278,36 @@ export class TranscriptsStore {
   /** Read one session descriptor plus its directory. */
   async readSessionEntry(sessionId: string): Promise<TranscriptsSessionEntry | undefined> {
     if (this.stateDb) {
+      const db = this.kyselyDb();
       const qualified = sessionId.match(/^(\d{4}-\d{2}-\d{2})\/(.+)$/);
       if (qualified?.[1] && qualified[2]) {
-        const row = this.dbGet(
-          `SELECT * FROM transcript_sessions
-           WHERE session_id = ? AND started_at LIKE ?`,
-          [toSqlValue(qualified[2]), toSqlValue(`${qualified[1]}T%`)],
+        const row = executeSqliteQueryTakeFirstSync(
+          this.stateDb.db,
+          db
+            .selectFrom("transcript_sessions")
+            .selectAll()
+            .where("session_id", "=", qualified[2])
+            .where("started_at", "like", `${qualified[1]}T%`),
         );
         if (!row) {
           return undefined;
         }
-        const session = sessionFromRow(row);
+        const session = sessionFromRow(row as unknown as Record<string, unknown>);
         return { session, sessionDir: this.sessionDir(session) };
       }
-      const row = this.dbGet(
-        "SELECT * FROM transcript_sessions WHERE session_id = ? ORDER BY started_at DESC LIMIT 1",
-        [toSqlValue(sessionId)],
+      const row = executeSqliteQueryTakeFirstSync(
+        this.stateDb.db,
+        db
+          .selectFrom("transcript_sessions")
+          .selectAll()
+          .where("session_id", "=", sessionId)
+          .orderBy("started_at", "desc")
+          .limit(1),
       );
       if (!row) {
         return undefined;
       }
-      const session = sessionFromRow(row);
+      const session = sessionFromRow(row as unknown as Record<string, unknown>);
       return { session, sessionDir: this.sessionDir(session) };
     }
     const dir = await this.findSessionDir(sessionId);
@@ -326,25 +327,23 @@ export class TranscriptsStore {
   ): Promise<void> {
     if (this.stateDb) {
       const ts = nowMs();
-      runOpenClawStateWriteTransaction(() => {
-        this.dbRun(
-          `INSERT INTO transcript_utterances
-           (session_id, session_started, utterance_id, speaker_label, speaker_id, text, started_at, ended_at,
-            final, metadata_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            toSqlValue(session.sessionId),
-            toSqlValue(session.startedAt),
-            toSqlValue(utterance.id),
-            toSqlValue(utterance.speaker?.label),
-            toSqlValue(utterance.speaker?.id),
-            toSqlValue(utterance.text),
-            toSqlValue(utterance.startedAt),
-            toSqlValue(utterance.endedAt),
-            toSqlValue(utterance.final !== false ? 1 : 0),
-            toSqlValue(utterance.metadata ? JSON.stringify(utterance.metadata) : null),
-            toSqlValue(ts),
-          ],
+      runOpenClawStateWriteTransaction((database) => {
+        const db = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          db.insertInto("transcript_utterances").values({
+            session_id: session.sessionId,
+            session_started: session.startedAt,
+            utterance_id: utterance.id ?? null,
+            speaker_label: utterance.speaker?.label ?? null,
+            speaker_id: utterance.speaker?.id ?? null,
+            text: utterance.text,
+            started_at: utterance.startedAt ?? null,
+            ended_at: utterance.endedAt ?? null,
+            final: utterance.final !== false ? 1 : 0,
+            metadata_json: utterance.metadata ? JSON.stringify(utterance.metadata) : null,
+            created_at: ts,
+          }),
         );
       });
       return;
@@ -406,32 +405,29 @@ export class TranscriptsStore {
   ): Promise<TranscriptUtterance[]> {
     const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
     const scoped = sessionStarted !== undefined;
-    if (maxUtterances !== undefined) {
-      const sql = scoped
-        ? `SELECT * FROM transcript_utterances
-           WHERE session_id = ? AND session_started LIKE ?
-           ORDER BY id DESC LIMIT ?`
-        : `SELECT * FROM transcript_utterances
-           WHERE session_id = ?
-           ORDER BY id DESC LIMIT ?`;
-      const params: import("node:sqlite").SQLInputValue[] = scoped
-        ? [toSqlValue(sessionId), toSqlValue(sessionStarted + "%"), toSqlValue(maxUtterances)]
-        : [toSqlValue(sessionId), toSqlValue(maxUtterances)];
-      const rows = this.dbExec(sql, params);
-      return (rows as Record<string, unknown>[]).toReversed().map(utteranceFromRow);
+    const db = this.kyselyDb();
+    if (!this.stateDb) {
+      return [];
     }
-    const sql = scoped
-      ? `SELECT * FROM transcript_utterances
-         WHERE session_id = ? AND session_started LIKE ?
-         ORDER BY id ASC`
-      : `SELECT * FROM transcript_utterances
-         WHERE session_id = ?
-         ORDER BY id ASC`;
-    const params: import("node:sqlite").SQLInputValue[] = scoped
-      ? [toSqlValue(sessionId), toSqlValue(sessionStarted + "%")]
-      : [toSqlValue(sessionId)];
-    const rows = this.dbExec(sql, params);
-    return (rows as Record<string, unknown>[]).map(utteranceFromRow);
+    let query = db
+      .selectFrom("transcript_utterances")
+      .selectAll()
+      .where("session_id", "=", sessionId);
+    if (scoped) {
+      query = query.where("session_started", "like", `${sessionStarted}%`);
+    }
+    if (maxUtterances !== undefined) {
+      query = query.orderBy("id", "desc").limit(maxUtterances);
+    } else {
+      query = query.orderBy("id", "asc");
+    }
+    const rows = executeSqliteQuerySync(this.stateDb.db, query).rows;
+    if (maxUtterances !== undefined) {
+      return rows
+        .toReversed()
+        .map((row) => utteranceFromRow(row as unknown as Record<string, unknown>));
+    }
+    return rows.map((row) => utteranceFromRow(row as unknown as Record<string, unknown>));
   }
 
   private async readUtterancesFromDir(
@@ -525,31 +521,42 @@ export class TranscriptsStore {
   /** Mark a transcript session as stopped when metadata exists. */
   async updateStopped(sessionId: string, stoppedAt: string): Promise<void> {
     if (this.stateDb) {
+      const ts = nowMs();
       const qualified = sessionId.match(/^(\d{4}-\d{2}-\d{2})\/(.+)$/);
       if (qualified?.[1] && qualified[2]) {
-        runOpenClawStateWriteTransaction(() => {
-          this.dbRun(
-            `UPDATE transcript_sessions SET stopped_at = ?, updated_at = ?
-             WHERE session_id = ? AND started_at LIKE ?`,
-            [
-              toSqlValue(stoppedAt),
-              toSqlValue(nowMs()),
-              toSqlValue(qualified[2]),
-              toSqlValue(`${qualified[1]}T%`),
-            ],
+        runOpenClawStateWriteTransaction((database) => {
+          const db = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(database.db);
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("transcript_sessions")
+              .set({ stopped_at: stoppedAt, updated_at: ts })
+              .where("session_id", "=", qualified[2]!)
+              .where("started_at", "like", `${qualified[1]}T%`),
           );
         });
         return;
       }
-      runOpenClawStateWriteTransaction(() => {
-        this.dbRun(
-          `UPDATE transcript_sessions SET stopped_at = ?, updated_at = ?
-           WHERE id = (
-             SELECT id FROM transcript_sessions
-             WHERE session_id = ? ORDER BY started_at DESC LIMIT 1
-           )`,
-          [toSqlValue(stoppedAt), toSqlValue(nowMs()), toSqlValue(sessionId)],
+      runOpenClawStateWriteTransaction((database) => {
+        const db = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(database.db);
+        const latest = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("transcript_sessions")
+            .select("id")
+            .where("session_id", "=", sessionId)
+            .orderBy("started_at", "desc")
+            .limit(1),
         );
+        if (latest) {
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("transcript_sessions")
+              .set({ stopped_at: stoppedAt, updated_at: ts })
+              .where("id", "=", latest.id),
+          );
+        }
       });
       return;
     }
