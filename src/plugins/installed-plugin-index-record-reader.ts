@@ -5,7 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
+import { isNotFoundPathError, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { compareValidSemver } from "../infra/semver.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -210,11 +210,18 @@ function isUnavailableManagedNpmInstallRecord(params: {
   if (!packageInfo || packageInfo.packageName !== params.recovered.resolvedName) {
     return false;
   }
-  const npmRoot = path.resolve(params.npmRoot);
-  const projectRoot = path.resolve(packageInfo.projectRoot);
+  const normalizeForComparison = (value: string): string => {
+    const resolved = path.resolve(value);
+    return process.platform === "win32" ? normalizeWindowsPathForComparison(resolved) : resolved;
+  };
+  // Persisted Windows paths can differ only by casing. Use filesystem comparison
+  // semantics so a managed generation is not mistaken for a custom install.
+  const npmRoot = normalizeForComparison(params.npmRoot);
+  const projectRoot = normalizeForComparison(packageInfo.projectRoot);
   return (
     projectRoot === npmRoot ||
-    path.dirname(projectRoot) === path.resolve(resolvePluginNpmProjectsDir(npmRoot))
+    normalizeForComparison(path.dirname(packageInfo.projectRoot)) ===
+      normalizeForComparison(resolvePluginNpmProjectsDir(params.npmRoot))
   );
 }
 

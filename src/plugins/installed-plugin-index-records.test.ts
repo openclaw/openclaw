@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -599,6 +600,59 @@ describe("plugin index install records store", () => {
       resolvedVersion: "2026.7.1",
     });
     expect(record.integrity).toBeUndefined();
+  });
+
+  it("recovers a Windows managed generation when the persisted root casing differs", async () => {
+    const stateDir = makeStateDir();
+    const packageName = "@openclaw/discord";
+    const npmDir = path.join(stateDir, "npm");
+    const fixtureProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName,
+      pluginId: "discord",
+      version: "2026.7.1",
+    });
+    const activeProjectRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName,
+      generationKey: "discord-2026.7.1",
+    });
+    fs.renameSync(fixtureProjectRoot, activeProjectRoot);
+    const activePackageDir = path.join(
+      activeProjectRoot,
+      "node_modules",
+      ...packageName.split("/"),
+    );
+    const staleProjectRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName,
+      generationKey: "discord-2026.6.4",
+    });
+    const stalePackageDir = path
+      .join(staleProjectRoot, "node_modules", ...packageName.split("/"))
+      .replace(stateDir, stateDir.toUpperCase());
+
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@latest",
+          installPath: stalePackageDir,
+          resolvedName: packageName,
+          resolvedVersion: "2026.6.4",
+        },
+      },
+      { stateDir, candidates: [] },
+    );
+
+    const loaded = await withMockedWindowsPlatform(() =>
+      loadInstalledPluginIndexInstallRecords({ stateDir }),
+    );
+    expectRecordFields(loaded.discord, {
+      installPath: activePackageDir,
+      resolvedVersion: "2026.7.1",
+    });
   });
 
   it("recovers managed npm metadata when the persisted record points at an older package version", async () => {
