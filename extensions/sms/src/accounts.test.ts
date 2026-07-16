@@ -258,9 +258,7 @@ describe("SMS account config", () => {
           sms: {
             accounts: {
               support: {
-                accountSid: "AC-support",
-                authToken: "support-token",
-                fromNumber: "+15551112222",
+                enabled: true,
               },
             },
           },
