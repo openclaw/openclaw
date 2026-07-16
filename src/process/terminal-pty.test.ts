@@ -75,6 +75,51 @@ describe("terminal PTY invocation", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([{}, { TERM: "" }, { TERM: "dumb" }, { TERM: "DUMB" }])(
+    "upgrades non-interactive TERM for a real PTY: %o",
+    async (env) => {
+      mocks.spawn.mockReturnValueOnce(fakePty());
+
+      await spawnTerminalPty({
+        file: "/usr/bin/codex",
+        args: ["resume", "thread"],
+        env,
+        cols: 80,
+        rows: 24,
+      });
+
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        "/usr/bin/codex",
+        ["resume", "thread"],
+        expect.objectContaining({
+          name: "xterm-256color",
+          env: expect.objectContaining({ TERM: "xterm-256color" }),
+        }),
+      );
+    },
+  );
+
+  it("preserves an interactive TERM", async () => {
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    await spawnTerminalPty({
+      file: "/usr/bin/codex",
+      args: [],
+      env: { TERM: "screen-256color" },
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "/usr/bin/codex",
+      [],
+      expect.objectContaining({
+        name: "screen-256color",
+        env: expect.objectContaining({ TERM: "screen-256color" }),
+      }),
+    );
+  });
+
   it.each([".cmd", ".bat"])("wraps Windows %s shims through ComSpec", async (extension) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.spawn.mockReturnValueOnce(fakePty());
