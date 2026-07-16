@@ -10,7 +10,14 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+} from "../../plugins/before-agent-reply.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -36,7 +43,6 @@ import {
   createEmbeddedRunStageTracker,
 } from "./run/attempt-stage-timing.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
-import { buildHandledReplyPayloads } from "./run/handled-reply.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -243,29 +249,35 @@ async function runEmbeddedAgentInternal(
         modelId,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+        ...buildAgentHookContextIdentityFields({
+          trigger: params.trigger,
+          senderId: params.senderId,
+          chatId: params.chatId,
+          channelContext: params.channelContext,
+        }),
       };
-      if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
-        notifyExecutionPhase("before_agent_reply", { provider, model: modelId });
-        const hookResult = await hookRunner.runBeforeAgentReply(
-          { cleanedBody: params.prompt },
-          hookCtx,
-        );
-        if (hookResult?.handled) {
-          return {
-            payloads: buildHandledReplyPayloads(hookResult.reply),
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta: {
-                sessionId: params.sessionId,
-                provider,
-                model: modelId,
-              },
-              finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-              finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+      const hookResult = await runBeforeAgentReplyForTurn({
+        runId: params.runId,
+        trigger: params.trigger,
+        event: { cleanedBody: params.prompt },
+        context: hookCtx,
+        onDispatch: () => notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
+        onDeclined: () => notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
+      });
+      if (hookResult?.handled) {
+        return {
+          payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+          meta: {
+            durationMs: Date.now() - started,
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider,
+              model: modelId,
             },
-          };
-        }
-        notifyExecutionPhase("runtime_plugins", { provider, model: modelId });
+            finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+            finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+          },
+        };
       }
 
       return executePreparedEmbeddedRun({
