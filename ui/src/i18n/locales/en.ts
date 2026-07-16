@@ -1719,6 +1719,13 @@ export const en: TranslationMap = {
     loading: "Checking this Gateway for available AI access…",
     retry: "Retry",
     checkAgain: "Check again",
+    verify: {
+      title: "Current connection",
+      button: "Verify connection",
+      checking: "Checking — asking {modelRef} for a quick reply…",
+      answered: "Answered",
+      answeredIn: "Answered in {latencyMs} ms",
+    },
     access: {
       adminRequired: "Model setup requires operator.admin access.",
       gatewayTooOld: "The Gateway is running an older OpenClaw version",

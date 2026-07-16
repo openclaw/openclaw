@@ -1753,6 +1753,13 @@ export const fa: TranslationMap = {
     loading: "در حال بررسی دسترسی‌های موجود به هوش مصنوعی در این Gateway…",
     retry: "تلاش مجدد",
     checkAgain: "بررسی مجدد",
+    verify: {
+      title: "اتصال فعلی",
+      button: "تأیید اتصال",
+      checking: "در حال بررسی — درخواست پاسخ سریع از {modelRef}…",
+      answered: "پاسخ داده شد",
+      answeredIn: "در {latencyMs} میلی‌ثانیه پاسخ داده شد",
+    },
     access: {
       adminRequired: "راه‌اندازی مدل به دسترسی operator.admin نیاز دارد.",
       gatewayTooOld: "Gateway از نسخه قدیمی‌تری از OpenClaw استفاده می‌کند",

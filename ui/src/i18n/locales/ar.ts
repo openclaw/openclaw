@@ -1744,6 +1744,13 @@ export const ar: TranslationMap = {
     loading: "جارٍ التحقق من إمكانية الوصول إلى الذكاء الاصطناعي المتاحة على Gateway هذا…",
     retry: "إعادة المحاولة",
     checkAgain: "التحقق مجددًا",
+    verify: {
+      title: "الاتصال الحالي",
+      button: "التحقق من الاتصال",
+      checking: "جارٍ التحقق — نطلب من {modelRef} ردًا سريعًا…",
+      answered: "تم الرد",
+      answeredIn: "تم الرد خلال {latencyMs} مللي ثانية",
+    },
     access: {
       adminRequired: "يتطلب إعداد النموذج صلاحية operator.admin.",
       gatewayTooOld: "يعمل Gateway بإصدار أقدم من OpenClaw",

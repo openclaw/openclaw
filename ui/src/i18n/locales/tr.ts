@@ -1762,6 +1762,13 @@ export const tr: TranslationMap = {
     loading: "Bu Gateway'deki kullanılabilir AI erişimi kontrol ediliyor…",
     retry: "Tekrar dene",
     checkAgain: "Tekrar kontrol et",
+    verify: {
+      title: "Mevcut bağlantı",
+      button: "Bağlantıyı doğrula",
+      checking: "Kontrol ediliyor — {modelRef} modelinden hızlı bir yanıt isteniyor…",
+      answered: "Yanıtlandı",
+      answeredIn: "{latencyMs} ms içinde yanıtlandı",
+    },
     access: {
       adminRequired: "Model kurulumu için operator.admin erişimi gerekir.",
       gatewayTooOld: "Gateway, OpenClaw'ın eski bir sürümünü çalıştırıyor",

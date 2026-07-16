@@ -64,6 +64,24 @@ struct BackgroundTasksScreenTests {
         #expect(merged.map(\.status) == ["completed"])
     }
 
+    @Test func `loads active before terminal without overlapping status queries`() async throws {
+        let running = try self.task(id: "same", status: "running", updatedAt: 2000)
+        let completed = try self.task(id: "same", status: "completed", updatedAt: 3000)
+        let probe = OrderedBackgroundTaskRequestProbe(active: [running], finished: [completed])
+
+        let tasks = try await MobileBackgroundTaskList.load { status, limit in
+            await probe.request(status: status, limit: limit)
+        }
+        let snapshot = await probe.snapshot()
+
+        #expect(tasks.map(\.status) == ["completed"])
+        #expect(snapshot.calls == [
+            "queued,running|200",
+            "completed,failed,cancelled,timed_out|100",
+        ])
+        #expect(!snapshot.overlapped)
+    }
+
     private func task(id: String, status: String, updatedAt: Int) throws -> MobileBackgroundTask {
         let data = Data(#"""
         {
@@ -76,5 +94,31 @@ struct BackgroundTasksScreenTests {
         }
         """#.utf8)
         return try JSONDecoder().decode(MobileBackgroundTask.self, from: data)
+    }
+}
+
+private actor OrderedBackgroundTaskRequestProbe {
+    private let active: [MobileBackgroundTask]
+    private let finished: [MobileBackgroundTask]
+    private var calls: [String] = []
+    private var inFlight = 0
+    private var overlapped = false
+
+    init(active: [MobileBackgroundTask], finished: [MobileBackgroundTask]) {
+        self.active = active
+        self.finished = finished
+    }
+
+    func request(status: [String], limit: Int) async -> [MobileBackgroundTask] {
+        self.calls.append("\(status.joined(separator: ","))|\(limit)")
+        self.inFlight += 1
+        self.overlapped = self.overlapped || self.inFlight > 1
+        await Task.yield()
+        self.inFlight -= 1
+        return status.contains("running") ? self.active : self.finished
+    }
+
+    func snapshot() -> (calls: [String], overlapped: Bool) {
+        (self.calls, self.overlapped)
     }
 }

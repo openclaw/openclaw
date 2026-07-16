@@ -11243,7 +11243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 68,
+      "line": 69,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Couldn’t load background tasks",
       "surface": "android",
@@ -11251,7 +11251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 82,
+      "line": 83,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Couldn’t load task details",
       "surface": "android",
@@ -11259,7 +11259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 134,
+      "line": 135,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Background tasks",
       "surface": "android",
@@ -11267,7 +11267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 142,
+      "line": 143,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Refresh background tasks",
       "surface": "android",
@@ -11275,7 +11275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 160,
+      "line": 161,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "No background tasks for this agent.",
       "surface": "android",
@@ -11283,15 +11283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 167,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
-      "source": "Running",
-      "surface": "android",
-      "id": "native.android.7e4ab752e691e19a"
-    },
-    {
-      "kind": "ui-call",
-      "line": 168,
+      "line": 169,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Finished",
       "surface": "android",
@@ -11299,7 +11291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 257,
+      "line": 260,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Back to background tasks",
       "surface": "android",
@@ -11307,15 +11299,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 263,
+      "line": 266,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
-      "source": "${task.statusLabel} · ${task.runtime}",
+      "source": "${statusLabel} · ${task.runtime}",
       "surface": "android",
-      "id": "native.android.91ef72ad20357acf"
+      "id": "native.android.193a6c8583fe0dfb"
     },
     {
       "kind": "ui-call",
-      "line": 285,
+      "line": 288,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Prompt",
       "surface": "android",
@@ -11323,7 +11315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 285,
+      "line": 288,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Prompt unavailable",
       "surface": "android",
@@ -11331,7 +11323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 286,
+      "line": 289,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "No output yet",
       "surface": "android",
@@ -11339,11 +11331,43 @@
     },
     {
       "kind": "ui-call",
-      "line": 286,
+      "line": 289,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
       "source": "Output",
       "surface": "android",
       "id": "native.android.3adeec85d4a8e797"
+    },
+    {
+      "kind": "ui-call",
+      "line": 295,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
+      "source": "Queued",
+      "surface": "android",
+      "id": "native.android.e378f4d3069dc5f4"
+    },
+    {
+      "kind": "ui-call",
+      "line": 296,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
+      "source": "Running",
+      "surface": "android",
+      "id": "native.android.7e4ab752e691e19a"
+    },
+    {
+      "kind": "ui-call",
+      "line": 297,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
+      "source": "Completed",
+      "surface": "android",
+      "id": "native.android.c3b1223090fc9f15"
+    },
+    {
+      "kind": "ui-call",
+      "line": 298,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/BackgroundTasksSheet.kt",
+      "source": "Failed",
+      "surface": "android",
+      "id": "native.android.7a5134f615d03ff9"
     },
     {
       "kind": "conditional-branch",
@@ -16475,7 +16499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 158,
+      "line": 170,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Loading background tasks…",
       "surface": "apple",
@@ -16483,7 +16507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 170,
+      "line": 182,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Tasks for this agent will appear here.",
       "surface": "apple",
@@ -16491,7 +16515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 181,
+      "line": 193,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "No running tasks",
       "surface": "apple",
@@ -16499,7 +16523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 190,
+      "line": 202,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Running",
       "surface": "apple",
@@ -16507,7 +16531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 194,
+      "line": 206,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "No finished tasks",
       "surface": "apple",
@@ -16515,7 +16539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 203,
+      "line": 215,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Finished",
       "surface": "apple",
@@ -16523,7 +16547,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 210,
+      "line": 222,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Background Tasks",
       "surface": "apple",
@@ -16531,7 +16555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 218,
+      "line": 230,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -16539,7 +16563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 328,
+      "line": 337,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Prompt",
       "surface": "apple",
@@ -16547,7 +16571,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 330,
+      "line": 339,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Loading…",
       "surface": "apple",
@@ -16555,7 +16579,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 331,
+      "line": 340,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Prompt unavailable.",
       "surface": "apple",
@@ -16563,7 +16587,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 333,
+      "line": 342,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Output",
       "surface": "apple",
@@ -16571,7 +16595,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 334,
+      "line": 343,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "No output yet.",
       "surface": "apple",
@@ -16579,7 +16603,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 344,
+      "line": 353,
       "path": "apps/ios/Sources/Design/BackgroundTasksScreen.swift",
       "source": "Task Details",
       "surface": "apple",

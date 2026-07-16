@@ -1748,6 +1748,13 @@ export const ko: TranslationMap = {
     loading: "이 Gateway에서 사용 가능한 AI 액세스를 확인하는 중…",
     retry: "재시도",
     checkAgain: "다시 확인",
+    verify: {
+      title: "현재 연결",
+      button: "연결 확인",
+      checking: "확인 중 — {modelRef}에 빠른 응답을 요청하고 있습니다…",
+      answered: "응답 완료",
+      answeredIn: "{latencyMs}ms 만에 응답",
+    },
     access: {
       adminRequired: "모델을 설정하려면 operator.admin 액세스가 필요합니다.",
       gatewayTooOld: "Gateway에서 이전 버전의 OpenClaw가 실행 중입니다",

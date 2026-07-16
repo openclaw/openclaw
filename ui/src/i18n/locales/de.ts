@@ -1771,6 +1771,13 @@ export const de: TranslationMap = {
     loading: "Dieser Gateway wird auf verfügbaren KI-Zugriff geprüft…",
     retry: "Erneut versuchen",
     checkAgain: "Erneut prüfen",
+    verify: {
+      title: "Aktuelle Verbindung",
+      button: "Verbindung überprüfen",
+      checking: "Überprüfung läuft — {modelRef} wird um eine kurze Antwort gebeten…",
+      answered: "Geantwortet",
+      answeredIn: "In {latencyMs} ms geantwortet",
+    },
     access: {
       adminRequired: "Für die Modelleinrichtung ist operator.admin-Zugriff erforderlich.",
       gatewayTooOld: "Der Gateway verwendet eine ältere OpenClaw-Version",

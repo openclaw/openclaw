@@ -353,6 +353,9 @@ describe("plugin npm extended-stable workflow", () => {
     );
     expect(consume.run).toContain("--workflow-jobs-metadata");
     expect(consume.run).toContain("--source-package-json-sha256");
+    expect(consume.run).toContain("--connect-timeout 10");
+    expect(consume.run).toContain("--max-time 120");
+    expect(consume.run).toContain("actions/artifacts/${artifact_id}/zip");
     expect(consume.run).toContain("sha_pinned_release_publish=false");
     expect(consume.run).toContain(
       '[[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]',

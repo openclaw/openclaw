@@ -1763,6 +1763,13 @@ export const ja_JP: TranslationMap = {
     loading: "このGatewayで利用可能なAIアクセスを確認しています…",
     retry: "再試行",
     checkAgain: "再確認",
+    verify: {
+      title: "現在の接続",
+      button: "接続を確認",
+      checking: "確認中 — {modelRef} に簡単な応答を求めています…",
+      answered: "応答あり",
+      answeredIn: "{latencyMs} ms で応答",
+    },
     access: {
       adminRequired: "モデルの設定にはoperator.adminアクセスが必要です。",
       gatewayTooOld: "Gatewayで実行中のOpenClawのバージョンが古いです",

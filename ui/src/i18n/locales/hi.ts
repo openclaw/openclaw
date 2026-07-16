@@ -1743,6 +1743,13 @@ export const hi: TranslationMap = {
     loading: "उपलब्ध AI एक्सेस के लिए इस Gateway की जाँच की जा रही है…",
     retry: "पुनः प्रयास करें",
     checkAgain: "फिर से जाँचें",
+    verify: {
+      title: "वर्तमान कनेक्शन",
+      button: "कनेक्शन सत्यापित करें",
+      checking: "जाँच जारी है — {modelRef} से त्वरित उत्तर माँगा जा रहा है…",
+      answered: "उत्तर मिला",
+      answeredIn: "{latencyMs} ms में उत्तर मिला",
+    },
     access: {
       adminRequired: "मॉडल सेटअप के लिए operator.admin एक्सेस आवश्यक है।",
       gatewayTooOld: "Gateway पर OpenClaw का पुराना संस्करण चल रहा है",

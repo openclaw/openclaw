@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.BackgroundTask
+import ai.openclaw.app.chat.BackgroundTaskDisplayStatus
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
@@ -190,6 +191,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.taskSection(
     )
   }
   items(tasks, key = BackgroundTask::id) { task ->
+    val statusLabel = backgroundTaskStatusLabel(task)
     Surface(
       onClick = { onSelect(task) },
       modifier = Modifier.fillMaxWidth(),
@@ -210,7 +212,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.taskSection(
           )
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             ClawStatusPill(
-              text = task.statusLabel,
+              text = statusLabel,
               status =
                 when {
                   task.isActive -> ClawStatus.Warning
@@ -244,6 +246,7 @@ private fun BackgroundTaskDetail(
   error: String?,
   onBack: () -> Unit,
 ) {
+  val statusLabel = backgroundTaskStatusLabel(task)
   LazyColumn(
     modifier = Modifier.fillMaxWidth().heightIn(max = 620.dp),
     contentPadding = PaddingValues(bottom = 28.dp),
@@ -261,8 +264,8 @@ private fun BackgroundTaskDetail(
           Text(
             text =
               nativeString(
-                "\${task.statusLabel} · \${task.runtime}",
-                task.statusLabel,
+                "\${statusLabel} · \${task.runtime}",
+                statusLabel,
                 task.runtime,
               ),
             style = ClawTheme.type.caption,
@@ -286,6 +289,14 @@ private fun BackgroundTaskDetail(
     item { TaskTextBlock(label = nativeString("Output"), text = task.output ?: nativeString("No output yet")) }
   }
 }
+
+private fun backgroundTaskStatusLabel(task: BackgroundTask): String =
+  when (task.displayStatus) {
+    BackgroundTaskDisplayStatus.Queued -> nativeString("Queued")
+    BackgroundTaskDisplayStatus.Running -> nativeString("Running")
+    BackgroundTaskDisplayStatus.Completed -> nativeString("Completed")
+    BackgroundTaskDisplayStatus.Failed -> nativeString("Failed")
+  }
 
 @Composable
 private fun TaskTextBlock(

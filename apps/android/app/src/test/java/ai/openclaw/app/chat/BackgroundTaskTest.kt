@@ -27,7 +27,7 @@ class BackgroundTaskTest {
     assertEquals("Index docs", tasks.single().displayTitle)
     assertEquals("Index the docs", tasks.single().prompt)
     assertEquals("Command failed", tasks.single().output)
-    assertEquals("Failed", tasks.single().statusLabel)
+    assertEquals(BackgroundTaskDisplayStatus.Failed, tasks.single().displayStatus)
     assertFalse(tasks.single().isActive)
   }
 
@@ -108,6 +108,18 @@ class BackgroundTaskTest {
     val merged = mergeBackgroundTasks(listOf(running), listOf(finished))
 
     assertEquals("completed", merged.single().status)
+  }
+
+  @Test
+  fun finishedProtocolStatusesUseTheBinaryFailedPresentation() {
+    assertEquals(
+      BackgroundTaskDisplayStatus.Failed,
+      sampleTask(id = "cancelled", status = "cancelled", endedAtMs = 2000).displayStatus,
+    )
+    assertEquals(
+      BackgroundTaskDisplayStatus.Failed,
+      sampleTask(id = "timed-out", status = "timed_out", endedAtMs = 2000).displayStatus,
+    )
   }
 
   @Test

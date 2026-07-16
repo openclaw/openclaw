@@ -191,6 +191,55 @@ describe("background tasks rail state", () => {
     expect(props.taskDetails.get("task-1")?.terminalSummary).toBe("Finished in lookup");
   });
 
+  it("does not replace a newer detail snapshot with a stale list refresh", async () => {
+    const running = makeTask({ id: "task-1", status: "running", updatedAt: 2_000 });
+    const completed = makeTask({
+      id: "task-1",
+      status: "completed",
+      updatedAt: 3_000,
+      terminalSummary: "Finished in lookup",
+      prompt: "Review the task",
+    });
+    let listCall = 0;
+    let resolveActive: ((value: unknown) => void) | undefined;
+    let resolveRecent: ((value: unknown) => void) | undefined;
+    const active = new Promise<unknown>((resolve) => {
+      resolveActive = resolve;
+    });
+    const recent = new Promise<unknown>((resolve) => {
+      resolveRecent = resolve;
+    });
+    const { host } = createHost({
+      request: (method) => {
+        if (method === "tasks.get") {
+          return Promise.resolve({ task: completed });
+        }
+        listCall += 1;
+        if (listCall <= 2) {
+          return Promise.resolve({ tasks: [running] });
+        }
+        return listCall === 3 ? active : recent;
+      },
+    });
+    createBackgroundTasksProps(host, openSession);
+    await flushAsync();
+
+    createBackgroundTasksProps(host, openSession).onRefresh();
+    createBackgroundTasksProps(host, openSession).onToggleTask(running);
+    await flushAsync();
+    resolveActive?.({ tasks: [running] });
+    resolveRecent?.({ tasks: [running] });
+    await flushAsync();
+
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.tasks?.map((task) => [task.id, task.status])).toEqual([["task-1", "completed"]]);
+    expect(props.taskDetails.get("task-1")).toMatchObject({
+      status: "completed",
+      prompt: "Review the task",
+      terminalSummary: "Finished in lookup",
+    });
+  });
+
   it("does not resurrect a task deleted while its detail lookup is pending", async () => {
     const running = makeTask({ id: "task-1" });
     let resolveDetail: ((value: unknown) => void) | undefined;

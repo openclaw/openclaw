@@ -1734,6 +1734,13 @@ export const th: TranslationMap = {
     loading: "กำลังตรวจสอบสิทธิ์เข้าถึง AI ที่พร้อมใช้งานบน Gateway นี้…",
     retry: "ลองอีกครั้ง",
     checkAgain: "ตรวจสอบอีกครั้ง",
+    verify: {
+      title: "การเชื่อมต่อปัจจุบัน",
+      button: "ตรวจสอบการเชื่อมต่อ",
+      checking: "กำลังตรวจสอบ — กำลังขอให้ {modelRef} ตอบกลับสั้น ๆ…",
+      answered: "ตอบแล้ว",
+      answeredIn: "ตอบภายใน {latencyMs} มิลลิวินาที",
+    },
     access: {
       adminRequired: "การตั้งค่าโมเดลต้องมีสิทธิ์ operator.admin",
       gatewayTooOld: "Gateway กำลังใช้งาน OpenClaw เวอร์ชันเก่า",

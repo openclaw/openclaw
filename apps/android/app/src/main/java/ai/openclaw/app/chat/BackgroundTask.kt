@@ -32,13 +32,14 @@ data class BackgroundTask(
   val displayTitle: String
     get() = title?.trim()?.takeIf { it.isNotEmpty() } ?: id
 
-  val statusLabel: String
+  val displayStatus: BackgroundTaskDisplayStatus
     get() =
       when (status) {
-        "completed" -> "Completed"
-        "queued" -> "Queued"
-        "running" -> "Running"
-        else -> "Failed"
+        "queued" -> BackgroundTaskDisplayStatus.Queued
+        "running" -> BackgroundTaskDisplayStatus.Running
+        "completed" -> BackgroundTaskDisplayStatus.Completed
+        "failed", "cancelled", "timed_out" -> BackgroundTaskDisplayStatus.Failed
+        else -> BackgroundTaskDisplayStatus.Failed
       }
 
   val output: String?
@@ -54,6 +55,13 @@ data class BackgroundTask(
 
   val activityAtMs: Long
     get() = updatedAtMs ?: endedAtMs ?: startedAtMs ?: createdAtMs ?: 0L
+}
+
+enum class BackgroundTaskDisplayStatus {
+  Queued,
+  Running,
+  Completed,
+  Failed,
 }
 
 internal fun parseBackgroundTasks(

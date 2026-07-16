@@ -1757,6 +1757,13 @@ export const vi: TranslationMap = {
     loading: "Đang kiểm tra quyền truy cập AI khả dụng trên Gateway này…",
     retry: "Thử lại",
     checkAgain: "Kiểm tra lại",
+    verify: {
+      title: "Kết nối hiện tại",
+      button: "Xác minh kết nối",
+      checking: "Đang kiểm tra — yêu cầu {modelRef} phản hồi nhanh…",
+      answered: "Đã phản hồi",
+      answeredIn: "Đã phản hồi sau {latencyMs} ms",
+    },
     access: {
       adminRequired: "Việc thiết lập mô hình yêu cầu quyền operator.admin.",
       gatewayTooOld: "Gateway đang chạy một phiên bản OpenClaw cũ hơn",

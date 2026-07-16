@@ -997,23 +997,6 @@ export const InboundDebounceSchema = z
   .strict()
   .optional();
 
-export const TranscribeAudioSchema = z
-  .object({
-    command: z.array(z.string()).superRefine((value, ctx) => {
-      const executable = value[0];
-      if (!isSafeExecutableValue(executable)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [0],
-          message: "expected safe executable name or path",
-        });
-      }
-    }),
-    timeoutSeconds: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
 export const HexColorSchema = z.string().regex(/^#?[0-9a-fA-F]{6}$/, "expected hex color (RRGGBB)");
 
 export const ExecutableTokenSchema = z

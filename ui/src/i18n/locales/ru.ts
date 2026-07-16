@@ -1766,6 +1766,13 @@ export const ru: TranslationMap = {
     loading: "Проверяем доступные способы доступа к ИИ на этом Gateway…",
     retry: "Повторить",
     checkAgain: "Проверить снова",
+    verify: {
+      title: "Текущее подключение",
+      button: "Проверить подключение",
+      checking: "Проверка — ожидаем быстрый ответ от {modelRef}…",
+      answered: "Ответ получен",
+      answeredIn: "Ответ получен за {latencyMs} мс",
+    },
     access: {
       adminRequired: "Для настройки модели требуется доступ operator.admin.",
       gatewayTooOld: "На Gateway установлена устаревшая версия OpenClaw",

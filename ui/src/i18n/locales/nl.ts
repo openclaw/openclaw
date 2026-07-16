@@ -1762,6 +1762,13 @@ export const nl: TranslationMap = {
     loading: "Deze Gateway controleren op beschikbare AI-toegang…",
     retry: "Opnieuw proberen",
     checkAgain: "Opnieuw controleren",
+    verify: {
+      title: "Huidige verbinding",
+      button: "Verbinding verifiëren",
+      checking: "Controleren — {modelRef} om een snel antwoord vragen…",
+      answered: "Beantwoord",
+      answeredIn: "Beantwoord in {latencyMs} ms",
+    },
     access: {
       adminRequired: "Voor modelinstellingen is operator.admin-toegang vereist.",
       gatewayTooOld: "De Gateway gebruikt een oudere versie van OpenClaw",

@@ -109,6 +109,18 @@ private struct MobileBackgroundTaskGetParams: Encodable {
 }
 
 enum MobileBackgroundTaskList {
+    @MainActor
+    static func load(
+        request: (_ status: [String], _ limit: Int) async throws -> [MobileBackgroundTask]) async throws
+        -> [MobileBackgroundTask]
+    {
+        // Active first, terminal second: a monotonic active-to-terminal transition
+        // is then present in at least one snapshot instead of falling between calls.
+        let active = try await request(["queued", "running"], 200)
+        let finished = try await request(["completed", "failed", "cancelled", "timed_out"], 100)
+        return self.merge(recent: finished, active: active)
+    }
+
     static func merge(
         recent: [MobileBackgroundTask],
         active: [MobileBackgroundTask]) -> [MobileBackgroundTask]
@@ -271,12 +283,9 @@ struct BackgroundTasksScreen: View {
         self.loading = true
         self.errorMessage = nil
         do {
-            async let activeTasks = self.requestTasks(status: ["queued", "running"], limit: 200)
-            async let finishedTasks = self.requestTasks(
-                status: ["completed", "failed", "cancelled", "timed_out"],
-                limit: 100)
-            let (active, finished) = try await (activeTasks, finishedTasks)
-            self.tasks = MobileBackgroundTaskList.merge(recent: finished, active: active)
+            self.tasks = try await MobileBackgroundTaskList.load { status, limit in
+                try await self.requestTasks(status: status, limit: limit)
+            }
         } catch {
             self.errorMessage = error.localizedDescription
         }

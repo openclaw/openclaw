@@ -136,7 +136,10 @@ function loadBackgroundTasks(
       if (current !== state || current.requestId !== requestId) {
         return;
       }
-      current.tasks = mergeTaskLists(recent, active);
+      const merged = mergeTaskLists(recent, active);
+      current.tasks = sortTasks(
+        merged.map((task) => newestTaskSnapshot(task, current.taskDetails.get(task.id))),
+      );
       current.loadedClient = client;
     } catch (error) {
       const current = getBackgroundTasksState(host);

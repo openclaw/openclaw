@@ -1820,7 +1820,9 @@ jobs:
             runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            runner: blacksmith-4vcpu-ubuntu-2404
+            # Concurrent Knip scans need cores and memory headroom; the wall
+            # clock roughly halves for similar billed core-minutes.
+            runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             # Slowest static lane (~3.5min on 4 vCPU); extra cores shorten the
@@ -1923,12 +1925,36 @@ jobs:
             dependencies)
               if has_package_script "deadcode:dependencies" &&
                 has_package_script "deadcode:unused-files"; then
-                pnpm deadcode:dependencies
-                pnpm deadcode:unused-files
+                # The three deadcode scripts spawn independent Knip scans over
+                # separate configs; run them concurrently (with buffered logs
+                # so output stays readable) instead of paying ~3 minutes of
+                # serial scanning.
+                dc_scripts=(deadcode:dependencies deadcode:unused-files)
                 if has_package_script "deadcode:exports"; then
-                  pnpm deadcode:exports
+                  dc_scripts+=(deadcode:exports)
                 elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                   echo "Current CI targets must provide the deadcode:exports package script." >&2
+                  exit 1
+                fi
+                dc_pids=()
+                dc_logs=()
+                for dc in "${dc_scripts[@]}"; do
+                  dc_log="$(mktemp -t deadcode-log.XXXXXX)"
+                  dc_logs+=("$dc_log")
+                  pnpm "$dc" >"$dc_log" 2>&1 &
+                  dc_pids+=($!)
+                done
+                dc_failures=0
+                for i in "${!dc_scripts[@]}"; do
+                  if wait "${dc_pids[$i]}"; then
+                    echo "[ok] ${dc_scripts[$i]}"
+                  else
+                    echo "::error title=${dc_scripts[$i]} failed::${dc_scripts[$i]} failed"
+                    dc_failures=1
+                  fi
+                  cat "${dc_logs[$i]}"
+                done
+                if [ "$dc_failures" -ne 0 ]; then
                   exit 1
                 fi
               elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
