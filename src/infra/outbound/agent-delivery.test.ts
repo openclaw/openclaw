@@ -769,7 +769,7 @@ describe("agent delivery helpers", () => {
       channel: "telegram",
       input: "current",
       accountId: "work",
-      unknownTargetMode: "error",
+      unknownTargetMode: "normalized",
       plugin: {
         messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
       },
@@ -825,7 +825,7 @@ describe("agent delivery helpers", () => {
       channel: "telegram",
       input: "current",
       accountId: undefined,
-      unknownTargetMode: "error",
+      unknownTargetMode: "normalized",
       plugin: {
         messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
       },

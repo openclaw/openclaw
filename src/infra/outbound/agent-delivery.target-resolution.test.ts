@@ -87,7 +87,10 @@ describe("agent delivery target resolution", () => {
 
   it("resolves named targets through the shared directory resolver", async () => {
     const plugin = {
-      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
+      messaging: {
+        resolveOutboundSessionRoute: vi.fn(),
+        targetResolver: { resolveTarget: vi.fn() },
+      },
     };
     mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:general" });
@@ -125,7 +128,10 @@ describe("agent delivery target resolution", () => {
   it("rejects named targets when directory and plugin resolution miss", async () => {
     const targetError = new Error('Unknown target "channel:missing"');
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      messaging: { resolveOutboundSessionRoute: vi.fn(), targetResolver: {} },
+      messaging: {
+        resolveOutboundSessionRoute: vi.fn(),
+        targetResolver: { resolveTarget: vi.fn() },
+      },
     });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:missing" });
     mocks.resolveChannelTarget.mockResolvedValue({ ok: false, error: targetError });
@@ -144,7 +150,7 @@ describe("agent delivery target resolution", () => {
   });
 
   it("resolves plugin default targets before returning the delivery plan", async () => {
-    const plugin = { messaging: { targetResolver: {} } };
+    const plugin = { messaging: { targetResolver: { resolveTarget: vi.fn() } } };
     mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "channel:default-room" });
     mocks.resolveChannelTarget.mockResolvedValue({
@@ -213,5 +219,44 @@ describe("agent delivery target resolution", () => {
       plugin,
     });
     expect(plan.resolvedTo).toBe("some-channel");
+  });
+
+  it("preserves normalized fallback for heuristic-only target resolvers", async () => {
+    const plugin = {
+      messaging: {
+        resolveOutboundSessionRoute: vi.fn(),
+        targetResolver: { looksLikeId: vi.fn() },
+      },
+    };
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "some-channel" });
+    mocks.resolveChannelTarget.mockResolvedValue({
+      ok: true,
+      target: {
+        to: "some-channel",
+        kind: "group",
+        source: "normalized",
+        resolutionSource: "normalized",
+      },
+    });
+
+    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "agent",
+      requestedChannel: "workspace",
+      explicitTo: "some-channel",
+      wantsDelivery: true,
+    });
+
+    expect(mocks.resolveChannelTarget).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "workspace",
+      input: "some-channel",
+      accountId: undefined,
+      unknownTargetMode: "normalized",
+      plugin,
+    });
+    expect(plan.resolvedTo).toBe("some-channel");
+    expect(plan.targetResolutionError).toBeUndefined();
   });
 });

@@ -187,6 +187,9 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   }
   const hasPluginSessionRoute = Boolean(plugin?.messaging?.resolveOutboundSessionRoute);
   const hasPluginTargetResolver = Boolean(plugin?.messaging?.targetResolver);
+  // Only concrete plugin resolution makes a directory miss authoritative.
+  // Heuristic-only resolvers preserve the shipped normalized fallback.
+  const hasPluginConcreteTargetResolver = Boolean(plugin?.messaging?.targetResolver?.resolveTarget);
   if (
     !hasPluginSessionRoute &&
     !hasPluginTargetResolver &&
@@ -219,7 +222,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     channel: resolvedChannel as ChannelId,
     input: targetInput,
     accountId: routedPlan.resolvedAccountId,
-    unknownTargetMode: hasPluginTargetResolver ? "error" : "normalized",
+    unknownTargetMode: hasPluginConcreteTargetResolver ? "error" : "normalized",
     plugin,
   });
   if (!resolvedTarget.ok) {
