@@ -316,6 +316,10 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/control-ui-i18n.test.ts", "src/scripts/control-ui-i18n.test.ts"],
     });
+    expect(resolveChangedTestTargetPlan(["scripts/control-ui-i18n-resolve-conflicts.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/control-ui-i18n.test.ts"],
+    });
   });
 
   it("routes top-level scripts through conventional owner tests", () => {

@@ -300,7 +300,10 @@ const CONTROLLER_SOURCE = String.raw`
   }
   const api = Object.freeze({
     list: async (prefix = "") => {
-      const normalizedPrefix = prefix == null || String(prefix).trim() === "" ? "" : normalizeApiPath(prefix);
+      // list takes a directory prefix, so tolerate a trailing slash (API.list("mcp/"))
+      // that read's exact-path normalizer would otherwise reject as an empty segment.
+      const rawPrefix = prefix == null ? "" : String(prefix).trim().replace(/\/+$/, "");
+      const normalizedPrefix = rawPrefix === "" ? "" : normalizeApiPath(rawPrefix);
       const files = [...apiFileMap.values()]
         .filter((file) => !normalizedPrefix || file.path === normalizedPrefix || file.path.startsWith(normalizedPrefix.replace(/\/?$/, "/")))
         .map((file) => Object.freeze({

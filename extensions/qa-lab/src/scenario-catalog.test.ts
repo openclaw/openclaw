@@ -284,6 +284,7 @@ describe("qa scenario catalog", () => {
 
   it("routes Docker runtime scenarios through the shared lane adapter", () => {
     const scenarioLanes = [
+      ["codex-plugin-cold-install", "codex-on-demand"],
       ["openai-compatible-chat-tools", "openai-chat-tools"],
       ["openai-web-search-minimal", "openai-web-search-minimal"],
       ["openwebui-openai-compatible", "openwebui"],
@@ -326,7 +327,6 @@ describe("qa scenario catalog", () => {
         "auth-profile-codex-mixed-profiles",
         "auth-profile-doctor-migration-safety",
         "codex-plugin-cold-install",
-        "codex-plugin-install-race",
         "codex-plugin-pinned-new",
         "codex-plugin-pinned-old",
         "plugin-manifest-contract-health",
@@ -562,17 +562,21 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
-  it("loads the Codex plugin lifecycle fixture scenarios into the standard runtime tier", () => {
-    const scenarioIds = [
-      "codex-plugin-cold-install",
-      "codex-plugin-install-race",
+  it("loads Codex plugin lifecycle scenarios into the standard runtime tier", () => {
+    const coldInstall = readQaScenarioById("codex-plugin-cold-install");
+    expect(coldInstall.runtimeParityTier).toBe("standard");
+    expect(coldInstall.coverage?.primary).toContain("runtime.codex-plugin.lifecycle");
+    expect(coldInstall.coverage?.secondary).toBeUndefined();
+    expect(coldInstall.execution.kind).toBe("script");
+
+    const fixtureScenarioIds = [
       "codex-plugin-pinned-old",
       "codex-plugin-pinned-new",
       "auth-profile-codex-mixed-profiles",
       "auth-profile-doctor-migration-safety",
     ];
 
-    for (const scenarioId of scenarioIds) {
+    for (const scenarioId of fixtureScenarioIds) {
       const scenario = readQaScenarioById(scenarioId);
       expect(scenario.runtimeParityTier).toBe("standard");
       expect(scenario.coverage?.primary.length).toBeGreaterThan(0);

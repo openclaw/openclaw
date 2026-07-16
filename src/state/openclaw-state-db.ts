@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -180,7 +181,10 @@ export function assertOpenClawStateDatabaseForMaintenance(
 const stateDbLog = createSubsystemLogger("state/db");
 
 /** Targets already warned about, so chmod-less filesystems warn once per path. */
-const chmodWarnedTargets = new Set<string>();
+const chmodWarnedTargets = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 
 // Permission hardening is best-effort only on filesystems that cannot apply
 // it: the database stays usable without the chmod, and crashing at open would
@@ -188,10 +192,9 @@ const chmodWarnedTargets = new Set<string>();
 // chmod failures still throw so credentials-adjacent hardening stays loud.
 function bestEffortChmodSync(target: string, mode: number): void {
   const result = applyPrivateModeSync(target, mode);
-  if (result.applied || chmodWarnedTargets.has(target)) {
+  if (result.applied || chmodWarnedTargets.check(target)) {
     return;
   }
-  chmodWarnedTargets.add(target);
   stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
 }
 

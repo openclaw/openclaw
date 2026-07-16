@@ -7,6 +7,12 @@ import { pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
+  isControlUiGeneratedI18nConflictPath,
+  isControlUiGeneratedI18nPath,
+  mergeControlUiTranslationMemory,
+  resolveControlUiGeneratedConflict,
+} from "../../scripts/control-ui-i18n-resolve-conflicts.ts";
+import {
   analyzeControlUiCatalogs,
   assertScopedCatalogFallbackUpdate,
   flattenControlUiCatalog,
@@ -59,6 +65,111 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("recognizes only generated conflict paths", () => {
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/catalog-fallbacks.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/raw-copy-baseline.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/de.meta.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/de.tm.jsonl")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/de.ts")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/glossary.de.json")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en.ts")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en-agents.ts")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/unknown.ts")).toBe(false);
+    expect(
+      isControlUiGeneratedI18nConflictPath("ui/src/i18n/locales/removed.ts", [
+        "// Generated locale bundle for Control UI translations.\nexport const removed = {};\n",
+        null,
+      ]),
+    ).toBe(true);
+    expect(
+      isControlUiGeneratedI18nConflictPath("ui/src/i18n/locales/en-agents.ts", [
+        "// Agent-specific English strings stay split from the oversized source locale.\n",
+      ]),
+    ).toBe(false);
+  });
+
+  it("uses the replayed entry when both sides change the same cache key", () => {
+    const base = [{ cache_key: "shared", translated: "base" }];
+    const ours = [
+      { cache_key: "b", translated: "upstream-only" },
+      { cache_key: "shared", translated: "upstream" },
+    ];
+    const theirs = [
+      { cache_key: "a", translated: "branch-only" },
+      { cache_key: "shared", translated: "branch" },
+    ];
+    const merged = mergeControlUiTranslationMemory(
+      `${base.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      `${ours.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      `${theirs.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { cache_key: string; translated: string });
+
+    expect(merged).toEqual([
+      { cache_key: "a", translated: "branch-only" },
+      { cache_key: "b", translated: "upstream-only" },
+      { cache_key: "shared", translated: "branch" },
+    ]);
+  });
+
+  it("preserves one-sided translation-memory changes and deletions", () => {
+    const base = [
+      { cache_key: "branch-change", translated: "base" },
+      { cache_key: "branch-delete", translated: "base" },
+      { cache_key: "upstream-change", translated: "base" },
+      { cache_key: "upstream-delete", translated: "base" },
+    ];
+    const ours = [
+      { cache_key: "branch-change", translated: "base" },
+      { cache_key: "branch-delete", translated: "base" },
+      { cache_key: "upstream-add", translated: "upstream" },
+      { cache_key: "upstream-change", translated: "upstream" },
+    ];
+    const theirs = [
+      { cache_key: "branch-add", translated: "branch" },
+      { cache_key: "branch-change", translated: "branch" },
+      { cache_key: "upstream-change", translated: "base" },
+      { cache_key: "upstream-delete", translated: "base" },
+    ];
+    const encode = (entries: Array<{ cache_key: string; translated: string }>) =>
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+    const merged = mergeControlUiTranslationMemory(encode(base), encode(ours), encode(theirs))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { cache_key: string; translated: string });
+
+    expect(merged).toEqual([
+      { cache_key: "branch-add", translated: "branch" },
+      { cache_key: "branch-change", translated: "branch" },
+      { cache_key: "upstream-add", translated: "upstream" },
+      { cache_key: "upstream-change", translated: "upstream" },
+    ]);
+  });
+
+  it("preserves replayed-side generated-file deletion before regeneration", () => {
+    expect(
+      resolveControlUiGeneratedConflict(
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+        '{"cache_key":"stale"}\n',
+        '{"cache_key":"stale"}\n',
+        null,
+      ),
+    ).toBeNull();
+  });
+
+  it("preserves stage-2 translation-memory deletion when no records survive", () => {
+    expect(
+      resolveControlUiGeneratedConflict(
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+        '{"cache_key":"a"}\n{"cache_key":"b"}\n',
+        null,
+        '{"cache_key":"a"}\n',
+      ),
+    ).toBeNull();
+  });
+
   it("builds a deterministic fallback list without accepting catalog drift", () => {
     const source = flattenControlUiCatalog(
       { group: { first: "First {count}", second: "Second" } },
