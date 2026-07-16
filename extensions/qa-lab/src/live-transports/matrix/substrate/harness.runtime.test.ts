@@ -244,8 +244,49 @@ describe("matrix harness runtime", () => {
       testing.isMatrixVersionsReachable("http://127.0.0.1:28008/", fetchImpl),
     ).resolves.toBe(true);
 
-    expect(fetchImpl).toHaveBeenCalledWith("http://127.0.0.1:28008/_matrix/client/versions");
+    expect(fetchImpl).toHaveBeenCalledWith("http://127.0.0.1:28008/_matrix/client/versions", {
+      signal: expect.any(AbortSignal),
+    });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a stalled versions probe by the remaining discovery deadline", async () => {
+    let probeSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(
+      async (_input: string, init?: Pick<RequestInit, "signal">) =>
+        await new Promise<never>((_resolve, reject) => {
+          probeSignal = init?.signal ?? undefined;
+          if (!probeSignal) {
+            reject(new Error("versions probe signal missing"));
+            return;
+          }
+          const rejectAborted = () => reject(new Error("versions probe aborted"));
+          if (probeSignal.aborted) {
+            rejectAborted();
+            return;
+          }
+          probeSignal.addEventListener("abort", rejectAborted, { once: true });
+        }),
+    );
+    const sleepImpl = vi.fn(async () => {});
+    const startedAt = Date.now();
+
+    await expect(
+      testing.waitForReachableMatrixBaseUrl({
+        composeFile: "/tmp/docker-compose.matrix-qa.yml",
+        containerBaseUrl: null,
+        fetchImpl,
+        hostBaseUrl: "http://127.0.0.1:28008/",
+        sleepImpl,
+        timeoutMs: 25,
+        pollMs: 1_000,
+      }),
+    ).rejects.toThrow("did not become healthy");
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(probeSignal?.aborted).toBe(true);
+    expect(sleepImpl).not.toHaveBeenCalled();
   });
 
   it("falls back to the container IP when the host port is unreachable", async () => {
