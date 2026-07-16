@@ -1,6 +1,6 @@
 export type ProfileId = "smoke" | "default" | "large";
 
-type ProfileConfig = {
+export type ProfileConfig = {
   iterations: number;
   maxWalBytes: number;
   payloadBytes: number;
@@ -18,7 +18,7 @@ export type CliOptions = {
   stateDir: string | null;
 };
 
-type ReliabilityStateProof = {
+export type ReliabilityStateProof = {
   batches: number;
   rows: number;
   sha256: string;

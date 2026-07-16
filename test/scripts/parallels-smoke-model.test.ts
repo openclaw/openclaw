@@ -421,7 +421,8 @@ describe("Parallels smoke model selection", () => {
 
     expect(common).toContain('export * from "./host-command.ts"');
     expect(common).toContain('export * from "./lane-runner.ts"');
-    expect(common).toContain('export * from "./package-artifact.ts"');
+    expect(common).toContain("  packOpenClaw,");
+    expect(common).toContain('} from "./package-artifact.ts"');
     expect(common).toContain('export * from "./parallels-vm.ts"');
     expect(common).toContain('export * from "./snapshots.ts"');
     expect(hostCommand).toContain("export function shellQuote");
