@@ -1,4 +1,4 @@
-// Imessage tests cover monitor provider.echo cache plugin behavior.
+// Imessage test support covers monitor provider.echo cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createIMessagePluginStateSyncStoreForTest,

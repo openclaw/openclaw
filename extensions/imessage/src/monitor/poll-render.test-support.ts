@@ -1,3 +1,4 @@
+// Imessage test support covers poll rendering.
 import { describe, expect, it } from "vitest";
 import { renderIMessagePollBody } from "./poll-render.js";
 

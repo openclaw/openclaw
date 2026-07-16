@@ -9,12 +9,6 @@ type InboundProcessingModule = typeof import("./monitor/inbound-processing.js");
 let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 
-beforeEach(async () => {
-  await loadFreshIMessageReplyCacheForTest();
-  ({ buildIMessageInboundContext, resolveIMessageInboundDecision } =
-    await import("./monitor/inbound-processing.js"));
-});
-
 function baseCfg(): OpenClawConfig {
   return {
     channels: {
@@ -111,6 +105,12 @@ async function buildDispatchContextPayload(params: {
 }
 
 describe("imessage monitor gating + envelope builders", () => {
+  beforeEach(async () => {
+    await loadFreshIMessageReplyCacheForTest();
+    ({ buildIMessageInboundContext, resolveIMessageInboundDecision } =
+      await import("./monitor/inbound-processing.js"));
+  });
+
   it("parseIMessageNotification rejects malformed payloads", async () => {
     expect(
       parseIMessageNotification({

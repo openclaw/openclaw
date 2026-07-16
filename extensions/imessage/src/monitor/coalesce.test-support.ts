@@ -1,4 +1,4 @@
-// Imessage tests cover coalesce plugin behavior.
+// Imessage test support covers coalesce plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   combineIMessagePayloads,

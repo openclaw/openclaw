@@ -1,4 +1,4 @@
-// Covers the poll-comment folder: a native poll's caption is an inline reply to
+// Test support covers the poll-comment folder: a native poll's caption is an inline reply to
 // the poll balloon (its reply_to_guid == the poll's guid) that lands WITH the
 // poll, and must be folded (dropped) rather than delivered as a standalone
 // message the agent answers in prose. A deliberate later reply, or a different

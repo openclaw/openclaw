@@ -1,4 +1,4 @@
-// Imessage tests cover sanitize outbound plugin behavior.
+// Imessage test support covers sanitize outbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 

@@ -1,4 +1,4 @@
-// Imessage tests cover monitor.shutdown.unhandled rejection plugin behavior.
+// Imessage test support covers monitor.shutdown.unhandled rejection plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
 

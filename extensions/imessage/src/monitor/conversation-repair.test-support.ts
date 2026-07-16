@@ -1,4 +1,4 @@
-// Imessage tests cover conversation repair plugin behavior.
+// Imessage test support covers conversation repair plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import type { IMessagePayload } from "./types.js";

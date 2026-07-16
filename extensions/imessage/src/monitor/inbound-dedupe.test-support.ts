@@ -1,4 +1,4 @@
-// Imessage tests cover inbound dedupe + stale-backlog age fence behavior.
+// Imessage test support covers inbound dedupe + stale-backlog age fence behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildIMessageInboundReplayKey,

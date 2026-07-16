@@ -8,12 +8,12 @@ import {
 let accountSequence = 0;
 let accountId = "";
 
-beforeEach(() => {
-  accountSequence += 1;
-  accountId = `test-${accountSequence}`;
-});
-
 describe("warnGroupAllowlistMisconfigOnce", () => {
+  beforeEach(() => {
+    accountSequence += 1;
+    accountId = `test-${accountSequence}`;
+  });
+
   it("fires when groupPolicy=allowlist has no effective groupAllowFrom", () => {
     const messages: string[] = [];
     const fired = warnGroupAllowlistMisconfigOnce({
@@ -105,6 +105,11 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
 });
 
 describe("warnGroupAllowlistDropPerChatOnce", () => {
+  beforeEach(() => {
+    accountSequence += 1;
+    accountId = `test-${accountSequence}`;
+  });
+
   it("fires once per accountId:chat_id pair", () => {
     const messages: string[] = [];
     const log = (m: string) => messages.push(m);

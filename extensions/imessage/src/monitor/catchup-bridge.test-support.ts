@@ -1,4 +1,4 @@
-// Imessage tests cover catchup bridge plugin behavior.
+// Imessage test support covers catchup bridge plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";

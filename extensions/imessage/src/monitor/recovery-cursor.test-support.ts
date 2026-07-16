@@ -1,4 +1,4 @@
-// Imessage tests cover the downtime-recovery cursor.
+// Imessage test support covers the downtime-recovery cursor.
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";

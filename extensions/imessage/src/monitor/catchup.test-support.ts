@@ -16,10 +16,6 @@ import {
   type IMessageCatchupRow,
 } from "./catchup.js";
 
-beforeEach(() => {
-  installIMessageStateRuntimeForTest();
-});
-
 function openCatchupCursorStore() {
   return getIMessageRuntime().state.openSyncKeyedStore<IMessageCatchupCursor>({
     namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
@@ -42,6 +38,10 @@ async function saveIMessageCatchupCursor(
 }
 
 describe("resolveCatchupConfig", () => {
+  beforeEach(() => {
+    installIMessageStateRuntimeForTest();
+  });
+
   it("falls back to defaults when raw is undefined", () => {
     const cfg = resolveCatchupConfig(undefined);
     expect(cfg.enabled).toBe(false);
@@ -79,6 +79,10 @@ describe("resolveCatchupConfig", () => {
 });
 
 describe("advanceIMessageCatchupCursor", () => {
+  beforeEach(() => {
+    installIMessageStateRuntimeForTest();
+  });
+
   it("advances monotonically from a live-handled row and preserves given-up retry state", async () => {
     const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
     await saveIMessageCatchupCursor("primary", {
@@ -160,6 +164,10 @@ describe("advanceIMessageCatchupCursor", () => {
 });
 
 describe("capFailureRetriesMap", () => {
+  beforeEach(() => {
+    installIMessageStateRuntimeForTest();
+  });
+
   it("is identity below the cap", () => {
     const map = { a: 1, b: 2 };
     expect(capFailureRetriesMap(map, 10)).toEqual({ a: 1, b: 2 });
@@ -185,6 +193,10 @@ describe("capFailureRetriesMap", () => {
 });
 
 describe("performIMessageCatchup", () => {
+  beforeEach(() => {
+    installIMessageStateRuntimeForTest();
+  });
+
   const config = resolveCatchupConfig({ enabled: true });
   const now = 1_700_001_000_000; // arbitrary fixed clock
 

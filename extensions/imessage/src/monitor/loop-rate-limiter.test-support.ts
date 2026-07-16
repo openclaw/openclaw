@@ -1,4 +1,4 @@
-// Imessage tests cover loop rate limiter plugin behavior.
+// Imessage test support covers loop rate limiter plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 
