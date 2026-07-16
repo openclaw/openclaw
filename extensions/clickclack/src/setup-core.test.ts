@@ -128,11 +128,11 @@ describe("ClickClack setup adapter", () => {
 
   it("rejects conflicting credentials before claiming a setup code", async () => {
     for (const input of [
-      { code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example", token: "ccb_old" },
+      { code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example", token: "test-token" },
       {
         code: "ABCD-EFGH-JKMN",
         baseUrl: "https://clickclack.example",
-        tokenFile: "/run/secrets/clickclack",
+        tokenFile: "test-token-file",
       },
       { code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example", useEnv: true },
     ]) {
@@ -176,6 +176,35 @@ describe("ClickClack setup adapter", () => {
     await expect(
       prepare({ code: "ABCD-EFGH-JKMN", baseUrl: "https://clickclack.example" }),
     ).rejects.toThrow("Too many ClickClack setup code attempts");
+  });
+
+  it("writes setup-code defaults through the existing account patch", () => {
+    expect(
+      clickClackSetupAdapter.applyAccountConfig({
+        cfg: {},
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          token: "test-token",
+          baseUrl: "https://clickclack.example",
+          workspace: "wsp_1",
+          defaultTo: " channel:general ",
+          allowFrom: ["*"],
+          agentActivity: true,
+        },
+      }),
+    ).toEqual({
+      channels: {
+        clickclack: {
+          enabled: true,
+          token: "test-token",
+          baseUrl: "https://clickclack.example",
+          workspace: "wsp_1",
+          defaultTo: "channel:general",
+          allowFrom: ["*"],
+          agentActivity: true,
+        },
+      },
+    });
   });
 
   it("requires token, base URL, and workspace for explicit setup", () => {
@@ -262,9 +291,6 @@ describe("ClickClack setup adapter", () => {
           token: "ccb_default",
           baseUrl: "https://clickclack.example/",
           workspace: " default ",
-          defaultTo: " channel:general ",
-          allowFrom: ["*"],
-          agentActivity: true,
         },
       }),
     ).toEqual({
@@ -275,9 +301,6 @@ describe("ClickClack setup adapter", () => {
           token: "ccb_default",
           baseUrl: "https://clickclack.example",
           workspace: "default",
-          defaultTo: "channel:general",
-          allowFrom: ["*"],
-          agentActivity: true,
         },
       },
     });
