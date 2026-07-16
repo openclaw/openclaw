@@ -1,7 +1,7 @@
 name: PR Cache Cleanup
 
 on:
-  pull_request_target:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base workflow only; no checkout or untrusted PR code execution
     types: [closed]
 
 permissions:
