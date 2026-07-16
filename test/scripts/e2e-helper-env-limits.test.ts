@@ -253,6 +253,33 @@ describe("e2e helper numeric env limits", () => {
     expect(canceled).toBe(true);
   });
 
+  it("keeps Open WebUI HTTP probe cleanup within the probe deadline", async () => {
+    const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
+    let cancelCalled = false;
+    const fetchImpl = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            cancelCalled = true;
+            return new Promise(() => {});
+          },
+        }),
+        { status: 200 },
+      )) as typeof fetch;
+
+    const startedAt = Date.now();
+    await expect(
+      probeHttpStatus({
+        fetchImpl,
+        timeoutMs: 25,
+        url: "http://127.0.0.1/probe",
+      }),
+    ).resolves.toBe(true);
+
+    expect(cancelCalled).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
   it("clamps oversized Open WebUI HTTP probe timers before scheduling", async () => {
     const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
     const fetchImpl = (async (_url: string, init: RequestInit) => {

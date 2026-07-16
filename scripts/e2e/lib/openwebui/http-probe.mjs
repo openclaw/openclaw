@@ -16,6 +16,22 @@ function resolveTimerTimeoutMs(valueMs, fallbackMs) {
   return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
+async function awaitCancellationBeforeDeadline(cancel, signal) {
+  if (!cancel) {
+    return;
+  }
+  const cancellation = Promise.resolve().then(cancel).catch(() => undefined);
+  if (signal.aborted) {
+    return;
+  }
+  await Promise.race([
+    cancellation,
+    new Promise((resolve) => {
+      signal.addEventListener("abort", resolve, { once: true });
+    }),
+  ]);
+}
+
 export async function probeHttpStatus({
   url,
   expectedRaw = "200",
@@ -42,8 +58,11 @@ export async function probeHttpStatus({
       ? Boolean(res && res.status < 500)
       : res?.status === expectedStatus;
   } finally {
-    clearTimeout(timer);
-    await res?.body?.cancel?.().catch(() => undefined);
+    try {
+      await awaitCancellationBeforeDeadline(res?.body?.cancel?.bind(res.body), controller.signal);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
