@@ -306,18 +306,20 @@ describe("runDetachedWebhookWork", () => {
     const { runWithGatewayHttpWorkAdmission } =
       await import("../gateway/server/http-work-admission.js");
     const order: string[] = [];
-    let detached: Promise<void> | null = null;
+    const detached: Promise<void>[] = [];
 
     await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
-      detached = runDetachedWebhookWork(async () => {
-        order.push("work");
-      });
+      detached.push(
+        runDetachedWebhookWork(async () => {
+          order.push("work");
+        }),
+      );
       order.push("ack");
       expect(order).toEqual(["ack"]);
       return true;
     });
 
-    await detached;
+    await Promise.all(detached);
     expect(order).toEqual(["ack", "work"]);
   });
 
