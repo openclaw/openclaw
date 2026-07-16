@@ -127,6 +127,50 @@ describe("executeChannelApi", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("clears the request deadline when guarded fetch fails before headers", async () => {
+    vi.useFakeTimers();
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("offline"));
+
+    const result = await executeChannelApi(
+      { method: "GET", path: "/guilds/123/channels" },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toEqual({
+      error: "Network error: offline",
+      path: "/guilds/123/channels",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not label an unrelated body abort as a request timeout", async () => {
+    const release = vi.fn(async () => {});
+    const bodyError = new Error("upstream body aborted");
+    bodyError.name = "AbortError";
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(bodyError);
+          },
+        }),
+        { status: 200 },
+      ),
+      release,
+    });
+
+    const result = await executeChannelApi(
+      { method: "GET", path: "/guilds/123/channels" },
+      { accessToken: "token-1" },
+    );
+
+    expect(result.details).toEqual({
+      error: "upstream body aborted",
+      path: "/guilds/123/channels",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks guild listing when qqbot groups are scoped", async () => {
     const result = await executeChannelApi(
       { method: "GET", path: "/users/@me/guilds" },
