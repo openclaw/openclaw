@@ -375,8 +375,24 @@ describe("chat page split layout host", () => {
       [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
     expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
 
+    // Rows arrive under the canonical agent key while the route still says
+    // "main"; hello-default resolution plus equivalence matching must find
+    // the label anyway — including non-default agent ids.
+    (page as unknown as { context: { gateway?: unknown; sessions: unknown } }).context.gateway = {
+      snapshot: {
+        hello: {
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "dev",
+              mainKey: "main",
+              mainSessionKey: "agent:dev:main",
+            },
+          },
+        },
+      },
+    };
     sessionsState.result = {
-      sessions: [{ key: "main", displayName: "Main desk" }],
+      sessions: [{ key: "agent:dev:main", displayName: "Main desk" }],
     };
     notify();
     await page.updateComplete;

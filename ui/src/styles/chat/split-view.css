@@ -246,6 +246,18 @@ openclaw-chat-pane {
   }
 }
 
+/* Plain web with the nav collapsed: the floating sidebar-expand pill
+   (.shell-nav-expand, fixed 10px/10px, 32px wide) overlays the first pane
+   header's left edge; 52px clears it so the session title stays readable.
+   Native shells below reserve larger insets for their own window chrome. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .chat-pane__header {
+  padding-left: 52px;
+}
+
 /* Native macOS: with the nav column collapsed the top-left pane header is the
    window's top surface, so its content shifts right of the floating window
    chrome (Safari-style) instead of hiding under it. Traffic lights end at
