@@ -56,6 +56,17 @@ describe("Anthropic plugin manifest", () => {
     });
   });
 
+  it("declares GA 1M context window for opus-4-7 / sonnet-4-6 / opus-4-6 (issue #108152)", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {
+      expect(models.find((model) => model.id === id)?.contextWindow).toBe(1_048_576);
+    }
+    const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
+    for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {
+      expect(cliModels.find((model) => model.id === id)?.contextWindow).toBe(1_048_576);
+    }
+  });
+
   it("resolves both official Claude Haiku 4.5 API identifiers from the static catalog", () => {
     expect(manifest.modelCatalog?.discovery?.anthropic).toBe("static");
 
