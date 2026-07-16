@@ -1080,5 +1080,59 @@ describe("qa test file scenario runner", () => {
     expect(artifactPath).toBe(path.normalize(externalArtifact));
     expect(artifactPath?.includes("..")).toBe(false);
   });
+
+  it("imports the standalone UX Matrix producer as coverage-free infrastructure", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-ux-matrix-producer-"));
+    tempRoots.push(outputDir);
+    // The runner accepts scenario-shaped execution input, but this test fixture is not cataloged
+    // and deliberately carries no product taxonomy coverage.
+    const infrastructureFixture: QaSeedScenarioWithSource = {
+      id: "scenario-script",
+      title: "UX Matrix producer infrastructure fixture",
+      surface: "qa-lab",
+      objective: "Exercise the standalone UX Matrix evidence producer through the script runner.",
+      successCriteria: ["The runner imports the producer's structured evidence bundle."],
+      codeRefs: ["scripts/qa/ux-matrix-evidence-producer.ts"],
+      sourcePath: "test/scripts/qa-ux-matrix-evidence-producer.test.ts",
+      execution: {
+        kind: "script",
+        path: "scripts/qa/ux-matrix-evidence-producer.ts",
+        allowBlockedEvidence: true,
+        args: ["--artifact-base", "${outputDir}", "--skip-visual-proof"],
+      },
+    };
+
+    const result = await runQaTestFileScenarios({
+      repoRoot: process.cwd(),
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [infrastructureFixture],
+      env: { OPENCLAW_QA_REF: "infrastructure-fixture" } as NodeJS.ProcessEnv,
+    });
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+    );
+
+    expect(result.executionKind).toBe("script");
+    expect(result.results[0]).toMatchObject({ status: "pass" });
+    expect(result.results[0]?.producerEvidence?.entries).toHaveLength(3);
+    expect(evidence.entries.map((entry) => entry.test.id)).toEqual([
+      "ux-matrix.qa-lab.producer-artifact-fixture",
+      "ux-matrix.control-ui.screenshot-artifact",
+      "ux-matrix.cli.entrypoint-help",
+    ]);
+    expect(evidence.entries.every((entry) => entry.coverage.length === 0)).toBe(true);
+    expect(
+      evidence.entries.flatMap(
+        (entry) => entry.execution?.artifacts.map((artifact) => artifact.kind) ?? [],
+      ),
+    ).toEqual(expect.arrayContaining(["html", "log"]));
+    expect(
+      evidence.entries
+        .flatMap((entry) => entry.execution?.artifacts.map((artifact) => artifact.path) ?? [])
+        .some((artifactPath) => artifactPath.includes(path.join(outputDir, "scenario-script"))),
+    ).toBe(true);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
