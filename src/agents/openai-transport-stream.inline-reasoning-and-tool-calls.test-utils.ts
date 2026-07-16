@@ -60,6 +60,7 @@ describe("openai transport stream", () => {
   it("tags text before a tool-call completion as commentary", async () => {
     const model = makeCompletionsModel();
     const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
 
     await testing.processOpenAICompletionsStream(
       streamChunks([
@@ -78,13 +79,43 @@ describe("openai transport stream", () => {
       ]),
       output,
       model,
-      { push() {} },
+      { push: (event) => events.push(event as CapturedStreamEvent) },
     );
 
     expect(output.content[0]).toEqual({
       type: "text",
       text: "I'll inspect the workspace first.",
       textSignature: JSON.stringify({ v: 1, id: "chatcmpl-test", phase: "commentary" }),
+    });
+    const textEnd = events.find((event) => event.type === "text_end");
+    expect(textEnd?.contentIndex).toBe(0);
+    const endedText = (textEnd?.partial as { content?: Array<Record<string, unknown>> } | undefined)
+      ?.content?.[0];
+    expect(endedText).toMatchObject({
+      type: "text",
+      textSignature: JSON.stringify({ v: 1, id: "chatcmpl-test", phase: "commentary" }),
+    });
+  });
+
+  it("emits an unphased text_end for a completed final answer", async () => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ content: "Here is the final answer." }),
+        makeCompletionsChunk({}, "stop"),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textEnd = events.find((event) => event.type === "text_end");
+    expect(textEnd?.contentIndex).toBe(0);
+    expect(textEnd?.partial).toMatchObject({
+      content: [{ type: "text", text: "Here is the final answer." }],
     });
   });
 

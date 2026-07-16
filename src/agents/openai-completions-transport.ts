@@ -817,9 +817,27 @@ async function processOpenAICompletionsStream(
     // Chat Completions exposes the tool boundary only at completion. Preserve
     // that result on pre-tool text so delivery keeps it out of final replies.
     for (const block of output.content) {
-      if (block.type === "text" && block.text.trim().length > 0 && !block.textSignature) {
+      if (
+        block.type === "text" &&
+        typeof block.text === "string" &&
+        block.text.trim().length > 0 &&
+        !block.textSignature
+      ) {
         block.textSignature = textSignature;
       }
+    }
+  }
+  // Chat Completions does not disclose the turn phase until its terminal
+  // chunk. End text blocks only after that classification so text_end consumers
+  // never durably deliver a tool preamble as an answer.
+  for (const [contentIndex, block] of output.content.entries()) {
+    if (block.type === "text" && typeof block.text === "string") {
+      stream.push({
+        type: "text_end",
+        contentIndex,
+        content: block.text,
+        partial: output,
+      });
     }
   }
 }
