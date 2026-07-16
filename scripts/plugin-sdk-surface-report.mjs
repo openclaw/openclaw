@@ -210,7 +210,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // Registry sweep: 77 packages, zero fetch failures; retired dead channel-ingress facade.
-      328,
+      // +1: speech-settings keeps agent prompt imports off the synthesis/runtime graph.
+      329,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
@@ -242,6 +243,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared speech-provider API key resolver.
       // +32: shared channel setup, config-schema, policy, and status helpers.
       // +2: shared channel replay-guard factory and claim handle.
+      // +6: lightweight speech settings types, normalizers, and config resolver.
       // Harvest: retired AudioConfig type -1.
       // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
       7991,
@@ -266,6 +268,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +24: shared channel setup, config-schema, policy, and status helpers.
       // +1: shared channel replay-guard factory.
       // +3: receipt tracker/snapshot callables across channel barrels.
+      // +3: lightweight speech settings normalizers and config resolver.
       4468,
       env,
     ),
