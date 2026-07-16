@@ -4,9 +4,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  listStoredMemoryHostEvents,
+  memoryHostWorkspacePrefix,
+} from "../memory-host-sdk/event-store.js";
 import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
 import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
-import { resolveMemoryHostEventLogPath } from "./memory-host-events.js";
+
+const MEMORY_HOST_EVENTS_RELATIVE_PATH = "memory/events/memory-host-events.json";
 
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
@@ -24,15 +29,6 @@ export type {
 export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 export { resolveSessionAgentId } from "../agents/agent-scope.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
   const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
@@ -87,15 +83,21 @@ async function listMemoryWorkspacePublicArtifacts(params: {
     });
   }
 
-  const eventLogPath = resolveMemoryHostEventLogPath(params.workspaceDir);
-  if (await pathExists(eventLogPath)) {
+  const storedEvents = listStoredMemoryHostEvents({ workspaceDir: params.workspaceDir });
+  if (storedEvents.length > 0) {
+    const events = storedEvents.map((entry) => entry.value.event);
+    const content = JSON.stringify(events, null, 2);
+    const updatedAtMs = Math.max(...storedEvents.map((entry) => entry.createdAt));
     artifacts.push({
       kind: "event-log",
       workspaceDir: params.workspaceDir,
-      relativePath: path.relative(params.workspaceDir, eventLogPath).replace(/\\/g, "/"),
-      absolutePath: eventLogPath,
+      relativePath: MEMORY_HOST_EVENTS_RELATIVE_PATH,
+      absolutePath: `sqlite:plugin_state_entries/memory-core/memory-host.events/${memoryHostWorkspacePrefix(params.workspaceDir)}`,
       agentIds: [...params.agentIds],
       contentType: "json",
+      content,
+      updatedAtMs,
+      sizeBytes: Buffer.byteLength(content),
     });
   }
 

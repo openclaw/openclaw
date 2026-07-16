@@ -10,6 +10,14 @@ export type Generated<T> =
     ? ColumnType<S, I | undefined, U>
     : ColumnType<T, T | undefined, T>;
 
+export interface AcpParentStreamEvents {
+  created_at: number;
+  event_json: string;
+  run_id: string;
+  seq: number;
+  session_id: string;
+}
+
 export interface AuthProfileState {
   state_json: string;
   state_key: string;
@@ -278,6 +286,7 @@ export interface TranscriptEvents {
 }
 
 export interface DB {
+  acp_parent_stream_events: AcpParentStreamEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
   cache_entries: CacheEntries;

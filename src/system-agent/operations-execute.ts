@@ -4,7 +4,7 @@ import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-k
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
-import { resolveSystemAgentAuditPath } from "./audit.js";
+import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
@@ -107,7 +107,7 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "audit":
-      runtime.log(`Audit log: ${resolveSystemAgentAuditPath()}`);
+      runtime.log(`Audit state: ${SYSTEM_AGENT_AUDIT_STORE_LABEL}`);
       runtime.log("Only applied writes/actions are recorded; discovery stays quiet.");
       return { applied: false };
     case "config-validate": {

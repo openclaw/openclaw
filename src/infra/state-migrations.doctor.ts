@@ -35,6 +35,7 @@ import {
   detectLegacyApnsRegistrations,
   migrateLegacyApnsRegistrations,
 } from "./state-migrations.apns.js";
+import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 import {
   detectLegacyChannelPairingState,
   migrateLegacyChannelPairingState,
@@ -410,6 +411,10 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const auditLogs = detectLegacyAuditLogs({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const managedOutgoingImages = detectLegacyManagedOutgoingImages({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -596,6 +601,9 @@ export async function detectLegacyStateMigrations(params: {
   if (acpReplayLedger.hasLegacy) {
     preview.push("- ACP replay ledger: legacy JSON file → shared SQLite state");
   }
+  for (const source of auditLogs.sources) {
+    preview.push(`- ${source.label}: legacy JSONL file → shared SQLite state`);
+  }
   if (managedOutgoingImages.hasLegacy) {
     preview.push("- Managed outgoing images: legacy record JSON → shared SQLite state");
   }
@@ -708,6 +716,7 @@ export async function detectLegacyStateMigrations(params: {
     tuiLastSessions,
     commitments,
     acpReplayLedger,
+    auditLogs,
     managedOutgoingImages,
     apns,
     mcpOauth,
@@ -906,6 +915,10 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.acpReplayLedger,
     stateDir: detected.stateDir,
   });
+  const auditLogs = migrateLegacyAuditLogs({
+    detected: detected.auditLogs,
+    stateDir: detected.stateDir,
+  });
   const managedOutgoingImages = migrateLegacyManagedOutgoingImages({
     detected: detected.managedOutgoingImages,
     stateDir: detected.stateDir,
@@ -981,6 +994,7 @@ export async function runLegacyStateMigrations(params: {
     tuiLastSessions,
     commitments,
     acpReplayLedger,
+    auditLogs,
     managedOutgoingImages,
     apns,
     mcpOauth,
@@ -1007,6 +1021,7 @@ export async function runLegacyStateMigrations(params: {
       ...tuiLastSessions.changes,
       ...commitments.changes,
       ...acpReplayLedger.changes,
+      ...auditLogs.changes,
       ...managedOutgoingImages.changes,
       ...apns.changes,
       ...mcpOauth.changes,
@@ -1040,6 +1055,7 @@ export async function runLegacyStateMigrations(params: {
       ...tuiLastSessions.warnings,
       ...commitments.warnings,
       ...acpReplayLedger.warnings,
+      ...auditLogs.warnings,
       ...managedOutgoingImages.warnings,
       ...apns.warnings,
       ...mcpOauth.warnings,

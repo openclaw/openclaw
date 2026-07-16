@@ -1,0 +1,85 @@
+// ACP parent-stream diagnostics live with their child session in the per-agent database.
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabaseOptions,
+} from "../state/openclaw-agent-db.js";
+
+type AcpParentStreamDatabase = Pick<OpenClawAgentKyselyDatabase, "acp_parent_stream_events">;
+
+export type AcpParentStreamEvent = Record<string, unknown>;
+
+function getAcpParentStreamKysely(database: import("node:sqlite").DatabaseSync) {
+  return getNodeSqliteKysely<AcpParentStreamDatabase>(database);
+}
+
+function normalizeSqliteNumber(value: number | bigint): number {
+  return typeof value === "bigint" ? Number(value) : value;
+}
+
+/** Records one ordered batch in the same synchronous commit section as sequence allocation. */
+export function recordAcpParentStreamEvents(
+  options: OpenClawAgentDatabaseOptions & {
+    sessionId: string;
+    runId: string;
+    events: Array<{ event: AcpParentStreamEvent; createdAt: number }>;
+  },
+): void {
+  if (options.events.length === 0) {
+    return;
+  }
+  const prepared = options.events.map((entry) => ({
+    eventJson: JSON.stringify(entry.event),
+    createdAt: entry.createdAt,
+  }));
+  runOpenClawAgentWriteTransaction((database) => {
+    const db = getAcpParentStreamKysely(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("acp_parent_stream_events")
+        .select((eb) => eb.fn.max<number | bigint>("seq").as("max_seq"))
+        .where("session_id", "=", options.sessionId)
+        .where("run_id", "=", options.runId),
+    );
+    const firstSeq =
+      row?.max_seq === null || row?.max_seq === undefined
+        ? 0
+        : normalizeSqliteNumber(row.max_seq) + 1;
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("acp_parent_stream_events").values(
+        prepared.map((entry, index) => ({
+          session_id: options.sessionId,
+          run_id: options.runId,
+          seq: firstSeq + index,
+          event_json: entry.eventJson,
+          created_at: entry.createdAt,
+        })),
+      ),
+    );
+  }, options);
+}
+
+/** Lists one run's recorded stream events in emission order. */
+export function listAcpParentStreamEvents(
+  options: OpenClawAgentDatabaseOptions & { sessionId: string; runId: string },
+): AcpParentStreamEvent[] {
+  const database = openOpenClawAgentDatabase(options);
+  const db = getAcpParentStreamKysely(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("acp_parent_stream_events")
+      .select("event_json")
+      .where("session_id", "=", options.sessionId)
+      .where("run_id", "=", options.runId)
+      .orderBy("seq", "asc"),
+  ).rows.map((row) => JSON.parse(row.event_json) as AcpParentStreamEvent);
+}

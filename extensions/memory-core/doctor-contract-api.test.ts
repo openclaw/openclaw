@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureMemoryIndexSchema,
@@ -32,10 +31,6 @@ import {
   shortTermTestState as shortTermTesting,
 } from "./src/test-helpers.js";
 
-function requireStateMigration(index: number) {
-  return expectDefined(stateMigrations[index], `Memory Core state migration ${index}`);
-}
-
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
@@ -63,6 +58,26 @@ function qmdFileLockMigration() {
   );
   if (!migration) {
     throw new Error("expected memory-core QMD file-lock migration");
+  }
+  return migration;
+}
+
+function dreamingStateMigration() {
+  const migration = stateMigrations.find(
+    (entry) => entry.id === "memory-core-dreams-json-to-sqlite",
+  );
+  if (!migration) {
+    throw new Error("expected memory-core dreaming state migration");
+  }
+  return migration;
+}
+
+function hostEventsMigration() {
+  const migration = stateMigrations.find(
+    (entry) => entry.id === "memory-core-host-events-jsonl-to-sqlite",
+  );
+  if (!migration) {
+    throw new Error("expected memory-core host events migration");
   }
   return migration;
 }
@@ -458,6 +473,89 @@ describe("memory-core doctor dreaming migration", () => {
     };
   }
 
+  it("imports legacy memory host events into plugin state", async () => {
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    await fs.writeFile(
+      eventPath,
+      `${JSON.stringify({
+        type: "memory.recall.recorded",
+        timestamp: "2026-07-01T00:00:00.000Z",
+        query: "sqlite policy",
+        resultCount: 0,
+        results: [],
+      })}\n`,
+      "utf8",
+    );
+    const migration = hostEventsMigration();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
+      preview: [expect.stringContaining("Memory Core host events")],
+    });
+    const store = context().openPluginStateKeyedStore<
+      | {
+          kind: "event";
+          workspaceKey: string;
+          event: { type: string; query: string };
+          recordedAt: number;
+          sequence: number;
+        }
+      | { kind: "cursor"; workspaceKey: string; lastSequence: number }
+    >({ namespace: "memory-host.events", maxEntries: 50_000 });
+    await store.register("runtime-event", {
+      kind: "event",
+      workspaceKey: path.resolve(workspaceDir).replace(/\\/g, "/"),
+      event: {
+        type: "memory.recall.recorded",
+        query: "runtime after upgrade",
+      },
+      recordedAt: Date.parse("2026-07-02T00:00:00.000Z"),
+      sequence: 1,
+    });
+    await store.register("runtime-cursor", {
+      kind: "cursor",
+      workspaceKey: path.resolve(workspaceDir).replace(/\\/g, "/"),
+      lastSequence: 1,
+    });
+
+    const result = await migration.migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core host events -> SQLite plugin state (1 new row(s))",
+      expect.stringContaining("Archived Memory Core host events legacy source"),
+    ]);
+    const entries = await store.entries();
+    const events = entries
+      .flatMap((entry) => (entry.value.kind === "event" ? [entry.value] : []))
+      .toSorted((left, right) => left.sequence - right.sequence);
+    expect(events.map((entry) => entry.event.query)).toEqual([
+      "sqlite policy",
+      "runtime after upgrade",
+    ]);
+    expect(events[0]?.sequence).toBeLessThan(0);
+    expect(entries.find((entry) => entry.value.kind === "cursor")?.value).toMatchObject({
+      lastSequence: 1,
+    });
+    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("retires an empty legacy memory host event source without claiming an import", async () => {
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    await fs.writeFile(eventPath, "\n", "utf8");
+
+    const result = await hostEventsMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Retired empty Memory Core host events legacy source",
+      expect.stringContaining("Archived Memory Core host events legacy source"),
+    ]);
+    const entries = await context()
+      .openPluginStateKeyedStore({ namespace: "memory-host.events", maxEntries: 50_000 })
+      .entries();
+    expect(entries).toEqual([]);
+    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+  });
+
   it("imports persistent legacy dreaming state and ignores transient locks", async () => {
     const dreamsDir = path.join(workspaceDir, "memory", ".dreams");
     const dailyPath = path.join(dreamsDir, "daily-ingestion.json");
@@ -542,7 +640,7 @@ describe("memory-core doctor dreaming migration", () => {
     );
     await fs.writeFile(lockPath, `${process.pid}:${Date.now()}\n`, "utf8");
 
-    const migration = requireStateMigration(0);
+    const migration = dreamingStateMigration();
     const preview = await migration.detectLegacyState(migrationParams());
     expect(preview?.preview).toEqual([
       expect.stringContaining("Memory Core daily ingestion"),
@@ -624,7 +722,7 @@ describe("memory-core doctor dreaming migration", () => {
     const recallPath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
     await fs.writeFile(recallPath, "{", "utf8");
 
-    const result = await requireStateMigration(0).migrateLegacyState(migrationParams());
+    const result = await dreamingStateMigration().migrateLegacyState(migrationParams());
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
@@ -666,10 +764,10 @@ describe("memory-core doctor dreaming migration", () => {
     );
     const config = { agents: { list: [{ id: "main", default: true }] } };
 
-    const preview = await requireStateMigration(0).detectLegacyState(migrationParams(config));
+    const preview = await dreamingStateMigration().detectLegacyState(migrationParams(config));
     expect(preview?.preview).toEqual([expect.stringContaining("Memory Core short-term recall")]);
 
-    const result = await requireStateMigration(0).migrateLegacyState(migrationParams(config));
+    const result = await dreamingStateMigration().migrateLegacyState(migrationParams(config));
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([

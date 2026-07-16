@@ -7,10 +7,6 @@ import {
   type MemoryPluginPublicArtifact,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
-import {
-  appendMemoryHostEvent,
-  resolveMemoryHostEventLogPath,
-} from "openclaw/plugin-sdk/memory-host-events";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
@@ -436,28 +432,33 @@ describe("syncMemoryWikiBridgeSources", () => {
       },
     });
 
-    await appendMemoryHostEvent(workspaceDir, {
-      type: "memory.recall.recorded",
-      timestamp: "2026-04-05T12:00:00.000Z",
-      query: "bridge events",
-      resultCount: 1,
-      results: [
-        {
-          path: "memory/2026-04-05.md",
-          startLine: 1,
-          endLine: 2,
-          score: 0.8,
-        },
-      ],
-    });
+    const eventContent = JSON.stringify([
+      {
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-05T12:00:00.000Z",
+        query: "bridge events",
+        resultCount: 1,
+        results: [
+          {
+            path: "memory/2026-04-05.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.8,
+          },
+        ],
+      },
+    ]);
     registerBridgeArtifacts([
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/.dreams/events.jsonl",
-        absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
+        relativePath: "memory/events/memory-host-events.json",
+        absolutePath: "sqlite:plugin_state_entries/memory-core/memory-host.events/test",
         agentIds: ["main"],
         contentType: "json",
+        content: eventContent,
+        updatedAtMs: Date.parse("2026-04-05T12:00:00.000Z"),
+        sizeBytes: Buffer.byteLength(eventContent),
       },
     ]);
 

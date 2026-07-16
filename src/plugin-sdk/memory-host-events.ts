@@ -1,5 +1,5 @@
 /**
- * Public SDK subpath for memory host event log types and helpers.
+ * Public SDK subpath for memory host event types and helpers.
  */
 export {
   appendMemoryHostEvent,

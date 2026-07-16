@@ -4,7 +4,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -16,11 +17,14 @@ import {
   listMemoryHostPublicArtifacts,
   listActiveMemoryPublicArtifacts,
 } from "./memory-host-core.js";
-import { appendMemoryHostEvent, resolveMemoryHostEventLogPath } from "./memory-host-events.js";
+import { appendMemoryHostEvent } from "./memory-host-events.js";
 
 describe("memory-host-core helpers", () => {
   afterEach(() => {
     clearMemoryPluginState();
+    resetPluginStateStoreForTests();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it("exposes the active memory prompt guidance builder for context engines", () => {
@@ -71,6 +75,7 @@ describe("memory-host-core helpers", () => {
   it("lists shared public artifacts from memory workspaces", async () => {
     const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-public-artifacts-"));
     try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       const workspaceDir = path.join(fixtureRoot, "workspace");
       await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
@@ -84,6 +89,8 @@ describe("memory-host-core helpers", () => {
         "# Dream Report\n",
         "utf8",
       );
+      const eventStoredAt = Date.parse("2026-05-19T09:30:00.000Z");
+      vi.spyOn(Date, "now").mockReturnValue(eventStoredAt);
       await appendMemoryHostEvent(workspaceDir, {
         type: "memory.recall.recorded",
         timestamp: "2026-05-18T12:00:00.000Z",
@@ -128,10 +135,27 @@ describe("memory-host-core helpers", () => {
         {
           kind: "event-log",
           workspaceDir,
-          relativePath: "memory/.dreams/events.jsonl",
-          absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
+          relativePath: "memory/events/memory-host-events.json",
+          absolutePath: expect.stringMatching(
+            /^sqlite:plugin_state_entries\/memory-core\/memory-host\.events\/[a-f0-9]{24}$/u,
+          ),
           agentIds: ["main"],
           contentType: "json",
+          content: JSON.stringify(
+            [
+              {
+                type: "memory.recall.recorded",
+                timestamp: "2026-05-18T12:00:00.000Z",
+                query: "bridge",
+                resultCount: 0,
+                results: [],
+              },
+            ],
+            null,
+            2,
+          ),
+          updatedAtMs: eventStoredAt,
+          sizeBytes: expect.any(Number),
         },
       ]);
     } finally {

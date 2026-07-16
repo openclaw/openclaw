@@ -11,12 +11,17 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.js";
 import { extractSystemAgentRescueMessage, runSystemAgentRescueMessage } from "./rescue-message.js";
 
 let tempRoot = "";
 let tempDirId = 0;
 
 type TestConfig = Record<string, unknown>;
+
+function readLastAuditEntry(): Record<string, unknown> {
+  return (listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {}) as Record<string, unknown>;
+}
 
 const mockConfig = vi.hoisted(() => {
   const state = {
@@ -552,8 +557,7 @@ describe("OpenClaw rescue message", () => {
       };
       const model = currentConfig.agents?.defaults?.model;
       expect(typeof model === "string" ? model : model?.primary).toBe("openai/gpt-5.2");
-      const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+      const audit = readLastAuditEntry() as {
         details?: { rescue?: boolean; channel?: string; accountId?: string; senderId?: string };
       };
       expect(audit.details?.rescue).toBe(true);
@@ -576,8 +580,7 @@ describe("OpenClaw rescue message", () => {
       );
 
       expect(deps.runGatewayRestart).toHaveBeenCalledTimes(1);
-      const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+      const audit = readLastAuditEntry() as {
         operation?: string;
         details?: { rescue?: boolean; channel?: string; senderId?: string };
       };
@@ -687,8 +690,7 @@ describe("OpenClaw rescue message", () => {
       });
       expect(agentRuntime).toBeTypeOf("object");
       expect(agentOptions).toEqual({ hasFlags: true });
-      const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-      const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
+      const audit = readLastAuditEntry() as {
         operation?: string;
         details?: {
           rescue?: boolean;

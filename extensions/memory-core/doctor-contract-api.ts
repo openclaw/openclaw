@@ -19,10 +19,12 @@ import {
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveMemoryHostEventLogPath } from "openclaw/plugin-sdk/memory-host-events";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
   legacyStateFileExists,
+  type PluginDoctorStateMigrationContext,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import {
@@ -66,6 +68,59 @@ type LegacySource = {
   label: string;
   filePath: string;
 };
+
+type LegacyMemoryHostEventSource = {
+  workspaceDir: string;
+  filePath: string;
+};
+
+type LegacyMemoryHostEvent = Record<string, unknown> & {
+  type:
+    | "memory.recall.recorded"
+    | "memory.recall.skipped"
+    | "memory.promotion.applied"
+    | "memory.dream.completed";
+  timestamp: string;
+};
+
+type StoredMemoryHostEvent = {
+  kind: "event";
+  workspaceKey: string;
+  event: LegacyMemoryHostEvent;
+  recordedAt: number;
+  sequence: number;
+};
+
+const MEMORY_HOST_EVENTS_NAMESPACE = "memory-host.events";
+const MAX_MEMORY_HOST_EVENTS = 50_000;
+const LEGACY_MEMORY_HOST_SEQUENCE_BASE = Number.MIN_SAFE_INTEGER;
+
+function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
+  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function memoryHostWorkspacePrefix(workspaceDir: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(normalizeMemoryHostWorkspaceKey(workspaceDir))
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function isMemoryHostEventRecord(value: unknown): value is LegacyMemoryHostEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const event = value as { type?: unknown; timestamp?: unknown };
+  return (
+    typeof event.timestamp === "string" &&
+    (event.type === "memory.recall.recorded" ||
+      event.type === "memory.recall.skipped" ||
+      event.type === "memory.promotion.applied" ||
+      event.type === "memory.dream.completed")
+  );
+}
 
 type LegacyMemorySidecarSource = {
   agentId: string;
@@ -1175,7 +1230,145 @@ async function migrateSource(source: LegacySource): Promise<number> {
   return await migratePhaseSignals(source);
 }
 
+async function collectLegacyMemoryHostEventSources(
+  config: unknown,
+  env: NodeJS.ProcessEnv,
+): Promise<LegacyMemoryHostEventSource[]> {
+  const sources: LegacyMemoryHostEventSource[] = [];
+  for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
+    const filePath = resolveMemoryHostEventLogPath(workspaceDir);
+    if (await legacyStateFileExists(filePath)) {
+      sources.push({ workspaceDir, filePath });
+    }
+  }
+  return sources;
+}
+
+async function migrateLegacyMemoryHostEventSource(params: {
+  source: LegacyMemoryHostEventSource;
+  context: PluginDoctorStateMigrationContext;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const warningStart = params.warnings.length;
+  const raw = await fs.readFile(params.source.filePath, "utf8");
+  if (!raw.trim()) {
+    params.changes.push("Retired empty Memory Core host events legacy source");
+    await archiveLegacyStateSource({
+      filePath: params.source.filePath,
+      label: "Memory Core host events",
+      changes: params.changes,
+      warnings: params.warnings,
+    });
+    return;
+  }
+  const workspaceKey = normalizeMemoryHostWorkspaceKey(params.source.workspaceDir);
+  const prefix = memoryHostWorkspacePrefix(params.source.workspaceDir);
+  const records: Array<{ key: string; value: StoredMemoryHostEvent }> = [];
+  for (const [index, line] of raw.split(/\r?\n/u).entries()) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed) as unknown;
+    } catch (error) {
+      params.warnings.push(
+        `Skipped malformed Memory Core host event at ${params.source.filePath}:${index + 1}: ${String(error)}`,
+      );
+      continue;
+    }
+    if (!isMemoryHostEventRecord(event)) {
+      params.warnings.push(
+        `Skipped invalid Memory Core host event at ${params.source.filePath}:${index + 1}`,
+      );
+      continue;
+    }
+    const parsedTimestamp = Date.parse(event.timestamp);
+    const recordedAt = Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now();
+    const digest = crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 16);
+    records.push({
+      key: `${prefix}:legacy:${(index + 1).toString().padStart(16, "0")}:${digest}`,
+      value: {
+        kind: "event",
+        workspaceKey,
+        event,
+        recordedAt,
+        // Legacy file lines predate any SQLite-native events, including events
+        // written before delayed doctor repair. Negative order never overlaps runtime cursors.
+        sequence: LEGACY_MEMORY_HOST_SEQUENCE_BASE + index + 1,
+      },
+    });
+  }
+  if (params.warnings.length > warningStart) {
+    return;
+  }
+
+  const store = params.context.openPluginStateKeyedStore<StoredMemoryHostEvent>({
+    namespace: MEMORY_HOST_EVENTS_NAMESPACE,
+    maxEntries: MAX_MEMORY_HOST_EVENTS,
+  });
+  const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
+  const missing = records.filter((record) => !existingKeys.has(record.key));
+  if (missing.length > MAX_MEMORY_HOST_EVENTS - existingKeys.size) {
+    params.warnings.push(
+      `Skipped Memory Core host event migration because SQLite has room for ${MAX_MEMORY_HOST_EVENTS - existingKeys.size} of ${missing.length} missing rows; left legacy source in place`,
+    );
+    return;
+  }
+  for (const record of missing) {
+    await store.register(record.key, record.value);
+  }
+  const importedKeys = new Set((await store.entries()).map((entry) => entry.key));
+  const missingKey = records.find((record) => !importedKeys.has(record.key))?.key;
+  if (missingKey) {
+    params.warnings.push(
+      `Skipped archiving Memory Core host events because SQLite verification missed ${missingKey}`,
+    );
+    return;
+  }
+  params.changes.push(
+    `Migrated Memory Core host events -> SQLite plugin state (${missing.length} new row(s))`,
+  );
+  await archiveLegacyStateSource({
+    filePath: params.source.filePath,
+    label: "Memory Core host events",
+    changes: params.changes,
+    warnings: params.warnings,
+  });
+}
+
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  {
+    id: "memory-core-host-events-jsonl-to-sqlite",
+    label: "Memory Core host events",
+    async detectLegacyState(params) {
+      const sources = await collectLegacyMemoryHostEventSources(params.config, params.env);
+      if (sources.length === 0) {
+        return null;
+      }
+      return {
+        preview: sources.map(
+          (source) =>
+            `- Memory Core host events: ${source.filePath} -> SQLite plugin state (${MEMORY_HOST_EVENTS_NAMESPACE})`,
+        ),
+      };
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      for (const source of await collectLegacyMemoryHostEventSources(params.config, params.env)) {
+        await migrateLegacyMemoryHostEventSource({
+          source,
+          context: params.context,
+          changes,
+          warnings,
+        });
+      }
+      return { changes, warnings };
+    },
+  },
   {
     id: "memory-core-dreams-json-to-sqlite",
     label: "Memory Core dreaming state",
