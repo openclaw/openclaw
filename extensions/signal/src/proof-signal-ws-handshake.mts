@@ -39,7 +39,9 @@ async function listenLoopback(server: net.Server): Promise<number> {
     });
   });
   const addr = server.address();
-  if (!addr || typeof addr === "string") throw new Error("server failed to bind");
+  if (!addr || typeof addr === "string") {
+    throw new Error("server failed to bind");
+  }
   return addr.port;
 }
 
@@ -75,7 +77,9 @@ async function main() {
     console.log("  info: outcome=%s elapsed_ms=%d", outcome, elapsedMs);
 
     ws.terminate();
-    for (const s of sockets) s.destroy();
+    for (const s of sockets) {
+      s.destroy();
+    }
     server.close();
   }
 
@@ -110,7 +114,9 @@ async function main() {
     console.log("  info: elapsed_ms=%d budget_ms=%d", elapsedMs, budgetMs);
 
     ws.terminate();
-    for (const s of sockets) s.destroy();
+    for (const s of sockets) {
+      s.destroy();
+    }
     server.close();
   }
 
@@ -120,9 +126,13 @@ async function main() {
   console.log("[case 3] valid server — ws with handshakeTimeout connects normally");
   {
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((r) => wss.once("listening", r));
+    await new Promise<void>((r) => {
+      wss.once("listening", r);
+    });
     const addr = wss.address();
-    if (!addr || typeof addr === "string") throw new Error("wss failed to bind");
+    if (!addr || typeof addr === "string") {
+      throw new Error("wss failed to bind");
+    }
 
     const startedAt = Date.now();
     const ws = new WebSocket(`ws://127.0.0.1:${addr.port}`, {
@@ -143,7 +153,9 @@ async function main() {
     console.log("  info: ready_state=%d elapsed_ms=%d", ws.readyState, elapsedMs);
 
     ws.close();
-    await new Promise<void>((r) => wss.close(() => r()));
+    await new Promise<void>((r) => {
+      wss.close(() => r());
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -153,10 +165,12 @@ async function main() {
   console.log("node=%s %s", process.version, process.arch);
   console.log("head=%s", process.env.GIT_HEAD ?? "unknown");
   console.log("ALL PROOF ASSERTIONS: %d passed, %d failed", passed, failed);
-  if (failed > 0) process.exit(1);
+  if (failed > 0) {
+    process.exit(1);
+  }
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error("proof crashed:", err);
   process.exit(1);
 });
