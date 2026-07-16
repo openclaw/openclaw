@@ -321,6 +321,7 @@ describe("provider auth choice manifest helpers", () => {
             cliFlag: "--openai-api-key",
             cliOption: "--openai-api-key <key>",
             appGuidedSecret: true,
+            appGuidedDiscovery: true,
           },
         ],
       },
@@ -366,6 +367,7 @@ describe("provider auth choice manifest helpers", () => {
         cliFlag: "--openai-api-key",
         cliOption: "--openai-api-key <key>",
         appGuidedSecret: true,
+        appGuidedDiscovery: true,
       },
     ]);
     expect(

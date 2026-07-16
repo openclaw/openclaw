@@ -26,6 +26,7 @@ import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
@@ -231,6 +232,7 @@ export async function monitorLineProvider(
                       pushMessagesLine,
                       createFlexMessage,
                       createImageMessage,
+                      buildMediaMessage: buildLineMediaMessage,
                       createLocationMessage,
                       onReplyError: (replyErr) => {
                         logVerbose(

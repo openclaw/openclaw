@@ -31,6 +31,10 @@ on:
         description: Optional successful NPM Telegram Beta E2E run id to include in final release evidence
         required: false
         type: string
+      openclaw_npm_resume_run_id:
+        description: Successful original OpenClaw NPM Release run id when resuming an already-published package
+        required: false
+        type: string
       npm_dist_tag:
         description: npm dist-tag for the OpenClaw package
         required: true
@@ -104,6 +108,7 @@ jobs:
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
@@ -151,6 +156,14 @@ jobs:
           fi
           if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" && ! "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
             echo "full_release_validation_run_attempt must be a positive integer." >&2
+            exit 1
+          fi
+          if [[ -n "${OPENCLAW_NPM_RESUME_RUN_ID}" && ! "${OPENCLAW_NPM_RESUME_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "openclaw_npm_resume_run_id must be a positive GitHub Actions run id." >&2
+            exit 1
+          fi
+          if [[ -n "${OPENCLAW_NPM_RESUME_RUN_ID}" && "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
+            echo "openclaw_npm_resume_run_id requires publish_openclaw_npm=true." >&2
             exit 1
           fi
           stable_release=true
@@ -782,6 +795,7 @@ jobs:
           WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
           PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
           NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
+          OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
@@ -789,6 +803,9 @@ jobs:
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
         run: |
           set -euo pipefail
+
+          openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
+          openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"
 
           is_stable_release() {
             [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
@@ -1273,6 +1290,7 @@ jobs:
 
           resolve_openclaw_npm_publish_state() {
             local artifact_name manifest_dir manifest_path manifest_sha manifest_tarball_sha published_sha published_tarball_path published_tarball_url release_version
+            local resume_state resume_url
 
             openclaw_npm_already_published="false"
             if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
@@ -1317,8 +1335,19 @@ jobs:
               exit 1
             fi
 
+            if [[ -z "${OPENCLAW_NPM_RESUME_RUN_ID//[[:space:]]/}" ]]; then
+              echo "openclaw@${release_version} is already published; openclaw_npm_resume_run_id is required to bind postpublish proof to the original workflow identity." >&2
+              exit 1
+            fi
+            resume_state="$(node "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mjs" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --run-id "${OPENCLAW_NPM_RESUME_RUN_ID}")"
+            resume_url="$(printf '%s' "${resume_state}" | jq -er '.url')"
+            openclaw_npm_expected_workflow_ref="$(printf '%s' "${resume_state}" | jq -er '.workflowRef')"
+            openclaw_npm_expected_workflow_sha="$(printf '%s' "${resume_state}" | jq -er '.workflowSha')"
+
             openclaw_npm_already_published="true"
-            echo "openclaw@${release_version} is already published on npm with this tag's preflight tarball; skipping the core npm dispatch and resuming the remaining publish stages."
+            echo "openclaw@${release_version} is already published on npm with this tag's preflight tarball; resuming from ${resume_url}."
           }
 
           resolve_clawhub_release_plan() {
@@ -1715,17 +1744,35 @@ jobs:
 
             (
               cd "${download_dir}"
+              export TZ=UTC
+              find dependency-evidence -type f -exec touch -t 198001010000 {} +
               find dependency-evidence -type f -print | LC_ALL=C sort | zip -X -q "${asset_path}" -@
             )
-            attach_or_verify_release_asset "${asset_path}" "${asset_name}"
+            attach_or_verify_release_asset "${asset_path}" "${asset_name}" zip-tree
             echo "- Dependency evidence asset: \`${asset_name}\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          release_evidence_zip_trees_match() {
+            local source_path="$1"
+            local existing_path="$2"
+            python3 "${GITHUB_WORKSPACE}/.release-harness/scripts/compare-release-evidence-zip.py" \
+              "${source_path}" "${existing_path}"
           }
 
           attach_or_verify_release_asset() {
             local source_path="$1"
             local asset_name="$2"
+            local comparison_mode="${3:-exact}"
             local existing_dir="${RUNNER_TEMP}/openclaw-release-existing-assets/${asset_name}"
             local existing_path="${existing_dir}/${asset_name}"
+
+            case "${comparison_mode}" in
+              exact | zip-tree) ;;
+              *)
+                echo "Unknown release evidence comparison mode: ${comparison_mode}" >&2
+                exit 1
+                ;;
+            esac
 
             if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets |
               jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' >/dev/null; then
@@ -1733,11 +1780,15 @@ jobs:
               mkdir -p "${existing_dir}"
               gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
                 --pattern "${asset_name}" --dir "${existing_dir}"
-              cmp --silent "${source_path}" "${existing_path}" || {
-                echo "Existing release evidence asset ${asset_name} differs from this release run." >&2
-                exit 1
-              }
-              return
+              if cmp --silent "${source_path}" "${existing_path}"; then
+                return
+              fi
+              if [[ "${comparison_mode}" == "zip-tree" ]] &&
+                release_evidence_zip_trees_match "${source_path}" "${existing_path}"; then
+                return
+              fi
+              echo "Existing release evidence asset ${asset_name} differs from this release run." >&2
+              exit 1
             fi
 
             gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
@@ -1841,11 +1892,18 @@ jobs:
               verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
             fi
 
-            OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${GITHUB_REF}" \
-              OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${PARENT_WORKFLOW_SHA}" \
+            if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+              verify_args+=(
+                --postpublish-verifier
+                "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-postpublish-verify.ts"
+              )
+            fi
+
+            OPENCLAW_NPM_EXPECTED_WORKFLOW_REF="${openclaw_npm_expected_workflow_ref}" \
+              OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA="${openclaw_npm_expected_workflow_sha}" \
               node --import tsx \
-              "${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts" \
-              "${verify_args[@]}"
+                "${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts" \
+                "${verify_args[@]}"
 
             # Resolve already validated this exact v3 run before mutation. Append
             # its immutable tuple here so frozen targets need no new CLI option.

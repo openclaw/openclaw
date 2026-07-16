@@ -34,6 +34,11 @@ import {
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import {
+  type AgentPlanStep,
+  formatPlanChecklistLines,
+  normalizeAgentPlanSteps,
+} from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -194,10 +199,11 @@ function createReplyDispatchEvent(
   }) as PluginHookReplyDispatchEvent;
 }
 
-/** Test-only hooks for overriding selected dispatch dependencies. */
-export const testing = {
-  createReplyDispatchEvent,
-};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.dispatchFromConfigTestApi")] = {
+    createReplyDispatchEvent,
+  };
+}
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
@@ -1685,13 +1691,16 @@ async function dispatchReplyFromConfigInner(
       }
       return `${truncateUtf16Safe(collapsed, 77).trimEnd()}...`;
     };
-    const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
+    const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
       const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
       const steps = (payload.steps ?? [])
-        .map((step) => step.replace(/\s+/g, " ").trim())
-        .filter(Boolean);
+        .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
+        .filter((entry) => entry.step);
       if (steps.length > 0) {
-        return steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+        return formatPlanChecklistLines(steps, {
+          maxLines: steps.length,
+          maxLineChars: 120,
+        }).join("\n");
       }
       return explanation || "Planning next steps.";
     };
@@ -1723,7 +1732,7 @@ async function dispatchReplyFromConfigInner(
     };
     const sendPlanUpdate = async (payload: {
       explanation?: string;
-      steps?: string[];
+      steps?: AgentPlanStep[];
     }): Promise<void> => {
       if (
         shouldSuppressProgressDelivery() ||
@@ -2272,6 +2281,17 @@ async function dispatchReplyFromConfigInner(
                     if (isDispatchOperationAborted()) {
                       return;
                     }
+                    // External resolvers call this SDK callback directly and may
+                    // send only the shipped string form; normalize once so
+                    // channel forwards and fallback notices see both fields.
+                    const planSteps =
+                      normalizeAgentPlanSteps(payload.planSteps) ??
+                      normalizeAgentPlanSteps(payload.steps);
+                    const normalized = {
+                      ...payload,
+                      steps: planSteps?.map((entry) => entry.step) ?? payload.steps,
+                      planSteps,
+                    };
                     markProgress();
                     await waitForPendingDirectBlockReplyDelivery(
                       getDispatchAbortOperation()?.abortSignal,
@@ -2286,7 +2306,7 @@ async function dispatchReplyFromConfigInner(
                         requiresToolSummaryVisibility: true,
                       })
                     ) {
-                      await onPlanUpdateFromReplyOptions?.(payload);
+                      await onPlanUpdateFromReplyOptions?.(normalized);
                     }
                     if (isDispatchOperationAborted()) {
                       return;
@@ -2295,8 +2315,8 @@ async function dispatchReplyFromConfigInner(
                       return;
                     }
                     await sendPlanUpdate({
-                      explanation: payload.explanation,
-                      steps: payload.steps,
+                      explanation: normalized.explanation,
+                      steps: planSteps,
                     });
                   },
                   onApprovalEvent: async (payload) => {

@@ -44,7 +44,7 @@ function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   });
 }
 
-export function buildCopilotDynamicHeaders(params: {
+function buildCopilotDynamicHeaders(params: {
   messages: Context["messages"];
   hasImages: boolean;
 }): Record<string, string> {
@@ -113,7 +113,7 @@ export function wrapCopilotAnthropicStream(
   };
 }
 
-export function wrapCopilotOpenAIResponsesStream(
+function wrapCopilotOpenAIResponsesStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
   if (!baseStreamFn) {
@@ -137,7 +137,7 @@ export function wrapCopilotOpenAIResponsesStream(
   };
 }
 
-export function wrapCopilotOpenAICompletionsStream(
+function wrapCopilotOpenAICompletionsStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
   if (!baseStreamFn) {

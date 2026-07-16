@@ -7,8 +7,8 @@ import {
   CODEX_APP_SERVER_DEFAULT_MODEL_REF,
   OPENAI_API_DEFAULT_MODEL_REF,
   detectInferenceBackends,
-  detectNativeCodexAppServer,
 } from "./onboard-inference.js";
+import { detectNativeCodexAppServer } from "./onboard-inference.test-support.js";
 
 function probeDeps(found: Record<string, boolean>) {
   return async (command: string): Promise<LocalCommandProbe> => ({

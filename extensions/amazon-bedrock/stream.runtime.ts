@@ -1173,7 +1173,7 @@ function createImageBlock(mimeType: string, data: string) {
 }
 
 /** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
-export const testing = {
+const testing = {
   buildAdditionalModelRequestFields,
   convertMessages,
   getConfiguredBedrockRegion,
@@ -1182,4 +1182,8 @@ export const testing = {
   resolveSimpleBedrockOptions,
   shouldUseExplicitBedrockEndpoint,
 };
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockStreamTestApi"), testing);
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

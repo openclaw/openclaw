@@ -69,36 +69,38 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
   const globalState = globalThis as typeof globalThis & {
     [WORKER_CLEANUP_HELPERS]?: Promise<WorkerCleanupHelpers>;
   };
-  globalState[WORKER_CLEANUP_HELPERS] ??= Promise.all([
-    vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
-      "../src/agents/context-runtime-state.js",
-    ),
-    vi.importActual<typeof import("../src/agents/models-config-state.test-support.js")>(
-      "../src/agents/models-config-state.test-support.js",
-    ),
-    vi.importActual<typeof import("../src/agents/session-write-lock.js")>(
-      "../src/agents/session-write-lock.js",
-    ),
-    vi.importActual<typeof import("../src/agents/session-write-lock.test-support.js")>(
-      "../src/agents/session-write-lock.test-support.js",
-    ),
-    vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
-      "../src/config/sessions/store-cache.js",
-    ),
-    vi.importActual<typeof import("../src/config/sessions/store-writer-state.js")>(
-      "../src/config/sessions/store-writer-state.js",
-    ),
-    vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
-  ]).then(
-    ([
+  globalState[WORKER_CLEANUP_HELPERS] ??= (async () => {
+    // The test-support facade reads the API installed by the real lock module at import time.
+    // Load that producer first so concurrent module evaluation cannot observe a missing API.
+    const sessionWriteLock = await vi.importActual<
+      typeof import("../src/agents/session-write-lock.js")
+    >("../src/agents/session-write-lock.js");
+    const [
       contextRuntimeState,
       modelsConfigState,
-      sessionWriteLock,
       sessionWriteLockTestSupport,
       sessionStoreCache,
       sessionStoreWriterState,
       fileLock,
-    ]) => ({
+    ] = await Promise.all([
+      vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
+        "../src/agents/context-runtime-state.js",
+      ),
+      vi.importActual<typeof import("../src/agents/models-config-state.test-support.js")>(
+        "../src/agents/models-config-state.test-support.js",
+      ),
+      vi.importActual<typeof import("../src/agents/session-write-lock.test-support.js")>(
+        "../src/agents/session-write-lock.test-support.js",
+      ),
+      vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
+        "../src/config/sessions/store-cache.js",
+      ),
+      vi.importActual<typeof import("../src/config/sessions/store-writer-state.js")>(
+        "../src/config/sessions/store-writer-state.js",
+      ),
+      vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
+    ]);
+    return {
       clearSessionStoreCaches: sessionStoreCache.clearSessionStoreCaches,
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
       drainSessionStoreWriterQueuesForTest:
@@ -109,8 +111,8 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
       resetSessionWriteLockStateForTest:
         sessionWriteLockTestSupport.resetSessionWriteLockStateForTest,
-    }),
-  );
+    };
+  })();
   return globalState[WORKER_CLEANUP_HELPERS];
 }
 

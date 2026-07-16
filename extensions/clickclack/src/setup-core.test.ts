@@ -1,7 +1,14 @@
 // ClickClack tests cover non-interactive setup validation and config writes.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
+
+const verifyClickClackAccountAfterSetup = vi.hoisted(() => vi.fn());
+
+vi.mock("./setup-verify.js", () => ({
+  verifyClickClackAccountAfterSetup,
+}));
 import {
   applyClickClackCredentialConfig,
   clickClackSetupAdapter,
@@ -293,6 +300,33 @@ describe("ClickClack setup adapter", () => {
     ).toMatchObject({
       enabled: true,
       tokenFile: "/run/secrets/clickclack",
+    });
+  });
+
+  it("runs post-write verification with the saved account config", async () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clickclack.example",
+          token: "ccb_test",
+          workspace: "default",
+        },
+      },
+    } as OpenClawConfig;
+    const runtime = createNonExitingRuntimeEnv();
+
+    await clickClackSetupAdapter.afterAccountConfigWritten?.({
+      previousCfg: {},
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {},
+      runtime,
+    });
+
+    expect(verifyClickClackAccountAfterSetup).toHaveBeenCalledWith({
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      runtime,
     });
   });
 });
