@@ -57,6 +57,7 @@ export function createAgentMailWebhookHandler(params: {
   const verifier = new Webhook(params.account.webhookSecret);
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
+      res.setHeader("allow", "POST");
       return respond(res, 405, "Method not allowed");
     }
     let rawBody: string;

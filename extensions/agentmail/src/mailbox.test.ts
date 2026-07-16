@@ -46,7 +46,7 @@ describe("AgentMail mailbox authorization", () => {
     "sender@localhost",
     "sender@-example.com",
     "sender@example_domain.com",
-    '\"sender\"@example.com',
+    '"sender"@example.com',
     "séndér@example.com",
   ])("rejects unsupported or ambiguous From value %j", (value) => {
     expect(parseSingleFromMailbox(value)).toBeNull();

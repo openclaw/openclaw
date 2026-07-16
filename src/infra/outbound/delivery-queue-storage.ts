@@ -2,7 +2,10 @@
 // platform-send recovery state in the shared SQLite queue.
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
+import type {
+  ChannelMessageSendAttemptKind,
+  RenderedMessageBatchPlanItem,
+} from "../../channels/message/types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
@@ -93,6 +96,8 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   recoveryState?: "send_attempt_started" | "unknown_after_send";
   /** Final post-hook payload captured before an exact-reconciliation adapter starts provider I/O. */
   platformSendPayload?: ReplyPayload;
+  /** Adapter route that produced platformSendPayload, for exact commit-hook replay. */
+  platformSendKind?: ChannelMessageSendAttemptKind;
 }
 
 function queuedDeliveryMetadata(entry: QueuedDelivery): DeliveryQueueRowMetadata {
@@ -217,6 +222,7 @@ export async function failDeliveryBeforePlatformSend(
     platformSendStartedAt: undefined,
     recoveryState: undefined,
     platformSendPayload: undefined,
+    platformSendKind: undefined,
   }));
 }
 
@@ -251,10 +257,12 @@ export async function saveDeliveryPlatformSendPayload(
   id: string,
   payload: ReplyPayload,
   stateDir?: string,
+  kind?: ChannelMessageSendAttemptKind,
 ): Promise<void> {
   updateQueuedDelivery(id, stateDir, (entry) => ({
     ...entry,
     platformSendPayload: payload,
+    ...(kind ? { platformSendKind: kind } : {}),
   }));
 }
 

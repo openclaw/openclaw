@@ -816,6 +816,7 @@ describe("deliverOutboundPayloads", () => {
       "queue-1",
       { text: "hello" },
       undefined,
+      "text",
     );
     expect(queueMocks.markDeliveryPlatformSendDispatched).toHaveBeenCalledWith(
       "queue-1",
@@ -1120,6 +1121,62 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("normalizes inline media directives before one atomic payload send", async () => {
+    const sendPayload = vi.fn(async (_ctx: ChannelMessageSendPayloadContext) => ({
+      messageId: "atomic-inline",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: "atomic-inline" }],
+        kind: "media",
+      }),
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            id: "matrix",
+            outbound: { ...matrixOutboundForTest, extractMarkdownImages: true },
+            message: {
+              id: "matrix",
+              durableFinal: { capabilities: { text: true, media: true, payload: true } },
+              send: {
+                mediaPayloadMode: "atomic",
+                text: vi.fn(),
+                payload: sendPayload,
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [
+        {
+          text: [
+            "caption",
+            "MEDIA:https://example.com/directive.png",
+            "![chart](https://example.com/chart.png)",
+          ].join("\n"),
+        },
+      ],
+      skipQueue: true,
+    });
+
+    expect(sendPayload).toHaveBeenCalledOnce();
+    expect(sendPayload.mock.calls[0]?.[0]).toMatchObject({
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["https://example.com/directive.png", "https://example.com/chart.png"],
+      },
+    });
+  });
+
   it("passes stable part indexes to exact multi-media sends", async () => {
     const messageSendMedia = vi.fn(async (ctx: ChannelMessageSendMediaContext) => ({
       messageId: `media-${ctx.deliveryPartIndex}`,
@@ -1165,6 +1222,7 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).resolves.toHaveLength(2);
     expect(messageSendMedia.mock.calls.map(([ctx]) => ctx.deliveryPartIndex)).toEqual([0, 1]);
+    expect(queueMocks.saveDeliveryPlatformSendPayload).not.toHaveBeenCalled();
   });
 
   it("rejects exact sends when reply payload hooks change platform fan-out", async () => {
@@ -3104,6 +3162,7 @@ describe("deliverOutboundPayloads", () => {
         mediaUrls: ["file:///tmp/final.png"],
       }),
       undefined,
+      "payload",
     );
     expect(sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({

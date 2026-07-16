@@ -4,16 +4,31 @@ const MAX_LOCAL_LENGTH = 64;
 const MAX_DOMAIN_LENGTH = 253;
 const LOCAL_PART_PATTERN = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+$/u;
 const DOMAIN_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/u;
-const CONTROL_OR_BIDI_PATTERN =
-  /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 const UNQUOTED_DISPLAY_SPECIALS_PATTERN = /[()[\]<>:;@\\]/u;
+
+function hasControlOrBidiCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (
+      code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function normalizeMailbox(value: string): string {
   return value.trim().toLocaleLowerCase("en-US");
 }
 
 function parseAsciiMailbox(value: string): string | null {
-  if (!value || value.length > MAX_ADDRESS_LENGTH || CONTROL_OR_BIDI_PATTERN.test(value)) {
+  if (!value || value.length > MAX_ADDRESS_LENGTH || hasControlOrBidiCharacter(value)) {
     return null;
   }
 
@@ -45,7 +60,7 @@ function parseAsciiMailbox(value: string): string | null {
 
 function parseDisplayName(value: string): string | null {
   const trimmed = value.trim();
-  if (!trimmed || CONTROL_OR_BIDI_PATTERN.test(trimmed)) {
+  if (!trimmed || hasControlOrBidiCharacter(trimmed)) {
     return null;
   }
 
@@ -86,7 +101,7 @@ function parseDisplayName(value: string): string | null {
  */
 export function parseSingleFromMailbox(value: string): { address: string; name?: string } | null {
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > MAX_FROM_LENGTH || CONTROL_OR_BIDI_PATTERN.test(trimmed)) {
+  if (!trimmed || trimmed.length > MAX_FROM_LENGTH || hasControlOrBidiCharacter(trimmed)) {
     return null;
   }
 

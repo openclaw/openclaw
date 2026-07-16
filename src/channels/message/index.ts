@@ -5,6 +5,7 @@ export { defineChannelMessageAdapter } from "./adapter.js";
 export { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
 export {
   createDurableInboundReceiveJournalFromQueue,
+  isDurableInboundReceiveCapacityError,
 } from "./durable-receive.js";
 
 export {

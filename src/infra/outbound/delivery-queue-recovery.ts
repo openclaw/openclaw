@@ -392,6 +392,15 @@ function buildReconciledCommitContext(params: {
     silent: params.entry.silent,
     result,
   };
+  if (params.entry.platformSendKind === "payload") {
+    return {
+      ...base,
+      kind: "payload",
+      text: payload.text ?? "",
+      mediaUrl: payload.mediaUrl,
+      payload,
+    };
+  }
   if (
     payload.presentation !== undefined ||
     payload.delivery !== undefined ||

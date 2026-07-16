@@ -205,12 +205,15 @@ type ChannelHandler = {
 };
 
 type PlatformSendRoute = {
+  kind?: ChannelMessageSendAttemptKind;
   replyToId?: string | null;
   threadId?: string | number | null;
   text?: string;
   mediaUrl?: string;
   payload?: ReplyPayload;
   audioAsVoice?: boolean;
+  /** This route represents the complete durable intent, not one part of a fan-out. */
+  durablePayloadScope?: "complete";
 };
 
 function resolvePlatformSendPayload(route: PlatformSendRoute): ReplyPayload {
@@ -532,6 +535,7 @@ function createPluginHandler(
               text: payload.text ?? "",
               mediaUrl: payload.mediaUrl,
               payload,
+              durablePayloadScope: "complete" as const,
             };
             assertUnknownSendReconciliationKind("payload");
             if (messagePayload) {
@@ -560,7 +564,9 @@ function createPluginHandler(
       ? async (text, overrides) => {
           const formattedCtx = {
             ...resolveCtx(overrides),
+            kind: "text" as const satisfies ChannelMessageSendAttemptKind,
             text,
+            durablePayloadScope: "complete" as const,
           };
           assertUnknownSendReconciliationKind("text");
           await params.onPlatformSendStart?.(formattedCtx);
@@ -584,6 +590,7 @@ function createPluginHandler(
         ...resolveCtx(overrides),
         kind: "text" as const satisfies ChannelMessageSendAttemptKind,
         text,
+        ...(!chunker ? { durablePayloadScope: "complete" as const } : {}),
       };
       assertUnknownSendReconciliationKind("text");
       if (messageText) {
@@ -1623,13 +1630,18 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     requiredUnknownSendReconciliation: exactReconciliationRequired,
     onPlatformSendStart: async (route) => {
       platformSendRoute = route;
-      if (platformQueueId && exactReconciliationRequired) {
+      if (
+        platformQueueId &&
+        exactReconciliationRequired &&
+        route.durablePayloadScope === "complete"
+      ) {
         // Recovery must repeat the final post-hook content. Persist it separately so a
         // proven-not-sent retry can still replay the original payload through current hooks.
         await saveDeliveryPlatformSendPayload(
           platformQueueId,
           resolvePlatformSendPayload(route),
           platformQueueStateDir,
+          route.kind,
         );
       } else if (platformQueueId && queuedPreSendState === undefined) {
         queuedPreSendState = await persistQueuedPreSendState({

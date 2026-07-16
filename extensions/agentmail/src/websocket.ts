@@ -1,4 +1,4 @@
-import type { AgentMail } from "agentmail";
+import type { AgentMail, AgentMailClient } from "agentmail";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   createAgentMailCatchUpSession,
@@ -82,8 +82,9 @@ export async function startAgentMailWebSocket(params: {
   catchUpSession?: AgentMailCatchUpSession;
   liveQueueMax?: number;
   catchUpIntervalMs?: number;
+  client?: AgentMailClient;
 }): Promise<void> {
-  const client = createAgentMailClient(params.account);
+  const client = params.client ?? createAgentMailClient(params.account);
   const catchUpSession =
     params.catchUpSession ??
     (await createAgentMailCatchUpSession({
@@ -141,7 +142,7 @@ export async function startAgentMailWebSocket(params: {
             receive: params.receive,
             abortSignal: params.abortSignal,
             retryDelay,
-            onCapacity: catchUpSupervisor.request,
+            onCapacity: () => catchUpSupervisor.request(),
             log: params.log,
           });
         } finally {
@@ -175,6 +176,14 @@ export async function startAgentMailWebSocket(params: {
   socket.on("open", subscribe);
   socket.on("close", () => {
     subscribedForCurrentConnection = false;
+  });
+  socket.on("error", (error) => {
+    params.log?.error?.(
+      `AgentMail WebSocket error for account ${params.account.accountId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    // Parsing and transport errors may not close the socket. Recover authoritative events even
+    // when the SDK remains connected and therefore does not trigger the reconnect catch-up path.
+    catchUpSupervisor.request();
   });
   socket.on("message", (event) => {
     if (!isReceivedEvent(event)) {

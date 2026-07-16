@@ -108,6 +108,13 @@ class DurableInboundReceiveCapacityError extends Error {
   }
 }
 
+/** Identify durable receive admission failures without exposing the internal error class. */
+export function isDurableInboundReceiveCapacityError(
+  error: unknown,
+): error is Error & { readonly maxPendingEntries: number } {
+  return error instanceof DurableInboundReceiveCapacityError;
+}
+
 function normalizeDurableInboundReceiveId(id: string): string {
   const normalized = id.trim();
   if (!normalized) {

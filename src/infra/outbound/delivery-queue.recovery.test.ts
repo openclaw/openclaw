@@ -875,6 +875,50 @@ describe("delivery-queue recovery", () => {
     });
   });
 
+  it("replays an atomic provider snapshot to commit hooks as a payload", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "original" }],
+      },
+      tmpDir(),
+    );
+    await saveDeliveryPlatformSendPayload(
+      id,
+      { text: "final", mediaUrls: ["file:///tmp/final.png"] },
+      tmpDir(),
+      "payload",
+    );
+    await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+    const afterCommit = vi.fn();
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend: vi.fn().mockResolvedValue({
+          status: "sent",
+          messageId: "platform-atomic",
+          receipt: {
+            primaryPlatformMessageId: "platform-atomic",
+            platformMessageIds: ["platform-atomic"],
+            parts: [{ platformMessageId: "platform-atomic", kind: "media", index: 0 }],
+            sentAt: 1,
+          },
+        }),
+      },
+      send: { lifecycle: { afterCommit } },
+    });
+
+    await runRecovery({ deliver: vi.fn().mockResolvedValue([]) });
+
+    expect(mockCallArg(afterCommit)).toMatchObject({
+      kind: "payload",
+      text: "final",
+      payload: { text: "final", mediaUrls: ["file:///tmp/final.png"] },
+    });
+  });
+
   it("reconstructs local-media access before unknown-send reconciliation", async () => {
     const mediaPath = path.join(tmpDir(), "workspace", "proof.txt");
     const id = await enqueueDelivery(

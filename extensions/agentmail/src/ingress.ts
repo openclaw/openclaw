@@ -1,3 +1,4 @@
+import { isDurableInboundReceiveCapacityError } from "openclaw/plugin-sdk/channel-outbound";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { createAgentMailDurableInboundReceiveJournal } from "./durable-receive.js";
 import { createAgentMailDurableInboundId } from "./durable-receive.js";
@@ -37,10 +38,6 @@ export class AgentMailIngressCapacityError extends Error {
   }
 }
 
-function isDurableIngressCapacityError(error: unknown): boolean {
-  return error instanceof Error && error.name === "DurableInboundReceiveCapacityError";
-}
-
 function retryDelayMs(attempt: number): number {
   return computeBackoff({ initialMs: 1_000, maxMs: 30 * 60_000, factor: 2, jitter: 0.2 }, attempt);
 }
@@ -72,9 +69,8 @@ export async function processAgentMailIngress(params: {
       receivedAt: params.record.receivedAt,
     });
   } catch (error) {
-    // Core intentionally keeps the capacity class internal to the generic queue facade. Normalize
-    // it here so AgentMail transport workers can apply plugin-owned backpressure policy.
-    if (isDurableIngressCapacityError(error)) {
+    // Normalize the generic admission result so transports can apply plugin-owned backpressure.
+    if (isDurableInboundReceiveCapacityError(error)) {
       throw new AgentMailIngressCapacityError();
     }
     throw error;

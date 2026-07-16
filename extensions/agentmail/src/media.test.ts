@@ -1,5 +1,5 @@
 import { MediaFetchError, MediaSizeLimitError } from "openclaw/plugin-sdk/web-media";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AgentMailMediaPolicyError,
   loadAgentMailInboundAttachments,
@@ -16,6 +16,12 @@ vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
 }));
 vi.mock("openclaw/plugin-sdk/media-store", () => ({ saveMediaBuffer }));
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({ loadOutboundMediaFromUrl }));
+
+beforeEach(() => {
+  loadWebMediaRaw.mockReset();
+  saveMediaBuffer.mockReset();
+  loadOutboundMediaFromUrl.mockReset();
+});
 
 describe("AgentMail inbound attachments", () => {
   it("downloads all accepted parts before persisting any", async () => {
@@ -162,6 +168,37 @@ describe("AgentMail inbound attachments", () => {
         maxBytes: 100,
       }),
     ).rejects.toThrow("second attachment failed");
+  });
+
+  it("keeps the per-file limit stable while enforcing the aggregate after loading", async () => {
+    loadOutboundMediaFromUrl
+      .mockResolvedValueOnce({
+        buffer: Buffer.alloc(80),
+        contentType: "image/png",
+        fileName: "one.png",
+      })
+      .mockResolvedValueOnce({
+        buffer: Buffer.alloc(30),
+        contentType: "image/png",
+        fileName: "two.png",
+      });
+
+    await expect(
+      loadAgentMailOutboundAttachments({
+        mediaUrls: ["file:///one.png", "file:///two.png"],
+        maxBytes: 100,
+      }),
+    ).rejects.toThrow("aggregate media limit");
+    expect(loadOutboundMediaFromUrl).toHaveBeenNthCalledWith(
+      1,
+      "file:///one.png",
+      expect.objectContaining({ maxBytes: 100 }),
+    );
+    expect(loadOutboundMediaFromUrl).toHaveBeenNthCalledWith(
+      2,
+      "file:///two.png",
+      expect.objectContaining({ maxBytes: 100 }),
+    );
   });
 
   it.each([

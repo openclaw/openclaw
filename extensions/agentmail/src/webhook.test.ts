@@ -28,10 +28,12 @@ function request(body: string, headers: Record<string, string>): IncomingMessage
   return req;
 }
 
-function response(): ServerResponse & { body?: string } {
+function response(): ServerResponse & { body?: string; setHeaderMock: ReturnType<typeof vi.fn> } {
+  const setHeaderMock = vi.fn();
   return {
     statusCode: 200,
-    setHeader: vi.fn(),
+    setHeader: setHeaderMock,
+    setHeaderMock,
     end: vi.fn(function (this: ServerResponse & { body?: string }, body?: string) {
       this.body = body;
       return this;
@@ -108,6 +110,7 @@ describe("AgentMail webhook", () => {
     const methodRes = response();
     await createAgentMailWebhookHandler({ account: account(), receive })(methodReq, methodRes);
     expect(methodRes.statusCode).toBe(405);
+    expect(methodRes.setHeaderMock).toHaveBeenCalledWith("allow", "POST");
 
     const body = JSON.stringify({
       type: "event",

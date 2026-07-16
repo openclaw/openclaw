@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createDurableInboundReceiveJournalFromQueue,
+  isDurableInboundReceiveCapacityError,
 } from "./durable-receive.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
@@ -106,9 +107,12 @@ describe("createDurableInboundReceiveJournalFromQueue", () => {
       await expect(journal.accept("message-1", { body: "first" })).resolves.toMatchObject({
         kind: "accepted",
       });
-      await expect(journal.accept("message-2", { body: "second" })).rejects.toThrow(
-        "Durable inbound receive queue is full (1 pending entries)",
-      );
+      const capacityError = await journal
+        .accept("message-2", { body: "second" })
+        .then(() => undefined)
+        .catch((error: unknown) => error);
+      expect(isDurableInboundReceiveCapacityError(capacityError)).toBe(true);
+      expect(capacityError).toMatchObject({ maxPendingEntries: 1 });
       await expect(journal.pending()).resolves.toMatchObject([
         { id: "message-1", payload: { body: "first" } },
       ]);

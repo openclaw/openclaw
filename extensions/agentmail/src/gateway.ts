@@ -2,6 +2,7 @@ import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { createAgentMailCatchUpSession, createAgentMailCatchUpSupervisor } from "./catch-up.js";
+import { createAgentMailClient } from "./client.js";
 import { createAgentMailDurableInboundReceiveJournal } from "./durable-receive.js";
 import { dispatchAgentMailInboundEvent, type AgentMailChannelRuntime } from "./inbound.js";
 import { processAgentMailIngress, replayPendingAgentMailIngress } from "./ingress.js";
@@ -51,6 +52,7 @@ export async function startAgentMailGatewayAccount(params: {
   if (!params.account.apiKey || !params.account.inboxId) {
     return await waitUntilAbort(params.abortSignal);
   }
+  const client = createAgentMailClient(params.account);
 
   const journal = createAgentMailDurableInboundReceiveJournal({
     accountId: params.account.accountId,
@@ -65,6 +67,7 @@ export async function startAgentMailGatewayAccount(params: {
       account: params.account,
       record,
       channelRuntime: params.channelRuntime,
+      client,
       log: params.log,
       onTurnAdopted: lifecycle.onTurnAdopted,
     });
@@ -87,6 +90,7 @@ export async function startAgentMailGatewayAccount(params: {
       abortSignal: params.abortSignal,
       receive,
       log: params.log,
+      client,
     });
   }
 
@@ -108,6 +112,7 @@ export async function startAgentMailGatewayAccount(params: {
   }
   const catchUpSession = await createAgentMailCatchUpSession({
     account: params.account,
+    client,
     log: params.log,
   });
   const catchUpSupervisor = createAgentMailCatchUpSupervisor({

@@ -242,10 +242,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared speech-provider API key resolver.
       // +32: shared channel setup, config-schema, policy, and status helpers.
       // +2: shared channel replay-guard factory and claim handle.
-      // +2: MediaFetchError and its code let external plugins classify bounded-media rejection.
-      // +1: MediaSizeLimitError distinguishes permanent loaded-media policy failures.
+      // +2: bounded-media error classes let plugins classify permanent size failures.
+      // +1: durable receive capacity guard lets plugins apply typed backpressure policy.
       // Harvest: retired AudioConfig type -1.
-      7988,
+      7990,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -266,7 +266,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared speech-provider API key resolver.
       // +24: shared channel setup, config-schema, policy, and status helpers.
       // +1: shared channel replay-guard factory.
-      4465,
+      // +3: bounded-media error classes and durable receive capacity guard.
+      4468,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -281,7 +282,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Used-union narrowing drops inherited deprecated exports.
       // +1: Telegram runner alias retained for plugin SDK compatibility.
       // +8: shared channel helpers mirrored by deprecated barrels.
-      2986,
+      // +1: durable receive capacity guard mirrored by deprecated barrels.
+      2987,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

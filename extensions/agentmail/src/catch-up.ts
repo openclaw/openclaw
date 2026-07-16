@@ -154,7 +154,7 @@ async function persistCursor(params: {
         version: CURSOR_VERSION,
         baselineAtMs: current?.baselineAtMs ?? params.baselineAtMs,
         highWaterAtMs: Math.max(current?.highWaterAtMs ?? 0, params.highWaterAtMs),
-        established: Boolean(current?.established || params.established),
+        established: current?.established === true || params.established,
       };
     });
     return;
@@ -164,7 +164,7 @@ async function persistCursor(params: {
     version: CURSOR_VERSION,
     baselineAtMs: current?.baselineAtMs ?? params.baselineAtMs,
     highWaterAtMs: Math.max(current?.highWaterAtMs ?? 0, params.highWaterAtMs),
-    established: Boolean(current?.established || params.established),
+    established: current?.established === true || params.established,
   });
 }
 
@@ -222,6 +222,7 @@ export async function createAgentMailCatchUpSession(params: {
           },
           { abortSignal },
         );
+        let pageAdvanced = false;
         for (const message of page.messages) {
           if (abortSignal.aborted) {
             return;
@@ -238,6 +239,11 @@ export async function createAgentMailCatchUpSession(params: {
           });
           admitted += 1;
           highWaterAtMs = Math.max(highWaterAtMs, message.timestamp.getTime());
+          pageAdvanced = true;
+        }
+        if (pageAdvanced) {
+          // Persist once per page. If admission fails mid-page, the cursor stays behind the page
+          // and durable message-id dedupe safely absorbs the repeated prefix on the next pass.
           await persistCursor({
             store,
             key,

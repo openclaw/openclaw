@@ -117,8 +117,7 @@ export async function loadAgentMailOutboundAttachments(params: {
   let totalBytes = 0;
   const attachments: AgentMail.SendAttachment[] = [];
   for (const [index, mediaUrl] of params.mediaUrls.entries()) {
-    const remainingBytes = params.maxBytes - totalBytes;
-    if (remainingBytes <= 0) {
+    if (totalBytes >= params.maxBytes) {
       throw new AgentMailMediaPolicyError(
         "AgentMail outbound attachments exceed the configured aggregate media limit",
       );
@@ -126,7 +125,9 @@ export async function loadAgentMailOutboundAttachments(params: {
     let loaded;
     try {
       loaded = await loadOutboundMediaFromUrl(mediaUrl, {
-        maxBytes: remainingBytes,
+        // Keep the per-file policy stable. Aggregate accounting happens after loading, so a later
+        // image is never recompressed more aggressively merely because earlier files were large.
+        maxBytes: params.maxBytes,
         mediaAccess: params.mediaAccess,
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,

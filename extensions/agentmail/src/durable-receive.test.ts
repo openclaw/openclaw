@@ -1,3 +1,4 @@
+import { createDurableInboundReceiveJournalFromQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
 import {
   AGENTMAIL_DURABLE_COMPLETED_TTL_MS,
@@ -32,15 +33,16 @@ describe("AgentMail durable ingress", () => {
   });
 
   it("normalizes generic durable capacity for transport backpressure", async () => {
-    const capacityError = new Error("queue full");
-    capacityError.name = "DurableInboundReceiveCapacityError";
+    const journal = createDurableInboundReceiveJournalFromQueue({
+      queue: {
+        prune: vi.fn(async () => undefined),
+        enqueue: vi.fn(async () => ({ kind: "capacity", maxPendingEntries: 1 })),
+      } as never,
+      admission: { pendingMaxEntries: 1 },
+    });
     await expect(
       processAgentMailIngress({
-        journal: {
-          accept: vi.fn(async () => {
-            throw capacityError;
-          }),
-        } as never,
+        journal: journal as never,
         record,
         dispatch: vi.fn(),
       }),

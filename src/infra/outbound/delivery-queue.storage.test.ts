@@ -184,6 +184,7 @@ describe("delivery-queue storage", () => {
         id,
         { text: "rewritten", mediaUrls: ["file:///tmp/final.png"] },
         tmpDir(),
+        "payload",
       );
 
       const entry = readQueuedEntry(tmpDir(), id);
@@ -194,6 +195,7 @@ describe("delivery-queue storage", () => {
         text: "rewritten",
         mediaUrls: ["file:///tmp/final.png"],
       });
+      expect(entry.platformSendKind).toBe("payload");
       expect(entry.platformSendStartedAt).toBeUndefined();
       expect(entry.recoveryState).toBeUndefined();
     });
