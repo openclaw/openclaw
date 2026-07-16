@@ -178,6 +178,31 @@ describe("Codex app-server dynamic tool build", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("forwards the sessions_yield message to onYieldDetected (#107788)", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const yieldMessages: Array<string | undefined> = [];
+    let capturedOnYield: ((message: string) => Promise<void> | void) | undefined;
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      capturedOnYield = (options as { onYield?: (message: string) => Promise<void> | void })
+        .onYield;
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null as never,
+      onYieldDetected: (message) => {
+        yieldMessages.push(message);
+      },
+    });
+
+    expectDefined(capturedOnYield);
+    await capturedOnYield("Research started — results will follow.");
+    expect(yieldMessages).toEqual(["Research started — results will follow."]);
+  });
+
   it("uses the message tool channel before a differing ingress provider", () => {
     expect(
       resolveCodexMessageToolProvider({
