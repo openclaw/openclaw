@@ -2114,9 +2114,77 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Run Slack desktop scenario",
     );
 
+    expect(runStep?.run).toContain("for attempt in 1 2 3");
     expect(runStep?.run).toContain(
-      "curl -fsS --connect-timeout 5 --max-time 15 --retry 2 https://checkip.amazonaws.com",
+      "curl -fsS --connect-timeout 5 --max-time 15 https://checkip.amazonaws.com",
     );
+    expect(runStep?.run).not.toContain("--retry");
+    expect(runStep?.run).toContain('runner_ip=""');
+    expect(runStep?.run).toContain("((${#runner_ip_octets[@]} != 4))");
+    expect(runStep?.run).toContain("((10#$octet > 255))");
+
+    const discoveryBlock = runStep?.run?.match(
+      /runner_ip=""[\s\S]*?echo "Using AWS SSH CIDR \$\{CRABBOX_AWS_SSH_CIDRS\}"/u,
+    )?.[0];
+    expect(discoveryBlock).toBeTruthy();
+
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-mantis-runner-ip-"));
+    try {
+      const fakeBin = path.join(root, "bin");
+      const callCount = path.join(root, "curl-calls");
+      mkdirSync(fakeBin);
+      writeFileSync(callCount, "0\n");
+      writeFileSync(
+        path.join(fakeBin, "curl"),
+        `#!/bin/bash
+count="$(<"$CURL_CALL_COUNT")"
+count=$((count + 1))
+printf '%s\n' "$count" >"$CURL_CALL_COUNT"
+if [[ "$count" == "1" ]]; then
+  printf '198.51.'
+  exit 28
+fi
+printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(path.join(fakeBin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail\n${discoveryBlock}\nprintf 'result=%s\\n' "$CRABBOX_AWS_SSH_CIDRS"`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            CURL_CALL_COUNT: callCount,
+            PATH: `${fakeBin}:${process.env.PATH}`,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("result=203.0.113.7/32");
+      expect(result.stdout).not.toContain("198.51.");
+      expect(readFileSync(callCount, "utf8")).toBe("2\n");
+
+      writeFileSync(callCount, "0\n");
+      const invalidResult = spawnSync("bash", ["-c", `set -euo pipefail\n${discoveryBlock}`], {
+        encoding: "utf8",
+        env: {
+          CURL_CALL_COUNT: callCount,
+          CURL_SUCCESS_IP: "999.0.0.1",
+          PATH: `${fakeBin}:${process.env.PATH}`,
+        },
+      });
+      expect(invalidResult.status).toBe(1);
+      expect(invalidResult.stderr).toContain(
+        "Could not resolve GitHub runner public IPv4 for AWS SSH ingress.",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
