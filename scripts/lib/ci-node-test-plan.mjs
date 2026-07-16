@@ -33,6 +33,7 @@ const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 const AUTO_REPLY_COMMANDS_STRIPES = 3;
+const AGENTS_CORE_RUNNER_CLI_STRIPES = 3;
 // Advisory runtime estimates (seconds) per split shard, measured from a
 // Blacksmith compact PR run with serial plans and 2 Vitest workers (run
 // 29481835688). Packing only: a stale entry skews job balance but never
@@ -41,7 +42,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-auth", 32],
   ["agentic-agents-core-isolated", 10],
   ["agentic-agents-core-models", 66],
-  ["agentic-agents-core-runner-cli", 312],
+  ["agentic-agents-core-runner-cli-1", 110],
+  ["agentic-agents-core-runner-cli-2", 110],
+  ["agentic-agents-core-runner-cli-3", 110],
   ["agentic-agents-core-runner-commands", 30],
   ["agentic-agents-core-runner-embedded", 20],
   ["agentic-agents-core-runner-sessions", 18],
@@ -80,7 +83,7 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-plugin-sdk", 50],
   ["auto-reply-core-top-level", 33],
   ["auto-reply-reply-agent-runner", 52],
-  ["auto-reply-reply-commands-1", 326],
+  ["auto-reply-reply-commands-1", 220],
   ["auto-reply-reply-commands-2", 33],
   ["auto-reply-reply-commands-3", 24],
   ["auto-reply-reply-dispatch", 36],
@@ -135,7 +138,7 @@ function isExclusiveCompactGroup(group) {
 // scales with the runner class. infra-process spawns child processes per test
 // and hit worker-startup timeouts under contention before serialization.
 const PINNED_WORKER_COMPACT_GROUP_RE =
-  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$|^core-runtime-infra-process$/u;
+  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 
 function applyCompactGroupWorkerPins(group) {
@@ -176,7 +179,9 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-agents-core-subagents",
   "agentic-agents-embedded",
   "agentic-agents-support",
-  "agentic-agents-core-runner-cli",
+  "agentic-agents-core-runner-cli-1",
+  "agentic-agents-core-runner-cli-2",
+  "agentic-agents-core-runner-cli-3",
   "agentic-agents-core-runner-commands",
   "agentic-agents-core-runner-embedded",
   "agentic-agents-core-runner-sessions",
@@ -461,12 +466,30 @@ function createAgentCoreSplitShards() {
     "agentic-agents-core-runner-sessions",
     "agentic-agents-core-runtime",
   ]
-    .map((shardName) => ({
-      configs: ["test/vitest/vitest.agents-core.config.ts"],
-      includePatterns: groups.get(shardName) ?? [],
-      requiresDist: false,
-      shardName,
-    }))
+    .flatMap((shardName) => {
+      const includePatterns = groups.get(shardName) ?? [];
+      // agents-core runs files serially (fileParallelism false guards shared
+      // module state), so the import-heavy cli-runner suite (~35s of module
+      // import per file) stripes across bins to parallelize at the job level.
+      if (shardName === "agentic-agents-core-runner-cli") {
+        return createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES).map(
+          (batch, index) => ({
+            configs: ["test/vitest/vitest.agents-core.config.ts"],
+            includePatterns: batch,
+            requiresDist: false,
+            shardName: `${shardName}-${index + 1}`,
+          }),
+        );
+      }
+      return [
+        {
+          configs: ["test/vitest/vitest.agents-core.config.ts"],
+          includePatterns,
+          requiresDist: false,
+          shardName,
+        },
+      ];
+    })
     .filter((shard) => shard.includePatterns.length > 0);
 
   return [
