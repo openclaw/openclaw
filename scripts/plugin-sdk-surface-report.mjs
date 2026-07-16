@@ -240,8 +240,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // proxy stream API and codex marker/scaffold pins retained.
       // +2: generic channel retry runner and Retry-After parser.
       // +1: shared speech-provider API key resolver.
-      // +22: shared channel setup, policy, and config schema helpers.
-      7974,
+      // +32: shared channel setup, config-schema, policy, and status helpers.
+      7984,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -260,8 +260,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Used-union narrowing of the 31 wildcard barrels.
       // +2: generic channel retry runner and Retry-After parser.
       // +1: shared speech-provider API key resolver.
-      // +15: shared channel setup, policy, and config schema helpers.
-      4455,
+      // +24: shared channel setup, config-schema, policy, and status helpers.
+      4464,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
