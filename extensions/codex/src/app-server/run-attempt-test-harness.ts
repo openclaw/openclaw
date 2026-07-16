@@ -16,13 +16,13 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import type { CodexAppServerClient } from "./client.js";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification } from "./protocol.js";
-import {
-  runCodexAppServerAttempt as runCodexAppServerAttemptImpl,
-  testing,
-} from "./run-attempt.js";
-import { closeCodexSandboxExecServersForTests } from "./sandbox-exec-server.js";
+import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -34,6 +34,7 @@ import {
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 export let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
@@ -267,7 +268,7 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
-export function getMockServerVersion() {
+function getMockServerVersion() {
   return "0.132.0";
 }
 
@@ -615,11 +616,11 @@ export function setupRunAttemptTestHooks(): void {
 
   afterEach(async () => {
     await drainActiveAppServerAttemptsForTest();
-    await closeCodexSandboxExecServersForTests();
+    await sandboxExecServerRegistry.closeAll();
     resetCodexAppServerClientFactoryForTest();
-    testing.resetOpenClawCodingToolsFactoryForTests();
-    testing.resetEnsuredCodexWorkspaceDirsForTests();
-    testing.clearPendingCodexNativeHookRelayUnregistersForTests();
+    dynamicToolBuildState.openClawCodingToolsFactory = undefined;
+    codexWorkspaceDirCache.clear();
+    nativeHookRelayUnregisterQueue.clear();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     clearMemoryPluginState();
     clearPluginCommands();
@@ -628,10 +629,11 @@ export function setupRunAttemptTestHooks(): void {
     resetGlobalHookRunner();
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
+    defaultCodexPluginMetadataCache.clear();
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
-    await closeCodexSandboxExecServersForTests();
+    await sandboxExecServerRegistry.closeAll();
     await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 }

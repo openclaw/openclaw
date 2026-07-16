@@ -1,7 +1,6 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
@@ -67,6 +66,7 @@ import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
+import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -151,31 +151,6 @@ function loadHookRunnerGlobal() {
 
 function loadOriginRouting() {
   return originRoutingLoader.load();
-}
-
-function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
-  const normalize = (list?: string[]) => {
-    if (!Array.isArray(list)) {
-      return undefined;
-    }
-    return normalizeStringEntries(list);
-  };
-  const channel = normalize(channelFilter);
-  const agent = normalize(agentFilter);
-  if (!channel && !agent) {
-    return undefined;
-  }
-  if (!channel) {
-    return agent;
-  }
-  if (!agent) {
-    return channel;
-  }
-  if (channel.length === 0 || agent.length === 0) {
-    return [];
-  }
-  const agentSet = new Set(agent);
-  return channel.filter((name) => agentSet.has(name));
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
@@ -510,6 +485,8 @@ export async function getReplyFromConfig(
             ...(internalOptsWithSkillFilter?.expectedExistingSessionId
               ? { expectedExistingSessionId: internalOptsWithSkillFilter.expectedExistingSessionId }
               : {}),
+            pinExpectedExistingSession:
+              internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
             signal: internalOptsWithSkillFilter?.abortSignal,
@@ -1047,6 +1024,12 @@ export async function getReplyFromConfig(
   }
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
+  // Dispatch-owned turns defer this to the runner. Turns that acquire the reply
+  // lane run it after durable admission; active steer/follow-up paths preserve
+  // the hook's existing before-queue boundary.
+  let beforeAgentReply:
+    | ((admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>)
+    | undefined;
   if (!useFastTestBootstrap) {
     const { getGlobalHookRunner } = await loadHookRunnerGlobal();
     const hookRunner = getGlobalHookRunner();
@@ -1060,34 +1043,43 @@ export async function getReplyFromConfig(
         normalizeOptionalString(sessionCtx.NativeChannelId) ??
         normalizeOptionalString(sessionCtx.ChatId);
       const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
-      const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
-        hookRunner.runBeforeAgentReply(
-          { cleanedBody },
-          {
-            agentId,
-            sessionKey: agentSessionKey,
-            sessionId,
-            workspaceDir,
-            trigger: hookTrigger,
-            ...buildAgentHookContextChannelFields({
+      beforeAgentReply = async (admitted) => {
+        const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
+          hookRunner.runBeforeAgentReply(
+            { cleanedBody },
+            {
+              agentId,
               sessionKey: agentSessionKey,
-              messageProvider: hookMessageProvider,
-              currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              senderId: sessionCtx.SenderId ?? ctx.SenderId,
-            }),
-            ...buildAgentHookContextIdentityFields({
+              sessionId: admitted?.sessionId ?? sessionId,
+              workspaceDir,
               trigger: hookTrigger,
-              senderId: sessionCtx.SenderId,
-              chatId: hookChatId,
-              channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
-            }),
-          },
-        ),
-      );
-      if (hookResult?.handled) {
+              ...buildAgentHookContextChannelFields({
+                sessionKey: agentSessionKey,
+                messageProvider: hookMessageProvider,
+                currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+                messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+                senderId: sessionCtx.SenderId ?? ctx.SenderId,
+              }),
+              ...buildAgentHookContextIdentityFields({
+                trigger: hookTrigger,
+                senderId: sessionCtx.SenderId,
+                chatId: hookChatId,
+                channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
+              }),
+            },
+          ),
+        );
+        if (!hookResult?.handled) {
+          return undefined;
+        }
         logResolverTiming("completed", "before_agent_reply_hook");
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+      };
+      if (!internalResolvedOpts?.replyOperation) {
+        const hookReply = await beforeAgentReply();
+        if (hookReply) {
+          return hookReply;
+        }
       }
     }
   }
@@ -1159,8 +1151,10 @@ export async function getReplyFromConfig(
       workspaceDir,
       abortedLastRun,
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+      ...(internalResolvedOpts?.replyOperation && beforeAgentReply ? { beforeAgentReply } : {}),
     }),
   );
   logResolverTiming("completed", "prepared_reply");
   return replyResult;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

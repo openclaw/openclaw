@@ -34,6 +34,7 @@ import {
 } from "../accounts.js";
 import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
 import { resolveSlackWebClientOptions } from "../client-options.js";
+import { createSlackStartupAuthClient } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
@@ -57,32 +58,31 @@ import {
   assertEnterpriseSlackDmPolicy,
   assertEnterpriseSlackPolicyConfig,
   assertNoEnterpriseSlackBindings,
+  resolveSlackIdentityHealth,
   resolveSlackInstallationIdentity,
   type SlackAuthTestIdentity,
 } from "./enterprise-install.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
+import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
+import { createSlackPresenceMonitor, hasSlackPresenceEventsEnabled } from "./presence-monitor.js";
 import {
   createSlackBoltApp,
-  createSlackSocketDisconnectWaiter,
   formatSlackChannelResolved,
   formatSlackUserResolved,
   gracefulStopSlackApp,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
-  resolveSlackSocketShutdownClient,
   startSlackSocketAndWaitForDisconnect,
   type SlackBoltResolvedExports,
 } from "./provider-support.js";
 import {
   formatSlackSocketModeSharedConnectionWarning,
   formatUnknownError,
-  getSocketEmitter,
   isNonRecoverableSlackAuthError,
   registerSlackSocketModeConnectionDiagnostics,
   SLACK_SOCKET_RECONNECT_POLICY,
-  waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
 import { setSlackDefaultSendIdentity } from "./send.runtime.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
@@ -133,7 +133,7 @@ function resolveStableSlackUserAllowlistEntries(entries: string[]): SlackUserRes
   return resolved;
 }
 
-export function formatSlackSocketReconnectMessage(params: {
+function formatSlackSocketReconnectMessage(params: {
   event: string;
   attempt: number;
   delayMs: number;
@@ -143,7 +143,7 @@ export function formatSlackSocketReconnectMessage(params: {
   return `slack socket disconnected (${params.event}); reconnecting in ${Math.round(params.delayMs / 1000)}s (attempt ${params.attempt}/∞)${suffix}`;
 }
 
-export function formatSlackSocketStartRetryMessage(params: {
+function formatSlackSocketStartRetryMessage(params: {
   attempt: number;
   delayMs: number;
   error: unknown;
@@ -380,12 +380,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let botId = "";
   const expectedApiAppIdFromAppToken =
     slackMode === "socket" ? parseApiAppIdFromAppToken(appToken) : undefined;
-  let authTestFailed = false;
   let authTestError: string | undefined;
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
   try {
-    const auth = await app.client.auth.test();
+    const auth = await createSlackStartupAuthClient(botToken, clientOptions).auth.test();
     const authUserId = normalizeOptionalString(auth.user_id) ?? "";
     botId = normalizeOptionalString((auth as { bot_id?: string }).bot_id) ?? "";
     // Slack documents bot_id only for bot-token identities. Never treat the user behind a
@@ -397,26 +396,24 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       accountId: account.accountId,
     });
     if (!authUserId && !enterpriseOrgInstall) {
-      authTestFailed = true;
       authTestError = "auth.test returned no user_id";
     }
   } catch (err) {
-    authTestFailed = true;
     authTestError = err instanceof Error ? err.message : String(err);
   }
   const installationIdentity = resolveSlackInstallationIdentity({
     enterpriseOrgInstall,
-    auth: authTestFailed ? undefined : authTestIdentity,
+    auth: authTestError === undefined ? authTestIdentity : undefined,
     authError: authTestError,
     transportApiAppId: expectedApiAppIdFromAppToken,
   });
   const teamId = installationIdentity.kind === "workspace" ? installationIdentity.teamId : "";
   const apiAppId =
     installationIdentity.kind === "degraded" ? "" : (installationIdentity.apiAppId ?? "");
-  if (authTestFailed) {
+  if (authTestError !== undefined) {
     runtime.log?.(
       warn(
-        `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
+        `[${account.accountId}] slack auth.test failed at boot (${authTestError}); ` +
           "explicit bot-mention detection will be disabled until restart with a valid bot token; " +
           "required-mention channels will fail closed without another trusted activation signal",
       ),
@@ -425,6 +422,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   if (authIdentityWarning) {
     runtime.log?.(warn(authIdentityWarning));
   }
+
+  const identityHealth = resolveSlackIdentityHealth({
+    installationIdentity,
+    botUserId,
+    authTestError,
+    authIdentityWarning,
+  });
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
     runtime.error?.(
@@ -480,7 +484,30 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     : undefined;
 
-  const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+  const presenceEventsEnabled = hasSlackPresenceEventsEnabled({
+    account: slackCfg.presenceEvents,
+    channels: slackCfg.channels,
+  });
+  const presenceMonitor =
+    installationIdentity.kind !== "enterprise" && presenceEventsEnabled
+      ? createSlackPresenceMonitor({
+          accountId: account.accountId,
+          accountConfig: slackCfg.presenceEvents,
+          client: app.client.users,
+          cooldownStore: openSlackPresenceCooldownStore(),
+          log: runtime.log,
+          error: runtime.error,
+        })
+      : undefined;
+  if (installationIdentity.kind === "enterprise" && presenceEventsEnabled) {
+    runtime.log?.(warn("slack presence events are unavailable for Enterprise Grid org installs"));
+  }
+  const handleSlackMessage = createSlackMessageHandler({
+    ctx,
+    account,
+    trackEvent,
+    onPrepared: presenceMonitor?.observe,
+  });
   if (
     installationIdentity.kind !== "enterprise" &&
     isSlackAnyNativeApprovalClientEnabled({
@@ -515,6 +542,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     appHomeSlashCommandName,
     trackEvent,
   });
+  presenceMonitor?.start();
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -675,10 +703,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             abortSignal: opts.abortSignal,
             onStarted: () => {
               reconnectAttempts = 0;
-              publishSlackConnectedStatus(opts.setStatus);
+              publishSlackConnectedStatus(opts.setStatus, identityHealth);
               if (!hasLoggedSocketConnected) {
                 hasLoggedSocketConnected = true;
-                runtime.log?.("slack socket mode connected");
+                runtime.log?.(
+                  identityHealth.healthState === "degraded"
+                    ? "slack socket mode connected (degraded identity)"
+                    : "slack socket mode connected",
+                );
               }
             },
           });
@@ -768,6 +800,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    await presenceMonitor?.stop();
     if (slackMode === "relay") {
       setSlackDefaultSendIdentity(account.accountId, undefined);
     }
@@ -778,24 +811,5 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 }
 
-export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
-
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
-
-export const testing = {
-  formatSlackChannelResolved,
-  formatSlackUserResolved,
-  publishSlackConnectedStatus,
-  publishSlackDisconnectedStatus,
-  resolveSlackSocketShutdownClient,
-  gracefulStopSlackApp,
-  resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveSlackBoltInterop,
-  createSlackBoltApp,
-  createSlackSocketDisconnectWaiter,
-  startSlackSocketAndWaitForDisconnect,
-  getSocketEmitter,
-  waitForSlackSocketDisconnect,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

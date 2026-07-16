@@ -57,7 +57,7 @@ import {
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
-import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
+import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -124,7 +124,7 @@ type AzureResponsesOutputItemDoneEvent = Omit<ResponsesOutputItemDoneEvent, "ite
   item: ResponsesStreamOutputMessage;
 };
 
-export type OpenAIResponsesStreamEvent =
+type OpenAIResponsesStreamEvent =
   | ResponseStreamEvent
   | AzureResponsesContentPartAddedEvent
   | AzureResponsesOutputItemDoneEvent
@@ -210,8 +210,7 @@ interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
 }
-export { convertResponsesToolPayload, convertResponsesTools };
-export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
+export { convertResponsesToolPayload };
 
 type ResponsesRequestOptions = {
   signal?: AbortSignal;
@@ -786,9 +785,12 @@ export async function processResponsesStream<TApi extends Api>(
     if (outputIndex !== undefined) {
       const indexed = toolCallsByOutputIndex.get(outputIndex);
       if (indexed) {
-        return !identitiesConflict(indexed, identity)
-          ? adoptToolCallIdentity(indexed, identity)
-          : undefined;
+        if (indexed.callId && identity.callId && indexed.callId !== identity.callId) {
+          return undefined;
+        }
+        // output_index owns routing once registered, but call_id stays stable;
+        // compatible providers may rotate item_id for the same output item.
+        return adoptToolCallIdentity(indexed, identity);
       }
       // A compatibility stream may add calls without indices, then start
       // including them. Bind only the one identity-matched (or sole) candidate.
@@ -1314,3 +1316,4 @@ function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): Sto
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -341,9 +341,11 @@ export type SessionCreateParams = {
   agentId?: string;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   parentSessionKey?: string;
   task?: string;
   message?: string;
+  attachments?: unknown[];
 };
 
 /** Parameters for sending a message to an existing session. */

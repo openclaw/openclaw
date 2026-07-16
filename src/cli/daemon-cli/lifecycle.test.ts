@@ -31,7 +31,9 @@ type RestartParams = {
 
 const service = {
   readCommand: vi.fn(),
+  readRuntime: vi.fn(),
   restart: vi.fn(),
+  stop: vi.fn(),
 };
 
 const runServiceStart = vi.fn();
@@ -213,7 +215,10 @@ describe("runDaemonRestart health checks", () => {
     ]);
     delete process.env.OPENCLAW_CONTAINER_HINT;
     service.readCommand.mockReset();
+    service.readRuntime.mockReset();
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
     service.restart.mockReset();
+    service.stop.mockReset();
     runServiceStart.mockReset();
     runServiceRestart.mockReset();
     runServiceStop.mockReset();
@@ -626,9 +631,13 @@ describe("runDaemonRestart health checks", () => {
 
   it("signals an unmanaged gateway process on stop", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4200, 4300]);
-    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
-      await params.onNotLoaded?.();
-    });
+    runServiceStop.mockImplementation(
+      async (params: {
+        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+      }) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
+      },
+    );
 
     await runDaemonStop({ json: true });
 
@@ -648,6 +657,23 @@ describe("runDaemonRestart health checks", () => {
     };
     expect(stopParams.opts).toEqual({ json: true, disable: true });
     expect(stopParams.stopWhenNotLoaded).toBe(true);
+  });
+
+  it("stops a running disabled systemd unit through the service manager", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    service.readRuntime.mockResolvedValue({ status: "running" });
+    runServiceStop.mockImplementation(
+      async (params: {
+        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+      }) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
+      },
+    );
+
+    await runDaemonStop({ json: true });
+
+    expect(service.stop).toHaveBeenCalledWith({ env: process.env, stdout: process.stdout });
+    expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
   });
 
   it("skips gateway port resolution on stop when the service manager handles the stop", async () => {
@@ -830,9 +856,13 @@ describe("runDaemonRestart health checks", () => {
     });
     stopSystemdService.mockResolvedValue(undefined);
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
-      await params.onNotLoaded?.();
-    });
+    runServiceStop.mockImplementation(
+      async (params: {
+        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+      }) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
+      },
+    );
 
     await expect(runDaemonStop({ json: true })).resolves.toBeUndefined();
     expect(stopSystemdService).toHaveBeenCalled();
@@ -852,9 +882,13 @@ describe("runDaemonRestart health checks", () => {
       ),
     );
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
-      await params.onNotLoaded?.();
-    });
+    runServiceStop.mockImplementation(
+      async (params: {
+        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+      }) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
+      },
+    );
 
     await expect(runDaemonStop({ json: true })).rejects.toThrow(
       /sudo systemctl stop openclaw-gateway\.service/,
@@ -865,9 +899,13 @@ describe("runDaemonRestart health checks", () => {
 
   it("skips unmanaged signaling for pids that are not live gateway processes", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
-    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
-      await params.onNotLoaded?.();
-    });
+    runServiceStop.mockImplementation(
+      async (params: {
+        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+      }) => {
+        await params.onNotLoaded?.({ stdout: process.stdout });
+      },
+    );
 
     await runDaemonStop({ json: true });
 

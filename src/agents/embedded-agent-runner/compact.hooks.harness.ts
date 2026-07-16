@@ -77,12 +77,10 @@ export const sessionCompactImpl = vi.fn(async () => ({
   details: { ok: true },
 }));
 export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
-export const sanitizeSessionHistoryMock = vi.fn(
+const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
-export const validateReplayTurnsMock = vi.fn(
-  async ({ messages }: { messages: unknown[] }) => messages,
-);
+const validateReplayTurnsMock = vi.fn(async ({ messages }: { messages: unknown[] }) => messages);
 export const getMemorySearchManagerMock: Mock<
   (params?: unknown) => Promise<MockMemorySearchManager>
 > = vi.fn(async () => ({
@@ -188,7 +186,7 @@ function createMockToolDefinitions(tools: unknown[] = []) {
   });
 }
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
-export const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
+const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const guardSessionManagerMock = vi.fn(() => ({
   flushPendingToolResults: vi.fn(),
 }));
@@ -243,8 +241,9 @@ function createDefaultCompactionAuthStore(): AuthProfileStore {
 export const ensureAuthProfileStoreMock: Mock<() => AuthProfileStore> = vi.fn(
   createDefaultCompactionAuthStore,
 );
-export const ensureAuthProfileStoreWithoutExternalProfilesMock: Mock<() => AuthProfileStore> =
-  vi.fn(createDefaultCompactionAuthStore);
+const ensureAuthProfileStoreWithoutExternalProfilesMock: Mock<() => AuthProfileStore> = vi.fn(
+  createDefaultCompactionAuthStore,
+);
 const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> = vi.fn(
   () => undefined,
 );
@@ -643,7 +642,6 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../harness/policy.js", () => ({
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
-
   vi.doMock("../harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
   }));
@@ -663,6 +661,7 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSystemPromptContribution: vi.fn(() => undefined),
     resolveProviderTextTransforms: vi.fn(() => undefined),
+    shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
     transformProviderSystemPrompt: vi.fn(
       (params: { systemPrompt?: string; context?: { systemPrompt?: string } }) =>
         params.context?.systemPrompt ?? params.systemPrompt,
@@ -1063,3 +1062,4 @@ export async function loadCompactHooksHarness(): Promise<{
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

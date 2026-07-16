@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { DisconnectReason } from "baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -32,10 +31,27 @@ vi.mock("./session.js", async () => {
   };
 });
 
+const runtimeContextMocks = vi.hoisted(() => ({
+  channelRuntime: { runtimeContexts: {} },
+  register: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => {
+  return {
+    getChannelRuntimeContext: vi.fn(),
+    registerChannelRuntimeContext: runtimeContextMocks.register,
+  };
+});
+
+vi.mock("./runtime.js", () => ({
+  getWhatsAppRuntime: () => ({ channel: runtimeContextMocks.channelRuntime }),
+}));
+
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const logoutWebMock = vi.mocked(logoutWeb);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
+const registerChannelRuntimeContextMock = runtimeContextMocks.register;
 
 function createListenerStub(messageId = "ok") {
   return {
@@ -126,6 +142,7 @@ describe("WhatsAppConnectionController", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    registerChannelRuntimeContextMock.mockReturnValue({ dispose: vi.fn() });
     logoutWebMock.mockResolvedValue(true);
     readWebAuthExistsForDecisionMock
       .mockReset()
@@ -543,6 +560,8 @@ describe("WhatsAppConnectionController", () => {
 
   it("waits for queued creds persistence so linked auth survives an auth-dir reuse", async () => {
     const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
+    const actualAuthStore =
+      await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
     const authDir = await fs.mkdtemp(path.join(os.tmpdir(), "wa-auth-durability-"));
     try {
       readWebAuthExistsForDecisionMock.mockImplementation(
@@ -573,13 +592,15 @@ describe("WhatsAppConnectionController", () => {
       expect(credsSaved).toBe(true);
       expect(result.outcome).toBe("connected");
       // A fresh read of the same auth dir is what a restarted/rebuilt container does.
-      await expect(actualSession.webAuthExists(authDir)).resolves.toBe(true);
+      await expect(actualAuthStore.webAuthExists(authDir)).resolves.toBe(true);
     } finally {
       await fs.rm(authDir, { recursive: true, force: true });
     }
   });
 
   it("keeps the previous registered controller until a replacement listener is ready", async () => {
+    const disposeRuntimeContext = vi.fn();
+    registerChannelRuntimeContextMock.mockReturnValueOnce({ dispose: disposeRuntimeContext });
     const liveController = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
@@ -605,7 +626,14 @@ describe("WhatsAppConnectionController", () => {
       createListener: async () => liveListener,
     });
 
-    expect(getRegisteredWhatsAppConnectionController("work")).toBe(liveController);
+    expect(registerChannelRuntimeContextMock).toHaveBeenCalledWith({
+      channelRuntime: runtimeContextMocks.channelRuntime,
+      channelId: "whatsapp",
+      accountId: "work",
+      capability: "connection-controller",
+      context: liveController,
+      abortSignal: undefined,
+    });
 
     const replacement = new WhatsAppConnectionController({
       accountId: "work",
@@ -636,11 +664,12 @@ describe("WhatsAppConnectionController", () => {
         }),
       ).rejects.toThrow("replacement failed");
 
-      expect(getRegisteredWhatsAppConnectionController("work")).toBe(liveController);
+      expect(registerChannelRuntimeContextMock).toHaveBeenCalledTimes(1);
     } finally {
       await replacement.shutdown();
       await liveController.shutdown();
     }
+    expect(disposeRuntimeContext).toHaveBeenCalledOnce();
   });
 
   it("tracks real websocket frame activity in the connection snapshot", async () => {

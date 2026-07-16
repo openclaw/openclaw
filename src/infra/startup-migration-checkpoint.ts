@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
+import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -12,7 +13,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 type StartupMigrationCheckpointDatabase = Pick<
@@ -108,24 +108,23 @@ export function hasActiveStartupMigrationLease(
   if (!existsSync(pathname)) {
     return false;
   }
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
-  try {
-    const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
-    return Boolean(
-      executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("state_leases")
-          .select("owner")
-          .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
-          .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
-          .where("expires_at", ">", nowMs),
-      ),
-    );
-  } finally {
-    db.close();
-  }
+  return withOpenClawStateDatabaseReadOnly(
+    ({ db }) => {
+      const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
+      return Boolean(
+        executeSqliteQueryTakeFirstSync(
+          db,
+          stateDb
+            .selectFrom("state_leases")
+            .select("owner")
+            .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
+            .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
+            .where("expires_at", ">", nowMs),
+        ),
+      );
+    },
+    { env },
+  );
 }
 
 export function needsStartupMigrationCheckpoint(

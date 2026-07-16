@@ -3,12 +3,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
-import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -24,6 +23,7 @@ const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
 
 let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
 let sharedTempRoot: string;
+let rateLimitEpochMs = Date.now();
 
 function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
   if (!startedServer) {
@@ -46,6 +46,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  vi.restoreAllMocks();
   if (!startedServer) {
     return;
   }
@@ -173,10 +174,23 @@ async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
 }
 
 beforeEach(() => {
-  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+  rateLimitEpochMs += 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
 });
 
 describe("gateway config methods", () => {
+  it("includes the active runtime config revision", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+      configRevisionHash?: string;
+      appliedConfigHash?: string | null;
+    }>(requireWs(), "config.get", {});
+
+    expect(current.ok).toBe(true);
+    expect(current.payload).toHaveProperty("configRevisionHash");
+    expect(current.payload).toHaveProperty("appliedConfigHash");
+  });
+
   it("rejects config.set when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
     deleteTestEnvValue(missingEnvVar);
@@ -1119,3 +1133,4 @@ describe("gateway server sessions", () => {
     expect(loadSessionEntry({ agentId: "ops", sessionKey: "main", storePath })).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

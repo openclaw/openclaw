@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { formatBuildChipText } from "./sidebar-build-chip.ts";
+import { formatBuildChipText } from "./sidebar-build-chip-format.ts";
 
 const COMMIT = "e8cbc62f0123456789abcdef0123456789abcdef";
 const BUILT_AT = "2026-07-10T12:00:00.000Z";
@@ -54,6 +54,16 @@ describe("formatBuildChipText", () => {
       name: "long branch",
       info: buildInfo({ branch: "abcdefghijklmnop", builtAt: null }),
       expected: "abcdefghijklmn…@e8cbc62",
+    },
+    {
+      name: "long branch keeps an emoji that fits exactly at the boundary",
+      info: buildInfo({ branch: `${"a".repeat(12)}😀suffix`, builtAt: null }),
+      expected: "aaaaaaaaaaaa😀…@e8cbc62",
+    },
+    {
+      name: "long branch does not split an emoji across the boundary",
+      info: buildInfo({ branch: `${"a".repeat(13)}😀suffix`, builtAt: null }),
+      expected: "aaaaaaaaaaaaa…@e8cbc62",
     },
     {
       name: "future build timestamp",

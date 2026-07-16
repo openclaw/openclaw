@@ -9,7 +9,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { isLiveBillingDrift } from "./live-test-provider-drift.js";
+import { isLiveBillingDrift } from "./live-test-provider-drift.test-support.js";
 
 const LIVE = isLiveTestEnabled(["ANTHROPIC_TRANSPORT_LIVE_TEST"]);
 const describeLive = LIVE ? describe : describe.skip;

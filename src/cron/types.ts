@@ -32,10 +32,10 @@ export type CronSchedule =
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
-export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
+type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
 /** Wake policy for main-session jobs waiting on heartbeat/user activity. */
-export type CronWakeMode = "next-heartbeat" | "now";
+type CronWakeMode = "next-heartbeat" | "now";
 
 /** Messaging channel id accepted by cron delivery settings. */
 export type CronMessageChannel = ChannelId;
@@ -60,13 +60,13 @@ export type CronDelivery = {
 };
 
 /** Webhook completion destination used alongside chat delivery. */
-export type CronCompletionDestination = {
+type CronCompletionDestination = {
   mode: "webhook";
   to?: string;
 };
 
 /** Destination override for failed-run notifications. */
-export type CronFailureDestination = {
+type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
   accountId?: string;
@@ -74,7 +74,7 @@ export type CronFailureDestination = {
 };
 
 /** Partial failure-destination update shape; null clears individual override fields. */
-export type CronFailureDestinationPatch = {
+type CronFailureDestinationPatch = {
   channel?: CronMessageChannel | null;
   to?: string | null;
   accountId?: string | null;
@@ -138,7 +138,7 @@ export type CronDeliveryPreview = {
 };
 
 /** Token usage summary copied from the agent runner when available. */
-export type CronUsageSummary = {
+type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
@@ -212,8 +212,6 @@ export type CronAgentExecutionStarted = {
   tool?: string;
   toolCallId?: string;
   itemId?: string;
-  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
-  firstModelCallStarted?: boolean;
 };
 
 /** Watchdog update that requires the new execution phase. */
@@ -237,15 +235,27 @@ export type CronFailureAlert = {
 
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | CronAgentTurnPayload
-  | CronCommandPayload;
+  | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
+  | (CronAgentTurnPayload & CronPayloadToolAllow)
+  | (CronCommandPayload & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
-  | { kind: "systemEvent"; text?: string }
-  | CronAgentTurnPayloadPatch
-  | CronCommandPayloadPatch;
+  | ({ kind: "systemEvent"; text?: string } & CronPayloadToolAllowPatch)
+  | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
+  | (CronCommandPayloadPatch & CronPayloadToolAllowPatch);
+
+type CronPayloadToolAllow = {
+  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
+  toolsAllow?: string[];
+  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
+  toolsAllowIsDefault?: boolean;
+};
+
+type CronPayloadToolAllowPatch = {
+  toolsAllow?: string[] | null;
+  toolsAllowIsDefault?: boolean;
+};
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -260,10 +270,6 @@ type CronAgentTurnPayloadFields = {
   externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
-  /** Optional tool allow-list; when set, only these tools are sent to the model. */
-  toolsAllow?: string[];
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
-  toolsAllowIsDefault?: boolean;
 };
 
 type CronAgentTurnPayload = {

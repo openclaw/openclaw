@@ -114,14 +114,14 @@
       "translated": "Açık"
     },
     {
-      "id": "native.android.9f31cc0fcf527ed2",
-      "source": "Cron job is not due yet.",
-      "translated": "Cron işinin zamanı henüz gelmedi."
+      "id": "native.android.198617f355636373",
+      "source": "Automation is not due yet.",
+      "translated": "Otomasyonun zamanı henüz gelmedi."
     },
     {
-      "id": "native.android.fc2c0e26482b32cd",
-      "source": "Cron job is already running.",
-      "translated": "Cron işi zaten çalışıyor."
+      "id": "native.android.68d8213dbeaf4480",
+      "source": "Automation is already running.",
+      "translated": "Otomasyon zaten çalışıyor."
     },
     {
       "id": "native.android.e1bb423a2260ee6d",
@@ -129,9 +129,9 @@
       "translated": "Gateway yeniden başlatma kurtarma işlemi hâlâ devam ediyor."
     },
     {
-      "id": "native.android.341ad86c38a5d3d5",
-      "source": "Cron job has an invalid configuration.",
-      "translated": "Cron görevinin yapılandırması geçersiz."
+      "id": "native.android.7f330978f4d02d88",
+      "source": "Automation has an invalid configuration.",
+      "translated": "Otomasyonun yapılandırması geçersiz."
     },
     {
       "id": "native.android.83640045de441512",
@@ -139,24 +139,24 @@
       "translated": "Cron zamanlayıcı durduruldu."
     },
     {
-      "id": "native.android.df0b9434fa41904f",
-      "source": "Cron run finished.",
-      "translated": "Cron çalıştırması tamamlandı."
+      "id": "native.android.5b73964f29df42a7",
+      "source": "Automation run finished.",
+      "translated": "Otomasyon çalıştırması tamamlandı."
     },
     {
-      "id": "native.android.c709d0617063c061",
-      "source": "Cron run skipped.",
-      "translated": "Cron çalıştırması atlandı."
+      "id": "native.android.37a3fea89f09fd4f",
+      "source": "Automation run skipped.",
+      "translated": "Otomasyon çalıştırması atlandı."
     },
     {
-      "id": "native.android.b9f5c536c5a42514",
-      "source": "Cron run failed.",
-      "translated": "Cron çalıştırması başarısız oldu."
+      "id": "native.android.b257b623a2508db3",
+      "source": "Automation run failed.",
+      "translated": "Otomasyon çalıştırması başarısız oldu."
     },
     {
-      "id": "native.android.a42d3ae97bf79bbe",
-      "source": "Cron run finished with an unknown status.",
-      "translated": "Cron çalıştırması bilinmeyen bir durumla tamamlandı."
+      "id": "native.android.fe6882d37530dbb3",
+      "source": "Automation run finished with an unknown status.",
+      "translated": "Otomasyon çalıştırması bilinmeyen bir durumla tamamlandı."
     },
     {
       "id": "native.android.d00110fa302427ec",
@@ -524,49 +524,49 @@
       "translated": "Bağlandı (operatör: $operator)"
     },
     {
-      "id": "native.android.5fe7f7afb77851ff",
-      "source": "This cron job already has a queued run.",
-      "translated": "Bu cron işi için zaten sıraya alınmış bir çalıştırma var."
+      "id": "native.android.d21aada33a4f9af2",
+      "source": "This automation already has a queued run.",
+      "translated": "Bu otomasyonun zaten sıraya alınmış bir çalıştırması var."
     },
     {
-      "id": "native.android.1ebef3822941cdb6",
-      "source": "Cron job started.",
-      "translated": "Cron işi başlatıldı."
+      "id": "native.android.d6f67c67daa0cf8b",
+      "source": "Automation run queued.",
+      "translated": "Otomasyon çalıştırması sıraya alındı."
     },
     {
-      "id": "native.android.d8ba5136a17f7618",
-      "source": "Cron run queued.",
-      "translated": "Cron çalıştırması kuyruğa alındı."
+      "id": "native.android.33a3252703380d25",
+      "source": "Automation started.",
+      "translated": "Otomasyon başlatıldı."
     },
     {
-      "id": "native.android.9bc7e4ad0b917a5f",
-      "source": "Gateway rejected the cron run.",
-      "translated": "Gateway, cron çalıştırmasını reddetti."
+      "id": "native.android.2366805fa2d53539",
+      "source": "Gateway rejected the automation run.",
+      "translated": "Gateway otomasyon çalıştırmasını reddetti."
     },
     {
-      "id": "native.android.8a758d2851f3db17",
-      "source": "Cron job disabled.",
-      "translated": "Cron işi devre dışı bırakıldı."
+      "id": "native.android.f2afad6e17c1e4f5",
+      "source": "Automation enabled.",
+      "translated": "Otomasyon etkinleştirildi."
     },
     {
-      "id": "native.android.fda9390dc0d4bdea",
-      "source": "Cron job enabled.",
-      "translated": "Cron işi etkinleştirildi."
+      "id": "native.android.e9523d30c1f4484c",
+      "source": "Automation paused.",
+      "translated": "Otomasyon duraklatıldı."
     },
     {
-      "id": "native.android.a9aa7171558f8412",
-      "source": "This cron job changed on the gateway. Review the latest version before saving again.",
-      "translated": "Bu cron işi Gateway üzerinde değişti. Tekrar kaydetmeden önce en son sürümü inceleyin."
+      "id": "native.android.ee1570aa6c242586",
+      "source": "This automation changed on the gateway. Review the latest version before saving again.",
+      "translated": "Bu otomasyon Gateway üzerinde değiştirildi. Yeniden kaydetmeden önce en son sürümü inceleyin."
     },
     {
-      "id": "native.android.4562b415164529af",
-      "source": "Cron job updated.",
-      "translated": "Cron işi güncellendi."
+      "id": "native.android.c8b760a913d0cb66",
+      "source": "Automation updated.",
+      "translated": "Otomasyon güncellendi."
     },
     {
-      "id": "native.android.937a9a77deeef115",
-      "source": "Cron job deleted.",
-      "translated": "Cron işi silindi."
+      "id": "native.android.1c494df0976b57ed",
+      "source": "Automation deleted.",
+      "translated": "Otomasyon silindi."
     },
     {
       "id": "native.android.9c4af565f4ffe18c",
@@ -587,6 +587,21 @@
       "id": "native.android.4de14726a5ec0b73",
       "source": "No canvas update yet. Tap to retry.",
       "translated": "Henüz canvas güncellemesi yok. Yeniden denemek için dokunun."
+    },
+    {
+      "id": "native.android.00a2531a39904d08",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "Uyandırma sözcüklerini kaydetmek için bir Gateway'e bağlanın"
+    },
+    {
+      "id": "native.android.538201c75b85068f",
+      "source": "Wake words saved",
+      "translated": "Uyandırma sözcükleri kaydedildi"
+    },
+    {
+      "id": "native.android.b367e85de3a7148f",
+      "source": "Could not save wake words",
+      "translated": "Uyandırma sözcükleri kaydedilemedi"
     },
     {
       "id": "native.android.4b07456682e725d9",
@@ -634,34 +649,34 @@
       "translated": "Sağlayıcı modelleri yüklendi ancak hazır olma durumu kullanılamıyor."
     },
     {
-      "id": "native.android.0e1e5786e4cfc894",
-      "source": "Could not load cron jobs.",
-      "translated": "Cron görevleri yüklenemedi."
+      "id": "native.android.76a4ea6fbd0e9ec9",
+      "source": "Could not load automations.",
+      "translated": "Otomasyonlar yüklenemedi."
     },
     {
-      "id": "native.android.5288d0e2cd5ab8e6",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "Cron görevlerini incelemek için Gateway'e bağlanın."
+      "id": "native.android.38e0abd9a93954ee",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "Otomasyonları incelemek için Gateway'e bağlanın."
     },
     {
-      "id": "native.android.09ac6b21e791abb2",
-      "source": "Gateway returned an invalid cron job.",
-      "translated": "Gateway geçersiz bir cron görevi döndürdü."
+      "id": "native.android.c90da365e3dae626",
+      "source": "Gateway returned an invalid automation.",
+      "translated": "Gateway geçersiz bir otomasyon döndürdü."
     },
     {
-      "id": "native.android.db2fbde400d1e692",
-      "source": "Could not load cron job.",
-      "translated": "Cron görevi yüklenemedi."
+      "id": "native.android.d6714e6f74a2cb86",
+      "source": "Could not load automation.",
+      "translated": "Otomasyon yüklenemedi."
     },
     {
-      "id": "native.android.1c986c7849e0094a",
-      "source": "Connect the gateway to inspect cron run history.",
-      "translated": "Cron çalıştırma geçmişini incelemek için Gateway'e bağlanın."
+      "id": "native.android.892451834e038518",
+      "source": "Connect the gateway to inspect automation run history.",
+      "translated": "Otomasyon çalıştırma geçmişini incelemek için Gateway'e bağlanın."
     },
     {
-      "id": "native.android.5de73d7e34c4dfda",
-      "source": "Could not load cron run history.",
-      "translated": "Cron çalıştırma geçmişi yüklenemedi."
+      "id": "native.android.c25d29539ca8e4ff",
+      "source": "Could not load automation run history.",
+      "translated": "Otomasyon çalıştırma geçmişi yüklenemedi."
     },
     {
       "id": "native.android.153ffc5ce4132479",
@@ -669,9 +684,9 @@
       "translated": "Cron değişiklikleri operator.admin erişimi gerektirir."
     },
     {
-      "id": "native.android.31b0570face9a32e",
-      "source": "Connect the gateway to manage cron jobs.",
-      "translated": "Cron görevlerini yönetmek için Gateway'e bağlanın."
+      "id": "native.android.74e54edba88f9531",
+      "source": "Connect the gateway to manage automations.",
+      "translated": "Otomasyonları yönetmek için Gateway'e bağlanın."
     },
     {
       "id": "native.android.c050b799c39b1fd9",
@@ -1072,6 +1087,11 @@
       "id": "native.android.2c46e20193e2ae90",
       "source": "Could not update model.",
       "translated": "Model güncellenemedi."
+    },
+    {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "Düşünme düzeyi güncellenemedi."
     },
     {
       "id": "native.android.956a394937480f8a",
@@ -1539,24 +1559,24 @@
       "translated": "İptal"
     },
     {
-      "id": "native.android.ec06722578a6027e",
-      "source": "Delete cron job?",
-      "translated": "Cron işi silinsin mi?"
+      "id": "native.android.0e3e55624d2b9cc7",
+      "source": "Delete automation?",
+      "translated": "Otomasyon silinsin mi?"
     },
     {
-      "id": "native.android.362073d4e1e4624d",
-      "source": "This permanently removes the scheduled job from the gateway.",
-      "translated": "Bu, zamanlanmış işi gateway'den kalıcı olarak kaldırır."
+      "id": "native.android.a239813fcaf37275",
+      "source": "This permanently removes the automation and its schedule from the gateway.",
+      "translated": "Bu işlem, otomasyonu ve zamanlamasını Gateway'den kalıcı olarak kaldırır."
     },
     {
-      "id": "native.android.a3fcfa20dc395b87",
-      "source": "This job changed while you were editing. Revert to the latest gateway version before saving.",
-      "translated": "Bu iş, siz düzenlerken değiştirildi. Kaydetmeden önce en son Gateway sürümüne geri dönün."
+      "id": "native.android.dfbb2ffdd097891e",
+      "source": "This automation changed while you were editing. Revert to the latest gateway version before saving.",
+      "translated": "Bu otomasyon, siz düzenlerken değişti. Kaydetmeden önce en son Gateway sürümüne geri dönün."
     },
     {
-      "id": "native.android.db9f08d611b4c508",
-      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.",
-      "translated": "Bu işi çalıştırmadan, etkinleştirmeden, devre dışı bırakmadan, silmeden veya yenilemeden önce düzenlemelerinizi kaydedin ya da geri alın."
+      "id": "native.android.35f50ae04278c068",
+      "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this automation.",
+      "translated": "Bu otomasyonu çalıştırmadan, etkinleştirmeden, devre dışı bırakmadan, silmeden veya yenilemeden önce düzenlemelerinizi kaydedin ya da geri alın."
     },
     {
       "id": "native.android.212889821e40127e",
@@ -1589,14 +1609,14 @@
       "translated": "Etkinleştir"
     },
     {
-      "id": "native.android.1fed5d5912a9679c",
-      "source": "Delete Job",
-      "translated": "İşi Sil"
+      "id": "native.android.eb4763f9d83f71b5",
+      "source": "Delete Automation",
+      "translated": "Otomasyonu Sil"
     },
     {
-      "id": "native.android.da9ecf342cbd7035",
-      "source": "Edit Job",
-      "translated": "İşi Düzenle"
+      "id": "native.android.6cf371a6c39142be",
+      "source": "Edit Automation",
+      "translated": "Otomasyonu Düzenle"
     },
     {
       "id": "native.android.006f60922ae98063",
@@ -1604,9 +1624,9 @@
       "translated": "Etkin"
     },
     {
-      "id": "native.android.8b967e5cba1edfd8",
-      "source": "Allow the scheduler to run this job.",
-      "translated": "Zamanlayıcının bu işi çalıştırmasına izin ver."
+      "id": "native.android.cdfd111ea8c90d0f",
+      "source": "Allow the scheduler to run this automation.",
+      "translated": "Zamanlayıcının bu otomasyonu çalıştırmasına izin verin."
     },
     {
       "id": "native.android.f5fe0e769a9df4f8",
@@ -1614,14 +1634,14 @@
       "translated": "Çalıştırdıktan sonra sil"
     },
     {
-      "id": "native.android.9ed8d09744263540",
-      "source": "Remove this job after a successful one-shot run.",
-      "translated": "Başarılı bir tek seferlik çalıştırmadan sonra bu işi kaldır."
+      "id": "native.android.1a6d5883c1e661ba",
+      "source": "Remove this automation after a successful one-shot run.",
+      "translated": "Tek seferlik başarılı bir çalıştırmanın ardından bu otomasyonu kaldırın."
     },
     {
-      "id": "native.android.8faa8ae2ea76fe52",
-      "source": "Job name",
-      "translated": "İş adı"
+      "id": "native.android.7681a20f499488a8",
+      "source": "Automation name",
+      "translated": "Otomasyon adı"
     },
     {
       "id": "native.android.e3a12cf55b2caea3",
@@ -3869,34 +3889,39 @@
       "translated": "Gateway'iniz bildirdiğinde sağlayıcı limitleri burada görünecek."
     },
     {
-      "id": "native.android.962a15bdb26cb6e1",
-      "source": "Cron Jobs",
-      "translated": "Cron İşleri"
-    },
-    {
       "id": "native.android.5e3e4cd42004cb28",
       "source": "Scheduled OpenClaw work from your gateway.",
       "translated": "Gateway'inizden zamanlanmış OpenClaw işleri."
     },
     {
-      "id": "native.android.f9a5f09bd7436aa6",
-      "source": "Jobs",
-      "translated": "Görevler"
+      "id": "native.android.31a5440e22667f02",
+      "source": "Automations",
+      "translated": "Otomasyonlar"
     },
     {
-      "id": "native.android.3cd22006987fde12",
-      "source": "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
-      "translated": "Yapılandırmasını ve çalıştırma geçmişini incelemek için bir işi açın. Admin kapsamlı bağlantılar ayrıca onu çalıştırabilir, düzenleyebilir, etkinleştirebilir, devre dışı bırakabilir veya silebilir."
+      "id": "native.android.6e803f5130583ef7",
+      "source": "Search automations",
+      "translated": "Otomasyonlarda ara"
     },
     {
-      "id": "native.android.9354a5bf1e4ce5a5",
-      "source": "Connect the gateway to load cron jobs.",
-      "translated": "Cron jobs'u yüklemek için Gateway'e bağlanın."
+      "id": "native.android.ba3859394e1d84ad",
+      "source": "Search",
+      "translated": "Ara"
     },
     {
-      "id": "native.android.239e2598dab8a8b1",
-      "source": "No scheduled jobs.",
-      "translated": "Zamanlanmış iş yok."
+      "id": "native.android.02b3c78b09d0bbf5",
+      "source": "Open an automation to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
+      "translated": "Yapılandırmasını ve çalıştırma geçmişini incelemek için bir otomasyonu açın. Yönetici kapsamlı bağlantılar ayrıca otomasyonu çalıştırabilir, düzenleyebilir, etkinleştirebilir, devre dışı bırakabilir veya silebilir."
+    },
+    {
+      "id": "native.android.93757bcd5a888e9b",
+      "source": "Connect the gateway to load automations.",
+      "translated": "Otomasyonları yüklemek için Gateway'e bağlanın."
+    },
+    {
+      "id": "native.android.64a9b78fdbb526db",
+      "source": "No automations yet.",
+      "translated": "Henüz otomasyon yok."
     },
     {
       "id": "native.android.bc88f537cd309fcb",
@@ -3904,34 +3929,34 @@
       "translated": "Gateway üzerinde oluşturulan zamanlanmış işler burada görünür."
     },
     {
-      "id": "native.android.2fbb66cd888e9543",
-      "source": "Cron Job",
-      "translated": "Cron Görevi"
+      "id": "native.android.de64e737e58cc949",
+      "source": "No matching automations.",
+      "translated": "Eşleşen otomasyon yok."
     },
     {
-      "id": "native.android.f6dd71419863574c",
-      "source": "Inspect scheduled gateway work.",
-      "translated": "Zamanlanmış gateway işlerini inceleyin."
+      "id": "native.android.9e3164ae5cb0527a",
+      "source": "Automation",
+      "translated": "Otomasyon"
     },
     {
-      "id": "native.android.e3a6337e3c28d3f5",
-      "source": "Connect the gateway to inspect cron jobs.",
-      "translated": "Cron işlerini incelemek için gateway'e bağlanın."
+      "id": "native.android.5d9806af18054700",
+      "source": "Inspect and manage scheduled gateway work.",
+      "translated": "Zamanlanmış Gateway işlerini inceleyin ve yönetin."
     },
     {
-      "id": "native.android.2d3daa5032913461",
-      "source": "Cron job not loaded.",
-      "translated": "Cron işi yüklenmedi."
+      "id": "native.android.c6faada8886de13f",
+      "source": "Connect the gateway to inspect automations.",
+      "translated": "Otomasyonları incelemek için Gateway'e bağlanın."
     },
     {
-      "id": "native.android.401993832e04f790",
-      "source": "Loading cron job…",
-      "translated": "Cron işi yükleniyor…"
+      "id": "native.android.4530f9bf73d3155f",
+      "source": "Automation not loaded.",
+      "translated": "Otomasyon yüklenmedi."
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "Aracılar"
+      "id": "native.android.ba65a945fa8b0fc5",
+      "source": "Loading automation…",
+      "translated": "Otomasyon yükleniyor…"
     },
     {
       "id": "native.android.0f33ca43db97b2a9",
@@ -4044,9 +4069,89 @@
       "translated": "Profili Kaydet"
     },
     {
-      "id": "native.android.19f0834b4dbcc85a",
-      "source": "Configure voice, transport, and playback.",
-      "translated": "Ses, aktarım ve oynatmayı yapılandırın."
+      "id": "native.android.deda55df7ca328fc",
+      "source": "Configure wake words, talk, and playback.",
+      "translated": "Uyandırma sözcüklerini, konuşmayı ve oynatmayı yapılandırın."
+    },
+    {
+      "id": "native.android.2ae2282617282586",
+      "source": "Voice",
+      "translated": "Ses"
+    },
+    {
+      "id": "native.android.3f54d9356234744e",
+      "source": "Voice Wake",
+      "translated": "Sesle Uyandırma"
+    },
+    {
+      "id": "native.android.34ec8a3bc017cbd5",
+      "source": "Listen for wake words",
+      "translated": "Uyandırma sözcüklerini dinle"
+    },
+    {
+      "id": "native.android.6e58157abced395f",
+      "source": "Runs on-device while OpenClaw is visible.",
+      "translated": "OpenClaw görünür durumdayken cihaz üzerinde çalışır."
+    },
+    {
+      "id": "native.android.6464166ab71fde3f",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "Cihaz üzerinde konuşma tanıma kullanılamıyor."
+    },
+    {
+      "id": "native.android.35d996c1bc693bb9",
+      "source": "Wake listener",
+      "translated": "Uyandırma dinleyicisi"
+    },
+    {
+      "id": "native.android.12fd2cd4e7d1d778",
+      "source": "Last command: $command",
+      "translated": "Son komut: $command"
+    },
+    {
+      "id": "native.android.a36f052c5f1691d6",
+      "source": "Pauses during other voice activity.",
+      "translated": "Diğer ses etkinlikleri sırasında duraklatılır."
+    },
+    {
+      "id": "native.android.a5272caac136694c",
+      "source": "Wake words",
+      "translated": "Uyandırma sözcükleri"
+    },
+    {
+      "id": "native.android.37e7e27c16eca7fe",
+      "source": "Add one wake word or phrase per field. Then say one before your command.",
+      "translated": "Her alana bir uyandırma sözcüğü veya ifadesi ekleyin. Ardından komutunuzdan önce bunlardan birini söyleyin."
+    },
+    {
+      "id": "native.android.95e42f0b4b6d4092",
+      "source": "Wake word or phrase",
+      "translated": "Uyandırma sözcüğü veya ifadesi"
+    },
+    {
+      "id": "native.android.0b35023a9220d572",
+      "source": "Remove wake phrase",
+      "translated": "Uyandırma ifadesini kaldır"
+    },
+    {
+      "id": "native.android.0bff8c1428b32178",
+      "source": "Add wake phrase",
+      "translated": "Uyandırma ifadesi ekle"
+    },
+    {
+      "id": "native.android.dfb84902f6a483d0",
+      "source": "Save wake words",
+      "translated": "Uyandırma sözcüklerini kaydet"
+    },
+    {
+      "id": "native.android.5ab6829fa57f662d",
+      "source": "Saving…",
+      "translated": "Kaydediliyor…"
+    },
+    {
+      "id": "native.android.672382a4b7900ee6",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "Uyandırma sözcüklerini kaydetmek için bir Gateway'e bağlanın"
     },
     {
       "id": "native.android.8d0458a4fe154e9b",
@@ -4134,14 +4239,14 @@
       "translated": "OpenClaw seçilen uyarıları alabilir."
     },
     {
-      "id": "native.android.fef97bfb2cd5d228",
-      "source": "$quietStart to $quietEnd",
-      "translated": "$quietStart - $quietEnd"
-    },
-    {
       "id": "native.android.a04ee29c0a3b68f5",
       "source": "Quiet Hours",
       "translated": "Sessiz Saatler"
+    },
+    {
+      "id": "native.android.fef97bfb2cd5d228",
+      "source": "$quietStart to $quietEnd",
+      "translated": "$quietStart - $quietEnd"
     },
     {
       "id": "native.android.db3ed951c0462727",
@@ -4157,11 +4262,6 @@
       "id": "native.android.609413bd24d4dfe6",
       "source": "Rate Limit",
       "translated": "Hız Sınırı"
-    },
-    {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "Erişim"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -4429,14 +4529,44 @@
       "translated": "Çevrimiçi"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "Erişim"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "Adres"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "Kullanılamıyor"
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "Keşfedildi"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "Varsayılan Aracı"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "Aracılar"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "Örnek Kimliği"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "Eşleştirmek için QR Kodunu Tara"
+    },
+    {
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "Sınırlı Gateway erişimi"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4447,6 +4577,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "Bağlantıyı kes"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "Tanıla"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "Gateway Ekle"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "Başka bir Gateway eklemek için bir kurulum kodunu tarayın veya yapıştırın."
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "QR Kodunu Tara"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "Kurulum kodu"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "Kurulum kodunu nereden alabilirim?"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android mevcut bir kurulum kodunu tarayabilir veya yapıştırabilir, ancak bu gateway henüz uygulamaya kurulum kodu oluşturma özelliği sunmuyor. Gateway ana makinesinde openclaw qr ile QR/kod oluşturun, ardından burada tarayın veya kurulum kodunu aşağıya yapıştırın."
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "Henüz Gateway bulunamadı. Keşif engellenmişse manuel kurulumu kullanın."
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "Bağlan"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4639,9 @@
       "translated": "Unut"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Gateway kurulumu"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "Başka bir Gateway eklemek için bir kurulum kodunu tarayın veya yapıştırın."
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "Gateway ekle"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "Kurulum Kodu"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android mevcut bir kurulum kodunu tarayabilir veya yapıştırabilir, ancak bu gateway henüz uygulamaya kurulum kodu oluşturma özelliği sunmuyor. Gateway ana makinesinde openclaw qr ile QR/kod oluşturun, ardından burada tarayın veya kurulum kodunu aşağıya yapıştırın."
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "Bağlantı Kurulumu"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "Kurulum kodu"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "Manuel Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -4547,6 +4692,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "Geçerli bir kurulum kodu veya gateway adresi girin."
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "Kullanılamıyor"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "Tam"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "Sınırlı"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "Güvenli bir wss:// veya Tailscale Serve Gateway kullanın, Control UI'da veya openclaw qr ile tam erişimli bir kurulum kodu oluşturun, ardından aşağıya tarayın veya yapıştırın ve ayarları ve yükseltmeleri etkinleştirmek için yeniden bağlanın."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -4829,9 +4994,9 @@
       "translated": "İncele"
     },
     {
-      "id": "native.android.9664ff3f205c25d6",
-      "source": "Open cron job detail",
-      "translated": "Cron işi ayrıntısını aç"
+      "id": "native.android.bee982da282e0887",
+      "source": "Open automation detail",
+      "translated": "Otomasyon ayrıntısını aç"
     },
     {
       "id": "native.android.4a583b7a36684ed7",
@@ -4989,6 +5154,11 @@
       "translated": "Varsayılan"
     },
     {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
+    },
+    {
       "id": "native.android.f154617fd2233082",
       "source": "Action Request",
       "translated": "Eylem İsteği"
@@ -5062,6 +5232,21 @@
       "id": "native.android.98b1e19bdbc1e640",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "translated": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
+    },
+    {
+      "id": "native.android.ec82506ef939dc0e",
+      "source": "All",
+      "translated": "Tümü"
+    },
+    {
+      "id": "native.android.f281f6a848fd8ff5",
+      "source": "Active",
+      "translated": "Etkin"
+    },
+    {
+      "id": "native.android.48080c472857781d",
+      "source": "Paused",
+      "translated": "Duraklatıldı"
     },
     {
       "id": "native.android.c45aa61a985005d9",
@@ -5504,9 +5689,9 @@
       "translated": "Onaylar"
     },
     {
-      "id": "native.android.dd2def654c56b026",
-      "source": "Cron Jobs",
-      "translated": "Cron İşleri"
+      "id": "native.android.9cb21c6f0cbc9adc",
+      "source": "Automations",
+      "translated": "Otomasyonlar"
     },
     {
       "id": "native.android.20833251ed61ca65",
@@ -6104,9 +6289,29 @@
       "translated": "Yüklü skill'leri yönetin ve ClawHub'dan güvenilir sürümler ekleyin."
     },
     {
-      "id": "native.android.8d8bafb716f856dd",
-      "source": "Needs Setup",
-      "translated": "Kurulum Gerekiyor"
+      "id": "native.android.9c353cf3a7ec08e9",
+      "source": "Browse",
+      "translated": "Göz at"
+    },
+    {
+      "id": "native.android.c6d0b8c171da5e69",
+      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
+      "translated": "Skill değişiklikleri operator.admin gerektirir. Yönetici yetkisine sahip bir Gateway token'ı ile yeniden bağlanın."
+    },
+    {
+      "id": "native.android.cf0bc487b537dd04",
+      "source": "Inspect and manage installed skill state.",
+      "translated": "Yüklü skill durumunu inceleyin ve yönetin."
+    },
+    {
+      "id": "native.android.92e94c3027f3e5ce",
+      "source": "Status",
+      "translated": "Durum"
+    },
+    {
+      "id": "native.android.3866fe91a977b21a",
+      "source": "Missing",
+      "translated": "Eksik"
     },
     {
       "id": "native.android.9507bc022dc2e3ed",
@@ -6119,9 +6324,9 @@
       "translated": "Yenileniyor"
     },
     {
-      "id": "native.android.c6d0b8c171da5e69",
-      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
-      "translated": "Skill değişiklikleri operator.admin gerektirir. Yönetici yetkisine sahip bir Gateway token'ı ile yeniden bağlanın."
+      "id": "native.android.8748f97cadea1632",
+      "source": "Search installed skills",
+      "translated": "Yüklü skill'lerde ara"
     },
     {
       "id": "native.android.73f15da5b2ffdf3c",
@@ -6142,36 +6347,6 @@
       "id": "native.android.193fa2086c682510",
       "source": "No installed skills match this search.",
       "translated": "Bu aramayla eşleşen yüklü skill yok."
-    },
-    {
-      "id": "native.android.cf0bc487b537dd04",
-      "source": "Inspect and manage installed skill state.",
-      "translated": "Yüklü skill durumunu inceleyin ve yönetin."
-    },
-    {
-      "id": "native.android.92e94c3027f3e5ce",
-      "source": "Status",
-      "translated": "Durum"
-    },
-    {
-      "id": "native.android.3866fe91a977b21a",
-      "source": "Missing",
-      "translated": "Eksik"
-    },
-    {
-      "id": "native.android.944e0db270dbef5c",
-      "source": "Installed skills",
-      "translated": "Yüklü skill'ler"
-    },
-    {
-      "id": "native.android.47ee8c52e754f17d",
-      "source": "${visibleCount}/${totalCount}",
-      "translated": "${visibleCount}/${totalCount}"
-    },
-    {
-      "id": "native.android.8748f97cadea1632",
-      "source": "Search installed skills",
-      "translated": "Yüklü skill'lerde ara"
     },
     {
       "id": "native.android.e7aa097ca1a41857",
@@ -6254,16 +6429,6 @@
       "translated": "Aranıyor"
     },
     {
-      "id": "native.android.559e047666ce63f8",
-      "source": "Dismiss",
-      "translated": "Kapat"
-    },
-    {
-      "id": "native.android.0c00aa53506c3cd3",
-      "source": "Acknowledge Gateway warning and install",
-      "translated": "Gateway uyarısını kabul et ve yükle"
-    },
-    {
       "id": "native.android.cc0b71a70901e723",
       "source": "Version $it",
       "translated": "Version $it"
@@ -6279,9 +6444,24 @@
       "translated": "Loading"
     },
     {
+      "id": "native.android.c27608d140fad1ba",
+      "source": "Needs attention",
+      "translated": "Dikkat gerektiriyor"
+    },
+    {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
       "translated": "Review"
+    },
+    {
+      "id": "native.android.559e047666ce63f8",
+      "source": "Dismiss",
+      "translated": "Kapat"
+    },
+    {
+      "id": "native.android.0c00aa53506c3cd3",
+      "source": "Acknowledge Gateway warning and install",
+      "translated": "Gateway uyarısını kabul et ve yükle"
     },
     {
       "id": "native.android.9be29ded6a7097bf",
@@ -6312,6 +6492,16 @@
       "id": "native.android.268a3461947b22d3",
       "source": "Cancel",
       "translated": "İptal"
+    },
+    {
+      "id": "native.android.5f24ed8fa0ca7622",
+      "source": "All",
+      "translated": "Tümü"
+    },
+    {
+      "id": "native.android.8d8bafb716f856dd",
+      "source": "Needs Setup",
+      "translated": "Kurulum Gerekiyor"
     },
     {
       "id": "native.android.815c8dab8db8a6c1",
@@ -7789,6 +7979,56 @@
       "translated": "Konuşma hatası ($error)"
     },
     {
+      "id": "native.android.11d70a2e3419e346",
+      "source": "Off",
+      "translated": "Kapalı"
+    },
+    {
+      "id": "native.android.b21cacf24f03d772",
+      "source": "On-device speech recognition unavailable",
+      "translated": "Cihaz üzerinde konuşma tanıma kullanılamıyor"
+    },
+    {
+      "id": "native.android.c379aa335b932db2",
+      "source": "Paused",
+      "translated": "Duraklatıldı"
+    },
+    {
+      "id": "native.android.d0c22c4961346923",
+      "source": "Listening",
+      "translated": "Dinleniyor"
+    },
+    {
+      "id": "native.android.894062d81447a410",
+      "source": "Microphone permission required",
+      "translated": "Mikrofon izni gerekli"
+    },
+    {
+      "id": "native.android.d404b3d5f084f5d2",
+      "source": "Device language not supported",
+      "translated": "Cihaz dili desteklenmiyor"
+    },
+    {
+      "id": "native.android.d559a0a3f32701b8",
+      "source": "On-device language model unavailable",
+      "translated": "Cihaz üzerindeki dil modeli kullanılamıyor"
+    },
+    {
+      "id": "native.android.269915b38b1486c0",
+      "source": "Triggered",
+      "translated": "Tetiklendi"
+    },
+    {
+      "id": "native.android.9a0753f5ae9394ab",
+      "source": "Gateway unavailable",
+      "translated": "Gateway kullanılamıyor"
+    },
+    {
+      "id": "native.android.eef69ee3eb23cc1b",
+      "source": "Starting…",
+      "translated": "Başlatılıyor…"
+    },
+    {
       "id": "native.android.f392ee2d50d6b7ce",
       "source": "ask OpenClaw $prompt",
       "translated": "OpenClaw'a $prompt sor"
@@ -7977,6 +8217,691 @@
       "id": "native.apple.a811eb3e4d2174d5",
       "source": "that request",
       "translated": "bu istek"
+    },
+    {
+      "id": "native.apple.1696cec8c3c6a511",
+      "source": "Settings",
+      "translated": "Ayarlar"
+    },
+    {
+      "id": "native.apple.d66c2f42a01fdcc6",
+      "source": "History",
+      "translated": "Geçmiş"
+    },
+    {
+      "id": "native.apple.18f4b0e25c9ca42f",
+      "source": "Automation",
+      "translated": "Otomasyon"
+    },
+    {
+      "id": "native.apple.f8791c06b9eea7c9",
+      "source": "Close",
+      "translated": "Kapat"
+    },
+    {
+      "id": "native.apple.35f5bb05688e822d",
+      "source": "Refresh automation",
+      "translated": "Otomasyonu yenile"
+    },
+    {
+      "id": "native.apple.725e459c8dd8ba4c",
+      "source": "Delete this automation?",
+      "translated": "Bu otomasyon silinsin mi?"
+    },
+    {
+      "id": "native.apple.50255322e1b2c13b",
+      "source": "Delete Automation",
+      "translated": "Otomasyonu Sil"
+    },
+    {
+      "id": "native.apple.d4cb0f4dc6c1058f",
+      "source": "Cancel",
+      "translated": "İptal"
+    },
+    {
+      "id": "native.apple.ff9d5755b4f93f5d",
+      "source": "This permanently removes the automation and its schedule from the Gateway.",
+      "translated": "Bu işlem, otomasyonu ve zamanlamasını Gateway'den kalıcı olarak kaldırır."
+    },
+    {
+      "id": "native.apple.881fc358341a1df5",
+      "source": "active",
+      "translated": "etkin"
+    },
+    {
+      "id": "native.apple.4bc22f0f6856a7c5",
+      "source": "paused",
+      "translated": "duraklatıldı"
+    },
+    {
+      "id": "native.apple.8fb3a1cb0aeb5dfe",
+      "source": "Next run",
+      "translated": "Sonraki çalıştırma"
+    },
+    {
+      "id": "native.apple.57e96e8d8fd5c342",
+      "source": "Last run",
+      "translated": "Son çalıştırma"
+    },
+    {
+      "id": "native.apple.cb17c8f476ef9637",
+      "source": "Automation detail",
+      "translated": "Otomasyon ayrıntısı"
+    },
+    {
+      "id": "native.apple.125f2fbe90c80642",
+      "source": "Editing unavailable",
+      "translated": "Düzenleme kullanılamıyor"
+    },
+    {
+      "id": "native.apple.aa17216c6a622bcc",
+      "source": "Details",
+      "translated": "Ayrıntılar"
+    },
+    {
+      "id": "native.apple.adba197735c909a7",
+      "source": "Name",
+      "translated": "Ad"
+    },
+    {
+      "id": "native.apple.1de7b0cbc64f235e",
+      "source": "Automation name",
+      "translated": "Otomasyon adı"
+    },
+    {
+      "id": "native.apple.22c0b187b1d0ed60",
+      "source": "Description",
+      "translated": "Açıklama"
+    },
+    {
+      "id": "native.apple.ea1c2fa8bee66cde",
+      "source": "Optional context",
+      "translated": "İsteğe bağlı bağlam"
+    },
+    {
+      "id": "native.apple.555170e9a9b3c867",
+      "source": "Schedule",
+      "translated": "Zamanlama"
+    },
+    {
+      "id": "native.apple.23ffc415d7625e1d",
+      "source": "Delete after successful run",
+      "translated": "Başarılı çalıştırmadan sonra sil"
+    },
+    {
+      "id": "native.apple.9fe4b2423471d0f1",
+      "source": "Useful for one-time automations.",
+      "translated": "Tek seferlik otomasyonlar için kullanışlıdır."
+    },
+    {
+      "id": "native.apple.84cd065063e9703c",
+      "source": "ISO date and time",
+      "translated": "ISO tarihi ve saati"
+    },
+    {
+      "id": "native.apple.23830e2ba37b8769",
+      "source": "2030-01-15T09:00:00Z",
+      "translated": "2030-01-15T09:00:00Z"
+    },
+    {
+      "id": "native.apple.e1399c7c254d8dbb",
+      "source": "Interval (milliseconds)",
+      "translated": "Aralık (milisaniye)"
+    },
+    {
+      "id": "native.apple.74aa65bb399fb736",
+      "source": "Anchor (milliseconds)",
+      "translated": "Bağlantı noktası (milisaniye)"
+    },
+    {
+      "id": "native.apple.bcafe4b14750497b",
+      "source": "Cron expression",
+      "translated": "Cron ifadesi"
+    },
+    {
+      "id": "native.apple.a16790dec1a5f2b4",
+      "source": "Time zone",
+      "translated": "Saat dilimi"
+    },
+    {
+      "id": "native.apple.c2c5bed70319ae16",
+      "source": "America/Los_Angeles",
+      "translated": "America/Los_Angeles"
+    },
+    {
+      "id": "native.apple.9336c989fdd5d6fa",
+      "source": "Stagger (milliseconds)",
+      "translated": "Kademelendirme (milisaniye)"
+    },
+    {
+      "id": "native.apple.e03877d6332b324c",
+      "source": "Command to watch",
+      "translated": "İzlenecek komut"
+    },
+    {
+      "id": "native.apple.9fe4c10ddbf241e2",
+      "source": "pnpm build",
+      "translated": "pnpm build"
+    },
+    {
+      "id": "native.apple.585f47ef8c7223e1",
+      "source": "Action",
+      "translated": "Eylem"
+    },
+    {
+      "id": "native.apple.6260eb77ea71ba28",
+      "source": "Event text",
+      "translated": "Etkinlik metni"
+    },
+    {
+      "id": "native.apple.2878cb40276871ce",
+      "source": "What should the agent know?",
+      "translated": "Aracı ne bilmeli?"
+    },
+    {
+      "id": "native.apple.364fc52b3c80ff57",
+      "source": "Message",
+      "translated": "Mesaj"
+    },
+    {
+      "id": "native.apple.feac3b85bf40c7af",
+      "source": "What should the agent do?",
+      "translated": "Aracı ne yapmalı?"
+    },
+    {
+      "id": "native.apple.ab59900232a65c71",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.apple.8a9349d85eeb22d2",
+      "source": "Thinking",
+      "translated": "Düşünme"
+    },
+    {
+      "id": "native.apple.7450fbb4246506d1",
+      "source": "Gateway default",
+      "translated": "Gateway varsayılanı"
+    },
+    {
+      "id": "native.apple.9e19b04a68638b23",
+      "source": "Arguments (JSON array)",
+      "translated": "Bağımsız değişkenler (JSON dizisi)"
+    },
+    {
+      "id": "native.apple.cdde064f118b68ea",
+      "source": "Working directory",
+      "translated": "Çalışma dizini"
+    },
+    {
+      "id": "native.apple.20547b640f816b97",
+      "source": "Optional",
+      "translated": "İsteğe bağlı"
+    },
+    {
+      "id": "native.apple.4ff623573733f360",
+      "source": "Execution",
+      "translated": "Yürütme"
+    },
+    {
+      "id": "native.apple.d93a77ec4f005d00",
+      "source": "Session target",
+      "translated": "Oturum hedefi"
+    },
+    {
+      "id": "native.apple.71ee518c108734d5",
+      "source": "main, isolated, current, or session:<id>",
+      "translated": "main, isolated, current veya session:<id>"
+    },
+    {
+      "id": "native.apple.34106ad50c7b87e8",
+      "source": "Wake mode",
+      "translated": "Uyandırma modu"
+    },
+    {
+      "id": "native.apple.0f5ba1612a172b31",
+      "source": "now or next-heartbeat",
+      "translated": "now veya next-heartbeat"
+    },
+    {
+      "id": "native.apple.2314f13a102a3e2c",
+      "source": "Delivery and failure routing remain visible and editable in the Control UI.",
+      "translated": "Teslimat ve hata yönlendirmesi Control UI'da görünür ve düzenlenebilir kalır."
+    },
+    {
+      "id": "native.apple.c52518b79660be2e",
+      "source": "Manage",
+      "translated": "Yönet"
+    },
+    {
+      "id": "native.apple.61cf5b73d3be8b9e",
+      "source": "Admin scope is required to change, run, or delete automations.",
+      "translated": "Otomasyonları değiştirmek, çalıştırmak veya silmek için yönetici kapsamı gereklidir."
+    },
+    {
+      "id": "native.apple.63450040c4cdc79d",
+      "source": "Save",
+      "translated": "Kaydet"
+    },
+    {
+      "id": "native.apple.4e4304768b282ed0",
+      "source": "Run Now",
+      "translated": "Şimdi Çalıştır"
+    },
+    {
+      "id": "native.apple.4b893a030daf831b",
+      "source": "Running",
+      "translated": "Çalışıyor"
+    },
+    {
+      "id": "native.apple.252a740ded4f5747",
+      "source": "Enable",
+      "translated": "Etkinleştir"
+    },
+    {
+      "id": "native.apple.b0394e53e163e4d0",
+      "source": "Pause",
+      "translated": "Duraklat"
+    },
+    {
+      "id": "native.apple.03266f8398b57057",
+      "source": "Delete",
+      "translated": "Sil"
+    },
+    {
+      "id": "native.apple.4dcf36018847481d",
+      "source": "Save or discard edits before running, pausing, or enabling this automation.",
+      "translated": "Bu otomasyonu çalıştırmadan, duraklatmadan veya etkinleştirmeden önce düzenlemeleri kaydedin ya da atın."
+    },
+    {
+      "id": "native.apple.9fb34a87dc5dd407",
+      "source": "Recent runs",
+      "translated": "Son çalıştırmalar"
+    },
+    {
+      "id": "native.apple.3f31602868b5d915",
+      "source": "Loading",
+      "translated": "Yükleniyor"
+    },
+    {
+      "id": "native.apple.eff430620ea4d6e0",
+      "source": "Refresh",
+      "translated": "Yenile"
+    },
+    {
+      "id": "native.apple.522ed52c5d6f2cf6",
+      "source": "No runs yet",
+      "translated": "Henüz çalıştırma yok"
+    },
+    {
+      "id": "native.apple.a0b71e211aa932c5",
+      "source": "Completed runs and delivery outcomes will appear here.",
+      "translated": "Tamamlanan çalıştırmalar ve teslimat sonuçları burada görünecek."
+    },
+    {
+      "id": "native.apple.4cb9a754ceb21346",
+      "source": "Schedule configured",
+      "translated": "Zamanlama yapılandırıldı"
+    },
+    {
+      "id": "native.apple.592cd2b7c16fa91f",
+      "source": "One time",
+      "translated": "Tek seferlik"
+    },
+    {
+      "id": "native.apple.fde9e0a6a8b23b7d",
+      "source": "Every %@",
+      "translated": "Her %@"
+    },
+    {
+      "id": "native.apple.ed053c0e3d827ba3",
+      "source": "Interval",
+      "translated": "Aralık"
+    },
+    {
+      "id": "native.apple.fe7237d5293453ff",
+      "source": "After command exits",
+      "translated": "Komut sonlandıktan sonra"
+    },
+    {
+      "id": "native.apple.439c8dea4cc485bb",
+      "source": "Unsaved changes",
+      "translated": "Kaydedilmemiş değişiklikler"
+    },
+    {
+      "id": "native.apple.81846df87f4be1be",
+      "source": "Save or close this automation before refreshing.",
+      "translated": "Yenilemeden önce bu otomasyonu kaydedin veya kapatın."
+    },
+    {
+      "id": "native.apple.1be30cb60c21d3fe",
+      "source": "Edits preserved",
+      "translated": "Düzenlemeler korundu"
+    },
+    {
+      "id": "native.apple.8d87d696c6e912dd",
+      "source": "Gateway data changed while you edited. Save will validate the current revision.",
+      "translated": "Siz düzenleme yaparken Gateway verileri değişti. Kaydetme işlemi mevcut revizyonu doğrulayacak."
+    },
+    {
+      "id": "native.apple.d5c62307493aacbc",
+      "source": "Could not load automation",
+      "translated": "Otomasyon yüklenemedi"
+    },
+    {
+      "id": "native.apple.ce3928fc379e2daf",
+      "source": "Could not load run history",
+      "translated": "Çalıştırma geçmişi yüklenemedi"
+    },
+    {
+      "id": "native.apple.e84cad019bdb54c0",
+      "source": "Saving automation",
+      "translated": "Otomasyon kaydediliyor"
+    },
+    {
+      "id": "native.apple.0e8f64ab2aae550c",
+      "source": "Automation saved",
+      "translated": "Otomasyon kaydedildi"
+    },
+    {
+      "id": "native.apple.a237e22c861da698",
+      "source": "The Gateway accepted the latest revision.",
+      "translated": "Gateway en son revizyonu kabul etti."
+    },
+    {
+      "id": "native.apple.b74b1f32135775e7",
+      "source": "Enabling automation",
+      "translated": "Otomasyon etkinleştiriliyor"
+    },
+    {
+      "id": "native.apple.5d2466224b7f83cd",
+      "source": "Pausing automation",
+      "translated": "Otomasyon duraklatılıyor"
+    },
+    {
+      "id": "native.apple.d2b1cc3738a2d411",
+      "source": "Automation enabled",
+      "translated": "Otomasyon etkinleştirildi"
+    },
+    {
+      "id": "native.apple.1755a139d97def18",
+      "source": "Automation paused",
+      "translated": "Otomasyon duraklatıldı"
+    },
+    {
+      "id": "native.apple.92fd1af6e77e2b7d",
+      "source": "Future runs are active.",
+      "translated": "Gelecekteki çalıştırmalar etkin."
+    },
+    {
+      "id": "native.apple.1429ded16eab70ba",
+      "source": "Future scheduled runs are paused.",
+      "translated": "Gelecekteki zamanlanmış çalıştırmalar duraklatıldı."
+    },
+    {
+      "id": "native.apple.93b93b980c47d0ac",
+      "source": "Queueing run",
+      "translated": "Çalıştırma kuyruğa alınıyor"
+    },
+    {
+      "id": "native.apple.e15e1406fcc112fb",
+      "source": "Run queued",
+      "translated": "Çalıştırma kuyruğa alındı"
+    },
+    {
+      "id": "native.apple.6a6c77e2f6d11ec9",
+      "source": "Refresh History to follow the result.",
+      "translated": "Sonucu takip etmek için Geçmiş'i yenileyin."
+    },
+    {
+      "id": "native.apple.9482a1efdfc47e7f",
+      "source": "This run stays tracked until its exact result appears.",
+      "translated": "Bu çalıştırma, kesin sonucu görünene kadar izlenmeye devam eder."
+    },
+    {
+      "id": "native.apple.7586bdc989075ffd",
+      "source": "Run still pending",
+      "translated": "Çalıştırma hâlâ bekliyor"
+    },
+    {
+      "id": "native.apple.8f764528fa10c8eb",
+      "source": "The Gateway has not reported a result yet. Refresh History later.",
+      "translated": "Gateway henüz bir sonuç bildirmedi. Geçmiş'i daha sonra yenileyin."
+    },
+    {
+      "id": "native.apple.3120beddc3ef9928",
+      "source": "Run finished",
+      "translated": "Çalıştırma tamamlandı"
+    },
+    {
+      "id": "native.apple.7bf6ec0bc48196b0",
+      "source": "History now shows the completed result.",
+      "translated": "Geçmiş artık tamamlanan sonucu gösteriyor."
+    },
+    {
+      "id": "native.apple.421eedc59a44514c",
+      "source": "Run skipped",
+      "translated": "Çalıştırma atlandı"
+    },
+    {
+      "id": "native.apple.a0bf404e9bcb5ba3",
+      "source": "The Gateway skipped this run. History shows the result.",
+      "translated": "Gateway bu çalıştırmayı atladı. Geçmiş, sonucu gösteriyor."
+    },
+    {
+      "id": "native.apple.2e2f77f95cff0717",
+      "source": "Run failed",
+      "translated": "Çalıştırma başarısız oldu"
+    },
+    {
+      "id": "native.apple.4932b01670c6bb36",
+      "source": "History shows the failure details.",
+      "translated": "Geçmiş, hata ayrıntılarını gösteriyor."
+    },
+    {
+      "id": "native.apple.af47a77871426a34",
+      "source": "Run result available",
+      "translated": "Çalıştırma sonucu hazır"
+    },
+    {
+      "id": "native.apple.b3aa40fc12a403ef",
+      "source": "History shows the Gateway result.",
+      "translated": "Geçmiş, Gateway sonucunu gösteriyor."
+    },
+    {
+      "id": "native.apple.2a8eb4abb58e4c6a",
+      "source": "Deleting automation",
+      "translated": "Otomasyon siliniyor"
+    },
+    {
+      "id": "native.apple.dd3271c4e94641a2",
+      "source": "Automation action failed",
+      "translated": "Otomasyon eylemi başarısız oldu"
+    },
+    {
+      "id": "native.apple.32e3f08284bb3007",
+      "source": "This automation is not due yet.",
+      "translated": "Bu otomasyonun zamanı henüz gelmedi."
+    },
+    {
+      "id": "native.apple.5927a803625f5dbb",
+      "source": "This automation is already running.",
+      "translated": "Bu otomasyon zaten çalışıyor."
+    },
+    {
+      "id": "native.apple.4aad892e27b4ddd1",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Gateway yeniden başlatma kurtarma işlemi hâlâ devam ediyor."
+    },
+    {
+      "id": "native.apple.81308ff798cb8ff3",
+      "source": "This automation has an invalid configuration.",
+      "translated": "Bu otomasyonun yapılandırması geçersiz."
+    },
+    {
+      "id": "native.apple.a88f71792ad4beaa",
+      "source": "The automation scheduler is stopped.",
+      "translated": "Otomasyon zamanlayıcısı durduruldu."
+    },
+    {
+      "id": "native.apple.11923296a8287615",
+      "source": "The Gateway did not start this automation.",
+      "translated": "Gateway bu otomasyonu başlatmadı."
+    },
+    {
+      "id": "native.apple.0c744cad13a3927f",
+      "source": "not scheduled",
+      "translated": "zamanlanmadı"
+    },
+    {
+      "id": "native.apple.0bece6f361967bb7",
+      "source": "Could not track queued run",
+      "translated": "Kuyruğa alınan çalıştırma izlenemedi"
+    },
+    {
+      "id": "native.apple.fcc8d9fb5363552a",
+      "source": "One time",
+      "translated": "Tek seferlik"
+    },
+    {
+      "id": "native.apple.e36565ab0cbc27fc",
+      "source": "Interval",
+      "translated": "Aralık"
+    },
+    {
+      "id": "native.apple.4e409ac7b3902ef1",
+      "source": "Cron expression",
+      "translated": "Cron ifadesi"
+    },
+    {
+      "id": "native.apple.17b0f1a44e8b54f8",
+      "source": "On command exit",
+      "translated": "Komut sonlandığında"
+    },
+    {
+      "id": "native.apple.681114b86c1b4fc7",
+      "source": "System event",
+      "translated": "Sistem olayı"
+    },
+    {
+      "id": "native.apple.11ac31e919c88aaf",
+      "source": "Agent turn",
+      "translated": "Aracı sırası"
+    },
+    {
+      "id": "native.apple.9f1a73fdf9e6fb74",
+      "source": "Command",
+      "translated": "Komut"
+    },
+    {
+      "id": "native.apple.78e698f721570440",
+      "source": "This automation uses fields this app cannot edit safely.",
+      "translated": "Bu otomasyon, bu uygulamanın güvenli bir şekilde düzenleyemeyeceği alanlar kullanıyor."
+    },
+    {
+      "id": "native.apple.01a8e1daa343aa0c",
+      "source": "Update the Gateway before saving automation changes from iOS.",
+      "translated": "Otomasyon değişikliklerini iOS'tan kaydetmeden önce Gateway'i güncelleyin."
+    },
+    {
+      "id": "native.apple.eedad26d49890fd0",
+      "source": "No automation changes to save.",
+      "translated": "Kaydedilecek otomasyon değişikliği yok."
+    },
+    {
+      "id": "native.apple.468285718bc65cf9",
+      "source": "Automation name is required.",
+      "translated": "Otomasyon adı gereklidir."
+    },
+    {
+      "id": "native.apple.3b2cf513983fd309",
+      "source": "Session target must be main, isolated, current, or session:<id>.",
+      "translated": "Oturum hedefi main, isolated, current veya session:<id> olmalıdır."
+    },
+    {
+      "id": "native.apple.097835fd2547d9d3",
+      "source": "Wake mode must be now or next-heartbeat.",
+      "translated": "Uyandırma modu now veya next-heartbeat olmalıdır."
+    },
+    {
+      "id": "native.apple.cf32f85b7d927b14",
+      "source": "The connected Gateway changed. Refresh Automations and try again.",
+      "translated": "Bağlı Gateway değişti. Otomasyonları yenileyip tekrar deneyin."
+    },
+    {
+      "id": "native.apple.6e9fc11db7a84ccd",
+      "source": "The Gateway changed after the request was sent. Check current state before retrying.",
+      "translated": "İstek gönderildikten sonra Gateway değişti. Yeniden denemeden önce mevcut durumu kontrol edin."
+    },
+    {
+      "id": "native.apple.8334ace07b5a8769",
+      "source": "The Gateway returned an unexpected automation response.",
+      "translated": "Gateway beklenmeyen bir otomasyon yanıtı döndürdü."
+    },
+    {
+      "id": "native.apple.d15e02f352f095b5",
+      "source": "One-time automations need an ISO time.",
+      "translated": "Tek seferlik otomasyonlar için ISO biçiminde bir zaman gereklidir."
+    },
+    {
+      "id": "native.apple.217ae5784e8a790c",
+      "source": "Interval must be a positive number of milliseconds.",
+      "translated": "Aralık, milisaniye cinsinden pozitif bir sayı olmalıdır."
+    },
+    {
+      "id": "native.apple.5d1437fb94b0c2fd",
+      "source": "Anchor must be a non-negative number of milliseconds.",
+      "translated": "Başlangıç noktası, milisaniye cinsinden negatif olmayan bir sayı olmalıdır."
+    },
+    {
+      "id": "native.apple.74979b1b3f3fd0cb",
+      "source": "Cron expression is required.",
+      "translated": "Cron ifadesi gereklidir."
+    },
+    {
+      "id": "native.apple.d674e9211880efdd",
+      "source": "Stagger must be a non-negative number of milliseconds.",
+      "translated": "Kademelendirme, milisaniye cinsinden negatif olmayan bir sayı olmalıdır."
+    },
+    {
+      "id": "native.apple.ecf986d82e845e3d",
+      "source": "On-exit automations need a command.",
+      "translated": "Çıkışta çalışan otomasyonlar için bir komut gereklidir."
+    },
+    {
+      "id": "native.apple.f9a8e11940df3708",
+      "source": "Changing schedule type is available in the Control UI.",
+      "translated": "Zamanlama türü Control UI üzerinden değiştirilebilir."
+    },
+    {
+      "id": "native.apple.15d3d90d9e55055c",
+      "source": "System event text is required.",
+      "translated": "Sistem olayı metni gereklidir."
+    },
+    {
+      "id": "native.apple.f9e96a64787cfd1e",
+      "source": "Agent message is required.",
+      "translated": "Aracı mesajı gereklidir."
+    },
+    {
+      "id": "native.apple.866cd35476800bb0",
+      "source": "Command arguments must be a JSON array of non-empty strings.",
+      "translated": "Komut bağımsız değişkenleri, boş olmayan dizelerden oluşan bir JSON dizisi olmalıdır."
+    },
+    {
+      "id": "native.apple.62a94efde347e48b",
+      "source": "The Gateway can change this command path but cannot clear it.",
+      "translated": "Gateway bu komut yolunu değiştirebilir ancak temizleyemez."
+    },
+    {
+      "id": "native.apple.80a46289c6ed4e6f",
+      "source": "Changing action type is available in the Control UI.",
+      "translated": "Eylem türünü değiştirme işlemi Control UI'da yapılabilir."
+    },
+    {
+      "id": "native.apple.d848c7c83ca56e87",
+      "source": "Could not encode automation changes.",
+      "translated": "Otomasyon değişiklikleri kodlanamadı."
     },
     {
       "id": "native.apple.6507fad2526215fc",
@@ -8444,9 +9369,44 @@
       "translated": "Sonraki"
     },
     {
-      "id": "native.apple.265fe9a6fd48774a",
-      "source": "Jobs",
-      "translated": "İşler"
+      "id": "native.apple.0716c9afeacc4d94",
+      "source": "Automations",
+      "translated": "Otomasyonlar"
+    },
+    {
+      "id": "native.apple.afaf94d79c41f401",
+      "source": "Search automations",
+      "translated": "Otomasyonlarda ara"
+    },
+    {
+      "id": "native.apple.873168b1830c60c8",
+      "source": "Automation status",
+      "translated": "Otomasyon durumu"
+    },
+    {
+      "id": "native.apple.0147a12ccae4382f",
+      "source": "No automations yet",
+      "translated": "Henüz otomasyon yok"
+    },
+    {
+      "id": "native.apple.904fc50cb40466e6",
+      "source": "No matching automations",
+      "translated": "Eşleşen otomasyon yok"
+    },
+    {
+      "id": "native.apple.e114f7974019ead5",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Gateway'de oluşturulan zamanlanmış işler burada görünecektir."
+    },
+    {
+      "id": "native.apple.50668445ecd01096",
+      "source": "Try another search or status filter.",
+      "translated": "Başka bir arama veya durum filtresi deneyin."
+    },
+    {
+      "id": "native.apple.d3df6fbbaafcc29f",
+      "source": "Edit",
+      "translated": "Düzenle"
     },
     {
       "id": "native.apple.e8964650f824c877",
@@ -8464,9 +9424,14 @@
       "translated": "Duraklat"
     },
     {
-      "id": "native.apple.7323dffbc056bdcd",
-      "source": "Queued %@.",
-      "translated": "%@ kuyruğa alındı."
+      "id": "native.apple.bdd438ba675d7562",
+      "source": "Tracking %@ in run history.",
+      "translated": "Çalıştırma geçmişinde %@ izleniyor."
+    },
+    {
+      "id": "native.apple.a3cfbe05c4013cac",
+      "source": "Ran %@. Open Edit for run history.",
+      "translated": "%@ çalıştırıldı. Çalıştırma geçmişi için Düzenle'yi açın."
     },
     {
       "id": "native.apple.424e352a747453ed",
@@ -8479,6 +9444,36 @@
       "translated": "%@ duraklatıldı."
     },
     {
+      "id": "native.apple.1b3a26abc61c570d",
+      "source": "This automation is not due yet.",
+      "translated": "Bu otomasyonun zamanı henüz gelmedi."
+    },
+    {
+      "id": "native.apple.c77dec246ca2f051",
+      "source": "This automation is already running.",
+      "translated": "Bu otomasyon zaten çalışıyor."
+    },
+    {
+      "id": "native.apple.2a91173216fc13a0",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Gateway'i yeniden başlatma kurtarma işlemi hâlâ devam ediyor."
+    },
+    {
+      "id": "native.apple.9d416b662fe79a2d",
+      "source": "This automation has an invalid configuration.",
+      "translated": "Bu otomasyonun yapılandırması geçersiz."
+    },
+    {
+      "id": "native.apple.74db101b9d066f9b",
+      "source": "The automation scheduler is stopped.",
+      "translated": "Otomasyon zamanlayıcısı durduruldu."
+    },
+    {
+      "id": "native.apple.a68b3d18073f246f",
+      "source": "The Gateway did not start this automation.",
+      "translated": "Gateway bu otomasyonu başlatmadı."
+    },
+    {
       "id": "native.apple.a373bf2332f0ab6a",
       "source": "Search agents",
       "translated": "Aracıları ara"
@@ -8489,9 +9484,9 @@
       "translated": "Skills"
     },
     {
-      "id": "native.apple.45c3f045dd9a3507",
-      "source": "Cron Jobs",
-      "translated": "Cron İşleri"
+      "id": "native.apple.bed79f8c977be1cd",
+      "source": "Automations",
+      "translated": "Otomasyonlar"
     },
     {
       "id": "native.apple.4bee0220d011ab53",
@@ -8604,9 +9599,9 @@
       "translated": "Düş kuruyor"
     },
     {
-      "id": "native.apple.4999264d74844f21",
-      "source": "Scheduled Work",
-      "translated": "Zamanlanmış İşler"
+      "id": "native.apple.22a5389054110057",
+      "source": "Automations",
+      "translated": "Otomasyonlar"
     },
     {
       "id": "native.apple.13245a5075869f14",
@@ -8619,19 +9614,19 @@
       "translated": "Bu ajanı seçer"
     },
     {
-      "id": "native.apple.4f053bb46f35a802",
-      "source": "No scheduled jobs",
-      "translated": "Zamanlanmış iş yok"
+      "id": "native.apple.e0a5458b9b128e21",
+      "source": "No automations yet",
+      "translated": "Henüz otomasyon yok"
     },
     {
-      "id": "native.apple.e347d159f30bca34",
-      "source": "Cron unavailable",
-      "translated": "Cron kullanılamıyor"
+      "id": "native.apple.b2e8f8831767ae0e",
+      "source": "Automations unavailable",
+      "translated": "Otomasyonlar kullanılamıyor"
     },
     {
-      "id": "native.apple.0cd04bacdbcd8fa5",
-      "source": "The gateway has no visible cron jobs.",
-      "translated": "Gateway üzerinde görünür cron işi yok."
+      "id": "native.apple.36277ae5feb079fd",
+      "source": "Scheduled work created on the gateway will appear here.",
+      "translated": "Gateway'de oluşturulan zamanlanmış işler burada görünecek."
     },
     {
       "id": "native.apple.ae4aa2339b285164",
@@ -9129,11 +10124,6 @@
       "translated": "Engellendi"
     },
     {
-      "id": "native.apple.c1520bfdcd827e55",
-      "source": "All",
-      "translated": "Tümü"
-    },
-    {
       "id": "native.apple.2be2d2e1fb0c140a",
       "source": "Online",
       "translated": "Çevrimiçi"
@@ -9142,6 +10132,21 @@
       "id": "native.apple.a97cdae7c8e13f0e",
       "source": "Ready",
       "translated": "Hazır"
+    },
+    {
+      "id": "native.apple.c1520bfdcd827e55",
+      "source": "All",
+      "translated": "Tümü"
+    },
+    {
+      "id": "native.apple.6761fe33fbf18cb3",
+      "source": "Active",
+      "translated": "Etkin"
+    },
+    {
+      "id": "native.apple.c10177d9487a27d5",
+      "source": "Paused",
+      "translated": "Duraklatıldı"
     },
     {
       "id": "native.apple.9c4e8b82edf0b324",
@@ -10429,9 +11434,9 @@
       "translated": "Kullanım"
     },
     {
-      "id": "native.apple.9eb33a11fb81796b",
-      "source": "Cron Jobs",
-      "translated": "Cron İşleri"
+      "id": "native.apple.f21bf1e3b5ec896c",
+      "source": "Automations",
+      "translated": "Otomasyonlar"
     },
     {
       "id": "native.apple.57587fec1ca582ec",
@@ -10969,6 +11974,11 @@
       "translated": "Kanallar"
     },
     {
+      "id": "native.apple.e2eaba9832a2fad7",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
       "id": "native.apple.fd44d6742909f55c",
       "source": "Voice & Talk",
       "translated": "Ses ve Konuşma"
@@ -11284,6 +12294,11 @@
       "translated": "Kanallar"
     },
     {
+      "id": "native.apple.1f52746515df3fa5",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
       "id": "native.apple.1573249126ddd84f",
       "source": "Diagnostics",
       "translated": "Tanılama"
@@ -11304,11 +12319,6 @@
       "translated": "Lisanslar"
     },
     {
-      "id": "native.apple.5c4427c5a67068d6",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
       "id": "native.apple.800b6502b5b49941",
       "source": "Address",
       "translated": "Adres"
@@ -11327,6 +12337,51 @@
       "id": "native.apple.8e3656d85f092897",
       "source": "Agents",
       "translated": "Aracılar"
+    },
+    {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "Erişim"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "Tam"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "Sınırlı"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "Erişimi yükselt"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "Bu telefonun sınırlı Gateway erişimi var."
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "Güvenli bir wss:// veya Tailscale Serve Gateway kullanın, ardından Control UI'dan veya openclaw qr ile tam erişimli bir kurulum kodu tarayın ve ayarları ve yükseltmeleri etkinleştirmek için yeniden bağlanın."
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "Tam Erişim Kodunu Tara"
+    },
+    {
+      "id": "native.apple.5c4427c5a67068d6",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.34444b9c6d74f472",
+      "source": "Scan QR to Pair",
+      "translated": "Eşleştirmek için QR Kodunu Tara"
     },
     {
       "id": "native.apple.88835de05348122a",
@@ -11629,14 +12684,14 @@
       "translated": "Yeni Chat ve Talk oturumları için kullanılır."
     },
     {
-      "id": "native.apple.313eb24efcb8d4a0",
-      "source": "Paste setup code",
-      "translated": "Kurulum kodunu yapıştır"
-    },
-    {
       "id": "native.apple.19552e71de246322",
       "source": "Scan QR",
       "translated": "QR'ı Tara"
+    },
+    {
+      "id": "native.apple.313eb24efcb8d4a0",
+      "source": "Paste setup code",
+      "translated": "Kurulum kodunu yapıştır"
     },
     {
       "id": "native.apple.f4afcfbe4e4a72f8",
@@ -11644,19 +12699,14 @@
       "translated": "Bağlan"
     },
     {
-      "id": "native.apple.d8a5510f1a2e1701",
-      "source": "Setup Code",
-      "translated": "Kurulum Kodu"
-    },
-    {
-      "id": "native.apple.adb22453596f1d78",
-      "source": "Discovered Gateways",
-      "translated": "Keşfedilen Gateway'ler"
-    },
-    {
       "id": "native.apple.64b89f4aa3a81aef",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "translated": "Henüz gateway bulunamadı. Bonjour engelleniyorsa manuel kurulumu kullanın."
+    },
+    {
+      "id": "native.apple.784220b48f5c4af8",
+      "source": "Add Gateway",
+      "translated": "Gateway Ekle"
     },
     {
       "id": "native.apple.75c61c4ee1ecc6d8",
@@ -12097,6 +13147,346 @@
       "id": "native.apple.f439c34a9ce3a332",
       "source": "Discovered gateways and manual setup live here when the gateway has not connected yet.",
       "translated": "Gateway henüz bağlanmadığında keşfedilen Gateway'ler ve manuel kurulum burada yer alır."
+    },
+    {
+      "id": "native.apple.acf33c8c3efde926",
+      "source": "Browse",
+      "translated": "Göz At"
+    },
+    {
+      "id": "native.apple.57f55061e45f732b",
+      "source": "All",
+      "translated": "Tümü"
+    },
+    {
+      "id": "native.apple.02a59c6d5de241c6",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
+      "id": "native.apple.de33b4b220a48b7b",
+      "source": "Connect to manage Gateway skills.",
+      "translated": "Gateway Skills'ı yönetmek için bağlanın."
+    },
+    {
+      "id": "native.apple.395f4d55dfb4b1bf",
+      "source": "Loading installed skills and readiness.",
+      "translated": "Yüklü Skills ve hazır olma durumları yükleniyor."
+    },
+    {
+      "id": "native.apple.b5a47111394ae9d2",
+      "source": "%@ ready · %@ need setup",
+      "translated": "%@ hazır · %@ kurulum gerektiriyor"
+    },
+    {
+      "id": "native.apple.06c8a70b3321dd77",
+      "source": "offline",
+      "translated": "çevrimdışı"
+    },
+    {
+      "id": "native.apple.bbf921f4a20e6d64",
+      "source": "loading",
+      "translated": "yükleniyor"
+    },
+    {
+      "id": "native.apple.50af4928abeb5493",
+      "source": "Skills section",
+      "translated": "Skills bölümü"
+    },
+    {
+      "id": "native.apple.5be2a1662a9d8454",
+      "source": "Installed",
+      "translated": "Yüklü"
+    },
+    {
+      "id": "native.apple.493e64eee96d3b2c",
+      "source": "Refresh Skills",
+      "translated": "Skills'ı Yenile"
+    },
+    {
+      "id": "native.apple.2fc9bfee92bad603",
+      "source": "Search installed skills",
+      "translated": "Yüklü Skills içinde ara"
+    },
+    {
+      "id": "native.apple.b7a9e8ede061b45c",
+      "source": "Installed skill filter",
+      "translated": "Yüklü skill filtresi"
+    },
+    {
+      "id": "native.apple.d5075a70296450e1",
+      "source": "Connect to load and manage installed skills.",
+      "translated": "Yüklü Skills'ı yüklemek ve yönetmek için bağlanın."
+    },
+    {
+      "id": "native.apple.d23235f31ddc7d87",
+      "source": "Loading skills",
+      "translated": "Skills yükleniyor"
+    },
+    {
+      "id": "native.apple.ad8ceb4f98255843",
+      "source": "Reading the Gateway skill catalog.",
+      "translated": "Gateway skill kataloğu okunuyor."
+    },
+    {
+      "id": "native.apple.0550dad32f8ef785",
+      "source": "No matching skills",
+      "translated": "Eşleşen skill yok"
+    },
+    {
+      "id": "native.apple.adcee8faa45b0365",
+      "source": "No skills installed",
+      "translated": "Yüklü skill yok"
+    },
+    {
+      "id": "native.apple.e7e5b1011a14fc4b",
+      "source": "Browse ClawHub to discover and install skills.",
+      "translated": "Skill'leri keşfetmek ve yüklemek için ClawHub'a göz atın."
+    },
+    {
+      "id": "native.apple.f54b778b8ea52ece",
+      "source": "Change the search or readiness filter.",
+      "translated": "Arama veya hazır olma filtresini değiştirin."
+    },
+    {
+      "id": "native.apple.44d2b179910face4",
+      "source": "ClawHub",
+      "translated": "ClawHub"
+    },
+    {
+      "id": "native.apple.8e161683e7efa2a4",
+      "source": "Search ClawHub",
+      "translated": "ClawHub'da ara"
+    },
+    {
+      "id": "native.apple.c7050536b0ee103f",
+      "source": "Search",
+      "translated": "Ara"
+    },
+    {
+      "id": "native.apple.a390ab96444bced8",
+      "source": "The Gateway verifies the exact reviewed release before download.",
+      "translated": "Gateway, indirmeden önce incelenen sürümün tam olarak eşleştiğini doğrular."
+    },
+    {
+      "id": "native.apple.85d609abe4548150",
+      "source": "Gateway offline",
+      "translated": "Gateway çevrimdışı"
+    },
+    {
+      "id": "native.apple.37ce41bbd2c854dd",
+      "source": "Connect to search and install ClawHub skills.",
+      "translated": "ClawHub Skill'lerini aramak ve yüklemek için bağlanın."
+    },
+    {
+      "id": "native.apple.a21337a8fba8d90c",
+      "source": "Gateway update required",
+      "translated": "Gateway güncellemesi gerekli"
+    },
+    {
+      "id": "native.apple.503fadc03e3b4090",
+      "source": "Update the Gateway to search and install ClawHub skills from iOS.",
+      "translated": "iOS'tan ClawHub Skill'lerini aramak ve yüklemek için Gateway'i güncelleyin."
+    },
+    {
+      "id": "native.apple.b542672608467c0a",
+      "source": "Searching ClawHub",
+      "translated": "ClawHub aranıyor"
+    },
+    {
+      "id": "native.apple.5acf38408914a884",
+      "source": "Loading verified skill releases.",
+      "translated": "Doğrulanmış Skill sürümleri yükleniyor."
+    },
+    {
+      "id": "native.apple.c0261398045e7911",
+      "source": "No skills found",
+      "translated": "Skill bulunamadı"
+    },
+    {
+      "id": "native.apple.eb605facc8feeed7",
+      "source": "Try another search or refresh the catalog.",
+      "translated": "Başka bir arama yapmayı veya kataloğu yenilemeyi deneyin."
+    },
+    {
+      "id": "native.apple.29c8087ab70bedcd",
+      "source": "Could not load skills",
+      "translated": "Skill'ler yüklenemedi"
+    },
+    {
+      "id": "native.apple.cf8f37f9d39bf57b",
+      "source": "ClawHub unavailable",
+      "translated": "ClawHub kullanılamıyor"
+    },
+    {
+      "id": "native.apple.43406555e5144718",
+      "source": "Could not review skill",
+      "translated": "Skill incelenemedi"
+    },
+    {
+      "id": "native.apple.1633604644edf7b3",
+      "source": "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running.",
+      "translated": "Yeniden bağlanın, Skills'i yenileyin ve tekrar deneyin. Gateway, hâlâ devam eden eşleşen bir yüklemeye güvenli bir şekilde katılır."
+    },
+    {
+      "id": "native.apple.3cc22b37bdb9fcd1",
+      "source": "Gateway blocked install",
+      "translated": "Gateway yüklemeyi engelledi"
+    },
+    {
+      "id": "native.apple.95223294a767ccd7",
+      "source": "The Gateway installed the reviewed version.",
+      "translated": "Gateway, incelenen sürümü yükledi."
+    },
+    {
+      "id": "native.apple.71d7b3860ab9f02c",
+      "source": "Install result unknown",
+      "translated": "Yükleme sonucu bilinmiyor"
+    },
+    {
+      "id": "native.apple.e69ba6c4d73eb72f",
+      "source": "Skill disabled",
+      "translated": "Skill devre dışı bırakıldı"
+    },
+    {
+      "id": "native.apple.8677a968b0a7729d",
+      "source": "Skill enabled",
+      "translated": "Skill etkinleştirildi"
+    },
+    {
+      "id": "native.apple.b4577e30f257ad79",
+      "source": "Could not enable skill",
+      "translated": "Skill etkinleştirilemedi"
+    },
+    {
+      "id": "native.apple.b9d22e7d493eb2bb",
+      "source": "Could not disable skill",
+      "translated": "Skill devre dışı bırakılamadı"
+    },
+    {
+      "id": "native.apple.1f06ad201d9b6bed",
+      "source": "Disable",
+      "translated": "Devre dışı bırak"
+    },
+    {
+      "id": "native.apple.b284f85f4efc0fa7",
+      "source": "Enable",
+      "translated": "Etkinleştir"
+    },
+    {
+      "id": "native.apple.0d4cc831b423aa98",
+      "source": "Off",
+      "translated": "Kapalı"
+    },
+    {
+      "id": "native.apple.c63a20f1143b62ca",
+      "source": "Ready",
+      "translated": "Hazır"
+    },
+    {
+      "id": "native.apple.892d7433a4468f5a",
+      "source": "Needs Setup",
+      "translated": "Kurulum gerekiyor"
+    },
+    {
+      "id": "native.apple.0c8eb8bda0a17689",
+      "source": "Any binary: %@",
+      "translated": "Herhangi bir ikili dosya: %@"
+    },
+    {
+      "id": "native.apple.5242f6eeb0ffe658",
+      "source": "OS: %@",
+      "translated": "İşletim sistemi: %@"
+    },
+    {
+      "id": "native.apple.113dacafa42bb62e",
+      "source": "Missing: %@",
+      "translated": "Eksik: %@"
+    },
+    {
+      "id": "native.apple.1824681020aa336b",
+      "source": "Install",
+      "translated": "Yükle"
+    },
+    {
+      "id": "native.apple.7d9b36be7a7df9a8",
+      "source": "The Gateway will verify this exact release with ClawHub before download.",
+      "translated": "Gateway, indirmeden önce tam olarak bu sürümü ClawHub ile doğrulayacak."
+    },
+    {
+      "id": "native.apple.4fb1f26e4de787dd",
+      "source": "This gateway connection needs operator.admin to install skills.",
+      "translated": "Bu Gateway bağlantısının Skills yükleyebilmesi için operator.admin yetkisi gerekiyor."
+    },
+    {
+      "id": "native.apple.0f902fcad255ae3f",
+      "source": "Review ClawHub skill",
+      "translated": "ClawHub Skill'ini incele"
+    },
+    {
+      "id": "native.apple.8f61d18ceca765da",
+      "source": "Verify and install",
+      "translated": "Doğrula ve yükle"
+    },
+    {
+      "id": "native.apple.64ac6815468e764b",
+      "source": "Gateway warning",
+      "translated": "Gateway uyarısı"
+    },
+    {
+      "id": "native.apple.cfb4fe56e0a7f93b",
+      "source": "The Gateway requires explicit acknowledgement for this release.",
+      "translated": "Gateway, bu sürüm için açık onay gerektiriyor."
+    },
+    {
+      "id": "native.apple.91447e88c95f0f72",
+      "source": "Review warning details",
+      "translated": "Uyarı ayrıntılarını incele"
+    },
+    {
+      "id": "native.apple.9ad3235988108fce",
+      "source": "Expand and review the Gateway warning before acknowledging this exact version.",
+      "translated": "Tam olarak bu sürümü onaylamadan önce Gateway uyarısını genişletip inceleyin."
+    },
+    {
+      "id": "native.apple.b79b3886a801b83e",
+      "source": "Review Gateway warning",
+      "translated": "Gateway uyarısını incele"
+    },
+    {
+      "id": "native.apple.8a3adec4b6d6eb15",
+      "source": "Cancel",
+      "translated": "İptal"
+    },
+    {
+      "id": "native.apple.30304ca2865ea3b4",
+      "source": "Acknowledge and install",
+      "translated": "Onayla ve yükle"
+    },
+    {
+      "id": "native.apple.c1499a39573b3633",
+      "source": "Version",
+      "translated": "Sürüm"
+    },
+    {
+      "id": "native.apple.4789ad34a901e14e",
+      "source": "Publisher",
+      "translated": "Yayıncı"
+    },
+    {
+      "id": "native.apple.ba780a0a9b2fd426",
+      "source": "The connected Gateway changed. Refresh Skills and try again.",
+      "translated": "Bağlı Gateway değişti. Skills'i yenileyip tekrar deneyin."
+    },
+    {
+      "id": "native.apple.af9d5bb3dd35cfff",
+      "source": "Could not encode the Gateway request.",
+      "translated": "Gateway isteği kodlanamadı."
+    },
+    {
+      "id": "native.apple.7a5a1b9342f01954",
+      "source": "ClawHub did not report an installable version for this skill.",
+      "translated": "ClawHub bu skill için yüklenebilir bir sürüm bildirmedi."
     },
     {
       "id": "native.apple.798c3584ad95f8da",
@@ -12719,6 +14109,16 @@
       "translated": "OpenClaw, cihaza duyarlı etkileşimleri ve otomasyonları desteklemek için hareket verilerini kullanabilir."
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "Sağlık Özetleri'ni etkinleştirdikten sonra OpenClaw, istenen toplu verileri yapılandırdığınız yapay zeka sağlayıcısıyla paylaşmak için adımları, uykuyu, dinlenme kalp atış hızını ve antrenmanları okur."
+    },
+    {
+      "id": "native.apple.89de9bad79f17038",
+      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "OpenClaw, Sağlık verilerini yazmaz veya değiştirmez. Sağlık Özetleri; adımları, uykuyu, dinlenme kalp atış hızını ve antrenmanları okuyarak istenen toplu verileri yapılandırdığınız yapay zeka sağlayıcısıyla paylaşır."
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "OpenClaw, asistanınızın izin verdiğiniz fotoğrafları okumasını sağlar ve paylaşılacak fotoğrafları seçmenize olanak tanır."
@@ -12969,6 +14369,46 @@
       "translated": "\\(urlText.prefix(500))…"
     },
     {
+      "id": "native.apple.9dcd64ab340a6c15",
+      "source": "Allow access",
+      "translated": "Erişime izin ver"
+    },
+    {
+      "id": "native.apple.933a2ac28d1d2aec",
+      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
+      "translated": "Aracınızın bu iPhone'da neleri kullanabileceğini seçin. Siz izin verene kadar hiçbirine erişilemez."
+    },
+    {
+      "id": "native.apple.47114a39f7a71c3b",
+      "source": "You can change any of these later in Settings.",
+      "translated": "Bunlardan herhangi birini daha sonra Ayarlar'dan değiştirebilirsiniz."
+    },
+    {
+      "id": "native.apple.eabf54e2b640a4a1",
+      "source": "Continue",
+      "translated": "Devam"
+    },
+    {
+      "id": "native.apple.5f425282ece878eb",
+      "source": "Limited",
+      "translated": "Sınırlı"
+    },
+    {
+      "id": "native.apple.c5db9e6eae115f7a",
+      "source": "Allow",
+      "translated": "İzin ver"
+    },
+    {
+      "id": "native.apple.f591e16105268e99",
+      "source": "Open Settings",
+      "translated": "Ayarları Aç"
+    },
+    {
+      "id": "native.apple.12ed416835c36555",
+      "source": "Manage",
+      "translated": "Yönet"
+    },
+    {
       "id": "native.apple.11687a3d87afd0d7",
       "source": "Home Network",
       "translated": "Ev Ağı"
@@ -13149,24 +14589,24 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.c9419426ba8c2a2e",
-      "source": "Securely connect this iPhone to your gateway.",
-      "translated": "Bu iPhone'u gateway'inize güvenli bir şekilde bağlayın."
+      "id": "native.apple.9b414850baa618da",
+      "source": "Your agent, in your pocket. Pair this iPhone with your gateway to get started.",
+      "translated": "Aracınız cebinizde. Başlamak için bu iPhone'u Gateway'inizle eşleştirin."
     },
     {
-      "id": "native.apple.3e233ba3ed3181d4",
-      "source": "Connect to your gateway",
-      "translated": "Gateway'inize bağlanın"
+      "id": "native.apple.7248e67848beebd9",
+      "source": "Your agent runs on your own computer",
+      "translated": "Aracınız kendi bilgisayarınızda çalışır"
     },
     {
-      "id": "native.apple.b6978424ac0a4d14",
-      "source": "Choose device permissions",
-      "translated": "Cihaz izinlerini seçin"
+      "id": "native.apple.acbdc9332988fa64",
+      "source": "Pair this iPhone by scanning a setup code",
+      "translated": "Bir kurulum kodunu tarayarak bu iPhone'u eşleştirin"
     },
     {
-      "id": "native.apple.4109460a5b8927d8",
-      "source": "Use OpenClaw from your phone",
-      "translated": "OpenClaw'u telefonunuzdan kullanın"
+      "id": "native.apple.feb3e155748c2f05",
+      "source": "Chat, talk, and approve actions from anywhere",
+      "translated": "Her yerden sohbet edin, konuşun ve işlemleri onaylayın"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -13434,6 +14874,101 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.apple.0e07e7044608f954",
+      "source": "Allowed",
+      "translated": "İzin verildi"
+    },
+    {
+      "id": "native.apple.86796a6df9d0ff63",
+      "source": "Limited",
+      "translated": "Sınırlı"
+    },
+    {
+      "id": "native.apple.4c7f5404e9c42402",
+      "source": "Off in Settings",
+      "translated": "Ayarlar'da kapalı"
+    },
+    {
+      "id": "native.apple.96d65a5563690719",
+      "source": "Notifications",
+      "translated": "Bildirimler"
+    },
+    {
+      "id": "native.apple.d290a46515add091",
+      "source": "Camera",
+      "translated": "Kamera"
+    },
+    {
+      "id": "native.apple.0eeedbc8aaafcd2c",
+      "source": "Microphone",
+      "translated": "Mikrofon"
+    },
+    {
+      "id": "native.apple.14fadad23dd36e44",
+      "source": "Photos",
+      "translated": "Fotoğraflar"
+    },
+    {
+      "id": "native.apple.f0cfa9dcc57133b7",
+      "source": "Contacts",
+      "translated": "Kişiler"
+    },
+    {
+      "id": "native.apple.5ec2597d0b4a06fb",
+      "source": "Calendar",
+      "translated": "Takvim"
+    },
+    {
+      "id": "native.apple.9ed5c19cf1e84490",
+      "source": "Reminders",
+      "translated": "Anımsatıcılar"
+    },
+    {
+      "id": "native.apple.866b9df8afcadf07",
+      "source": "Location",
+      "translated": "Konum"
+    },
+    {
+      "id": "native.apple.f205ac6778705a7d",
+      "source": "Pairing approvals and replies from your agent.",
+      "translated": "Agentinizden gelen eşleştirme onayları ve yanıtları."
+    },
+    {
+      "id": "native.apple.061a17077ee3be94",
+      "source": "Scan setup codes and take photos on request.",
+      "translated": "Kurulum kodlarını tarayın ve istendiğinde fotoğraf çekin."
+    },
+    {
+      "id": "native.apple.c735ac6b282765f9",
+      "source": "Talk with your agent using voice.",
+      "translated": "Agentinizle sesli olarak konuşun."
+    },
+    {
+      "id": "native.apple.ebe8aadcf512ecdb",
+      "source": "Share recent photos when you ask.",
+      "translated": "İstediğinizde son fotoğrafları paylaşın."
+    },
+    {
+      "id": "native.apple.4c4bc12c0787383c",
+      "source": "Look up and add people you mention.",
+      "translated": "Bahsettiğiniz kişileri bulun ve ekleyin."
+    },
+    {
+      "id": "native.apple.5a4006fbb9b23db1",
+      "source": "Check and add calendar events.",
+      "translated": "Takvim etkinliklerini kontrol edin ve ekleyin."
+    },
+    {
+      "id": "native.apple.2b2a4f1aab6a12ec",
+      "source": "List, add, and complete reminders.",
+      "translated": "Anımsatıcıları listeleyin, ekleyin ve tamamlayın."
+    },
+    {
+      "id": "native.apple.3854ae1f0606bafe",
+      "source": "Answer location and nearby questions.",
+      "translated": "Konum ve yakındaki yerlerle ilgili soruları yanıtlayın."
+    },
+    {
       "id": "native.apple.e5f6435b9cb5a2d8",
       "source": "unknown relay error",
       "translated": "unknown relay error"
@@ -13524,9 +15059,9 @@
       "translated": "Kullanım"
     },
     {
-      "id": "native.apple.db0d9af6d0855d18",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.8c4e07b06e938527",
+      "source": "Automations",
+      "translated": "Otomasyonlar"
     },
     {
       "id": "native.apple.20f4753fc51c5341",
@@ -13634,9 +15169,9 @@
       "translated": "Kullanım"
     },
     {
-      "id": "native.apple.0b4e807d2449e93f",
-      "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "id": "native.apple.fca6a390e072ada9",
+      "source": "Automations",
+      "translated": "Otomasyonlar"
     },
     {
       "id": "native.apple.b3b5114b91a8db8f",
@@ -13699,84 +15234,14 @@
       "translated": "Özel Üst Bilgiler"
     },
     {
-      "id": "native.apple.e5a601c8fe47e9ed",
-      "source": "Add-Only",
-      "translated": "Yalnızca Ekleme"
-    },
-    {
-      "id": "native.apple.32aabe66f916a809",
-      "source": "Allowed",
-      "translated": "İzin Verildi"
-    },
-    {
-      "id": "native.apple.94208c3068dae5b9",
-      "source": "Limited",
-      "translated": "Sınırlı"
-    },
-    {
-      "id": "native.apple.92223852c90e286d",
-      "source": "Not Allowed",
-      "translated": "İzin Verilmiyor"
-    },
-    {
-      "id": "native.apple.aa6ff8becab99fdc",
-      "source": "Not Set",
-      "translated": "Ayarlanmadı"
-    },
-    {
-      "id": "native.apple.03e2f7265119d263",
-      "source": "Unknown",
-      "translated": "Bilinmiyor"
-    },
-    {
-      "id": "native.apple.4dac301c7e0c921c",
-      "source": "Contacts",
-      "translated": "Kişiler"
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "Gizlilik ve Erişim"
     },
     {
       "id": "native.apple.01f362d70f6ddb4e",
       "source": "Search and add contacts from the assistant.",
       "translated": "Asistandan kişi arayın ve ekleyin."
-    },
-    {
-      "id": "native.apple.eda8d96e40bcc36a",
-      "source": "Photos",
-      "translated": "Fotoğraflar"
-    },
-    {
-      "id": "native.apple.df0159ff34744870",
-      "source": "Calendar (Add Events)",
-      "translated": "Takvim (Etkinlik Ekle)"
-    },
-    {
-      "id": "native.apple.c6db4240083c0435",
-      "source": "Add events with least privilege.",
-      "translated": "En az ayrıcalıkla etkinlik ekleyin."
-    },
-    {
-      "id": "native.apple.dc62e22f0b2726c5",
-      "source": "Calendar (View Events)",
-      "translated": "Takvim (Etkinlikleri Görüntüle)"
-    },
-    {
-      "id": "native.apple.650091bc632b3120",
-      "source": "List and read calendar events.",
-      "translated": "Takvim etkinliklerini listeleyin ve okuyun."
-    },
-    {
-      "id": "native.apple.7a81d1f17d9d90c0",
-      "source": "Reminders",
-      "translated": "Anımsatıcılar"
-    },
-    {
-      "id": "native.apple.d6fd5e9f85b0e298",
-      "source": "List, add, and complete reminders.",
-      "translated": "Anımsatıcıları listeleyin, ekleyin ve tamamlayın."
-    },
-    {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "Gizlilik ve Erişim"
     },
     {
       "id": "native.apple.ab998419291361da",
@@ -13789,29 +15254,74 @@
       "translated": "Asistan için son fotoğrafları okuyun."
     },
     {
-      "id": "native.apple.ac3ff8e4c6df7a2a",
-      "source": "Manage Access",
-      "translated": "Erişimi Yönet"
+      "id": "native.apple.94208c3068dae5b9",
+      "source": "Limited",
+      "translated": "Sınırlı"
     },
     {
-      "id": "native.apple.c557c95fa2789089",
-      "source": "Request Full Access",
-      "translated": "Tam Erişim İste"
+      "id": "native.apple.df0159ff34744870",
+      "source": "Calendar (Add Events)",
+      "translated": "Takvim (Etkinlik Ekle)"
     },
     {
-      "id": "native.apple.4e50e2ab4c869464",
-      "source": "Request Access",
-      "translated": "Erişim İste"
+      "id": "native.apple.c6db4240083c0435",
+      "source": "Add events with least privilege.",
+      "translated": "En az ayrıcalıkla etkinlik ekleyin."
     },
     {
-      "id": "native.apple.a9f30d4e86060dca",
-      "source": "Upgrade to Full Access",
-      "translated": "Tam Erişime Yükselt"
+      "id": "native.apple.650091bc632b3120",
+      "source": "List and read calendar events.",
+      "translated": "Takvim etkinliklerini listeleyin ve okuyun."
+    },
+    {
+      "id": "native.apple.d6fd5e9f85b0e298",
+      "source": "List, add, and complete reminders.",
+      "translated": "Anımsatıcıları listeleyin, ekleyin ve tamamlayın."
+    },
+    {
+      "id": "native.apple.e5a601c8fe47e9ed",
+      "source": "Add-Only",
+      "translated": "Yalnızca Ekleme"
+    },
+    {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "Sağlık Özetleri"
+    },
+    {
+      "id": "native.apple.0b10201d7e452dc4",
+      "source": "Allow",
+      "translated": "İzin Ver"
     },
     {
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Ayarları Aç"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "Sağlık verileri bu aygıtta kullanılamıyor."
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "Yalnızca istenen adım, uyku, dinlenme kalp atış hızı ve antrenman toplu verilerini Gateway üzerinden yapılandırdığınız yapay zeka sağlayıcısıyla paylaşır. Sonuçlar sohbet geçmişinde kalabilir."
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "Varsayılan olarak kapalıdır. Etkinleştirme, istenen toplu verilerin Gateway ve yapılandırdığınız yapay zeka sağlayıcısı üzerinden bu iPhone'dan çıkmasına izin verir."
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "Devre dışı bırak"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "Özetleri etkinleştir ve paylaş"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -15514,6 +17024,36 @@
       "translated": "Gateway \\(found), uygulama \\(required) ile eşleşmiyor. Kurulum bunu güncelleyecek."
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "OpenClaw Gateway güncellemesi onarılıyor…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "OpenClaw Gateway, \\(targetVersion) sürümüne güncelleniyor…"
+    },
+    {
+      "id": "native.apple.7772913c171b78ac",
+      "source": "Gateway update needs attention.",
+      "translated": "Gateway güncellemesiyle ilgilenmeniz gerekiyor."
+    },
+    {
+      "id": "native.apple.e831aa3b0ced39d4",
+      "source": "Gateway update failed.",
+      "translated": "Gateway güncellemesi başarısız oldu."
+    },
+    {
+      "id": "native.apple.681e41736dc87c67",
+      "source": "Gateway update finished, but verification failed.",
+      "translated": "Gateway güncellemesi tamamlandı ancak doğrulama başarısız oldu."
+    },
+    {
+      "id": "native.apple.66f44c526206f5de",
+      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
+      "translated": "OpenClaw Gateway \\(installedVersion) yüklendi."
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "Kamera"
@@ -15689,6 +17229,111 @@
       "translated": "Telegram token'ı yapılandırılmamış."
     },
     {
+      "id": "native.apple.48155cd3182d0fc1",
+      "source": "Browse ClawHub",
+      "translated": "ClawHub'a göz at"
+    },
+    {
+      "id": "native.apple.2a63044f55e90b32",
+      "source": "Discover skills",
+      "translated": "Skill'leri keşfet"
+    },
+    {
+      "id": "native.apple.5fef1d6003e5df6f",
+      "source": "The Gateway verifies the exact reviewed release before download.",
+      "translated": "Gateway, indirmeden önce incelenen sürümün tam olarak eşleştiğini doğrular."
+    },
+    {
+      "id": "native.apple.f5aa33a76f62e6e9",
+      "source": "Search ClawHub",
+      "translated": "ClawHub'da ara"
+    },
+    {
+      "id": "native.apple.1b08dbd63dadda23",
+      "source": "Search",
+      "translated": "Ara"
+    },
+    {
+      "id": "native.apple.84bdcdb604ccadd6",
+      "source": "Results",
+      "translated": "Sonuçlar"
+    },
+    {
+      "id": "native.apple.2539b847d0cc4326",
+      "source": "Searching ClawHub…",
+      "translated": "ClawHub aranıyor…"
+    },
+    {
+      "id": "native.apple.ce42e5d6c37b59e8",
+      "source": "No skills found",
+      "translated": "Skill bulunamadı"
+    },
+    {
+      "id": "native.apple.c27ee52f9350a02f",
+      "source": "Try another search or refresh the catalog.",
+      "translated": "Başka bir arama yapmayı veya kataloğu yenilemeyi deneyin."
+    },
+    {
+      "id": "native.apple.fc107db526febdee",
+      "source": "Installed",
+      "translated": "Yüklendi"
+    },
+    {
+      "id": "native.apple.101103e2d97e04cd",
+      "source": "Review",
+      "translated": "İncele"
+    },
+    {
+      "id": "native.apple.8976aca17f4dfbdc",
+      "source": "Review ClawHub skill",
+      "translated": "ClawHub skill'ini incele"
+    },
+    {
+      "id": "native.apple.b5a521cd4f77fff0",
+      "source": "The Gateway will verify this exact release with ClawHub before download.",
+      "translated": "Gateway, indirmeden önce tam olarak bu sürümü ClawHub ile doğrulayacak."
+    },
+    {
+      "id": "native.apple.86078f1c84e735d7",
+      "source": "Verify and install",
+      "translated": "Doğrula ve yükle"
+    },
+    {
+      "id": "native.apple.fbbba0a83466864c",
+      "source": "Gateway warning",
+      "translated": "Gateway uyarısı"
+    },
+    {
+      "id": "native.apple.8957dc102983dbb0",
+      "source": "Review warning details",
+      "translated": "Uyarı ayrıntılarını incele"
+    },
+    {
+      "id": "native.apple.1b9020d8308c0563",
+      "source": "Expand and review the Gateway warning before acknowledging this exact version.",
+      "translated": "Tam olarak bu sürümü onaylamadan önce Gateway uyarısını genişletip inceleyin."
+    },
+    {
+      "id": "native.apple.ee2577b784c64ac6",
+      "source": "Cancel",
+      "translated": "İptal"
+    },
+    {
+      "id": "native.apple.9fa34dc1057cbcee",
+      "source": "Acknowledge and install",
+      "translated": "Onayla ve yükle"
+    },
+    {
+      "id": "native.apple.5e36364c63057778",
+      "source": "Version",
+      "translated": "Sürüm"
+    },
+    {
+      "id": "native.apple.cac171668ece3a4d",
+      "source": "Publisher",
+      "translated": "Yayıncı"
+    },
+    {
       "id": "native.apple.0a65101d40a6704c",
       "source": "No config sections available.",
       "translated": "Kullanılabilir config bölümü yok."
@@ -15787,26 +17432,6 @@
       "id": "native.apple.936bfd42a2f08232",
       "source": "Partial: \\(self.summary.totals.missingCostEntries) entries missing cost",
       "translated": "Kısmi: \\(self.summary.totals.missingCostEntries) girişte maliyet eksik"
-    },
-    {
-      "id": "native.apple.84f1d9ae4965cfe0",
-      "source": "Crestodian",
-      "translated": "Crestodian"
-    },
-    {
-      "id": "native.apple.4398066b42292ca3",
-      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
-      "translated": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels."
-    },
-    {
-      "id": "native.apple.648423d89aec0c13",
-      "source": "Chat",
-      "translated": "Sohbet"
-    },
-    {
-      "id": "native.apple.bd180b943ee89cfe",
-      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
-      "translated": "İpucu: “status”, “doctor”, “set default model …” veya “connect telegram” deneyin."
     },
     {
       "id": "native.apple.779f488d2ddd9eaf",
@@ -16949,9 +18574,9 @@
       "translated": "Peekaboo Bridge'i etkinleştir"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "İmzalı araçların (örn. `peekaboo`) PeekabooBridge üzerinden UI otomasyonunu yönlendirmesine izin ver."
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "İmzalı araçların (ör. `peekaboo`) PeekabooBridge aracılığıyla UI otomasyonunu yönetmesine izin verin. Computer Control gerektirir; aksi takdirde Peekaboo'nun kendi Mac uygulamasını çalıştırın."
     },
     {
       "id": "native.apple.72b24ed86295d6fa",
@@ -17484,6 +19109,11 @@
       "translated": "Kritik"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "Yeni Oturum"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "Ayarlar..."
@@ -17497,6 +19127,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "İleri"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "Komut Paleti…"
     },
     {
       "id": "native.apple.13a7356f48278757",
@@ -17859,16 +19494,6 @@
       "translated": "Kullanım"
     },
     {
-      "id": "native.apple.386595fa18585dbb",
-      "source": "approvalSource requires matching systemRunPlan",
-      "translated": "approvalSource, eşleşen bir systemRunPlan gerektirir"
-    },
-    {
-      "id": "native.apple.014ff905cecd753b",
-      "source": "explicit approval requires matching systemRunPlan",
-      "translated": "açık onay, eşleşen bir systemRunPlan gerektirir"
-    },
-    {
       "id": "native.apple.7eb0a88b8274ced8",
       "source": "Node pairing approved",
       "translated": "Düğüm eşleştirmesi onaylandı"
@@ -17929,9 +19554,9 @@
       "translated": "OpenClaw, herhangi bir çıkarım ayarını değiştirmeden önce tekrar denetleyecek."
     },
     {
-      "id": "native.apple.c7a02803addf11fa",
-      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
-      "translated": "Claude Code, Codex, Gemini ve kayıtlı API anahtarları denetleniyor."
+      "id": "native.apple.a0a8f45082d0ba99",
+      "source": "Checking CLI logins, saved API keys, and local model servers on the Gateway.",
+      "translated": "Gateway üzerindeki CLI oturumları, kayıtlı API anahtarları ve yerel model sunucuları kontrol ediliyor."
     },
     {
       "id": "native.apple.0fd3e5267cdf8250",
@@ -17939,9 +19564,9 @@
       "translated": "Bu Gateway'de AI hesapları kontrol edilemedi"
     },
     {
-      "id": "native.apple.0af61b95d249c351",
-      "source": "Couldn’t check this Mac for AI accounts",
-      "translated": "Bu Mac'te AI hesapları kontrol edilemedi"
+      "id": "native.apple.82ba8c9a69fbb84b",
+      "source": "Couldn’t check this Gateway for AI access",
+      "translated": "Bu Gateway üzerindeki AI erişimi denetlenemedi"
     },
     {
       "id": "native.apple.ab05bb1569f89077",
@@ -17964,9 +19589,9 @@
       "translated": "Ayrıntılar yukarıdaki her seçenekte listeleniyor. Girişi düzeltip yeniden deneyebilir veya aşağıda bir API anahtarı ya da token ile bağlanabilirsiniz."
     },
     {
-      "id": "native.apple.11383227f922aaec",
-      "source": "Need help? Chat with Crestodian",
-      "translated": "Yardım mı lazım? Crestodian ile sohbet edin"
+      "id": "native.apple.a0431b20c0650139",
+      "source": "Need help? Chat with OpenClaw",
+      "translated": "Yardıma mı ihtiyacınız var? OpenClaw ile sohbet edin"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -17984,14 +19609,24 @@
       "translated": "Kurulum ayrıntılarını kopyala"
     },
     {
-      "id": "native.apple.f5a157404f7a0eff",
-      "source": "No AI accounts found on this Mac",
-      "translated": "Bu Mac'te AI hesabı bulunamadı"
+      "id": "native.apple.e0458fcb8c0536ea",
+      "source": "No usable AI access found on this Gateway",
+      "translated": "Bu Gateway üzerinde kullanılabilir AI erişimi bulunamadı"
     },
     {
-      "id": "native.apple.76072d0308a553ca",
-      "source": "That’s fine — you can connect one with an API key or token. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
-      "translated": "Sorun değil — bir API anahtarı veya token ile bağlanabilirsiniz. Bu Mac'te Claude Code, Codex veya Gemini CLI kullanıyorsanız, önce oradan oturum açın ve “Tekrar kontrol et”e basın."
+      "id": "native.apple.06b98c6084617183",
+      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
+      "translated": "Sorun değil — bir API anahtarı veya belirteçle bağlantı kurabilirsiniz. Claude Code ya da Codex’te oturum açabilir veya uygun bir modelle Ollama ya da LM Studio’yu başlatıp ardından “Yeniden denetle”ye basabilirsiniz."
+    },
+    {
+      "id": "native.apple.e2749739df556643",
+      "source": "Detected, but not auto-tested",
+      "translated": "Algılandı ancak otomatik olarak test edilmedi"
+    },
+    {
+      "id": "native.apple.5f604e17336ca8a7",
+      "source": "\\(candidate.label) — \\(candidate.detail)",
+      "translated": "\\(candidate.label) — \\(candidate.detail)"
     },
     {
       "id": "native.apple.5f28927fe23c11cb",
@@ -18009,11 +19644,6 @@
       "translated": "Tekrar kontrol et"
     },
     {
-      "id": "native.apple.f179b0447a18bbf4",
-      "source": "Connect with an API key or token instead…",
-      "translated": "Bunun yerine bir API anahtarı veya token ile bağlan…"
-    },
-    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "Bir sağlayıcıyla oturum aç"
@@ -18027,6 +19657,11 @@
       "id": "native.apple.14b23c357d7a9eff",
       "source": "More sign-in options",
       "translated": "Daha fazla oturum açma seçeneği"
+    },
+    {
+      "id": "native.apple.634c5b2f1e8ec40f",
+      "source": "API Keys",
+      "translated": "API Keys"
     },
     {
       "id": "native.apple.10971b41012d4f36",
@@ -18134,9 +19769,9 @@
       "translated": "Bu anahtar işe yaramadı"
     },
     {
-      "id": "native.apple.18c6f84a21b9d92f",
-      "source": "Crestodian — setup helper",
-      "translated": "Crestodian — kurulum yardımcısı"
+      "id": "native.apple.e874bd0fad63f012",
+      "source": "OpenClaw — setup helper",
+      "translated": "OpenClaw — kurulum yardımcısı"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -18164,39 +19799,39 @@
       "translated": "Hatayı kopyala"
     },
     {
-      "id": "native.apple.6f51ff950befb37a",
+      "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
-      "translated": "<redacted secret>"
+      "translated": "<gizli bilgi çıkarıldı>"
     },
     {
-      "id": "native.apple.722995710f90cfc6",
-      "source": "Crestodian was interrupted. Restart to try again.",
-      "translated": "Crestodian kesintiye uğradı. Tekrar denemek için yeniden başlatın."
+      "id": "native.apple.b92f94ddc6bbc8e5",
+      "source": "OpenClaw was interrupted. Restart to try again.",
+      "translated": "OpenClaw kesintiye uğradı. Tekrar denemek için yeniden başlatın."
     },
     {
-      "id": "native.apple.6596e00d4333081e",
-      "source": "The Gateway connection changed. Restart Crestodian to reconnect.",
-      "translated": "Gateway bağlantısı değişti. Yeniden bağlanmak için Crestodian'ı yeniden başlatın."
+      "id": "native.apple.829845818e97978a",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Gateway bağlantısı değişti. Yeniden bağlanmak için OpenClaw'ı yeniden başlatın."
     },
     {
-      "id": "native.apple.6124d93872cfcfe4",
-      "source": "Crestodian is working…",
-      "translated": "Crestodian çalışıyor…"
+      "id": "native.apple.012861f82eff0ca9",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw çalışıyor…"
     },
     {
-      "id": "native.apple.105683a219ce17d7",
+      "id": "native.apple.2f7ad21b747fbc15",
       "source": "Restart",
-      "translated": "Yeniden başlat"
+      "translated": "Yeniden Başlat"
     },
     {
-      "id": "native.apple.839da8db3e4256b2",
+      "id": "native.apple.08f121b0b5f02195",
       "source": "Enter secret…",
-      "translated": "Gizli anahtarı girin…"
+      "translated": "Gizli bilgiyi girin…"
     },
     {
-      "id": "native.apple.3e9e9347173fffbc",
-      "source": "Reply to Crestodian… (yes sets everything up)",
-      "translated": "Crestodian'a yanıt verin… (yes her şeyi ayarlar)"
+      "id": "native.apple.35a542956f4f5497",
+      "source": "Reply to OpenClaw… (yes sets everything up)",
+      "translated": "OpenClaw'a yanıt verin… (evet, her şeyi ayarlar)"
     },
     {
       "id": "native.apple.78d1ad73762a7ce8",
@@ -18474,19 +20109,24 @@
       "translated": "Hazırlanıyor"
     },
     {
-      "id": "native.apple.183aee003b44ede6",
-      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
-      "translated": "OpenClaw, bu Mac’te arka plan hizmetini kuruyor. Bu genellikle bir dakikadan kısa sürer — Terminal yok, yönetici parolası yok."
-    },
-    {
       "id": "native.apple.d0b8cf59f852b3d0",
       "source": "Install OpenClaw",
       "translated": "OpenClaw’ı yükle"
     },
     {
+      "id": "native.apple.0b0fc42b8827e01f",
+      "source": "Prepare the Mac node",
+      "translated": "Mac düğümünü hazırlayın"
+    },
+    {
       "id": "native.apple.0112e18fa97e7c0c",
       "source": "Start the background service",
       "translated": "Arka plan hizmetini başlat"
+    },
+    {
+      "id": "native.apple.9230c2a15ba6da94",
+      "source": "Runs inside the app and uses its macOS permissions.",
+      "translated": "Uygulama içinde çalışır ve uygulamanın macOS izinlerini kullanır."
     },
     {
       "id": "native.apple.d1f9f278b55fe9b0",
@@ -18497,6 +20137,11 @@
       "id": "native.apple.0357f1eea66db068",
       "source": "Ready for the next step",
       "translated": "Sonraki adım için hazır"
+    },
+    {
+      "id": "native.apple.b4ba6f183309593d",
+      "source": "Once ready, this Mac connects to your selected Gateway.",
+      "translated": "Hazır olduğunda bu Mac, seçtiğiniz Gateway'e bağlanır."
     },
     {
       "id": "native.apple.9f58badc863cbf2b",
@@ -18714,6 +20359,16 @@
       "translated": "Mac"
     },
     {
+      "id": "native.apple.fb09a404bfd12fa9",
+      "source": "Device",
+      "translated": "Aygıt"
+    },
+    {
+      "id": "native.apple.7ed2af81aa7647fb",
+      "source": "Node",
+      "translated": "Düğüm"
+    },
+    {
       "id": "native.apple.6223e5f12aa9464b",
       "source": "Permissions",
       "translated": "İzinler"
@@ -18922,6 +20577,181 @@
       "id": "native.apple.1f5015480ea0f783",
       "source": "Share location when requested by the agent",
       "translated": "Ajan tarafından istendiğinde konumu paylaş"
+    },
+    {
+      "id": "native.apple.65c21de72f06fd33",
+      "source": "OpenClaw updated",
+      "translated": "OpenClaw güncellendi"
+    },
+    {
+      "id": "native.apple.6197fc2d1ebd6b2e",
+      "source": "Finishing your OpenClaw update",
+      "translated": "OpenClaw güncellemeniz tamamlanıyor"
+    },
+    {
+      "id": "native.apple.226b698fbbfc3cc4",
+      "source": "Checking the Mac app and Gateway…",
+      "translated": "Mac uygulaması ve Gateway kontrol ediliyor…"
+    },
+    {
+      "id": "native.apple.e9b1899627402a15",
+      "source": "Gateway recovery failed.",
+      "translated": "Gateway kurtarma işlemi başarısız oldu."
+    },
+    {
+      "id": "native.apple.91debe404bb7affc",
+      "source": "The managed OpenClaw runtime could not be reinstalled.",
+      "translated": "Yönetilen OpenClaw çalışma zamanı yeniden yüklenemedi."
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "Gateway yeniden başlatılıyor ve doğrulanıyor…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "Mac düğümü çalışma zamanı doğrulanıyor…"
+    },
+    {
+      "id": "native.apple.73e001baeae8e873",
+      "source": "Letting your agent know you’re back…",
+      "translated": "Temsilcinize geri döndüğünüz bildiriliyor…"
+    },
+    {
+      "id": "native.apple.3b2db6e4144742dd",
+      "source": "Welcome back",
+      "translated": "Tekrar hoş geldiniz"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) ve Gateway hazır."
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) ve Mac düğümü çalışma zamanı hazır."
+    },
+    {
+      "id": "native.apple.a3fa88f5fd3c2732",
+      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
+      "translated": "Temsilcinize henüz bildirim gönderilemedi. OpenClaw, uygulamanın bir sonraki başlatılışından sonra yeniden deneyecek."
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw, aracınıza otomatik olarak bildirim gönderemedi. Uygulama ve Gateway güncellemesi tamamlandı."
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw, aracınıza otomatik olarak bildirim gönderemedi. Uygulama ve Mac düğümü güncellemesi tamamlandı."
+    },
+    {
+      "id": "native.apple.71ad85442725f45c",
+      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenClaw, temsilci bildirimini doğrulayamadı. Yinelenen bir karşılama mesajını önlemek için yeniden denemeyecek."
+    },
+    {
+      "id": "native.apple.a3deea03e4870dd0",
+      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
+      "translated": "Uzak Gateway bu Mac uygulamasından daha eski olduğu için OpenClaw aracı bildirimini atladı."
+    },
+    {
+      "id": "native.apple.3636a8b503ff00d2",
+      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
+      "translated": "Gateway duraklatılmış durumda kaldığı için OpenClaw aracınızı uyandırmadı."
+    },
+    {
+      "id": "native.apple.0f533623878f3d67",
+      "source": "Gateway verification failed.",
+      "translated": "Gateway doğrulaması başarısız oldu."
+    },
+    {
+      "id": "native.apple.3ab92d342b4fa00b",
+      "source": "The managed runtime does not match the updated Mac app.",
+      "translated": "Yönetilen çalışma zamanı, güncellenmiş Mac uygulamasıyla eşleşmiyor."
+    },
+    {
+      "id": "native.apple.2cfad583503a9a41",
+      "source": "The Mac node did not restart.",
+      "translated": "Mac düğümü yeniden başlatılmadı."
+    },
+    {
+      "id": "native.apple.5b9061db451b644a",
+      "source": "The Mac node did not become ready.",
+      "translated": "Mac düğümü hazır duruma gelmedi."
+    },
+    {
+      "id": "native.apple.54e76dabec1eb1c1",
+      "source": "The node service restarted but did not remain running.",
+      "translated": "Düğüm hizmeti yeniden başlatıldı ancak çalışmaya devam etmedi."
+    },
+    {
+      "id": "native.apple.51fe0a453f99f5ad",
+      "source": "The Gateway did not start.",
+      "translated": "Gateway başlatılamadı."
+    },
+    {
+      "id": "native.apple.9e9e4278e553c144",
+      "source": "The update is installed, but Gateway health did not become ready.",
+      "translated": "Güncelleme yüklendi ancak Gateway sistem durumu hazır hâle gelmedi."
+    },
+    {
+      "id": "native.apple.91a105faed454e5a",
+      "source": "The Gateway could not reconnect.",
+      "translated": "Gateway yeniden bağlanamadı."
+    },
+    {
+      "id": "native.apple.9ac2dfa295929a92",
+      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
+      "translated": "OpenClaw güncellemeyi yükledi ancak Gateway bağlantısını doğrulayamadı."
+    },
+    {
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Gateway kontrol edilemedi."
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw, Gateway hizmetinin sahiplik kaydını okuyamadı. Gateway LaunchAgent'ı kontrol ettikten sonra yeniden deneyin."
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Mac düğümü kontrol edilemedi."
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw, düğüm hizmetinin sahiplik kaydını okuyamadı. Düğüm LaunchAgent'ını kontrol ettikten sonra yeniden deneyin."
+    },
+    {
+      "id": "native.apple.d0f712a2ed470a3e",
+      "source": "Gateway update needs help",
+      "translated": "Gateway güncellemesi için yardım gerekiyor"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "Güncelleme kılavuzu"
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "Discord'a sor"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "Yeniden dene"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "Devam et"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -19234,9 +21064,9 @@
       "translated": "Ses ve Konuşma"
     },
     {
-      "id": "native.apple.f5aa19bc071cf585",
-      "source": "Crestodian",
-      "translated": "Crestodian"
+      "id": "native.apple.59bed721dff1a25f",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -19289,9 +21119,14 @@
       "translated": "Skills"
     },
     {
-      "id": "native.apple.0f62bd687b786431",
-      "source": "Optional capabilities that become available when their requirements are met.",
-      "translated": "Gereksinimleri karşılandığında kullanılabilir hale gelen isteğe bağlı yetenekler."
+      "id": "native.apple.50be0aae3f54705e",
+      "source": "Manage installed capabilities or discover verified releases on ClawHub.",
+      "translated": "Yüklü özellikleri yönetin veya ClawHub'da doğrulanmış sürümleri keşfedin."
+    },
+    {
+      "id": "native.apple.5a3f840bde899fbe",
+      "source": "Skills section",
+      "translated": "Skills bölümü"
     },
     {
       "id": "native.apple.d40a7bb04c5534ec",
@@ -19334,6 +21169,11 @@
       "translated": "Yenile"
     },
     {
+      "id": "native.apple.90f5eb0762593f89",
+      "source": "Search installed skills",
+      "translated": "Yüklü Skills öğelerinde ara"
+    },
+    {
       "id": "native.apple.85a9941ff7a30fbe",
       "source": "Loading…",
       "translated": "Yükleniyor…"
@@ -19357,6 +21197,16 @@
       "id": "native.apple.2beddcc70ea0d96a",
       "source": "Filter",
       "translated": "Filtre"
+    },
+    {
+      "id": "native.apple.ebbf5e9abc1fd8b9",
+      "source": "Installed",
+      "translated": "Yüklü"
+    },
+    {
+      "id": "native.apple.a4b3ea71236c5789",
+      "source": "Browse",
+      "translated": "Göz at"
     },
     {
       "id": "native.apple.eb868667821fbf7c",
@@ -19419,6 +21269,11 @@
       "translated": "Eksik ikili dosyalar: \\(self.missingBins.joined(separator: \", \"))"
     },
     {
+      "id": "native.apple.98ac6e8935a9fee5",
+      "source": "Needs any binary: \\(self.missingAnyBins.joined(separator: \", \"))",
+      "translated": "Şu ikili dosyalardan herhangi biri gerekli: \\(self.missingAnyBins.joined(separator: \", \"))"
+    },
+    {
       "id": "native.apple.1ffd9ad47f1dd74a",
       "source": "Missing env: \\(self.missingEnv.joined(separator: \", \"))",
       "translated": "Eksik env: \\(self.missingEnv.joined(separator: \", \"))"
@@ -19427,6 +21282,11 @@
       "id": "native.apple.c9ef14276ce395c1",
       "source": "Requires config: \\(self.missingConfig.joined(separator: \", \"))",
       "translated": "Config gerektirir: \\(self.missingConfig.joined(separator: \", \"))"
+    },
+    {
+      "id": "native.apple.1f939d96ce8464dc",
+      "source": "Requires OS: \\(self.missingOS.joined(separator: \", \"))",
+      "translated": "Gerekli işletim sistemi: \\(self.missingOS.joined(separator: \", \"))"
     },
     {
       "id": "native.apple.c588ae10b9fae52b",
@@ -19492,6 +21352,26 @@
       "id": "native.apple.5bea2c67b8d4ccf9",
       "source": "Bundled",
       "translated": "Paketle birlikte gelen"
+    },
+    {
+      "id": "native.apple.4b27b3be5f3f1f66",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.9427da914cdbfbf3",
+      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+      "translated": "Yapay zekâ destekli kurulum yardımcınız. Durumu kontrol edebilir, yapılandırmayı düzeltebilir, modeller arasında geçiş yapabilir ve kanalları bağlayabilir."
+    },
+    {
+      "id": "native.apple.ce77d7e393a4b860",
+      "source": "Chat",
+      "translated": "Sohbet"
+    },
+    {
+      "id": "native.apple.61bddd6a136b5e8b",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "İpucu: “durum”, “doktor”, “varsayılan modeli ayarla …” veya “telegram'a bağlan” ifadelerini deneyin."
     },
     {
       "id": "native.apple.9df0af709d3b38bf",
@@ -20952,6 +22832,11 @@
       "id": "native.apple.2f45f005d2a7c3c2",
       "source": "Apple Watch",
       "translated": "Apple Watch"
+    },
+    {
+      "id": "native.apple.3fe61126fd4ca8aa",
+      "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
+      "translated": "Gateway farklı bir ClawHub sürümünü değerlendirdi. Yüklemeden önce Skill'i tekrar inceleyin."
     },
     {
       "id": "native.apple.e97067187c9a359d",

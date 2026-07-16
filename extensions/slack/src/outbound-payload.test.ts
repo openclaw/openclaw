@@ -883,6 +883,24 @@ describe("slackOutbound sendPayload", () => {
     ]);
   });
 
+  it("sends an exact mirrored portable control row once", async () => {
+    const buttons = [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }];
+    const { run, sendMock } = createHarness({
+      payload: {
+        text: "Deploy?",
+        presentation: { blocks: [{ type: "buttons", buttons }] },
+        interactive: { blocks: [{ type: "buttons", buttons }] },
+      },
+    });
+
+    await run();
+
+    const actions = sendOptions(sendCall(sendMock, 0)).blocks?.filter(
+      (block) => block.type === "actions",
+    );
+    expect(actions).toHaveLength(1);
+  });
+
   it("marks inline legacy text as represented when native data is compiled with it", async () => {
     const payload: ReplyPayload = {
       text: "Before [[slack_buttons: OK:ok]] after",
@@ -1197,3 +1215,4 @@ describe("Slack outbound payload contract", () => {
     createHarness: createSlackOutboundPayloadHarness,
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
