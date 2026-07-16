@@ -878,24 +878,35 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       ]);
 
       await gateway.setMethodResponse("sessions.list", {
-        count: 1,
+        count: 2,
         path: "",
         defaults: {},
         sessions: [
           {
             key: sessionKey,
             kind: "direct",
+            label: "Cloud session",
             updatedAt: Date.now(),
             worktree: { id: "worktree-1", branch: "openclaw/cloud-e2e", repoRoot: WORKSPACE },
             placement: { state: "active" },
+          },
+          {
+            key: "agent:cloud:local-e2e",
+            kind: "direct",
+            label: "Local session",
+            updatedAt: Date.now() - 1,
+            placement: { state: "local" },
           },
         ],
         ts: Date.now(),
       });
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
       const sessionRow = page.locator('[data-session-key="agent:cloud:cloud-e2e"]');
+      const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
       await sessionRow.waitFor();
-      await page.locator('[data-placement-state="active"]').waitFor();
+      await localSessionRow.waitFor();
+      const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
+      await cloudPlacementBadge.waitFor();
       await sessionRow.hover();
       await sessionRow.getByRole("button", { name: "Open session menu" }).click();
       const stopWorker = page
@@ -903,6 +914,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .getByRole("menuitem", { name: "Stop cloud worker…" });
       await stopWorker.waitFor();
       await captureUiProof(page, "02-active-cloud-worker-stop.png");
+      expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
+      expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);
       page.once("dialog", (dialog) => void dialog.accept());
       await stopWorker.click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");

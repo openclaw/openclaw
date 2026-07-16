@@ -766,7 +766,7 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
@@ -1375,7 +1375,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     isCloudflareAiGateway;
 
   const useMaxTokens =
-    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether;
+    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isZai;
 
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");

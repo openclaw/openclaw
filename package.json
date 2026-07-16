@@ -1626,7 +1626,7 @@
     "dup:check:json": "node scripts/check-duplicates.mjs --json",
     "format": "oxfmt --write --threads=1",
     "format:all": "pnpm format && pnpm format:swift",
-    "format:check": "oxfmt --check --threads=1",
+    "format:check": "oxfmt --check",
     "format:diff": "oxfmt --write --threads=1 && git --no-pager diff",
     "format:docs": "node scripts/format-docs.mjs",
     "format:docs:check": "node scripts/format-docs.mjs --check",

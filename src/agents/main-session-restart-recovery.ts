@@ -5,10 +5,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../packages/gateway-protocol/src/client-info.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -29,7 +25,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import {
@@ -1313,6 +1309,7 @@ async function sendUnresumableSessionNotice(params: {
   entry: SessionEntry;
   reason: string;
   sessionKey: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<void> {
   const messageParams: Record<string, unknown> = {
     to: params.deliveryContext.to,
@@ -1336,13 +1333,7 @@ async function sendUnresumableSessionNotice(params: {
   }
 
   try {
-    await callGateway({
-      method: "message.action",
-      params: actionParams,
-      timeoutMs: 10_000,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-    });
+    await params.gatewayRuntime.sendRecoveryNotice(actionParams, 10_000);
     log.info(
       `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
     );
@@ -1397,6 +1388,7 @@ async function failUnresumableMainSession(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
   expectedRecoverySourceRunId?: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
   reason: string;
   sessionKey: string;
   storePath: string;
@@ -1433,6 +1425,7 @@ async function failUnresumableMainSession(params: {
     await sendUnresumableSessionNotice({
       deliveryContext,
       entry: params.entry,
+      gatewayRuntime: params.gatewayRuntime,
       reason: params.reason,
       sessionKey: params.sessionKey,
     });
@@ -1521,6 +1514,7 @@ async function recoverStore(params: {
   sessionWorkAdmissionHandoffId?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
+  gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const providedActiveSessionIds =
@@ -1602,6 +1596,7 @@ async function recoverStore(params: {
         expectedRecoverySourceRunId: normalizeOptionalString(
           entry.restartRecoveryDeliverySourceRunId,
         ),
+        gatewayRuntime: params.gatewayRuntime,
         reason: "message-tool-only recovery authority is unavailable",
         sessionKey,
         storePath: params.storePath,
@@ -1631,6 +1626,7 @@ async function recoverStore(params: {
         cfg: params.cfg,
         entry,
         expectedRecoverySourceRunId,
+        gatewayRuntime: params.gatewayRuntime,
         reason: resumeBlockReason,
         sessionKey,
         storePath: params.storePath,
@@ -1656,6 +1652,7 @@ async function recoverStore(params: {
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
         forceRestartSafeTools: true,
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+        gatewayRuntime: params.gatewayRuntime,
       });
       if (resumed) {
         params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1698,6 +1695,7 @@ async function recoverStore(params: {
           sessionKey,
           pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
           sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+          gatewayRuntime: params.gatewayRuntime,
         });
         if (resumed) {
           params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1725,6 +1723,7 @@ async function recoverStore(params: {
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
         forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+        gatewayRuntime: params.gatewayRuntime,
       });
       if (resumed) {
         params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1767,6 +1766,7 @@ async function recoverStore(params: {
           cfg: params.cfg,
           entry,
           expectedRecoverySourceRunId,
+          gatewayRuntime: params.gatewayRuntime,
           reason: completion.reason,
           sessionKey,
           storePath: params.storePath,
@@ -1780,6 +1780,7 @@ async function recoverStore(params: {
         cfg: params.cfg,
         entry,
         expectedRecoverySourceRunId,
+        gatewayRuntime: params.gatewayRuntime,
         reason: resumePolicy.reason,
         sessionKey,
         storePath: params.storePath,
@@ -1801,6 +1802,7 @@ async function recoverStore(params: {
       forceRestartSafeTools:
         entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
       sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+      gatewayRuntime: params.gatewayRuntime,
     });
     if (resumed) {
       params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1831,15 +1833,14 @@ async function resolveRestartRecoveryStorePaths(params: {
   return [...storePaths].toSorted((a, b) => a.localeCompare(b));
 }
 
-export async function recoverRestartAbortedMainSessions(
-  params: {
-    cfg?: OpenClawConfig;
-    stateDir?: string;
-    resumedSessionKeys?: Set<string>;
-    activeSessionIds?: Iterable<string>;
-    activeSessionKeys?: Iterable<string>;
-  } = {},
-): Promise<{ recovered: number; failed: number; skipped: number }> {
+export async function recoverRestartAbortedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+  resumedSessionKeys?: Set<string>;
+  activeSessionIds?: Iterable<string>;
+  activeSessionKeys?: Iterable<string>;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
 
@@ -1850,6 +1851,7 @@ export async function recoverRestartAbortedMainSessions(
       resumedSessionKeys,
       activeSessionIds: params.activeSessionIds,
       activeSessionKeys: params.activeSessionKeys,
+      gatewayRuntime: params.gatewayRuntime,
     });
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
@@ -1873,6 +1875,7 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
   expectedSessionId: string;
   sessionKey: string;
   storePath: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const expectedClaim: ExpectedRestartRecoveryClaim = {
     canonicalSessionKey: params.canonicalSessionKey,
@@ -1910,6 +1913,7 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
           resumedSessionKeys: new Set<string>(),
           expectedClaim,
           sessionWorkAdmissionHandoffId: handoffId,
+          gatewayRuntime: params.gatewayRuntime,
         }),
     );
   } finally {
@@ -1917,16 +1921,15 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
   }
 }
 
-export async function recoverStartupOrphanedMainSessions(
-  params: {
-    cfg?: OpenClawConfig;
-    stateDir?: string;
-    activeSessionIds?: Iterable<string>;
-    activeSessionKeys?: Iterable<string>;
-    updatedBeforeMs?: number;
-    resumedSessionKeys?: Set<string>;
-  } = {},
-): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
+export async function recoverStartupOrphanedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+  activeSessionIds?: Iterable<string>;
+  activeSessionKeys?: Iterable<string>;
+  updatedBeforeMs?: number;
+  resumedSessionKeys?: Set<string>;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
   const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
   const marked = await markStartupOrphanedMainSessionsForRecovery({
     cfg: params.cfg,
@@ -1941,6 +1944,7 @@ export async function recoverStartupOrphanedMainSessions(
     resumedSessionKeys: params.resumedSessionKeys,
     activeSessionIds: params.activeSessionIds,
     activeSessionKeys: params.activeSessionKeys,
+    gatewayRuntime: params.gatewayRuntime,
   });
   return {
     marked: marked.marked,
@@ -1950,14 +1954,13 @@ export async function recoverStartupOrphanedMainSessions(
   };
 }
 
-export function scheduleRestartAbortedMainSessionRecovery(
-  params: {
-    cfg?: OpenClawConfig;
-    delayMs?: number;
-    maxRetries?: number;
-    stateDir?: string;
-  } = {},
-): void {
+export function scheduleRestartAbortedMainSessionRecovery(params: {
+  cfg?: OpenClawConfig;
+  delayMs?: number;
+  maxRetries?: number;
+  stateDir?: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): void {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
   const resumedSessionKeys = new Set<string>();
@@ -1975,6 +1978,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
           stateDir: params.stateDir,
           resumedSessionKeys,
           updatedBeforeMs: startupRecoveryCutoffMs,
+          gatewayRuntime: params.gatewayRuntime,
         }),
     )
       .then((result) => {
