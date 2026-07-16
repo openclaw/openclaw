@@ -145,6 +145,7 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
     case "strict-tables-v3":
       return "tables → SQLite STRICT typing";
   }
+  return migration.kind satisfies never;
 }
 
 let autoMigrateChecked = false;

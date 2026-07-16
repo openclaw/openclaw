@@ -149,6 +149,7 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
     case "strict-tables-v3":
       return "tables -> SQLite STRICT typing";
   }
+  return migration.kind satisfies never;
 }
 
 /** Return true when a path exists and is a file. */
