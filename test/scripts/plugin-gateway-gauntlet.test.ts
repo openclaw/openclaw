@@ -664,7 +664,7 @@ setInterval(() => {}, 1000);
           label: "timeout-leader-exits",
           phase: "probe",
           timeoutKillGraceMs: 25,
-          timeoutMs: 150,
+          timeoutMs: 250,
           timeMode: "none",
         });
 
@@ -732,7 +732,7 @@ setInterval(() => {}, 1000);
         label: "timeout-leader-drain",
         phase: "probe",
         timeoutKillGraceMs: 200,
-        timeoutMs: 200,
+        timeoutMs: 500,
         timeMode: "none",
       });
 
@@ -954,7 +954,7 @@ const promise = runMeasuredCommandLive({
   label: "timeout-parent-termination",
   phase: "probe",
   timeoutKillGraceMs: 150,
-  timeoutMs: 150,
+  timeoutMs: 200,
   timeMode: "none",
 });
 for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(

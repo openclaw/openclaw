@@ -984,7 +984,7 @@ describe("scripts/test-group-report child process guard", () => {
         cwd: process.cwd(),
         env: process.env,
         killGraceMs: 25,
-        timeoutMs: 150,
+        timeoutMs: 250,
       },
     );
 
@@ -994,7 +994,7 @@ describe("scripts/test-group-report child process guard", () => {
       signal: "SIGKILL",
       timedOut: true,
     });
-    expect(result.output).toContain("command timed out after 150ms");
+    expect(result.output).toContain("command timed out after 250ms");
     expect(result.output).toContain("sending SIGKILL");
   });
 
@@ -1022,7 +1022,7 @@ describe("scripts/test-group-report child process guard", () => {
           cwd: process.cwd(),
           env: process.env,
           killGraceMs: 25,
-          timeoutMs: 150,
+          timeoutMs: 250,
         },
       );
 
@@ -1030,7 +1030,7 @@ describe("scripts/test-group-report child process guard", () => {
         status: 1,
         timedOut: true,
       });
-      expect(result.output).toContain("command timed out after 150ms");
+      expect(result.output).toContain("command timed out after 250ms");
       expect(result.output).toContain("sending SIGKILL");
 
       const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
@@ -1066,7 +1066,7 @@ describe("scripts/test-group-report child process guard", () => {
         "const result = await spawnText(",
         '  "/usr/bin/time",',
         `  [process.execPath, "--eval", ${JSON.stringify(childScript)}],`,
-        "  { cwd: process.cwd(), env: process.env, killGraceMs: 25, timeoutMs: 200 },",
+        "  { cwd: process.cwd(), env: process.env, killGraceMs: 25, timeoutMs: 500 },",
         ");",
         "process.stdout.write(JSON.stringify(result));",
       ].join("\n");
