@@ -9,7 +9,12 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
+import {
+  ConfigPage,
+  configSelectionFromSearch,
+  quickChannels,
+  supportsSystemInfo,
+} from "./config-page.ts";
 import type { ConfigViewState } from "./view.ts";
 
 function deferred<T>() {
@@ -53,6 +58,46 @@ describe("supportsSystemInfo", () => {
     expect(supportsSystemInfo(hello)).toBe(true);
     expect(supportsSystemInfo(unsupportedHello)).toBe(false);
     expect(supportsSystemInfo(null)).toBe(false);
+  });
+});
+
+describe("quickChannels", () => {
+  it("does not count configured channels as connected without a live connection", () => {
+    expect(
+      quickChannels(
+        { channels: { slack: { token: "x" }, discord: { token: "y" } } },
+        {
+          ts: Date.now(),
+          channelOrder: ["discord", "slack"],
+          channelLabels: { discord: "Discord", slack: "Slack" },
+          channelDetailLabels: { discord: "Connected", slack: "Disconnected" },
+          channels: {
+            discord: { configured: true, connected: true },
+            slack: { configured: true, connected: false },
+          },
+          channelAccounts: {
+            discord: [{ accountId: "default", configured: true, connected: true }],
+            slack: [{ accountId: "default", configured: true, connected: false }],
+          },
+          channelDefaultAccountId: { discord: "default", slack: "default" },
+        },
+      ),
+    ).toEqual([
+      {
+        id: "discord",
+        label: "Discord",
+        connected: true,
+        configured: true,
+        detail: "Connected",
+      },
+      {
+        id: "slack",
+        label: "Slack",
+        connected: false,
+        configured: true,
+        detail: "Configured",
+      },
+    ]);
   });
 });
 

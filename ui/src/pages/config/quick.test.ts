@@ -198,7 +198,8 @@ describe("renderQuickSettings", () => {
       renderQuickSettings(
         createProps({
           channels: [
-            { id: "discord", label: "Discord", connected: true, detail: "Configured" },
+            { id: "discord", label: "Discord", connected: true, configured: true, detail: "Connected" },
+            { id: "slack", label: "Slack", connected: false, configured: true, detail: "Configured" },
             { id: "telegram", label: "Telegram", connected: false },
           ],
           onChannelConfigure,
@@ -208,7 +209,10 @@ describe("renderQuickSettings", () => {
     );
 
     const discordRow = expectRowByTitle(container, "Discord");
-    expect(discordRow.querySelector(".settings-status")?.textContent?.trim()).toBe("Configured");
+    expect(discordRow.querySelector(".settings-status")?.textContent?.trim()).toBe("Connected");
+    const slackRow = expectRowByTitle(container, "Slack");
+    expect(slackRow.querySelector("button")).toBeNull();
+    expect(slackRow.querySelector(".settings-status")?.textContent?.trim()).toBe("Configured");
     const telegramRow = expectRowByTitle(container, "Telegram");
     const connectButton = telegramRow.querySelector("button");
     expect(connectButton?.textContent?.trim()).toBe("Connect →");
