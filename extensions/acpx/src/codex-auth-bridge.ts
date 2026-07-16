@@ -402,7 +402,11 @@ function stripOpenClawWrapperArgs(args) {
 const rawConfiguredArgs = process.argv.slice(2);
 const stderrLogPath = resolveStderrLogPath(rawConfiguredArgs);
 if (stderrLogPath) {
-  rmSync(stderrLogPath, { force: true });
+  try {
+    rmSync(stderrLogPath, { force: true });
+  } catch {
+    // Diagnostic cleanup must never prevent the adapter from starting.
+  }
 }
 
 const configuredArgs = stripOpenClawWrapperArgs(rawConfiguredArgs);
