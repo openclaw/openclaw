@@ -48,7 +48,10 @@ describe("listAzureSpeechVoices timeout", () => {
       vi.stubGlobal(
         "fetch",
         vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-          return await originalFetch(`http://127.0.0.1:${port}/cognitiveservices/voices/list`, init);
+          return await originalFetch(
+            `http://127.0.0.1:${port}/cognitiveservices/voices/list`,
+            init,
+          );
         }) as unknown as typeof globalThis.fetch,
       );
 
@@ -64,10 +67,7 @@ describe("listAzureSpeechVoices timeout", () => {
               timeoutMs: 100,
             }),
             new Promise<never>((_, reject) => {
-              watchdog = setTimeout(
-                () => reject(new Error("voices list did not time out")),
-                1_000,
-              );
+              watchdog = setTimeout(() => reject(new Error("voices list did not time out")), 1_000);
             }),
           ]),
         ).rejects.toThrow(/aborted|timeout|timed out/i);
