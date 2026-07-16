@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import {
   assertQaGatewayCredentialLeaseQuarantine,
   createQaGatewayProcessBoundaryController,
@@ -120,6 +121,14 @@ describe("gateway process boundary", () => {
       expect(evidence.launches).toEqual([
         expect.objectContaining({ generation: prepared.generation }),
       ]);
+
+      await fs.writeFile(
+        `${prepared.identityFilePath}.runtime`,
+        Buffer.alloc(QA_CHILD_STDOUT_MAX_BYTES + 1, "x"),
+      );
+      await expect(controller.markReady(identity)).rejects.toThrow(
+        `process-boundary live verification proxy stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes`,
+      );
 
       const malformed = await controller.prepare({
         args: ["gateway", "run"],

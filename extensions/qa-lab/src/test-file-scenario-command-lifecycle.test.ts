@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -113,6 +114,56 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
     await expect(runCommand()).rejects.toBe(error);
     expect(parentHandlers.size).toBe(0);
   });
+
+  it.each(["stdout", "stderr"] as const)(
+    "stops the process group and reports a %s pipe failure once",
+    async (streamName) => {
+      const child = createChild();
+      const resultPromise = runCommand(5_000);
+      const message = `synthetic ${streamName} read failure`;
+
+      child[streamName]?.emit("error", new Error(message));
+      child.emit("close", 0, null);
+      child.emit("close", 0, null);
+
+      await expect(resultPromise).resolves.toEqual({
+        exitCode: 1,
+        failureMessage: `scenario-command ${streamName} stream failed: ${message}`,
+        signal: null,
+        stdout: "",
+        stderr: "",
+      });
+      expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
+      expect(parentHandlers.size).toBe(0);
+      processKill.mockClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(processKill).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["stdout", QA_CHILD_STDOUT_MAX_BYTES],
+    ["stderr", QA_CHILD_STDERR_TAIL_BYTES],
+  ] as const)(
+    "bounds %s and keeps close from replacing the overflow failure",
+    async (streamName, maxBytes) => {
+      const child = createChild();
+      const resultPromise = runCommand(5_000);
+
+      child[streamName]?.emit("data", Buffer.alloc(maxBytes + 1, "x"));
+      child.emit("close", 0, null);
+
+      const result = await resultPromise;
+      expect(result).toMatchObject({
+        exitCode: 1,
+        failureMessage: `scenario-command ${streamName} exceeded ${maxBytes} bytes`,
+        signal: null,
+      });
+      expect(Buffer.byteLength(result[streamName])).toBe(maxBytes);
+      expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
+      expect(parentHandlers.size).toBe(0);
+    },
+  );
 
   it("escalates timed-out commands and preserves the timeout result", async () => {
     createChild();

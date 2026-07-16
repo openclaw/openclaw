@@ -1,5 +1,12 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import {
+  appendQaChildOutput,
+  createQaChildOutputCapture,
+  QA_CHILD_STDERR_TAIL_BYTES,
+  QA_CHILD_STDOUT_MAX_BYTES,
+  readQaChildOutput,
+} from "./child-output.js";
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 export type QaScenarioCommandExecution = {
@@ -58,10 +65,11 @@ export function killQaScenarioWindowsProcessTree(
 // One owner keeps timers, parent handlers, child signals, and final result
 // settlement symmetric across every command exit path.
 class QaScenarioCommandLifecycle {
-  private readonly stderr: Buffer[] = [];
-  private readonly stdout: Buffer[] = [];
+  private readonly stderr = createQaChildOutputCapture(QA_CHILD_STDERR_TAIL_BYTES);
+  private readonly stdout = createQaChildOutputCapture(QA_CHILD_STDOUT_MAX_BYTES);
   private resolve: ((result: QaScenarioCommandResult) => void) | undefined;
   private settled = false;
+  private terminalFailure: string | undefined;
   private timers: QaScenarioCommandTimers = {};
   private timedOut = false;
 
@@ -74,16 +82,19 @@ class QaScenarioCommandLifecycle {
   start(resolve: (result: QaScenarioCommandResult) => void, reject: (reason?: unknown) => void) {
     this.resolve = resolve;
     this.armTimeout();
-    this.child.stdout?.on("data", (chunk: Buffer) => this.stdout.push(chunk));
-    this.child.stderr?.on("data", (chunk: Buffer) => this.stderr.push(chunk));
+    this.child.stdout?.on("data", (chunk: Buffer) => this.handleOutput("stdout", chunk));
+    this.child.stderr?.on("data", (chunk: Buffer) => this.handleOutput("stderr", chunk));
+    this.child.stdout?.once("error", (error) => this.handleStreamError("stdout", error));
+    this.child.stderr?.once("error", (error) => this.handleStreamError("stderr", error));
     process.once("exit", this.handleParentExit);
     for (const signal of QA_SCENARIO_COMMAND_PARENT_SIGNALS) {
       process.once(signal, this.handleParentSignal);
     }
     this.child.on("error", (error) => {
-      if (this.settled) {
+      if (this.settled || this.timedOut || this.terminalFailure) {
         return;
       }
+      this.settled = true;
       this.clearTimers();
       this.cleanupParentHandlers();
       reject(error);
@@ -113,24 +124,23 @@ class QaScenarioCommandLifecycle {
     if (!this.timedOut) {
       this.clearTimeoutTimer();
     }
+    const failureMessage = this.timedOut
+      ? `${this.commandLabel()} timed out after ${this.execution.timeoutMs}ms`
+      : this.terminalFailure;
     const result = {
-      exitCode: this.timedOut ? 1 : (exitCode ?? (signal ? 1 : 0)),
+      exitCode: failureMessage ? 1 : (exitCode ?? (signal ? 1 : 0)),
       signal,
-      ...(this.timedOut
-        ? {
-            failureMessage: `${this.commandLabel()} timed out after ${this.execution.timeoutMs}ms`,
-          }
-        : {}),
+      ...(failureMessage ? { failureMessage } : {}),
     };
     if (
-      this.timedOut &&
+      (this.timedOut || this.terminalFailure) &&
       !this.useProcessGroup &&
       (this.timers.forceKill || this.timers.forceSettle)
     ) {
       return;
     }
     if (this.isProcessGroupRunning()) {
-      if (!this.timedOut) {
+      if (!this.timedOut && !this.terminalFailure) {
         this.signalChild("SIGTERM");
       }
       this.scheduleForcedCleanup(result);
@@ -138,6 +148,34 @@ class QaScenarioCommandLifecycle {
     }
     this.finish(result);
   };
+
+  private handleOutput(source: "stderr" | "stdout", chunk: Buffer) {
+    const capture = source === "stdout" ? this.stdout : this.stderr;
+    appendQaChildOutput(capture, chunk);
+    if (capture.exceeded) {
+      this.handleTerminalFailure(
+        `${this.commandLabel()} ${source} exceeded ${capture.maxBytes} bytes`,
+      );
+    }
+  }
+
+  private handleStreamError(source: "stderr" | "stdout", error: Error) {
+    this.handleTerminalFailure(
+      `${this.commandLabel()} ${source} stream failed: ${error.message || String(error)}`,
+    );
+  }
+
+  private handleTerminalFailure(failureMessage: string) {
+    if (this.settled || this.timedOut || this.terminalFailure) {
+      return;
+    }
+    this.terminalFailure = failureMessage;
+    this.clearTimeoutTimer();
+    // Pipe loss or truncated evidence makes the result unusable. Keep failure on
+    // the normal process-tree cleanup path before reporting it to the scenario.
+    this.signalChild("SIGTERM");
+    this.scheduleForcedCleanup({ exitCode: 1, failureMessage, signal: null });
+  }
 
   private armTimeout() {
     const timeoutMs = this.execution.timeoutMs;
@@ -216,8 +254,8 @@ class QaScenarioCommandLifecycle {
     this.cleanupParentHandlers();
     this.resolve?.({
       ...result,
-      stdout: Buffer.concat(this.stdout).toString("utf8"),
-      stderr: Buffer.concat(this.stderr).toString("utf8"),
+      stdout: readQaChildOutput(this.stdout),
+      stderr: readQaChildOutput(this.stderr),
     });
   }
 
