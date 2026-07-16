@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withEnv } from "../test-utils/env.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildWorkspaceHookStatus } from "./hooks-status.js";
 import type { HookEntry } from "./types.js";
@@ -42,10 +43,6 @@ function evaluate(config?: OpenClawConfig) {
 }
 
 describe("hook environment requirements", () => {
-  afterEach(() => {
-    delete process.env[ENV_NAME];
-  });
-
   it.each([
     { name: "missing values", hostEnv: undefined, configEnv: undefined, satisfied: false },
     { name: "blank host env", hostEnv: " \t ", configEnv: undefined, satisfied: false },
@@ -59,14 +56,8 @@ describe("hook environment requirements", () => {
       satisfied: true,
     },
   ])("keeps runtime and status aligned for $name", ({ hostEnv, configEnv, satisfied }) => {
-    if (hostEnv === undefined) {
-      delete process.env[ENV_NAME];
-    } else {
-      process.env[ENV_NAME] = hostEnv;
-    }
-
-    const { runtimeIncluded, status } = evaluate(
-      configEnv === undefined ? undefined : configWithEnv(configEnv),
+    const { runtimeIncluded, status } = withEnv({ [ENV_NAME]: hostEnv }, () =>
+      evaluate(configEnv === undefined ? undefined : configWithEnv(configEnv)),
     );
 
     expect(runtimeIncluded).toBe(satisfied);
