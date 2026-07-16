@@ -102,6 +102,7 @@ function runCodexNpmPluginLiveAssertions(params: {
   marker: string;
   sessionId: string;
   modelRef: string;
+  bindingStoreContract?: "legacy-sidecar" | "plugin-kv";
   sessionStoreContract?: "legacy-json" | "sqlite";
 }) {
   return spawnSync(
@@ -120,6 +121,8 @@ function runCodexNpmPluginLiveAssertions(params: {
         HOME: path.join(params.root, "home"),
         NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
         OPENCLAW_STATE_DIR: path.join(params.root, "state"),
+        OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT:
+          params.bindingStoreContract ?? "plugin-kv",
         OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: params.sessionStoreContract ?? "sqlite",
       },
     },
@@ -134,6 +137,8 @@ function runCodexNpmPluginLiveFollowthroughAssertions(params: {
   modelRef: string;
   artifactPath: string;
   inputPaths: string[];
+  bindingStoreContract?: "legacy-sidecar" | "plugin-kv";
+  sessionStoreContract?: "legacy-json" | "sqlite";
   assertionEnv?: Record<string, string>;
 }) {
   return spawnSync(
@@ -155,7 +160,9 @@ function runCodexNpmPluginLiveFollowthroughAssertions(params: {
         HOME: path.join(params.root, "home"),
         NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
         OPENCLAW_STATE_DIR: path.join(params.root, "state"),
-        OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: "sqlite",
+        OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT:
+          params.bindingStoreContract ?? "plugin-kv",
+        OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: params.sessionStoreContract ?? "sqlite",
         ...params.assertionEnv,
       },
     },
@@ -383,6 +390,8 @@ function createCodexNpmPluginLiveFollowthroughFixture(params: {
   artifactText?: string;
   messageFinals?: Array<boolean | undefined>;
   readFails?: boolean;
+  bindingStoreContract?: "legacy-sidecar" | "plugin-kv";
+  sessionStoreContract?: "legacy-json" | "sqlite";
   workPlacement?:
     | "between"
     | "before-progress"
@@ -451,34 +460,57 @@ function createCodexNpmPluginLiveFollowthroughFixture(params: {
   } else {
     transcriptMessages = [...progressCalls, ...workMessages, ...completionCalls];
   }
+  const transcriptEvents = [
+    { type: "session" },
+    ...transcriptMessages.map((message) => ({ type: "message", message })),
+  ];
   replaceSessionTranscriptMessages({
     stateDir: path.join(params.root, "state"),
     sessionId: fixture.sessionId,
     messages: transcriptMessages,
   });
-  return {
+  const result = {
     ...fixture,
     progressMarker,
     completeMarker,
     artifactPath,
     inputPaths,
   };
+  return params.sessionStoreContract === "legacy-json"
+    ? convertCodexNpmPluginLiveFixtureToLegacy(
+        result,
+        transcriptEvents,
+        params.bindingStoreContract ?? "plugin-kv",
+      )
+    : result;
 }
 
-function createLegacyCodexNpmPluginLiveFixture(root: string) {
-  const fixture = createCodexNpmPluginLiveFixture(root);
-  const stateDir = path.join(root, "state");
+function convertCodexNpmPluginLiveFixtureToLegacy<
+  Fixture extends { root: string; sessionId: string },
+>(
+  fixture: Fixture,
+  transcriptEvents: unknown[] = [{ type: "message" }],
+  bindingStoreContract: "legacy-sidecar" | "plugin-kv" = "legacy-sidecar",
+) {
+  const stateDir = path.join(fixture.root, "state");
   rmSync(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"));
-  rmSync(path.join(stateDir, "state", "openclaw.sqlite"));
   const sessionFile = path.join(stateDir, "agents", "main", "sessions", "session.jsonl");
-  writeJson(sessionFile, { type: "message" });
-  writeJson(`${sessionFile}.codex-app-server.json`, {
-    schemaVersion: 2,
-    threadId: "thread-codex-npm-live",
-    cwd: stateDir,
-    model: "gpt-5.4",
-    modelProvider: "codex",
-  });
+  mkdirSync(path.dirname(sessionFile), { recursive: true });
+  writeFileSync(
+    sessionFile,
+    `${transcriptEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    "utf8",
+  );
+  if (bindingStoreContract === "legacy-sidecar") {
+    rmSync(path.join(stateDir, "state", "openclaw.sqlite"));
+    writeJson(`${sessionFile}.codex-app-server.json`, {
+      schemaVersion: 2,
+      threadId: "thread-codex-npm-live",
+      cwd: stateDir,
+      model: "gpt-5.4",
+      modelProvider: "codex",
+    });
+  }
   writeJson(path.join(stateDir, "agents", "main", "sessions", "sessions.json"), {
     "agent:main:codex-npm-plugin-live": {
       sessionId: fixture.sessionId,
@@ -486,7 +518,15 @@ function createLegacyCodexNpmPluginLiveFixture(root: string) {
       sessionFile,
     },
   });
-  return { ...fixture, sessionStoreContract: "legacy-json" as const };
+  return {
+    ...fixture,
+    bindingStoreContract,
+    sessionStoreContract: "legacy-json" as const,
+  };
+}
+
+function createLegacyCodexNpmPluginLiveFixture(root: string) {
+  return convertCodexNpmPluginLiveFixtureToLegacy(createCodexNpmPluginLiveFixture(root));
 }
 
 function createCodexInstallFixture(root: string) {
@@ -653,15 +693,18 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("accepts progress, artifact work, and completion in one Codex live turn", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-");
-    const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root });
+  it.each(["sqlite", "legacy-json"] as const)(
+    "accepts progress, artifact work, and completion with the %s session contract",
+    (sessionStoreContract) => {
+      const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-");
+      const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root, sessionStoreContract });
 
-    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+      const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    },
+  );
 
   it("accepts settled failed work before a later successful artifact write", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-recovered-work-");
@@ -673,24 +716,34 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toBe("");
   });
 
-  it.each([
-    [
-      "event count",
-      "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES",
-      "2",
-      "exceeded 2 events",
-    ],
-    [
-      "aggregate bytes",
-      "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES",
-      "128",
-      "exceeded 128 bytes",
-    ],
-  ] as const)(
-    "rejects an oversized SQLite transcript by %s before assertions",
-    (_label, envName, limit, errorText) => {
+  it.each(
+    (["sqlite", "legacy-json"] as const).flatMap(
+      (sessionStoreContract) =>
+        [
+          [
+            sessionStoreContract,
+            "event count",
+            "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES",
+            "2",
+            "exceeded 2 events",
+          ],
+          [
+            sessionStoreContract,
+            "aggregate bytes",
+            "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES",
+            "128",
+            "exceeded 128 bytes",
+          ],
+        ] as const,
+    ),
+  )(
+    "rejects an oversized %s transcript by %s before assertions",
+    (sessionStoreContract, _label, envName, limit, errorText) => {
       const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-bounded-");
-      const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root });
+      const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+        root,
+        sessionStoreContract,
+      });
 
       const result = runCodexNpmPluginLiveFollowthroughAssertions({
         ...fixture,
@@ -743,19 +796,38 @@ describe("Codex install helpers", () => {
     );
   });
 
-  it("rejects workspace work issued before progress delivery completes", () => {
-    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-batched-work-");
+  it.each(["sqlite", "legacy-json"] as const)(
+    "rejects workspace work issued before progress delivery completes with the %s session contract",
+    (sessionStoreContract) => {
+      const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-batched-work-");
+      const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+        root,
+        sessionStoreContract,
+        workPlacement: "before-progress-result",
+      });
+
+      const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "expected progress to be the first completed tool call in its turn",
+      );
+    },
+  );
+
+  it("rejects a malformed legacy follow-through transcript", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-legacy-malformed-");
     const fixture = createCodexNpmPluginLiveFollowthroughFixture({
       root,
-      workPlacement: "before-progress-result",
+      sessionStoreContract: "legacy-json",
     });
+    const sessionFile = path.join(root, "state", "agents", "main", "sessions", "session.jsonl");
+    writeFileSync(sessionFile, `${readFileSync(sessionFile, "utf8")}not-json\n`, "utf8");
 
     const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "expected progress to be the first completed tool call in its turn",
-    );
+    expect(result.stderr).toContain("invalid OpenClaw legacy transcript event");
   });
 
   it("rejects completion sent before the artifact write succeeds", () => {

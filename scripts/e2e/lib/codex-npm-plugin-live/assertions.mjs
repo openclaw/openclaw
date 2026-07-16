@@ -21,6 +21,8 @@ const allowBetaCompatDiagnostics =
   process.env.OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS === "1";
 const sessionStoreContract =
   process.env.OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT || "sqlite";
+const bindingStoreContract =
+  process.env.OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT || "plugin-kv";
 const MAX_TEXT_FILE_BYTES = readPositiveIntEnv(
   "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES",
   1024 * 1024,
@@ -86,7 +88,7 @@ function readTextFileTail(filePath, label, maxBytes = MAX_ERROR_TAIL_BYTES) {
 }
 
 function readCodexBinding(sessionId, sessionKey, entry) {
-  if (sessionStoreContract === "legacy-json") {
+  if (bindingStoreContract === "legacy-sidecar") {
     const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
     if (!sessionFile) {
       throw new Error(`missing legacy Codex session file for ${sessionId}`);
@@ -97,6 +99,11 @@ function readCodexBinding(sessionId, sessionKey, entry) {
       throw new Error(`invalid legacy Codex app-server binding: ${JSON.stringify(binding)}`);
     }
     return binding;
+  }
+  if (bindingStoreContract !== "plugin-kv") {
+    throw new Error(
+      `OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT must be plugin-kv or legacy-sidecar; got ${bindingStoreContract}`,
+    );
   }
 
   const dbPath = path.join(stateDir(), "state", "openclaw.sqlite");
@@ -148,13 +155,31 @@ function readLegacySessionEntry(sessionId) {
   if (typeof entry.sessionFile !== "string" || !fs.existsSync(entry.sessionFile)) {
     throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
   }
-  const transcriptEventCount = readTextFileBounded(
+  const transcriptLines = readTextFileBounded(
     entry.sessionFile,
     "OpenClaw legacy session transcript",
+    Math.min(MAX_TEXT_FILE_BYTES, MAX_TRANSCRIPT_SCAN_BYTES),
   )
     .split("\n")
-    .filter((line) => line.trim()).length;
-  return { entry, sessionKey, transcriptEventCount };
+    .filter((line) => line.trim());
+  if (transcriptLines.length > MAX_TRANSCRIPT_WALK_ENTRIES) {
+    throw new Error(
+      `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_WALK_ENTRIES} events for ${sessionId}`,
+    );
+  }
+  const transcriptEvents = transcriptLines.map((line, index) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      throw new Error(`invalid OpenClaw legacy transcript event ${index + 1} for ${sessionId}`);
+    }
+  });
+  return {
+    entry,
+    sessionKey,
+    transcriptEventCount: transcriptEvents.length,
+    transcriptEvents,
+  };
 }
 
 function readSessionEntry(sessionId) {
@@ -735,12 +760,7 @@ function assertAgentTurnEvidence({ marker, sessionId, modelRef, stdoutPath, stde
     );
   }
 
-  const {
-    entry,
-    sessionKey,
-    transcriptEventCount,
-    transcriptEvents = [],
-  } = readSessionEntry(sessionId);
+  const { entry, sessionKey, transcriptEventCount, transcriptEvents } = readSessionEntry(sessionId);
   if (entry.agentHarnessId !== "codex") {
     throw new Error(`expected codex harness in session entry, got ${entry.agentHarnessId}`);
   }
