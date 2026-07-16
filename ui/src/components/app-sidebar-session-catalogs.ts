@@ -127,6 +127,24 @@ function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
     : nothing;
 }
 
+function catalogErrorMessages(catalog: SessionCatalog): string[] {
+  const messages = new Set<string>();
+  const add = (error: SessionCatalog["error"]) => {
+    if (error) {
+      messages.add(`[${error.code}] ${error.message}`);
+    }
+  };
+  add(catalog.error);
+  for (const host of catalog.hosts) {
+    // A disconnected empty host is normal fleet state, not a provider failure.
+    // Cached rows still expose the host-level offline badge when the host is visible.
+    if (host.error?.code !== "NODE_OFFLINE") {
+      add(host.error);
+    }
+  }
+  return [...messages];
+}
+
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows reuse the live session row so activity, unread state, and
   // the session menu behave exactly like the regular list.
@@ -140,7 +158,10 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionId = `catalog:${catalog.id}`;
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
-    const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
+    const visibleHosts = hosts.filter((host) => host.sessions.length > 0);
+    const rows = visibleHosts.flatMap((host) =>
+      host.sessions.map((session) => ({ host, session })),
+    );
     const liveRows = rows.flatMap(({ session }) => {
       const row = session.openClawSessionKey
         ? liveRowsByKey.get(session.openClawSessionKey)
@@ -152,12 +173,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
     const hasMore = hosts.some((host) => Boolean(host.nextCursor));
     const canCreateSession = catalog.capabilities.createSession !== undefined;
-    const errorMessages = [
-      ...(catalog.error ? [`[${catalog.error.code}] ${catalog.error.message}`] : []),
-      ...hosts.flatMap((host) =>
-        host.error ? [`[${host.error.code}] ${host.error.message}`] : [],
-      ),
-    ];
+    const errorMessages = catalogErrorMessages(catalog);
     const hasError = errorMessages.length > 0;
     // Keep provider failures distinguishable from successful empty results.
     // Hiding both states would silently mask unavailable session sources.
@@ -210,7 +226,9 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
         ${collapsed
           ? nothing
           : html`<div class="sidebar-recent-sessions__list">
-                ${hosts.map((host) => renderCatalogHostGroup(catalog, host, liveRowsByKey, params))}
+                ${visibleHosts.map((host) =>
+                  renderCatalogHostGroup(catalog, host, liveRowsByKey, params),
+                )}
               </div>
               ${hasMore
                 ? html`<button
@@ -235,9 +253,6 @@ function renderCatalogHostGroup(
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   params: SessionCatalogGroupsParams,
 ) {
-  if (host.sessions.length === 0 && !host.nextCursor && !host.error) {
-    return nothing;
-  }
   const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
   return html`
     <section class="sidebar-session-catalog-host" data-session-catalog-host=${host.hostId}>

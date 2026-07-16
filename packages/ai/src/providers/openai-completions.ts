@@ -61,7 +61,11 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  hasMediaPayload,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -98,7 +102,7 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
 }
 
 function isImageContentBlock(block: { type: string }): block is ImageContent {
-  return block.type === "image";
+  return block.type === "image" && hasMediaPayload(block);
 }
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -766,7 +770,7 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
@@ -1210,7 +1214,7 @@ export function convertMessages(
         // Extract text and image content
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some((c) => c.type === "image");
+        const hasImages = toolMsg.content.some(isImageContentBlock);
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(
@@ -1375,7 +1379,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     isCloudflareAiGateway;
 
   const useMaxTokens =
-    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether;
+    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isZai;
 
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");

@@ -8,6 +8,7 @@ import {
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 
 const ZAI_KEY = process.env.ZAI_API_KEY ?? process.env.Z_AI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["ZAI_LIVE_TEST"]);
@@ -35,7 +36,7 @@ async function expectModelReturnsAssistantText(
     contextWindow: modelId === "glm-5.2" ? 1_000_000 : 202_800,
     maxTokens: modelId === "glm-5.2" ? 131_072 : 131_100,
   };
-  const runProbe = (maxTokens: number) =>
+  const complete = (maxTokens: number) =>
     completeSimple(
       model,
       {
@@ -43,14 +44,30 @@ async function expectModelReturnsAssistantText(
       },
       { apiKey: ZAI_KEY, maxTokens },
     );
-  const res = await runProbe(64);
-  let text = extractNonEmptyAssistantText(res.content);
-  // GLM can spend a tiny cap entirely on hidden reasoning. Retry only a
-  // provider-declared truncation; other empty responses remain failures.
-  if (text.length === 0 && res.stopReason === "length") {
-    text = extractNonEmptyAssistantText((await runProbe(256)).content);
+
+  // A small probe cap can occasionally yield only hidden reasoning even though
+  // production allows much more output. Retry once, but still require visible text.
+  const initial = await complete(1_024);
+  let final = initial;
+  let text = extractNonEmptyAssistantText(final.content);
+  if (!text && (initial.stopReason === "stop" || initial.stopReason === "length")) {
+    final = await complete(8_192);
+    text = extractNonEmptyAssistantText(final.content);
   }
-  expect(text.length).toBeGreaterThan(0);
+  const drift = shouldSkipLiveProviderDrift({
+    allowAuth: true,
+    allowBilling: true,
+    allowModelNotFound: true,
+    allowProviderUnavailable: true,
+    allowRateLimit: true,
+    allowTimeout: true,
+    error: final.errorMessage ?? "",
+  });
+  const errorClass = final.errorMessage ? (drift?.reason ?? "unclassified") : "none";
+  expect(
+    text.length,
+    `${modelId} returned no assistant text; initialStopReason=${initial.stopReason}; finalStopReason=${final.stopReason}; errorClass=${errorClass}; contentTypes=${final.content.map((block) => block.type).join(",") || "none"}`,
+  ).toBeGreaterThan(0);
 }
 
 describeCodingLive("zai Coding Plan live", () => {

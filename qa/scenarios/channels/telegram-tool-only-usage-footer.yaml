@@ -21,7 +21,6 @@ scenario:
     kind: flow
     channel: telegram
     summary: Enable token usage mode, then verify the next Telegram reply footer.
-    driver: live
     config:
       marker: QA-TELEGRAM-USAGE-FOOTER-OK
 

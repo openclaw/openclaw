@@ -19,7 +19,6 @@ scenario:
     channel: whatsapp
     suiteIsolation: isolated
     summary: Verify pairing gate output through the canonical WhatsApp adapter.
-    driver: live
     config:
       accountId: sut
       conversationId: 15550000001@s.whatsapp.net

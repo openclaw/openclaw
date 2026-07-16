@@ -287,6 +287,7 @@ Docs: https://docs.openclaw.ai
 - **Reply pre-delivery recovery:** bound each pre-delivery callback with an owner-overridable deadline, release serialized reply lanes after hung plugin work, and preserve durable final-delivery retry state only when transport never started. (#104256) Thanks @NianJiuZst.
 - **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi.
 - **Media-store remote downloads:** bound response-header waits and stalled bodies, close abandoned redirect and error responses, and remove partial temp files so hung sources cannot pin callers. (#104624) Thanks @hugenshen.
+- **Cron llama.cpp tool schemas:** keep the model-facing cron declaration schema compatible with llama.cpp while retaining gateway and runtime nonblank validation. Fixes #107449. (#108360) Thanks @lee-xydt.
 
 ## 2026.7.1
 

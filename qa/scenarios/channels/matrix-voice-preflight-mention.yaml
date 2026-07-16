@@ -12,7 +12,6 @@ scenario:
     providerMode: live-frontier
     timeoutMs: 180000
     retryCount: 0
-    driver: live
     config:
       matrixConfigOverrides:
         audio:
