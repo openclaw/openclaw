@@ -216,14 +216,16 @@ async function fetchOpenRouterModels(
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<OpenRouterModelMeta[]> {
+  const controller = new AbortController();
+  // fetch resolves after headers, so keep one deadline alive until the
+  // provider-controlled catalog body has been consumed.
+  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
   let res: Response | undefined;
   try {
-    res = await withTimeout(timeoutMs, (signal) =>
-      fetchImpl(OPENROUTER_MODELS_URL, {
-        headers: { Accept: "application/json" },
-        signal,
-      }),
-    );
+    res = await fetchImpl(OPENROUTER_MODELS_URL, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
     if (!res.ok) {
       throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
     }
@@ -287,6 +289,7 @@ async function fetchOpenRouterModels(
       })
       .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
   } finally {
+    clearTimeout(timer);
     if (res && !res.bodyUsed) {
       await res.body?.cancel().catch(() => undefined);
     }
