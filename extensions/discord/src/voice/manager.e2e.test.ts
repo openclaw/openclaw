@@ -6296,6 +6296,54 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("admits account wildcard voice speakers without granting owner authority", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      { groupPolicy: "allowlist", allowFrom: ["*"], guilds: { g1: {} } },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-guest");
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: false }),
+      expect.anything(),
+    );
+  });
+
+  it("normalizes account wildcard voice admission without granting owner authority", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      { groupPolicy: "allowlist", allowFrom: [" * "], guilds: { g1: {} } },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-guest");
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: false }),
+      expect.anything(),
+    );
+  });
+
   it("uses commands.ownerAllowFrom for voice speakers when Discord DMs are disabled", async () => {
     const ownerId = "100000000000000001";
     const client = createClient();
