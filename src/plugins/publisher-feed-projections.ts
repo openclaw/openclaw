@@ -6,6 +6,7 @@ import {
 
 export const PUBLISHER_FEED_QUERY_PAYLOAD_TYPE = "openclaw.clawhub-publisher-feed-query-results.v1";
 export const PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE = "openclaw.clawhub-publisher-feed-changes.v1";
+export const PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE = "openclaw.clawhub-publisher-feed-snapshot.v1";
 
 export type PublisherFeedEntry = {
   kind: "skill" | "plugin";
@@ -77,13 +78,41 @@ export type PublisherFeedResetRequired = {
   snapshotUrl: string;
 };
 
+export type PublisherFeedSnapshot = {
+  schemaVersion: 1;
+  feedId: string;
+  publisherId: string;
+  handle: string | null;
+  displayName: string;
+  generatedAt: string;
+  expiresAt: string;
+  sequence: number;
+  entries: readonly PublisherFeedEntry[];
+};
+
 export type VerifiedPublisherFeedProjection = {
-  payload: PublisherFeedQueryPage | PublisherFeedChangePage | PublisherFeedResetRequired;
+  payload:
+    | PublisherFeedSnapshot
+    | PublisherFeedQueryPage
+    | PublisherFeedChangePage
+    | PublisherFeedResetRequired;
   signedBy: string;
   signedByKeyIds: readonly string[];
   signatureCount: number;
   threshold: number;
 };
+
+const SNAPSHOT_KEYS = [
+  "schemaVersion",
+  "feedId",
+  "publisherId",
+  "handle",
+  "displayName",
+  "generatedAt",
+  "expiresAt",
+  "sequence",
+  "entries",
+] as const;
 
 const QUERY_PAGE_KEYS = [
   "schemaVersion",
@@ -130,6 +159,14 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 
 function isSafeNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function hasUtf8Length(value: unknown, minimum: number, maximum: number): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const length = new TextEncoder().encode(value).length;
+  return length >= minimum && length <= maximum;
 }
 
 function isDateString(value: unknown): value is string {
@@ -303,6 +340,34 @@ function parseQueryPage(value: unknown): PublisherFeedQueryPage | null {
   return value as PublisherFeedQueryPage;
 }
 
+function parseSnapshot(value: unknown): PublisherFeedSnapshot | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, SNAPSHOT_KEYS) ||
+    !hasValidProjectionBase(value) ||
+    !hasUtf8Length(value.publisherId, 1, 200) ||
+    value.feedId !== `clawhub.publisher.${value.publisherId}` ||
+    new TextEncoder().encode(value.feedId).length > 256 ||
+    (value.handle !== null && !hasUtf8Length(value.handle, 1, 64)) ||
+    !hasUtf8Length(value.displayName, 1, 256) ||
+    !isSafeNonNegativeInteger(value.sequence) ||
+    !Array.isArray(value.entries) ||
+    value.entries.length > 400 ||
+    !value.entries.every(isPublisherFeedEntry)
+  ) {
+    return null;
+  }
+  const identities = new Set<string>();
+  for (const entry of value.entries) {
+    const identity = `${entry.kind}\0${entry.id}`;
+    if (identities.has(identity)) {
+      return null;
+    }
+    identities.add(identity);
+  }
+  return value as PublisherFeedSnapshot;
+}
+
 function parseChangePayload(
   value: unknown,
 ): PublisherFeedChangePage | PublisherFeedResetRequired | null {
@@ -359,6 +424,7 @@ export function verifyPublisherFeedProjection(
   raw: unknown,
   params: {
     payloadType:
+      | typeof PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE
       | typeof PUBLISHER_FEED_QUERY_PAYLOAD_TYPE
       | typeof PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE;
     trustedKeys: readonly TrustedFeedSigningKey[];
@@ -381,9 +447,11 @@ export function verifyPublisherFeedProjection(
     throw new Error("publisher feed projection payload is not valid JSON");
   }
   const payload =
-    params.payloadType === PUBLISHER_FEED_QUERY_PAYLOAD_TYPE
-      ? parseQueryPage(rawPayload)
-      : parseChangePayload(rawPayload);
+    params.payloadType === PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE
+      ? parseSnapshot(rawPayload)
+      : params.payloadType === PUBLISHER_FEED_QUERY_PAYLOAD_TYPE
+        ? parseQueryPage(rawPayload)
+        : parseChangePayload(rawPayload);
   if (!payload) {
     throw new Error("publisher feed projection payload is invalid");
   }

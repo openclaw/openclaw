@@ -12,11 +12,13 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 import {
   PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE,
   PUBLISHER_FEED_QUERY_PAYLOAD_TYPE,
+  PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE,
 } from "./publisher-feed-projections.js";
 import {
   applyPublisherFeedChanges,
   fetchPublisherFeedChanges,
   fetchPublisherFeedQuery,
+  fetchPublisherFeedSnapshot,
 } from "./publisher-feed-transport.js";
 
 type SigningKey = { keyId: string; privateKey: KeyObject; publicKey: KeyObject };
@@ -25,19 +27,17 @@ type QueuedResponse = { response: Response; finalUrl?: string };
 const queuedResponses: QueuedResponse[] = [];
 const release = vi.fn(async () => undefined);
 
-function signingKey(): SigningKey {
+function signingKey(keyId = "clawhub-feed-2026-q3"): SigningKey {
   const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
-  return { keyId: "clawhub-feed-2026-q3", privateKey, publicKey };
+  return { keyId, privateKey, publicKey };
 }
 
-function verification(key: SigningKey) {
+function verification(...keys: SigningKey[]) {
   return {
-    trustedKeys: [
-      {
-        keyId: key.keyId,
-        publicKey: key.publicKey.export({ type: "spki", format: "pem" }),
-      },
-    ],
+    trustedKeys: keys.map((key) => ({
+      keyId: key.keyId,
+      publicKey: key.publicKey.export({ type: "spki", format: "pem" }),
+    })),
   };
 }
 
@@ -98,6 +98,13 @@ const base = {
   expiresAt: "2026-07-16T00:05:00.000Z",
 };
 
+const evidence = {
+  signedBy: "clawhub-feed-2026-q3",
+  signedByKeyIds: ["clawhub-feed-2026-q3"],
+  signatureCount: 1,
+  threshold: 1,
+};
+
 beforeEach(() => {
   queuedResponses.length = 0;
   release.mockClear();
@@ -116,6 +123,35 @@ beforeEach(() => {
 });
 
 describe("publisher feed projection transport", () => {
+  it("fetches a complete signed snapshot from the canonical route", async () => {
+    const key = signingKey();
+    enqueueSigned(key, PUBLISHER_FEED_SNAPSHOT_PAYLOAD_TYPE, {
+      ...base,
+      publisherId: "publishers:alice",
+      handle: "alice",
+      displayName: "Alice",
+      sequence: 7,
+      entries: [entry],
+    });
+
+    const result = await fetchPublisherFeedSnapshot({
+      baseUrl: "https://clawhub.ai",
+      publisherId: "publishers:alice",
+      verification: verification(key),
+      now: () => new Date("2026-07-16T00:01:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      state: { publisherId: "publishers:alice", sequence: 7, entries: [entry] },
+      verification: { signedBy: key.keyId, signatureCount: 1, threshold: 1 },
+    });
+    expect(transportMocks.guardedFetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://clawhub.ai/api/v1/publishers/publishers%3Aalice/feed/snapshot",
+      }),
+    );
+  });
+
   it("assembles a complete signed query across revision-bound pages", async () => {
     const key = signingKey();
     const query = { text: "CUDA Helper", kinds: ["skill"] };
@@ -230,6 +266,7 @@ describe("publisher feed projection transport", () => {
 
   it("assembles a complete signed changed-since range", async () => {
     const key = signingKey();
+    const rotatedKey = signingKey("clawhub-feed-2026-q4");
     enqueueSigned(key, PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE, {
       ...base,
       fromSequence: 7,
@@ -241,7 +278,7 @@ describe("publisher feed projection transport", () => {
       changes: [{ sequence: 8, operation: "remove", entryId: "skills:old", entryKind: "skill" }],
       nextCursor: "next-change",
     });
-    enqueueSigned(key, PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE, {
+    enqueueSigned(rotatedKey, PUBLISHER_FEED_CHANGES_PAYLOAD_TYPE, {
       ...base,
       fromSequence: 7,
       toSequence: 9,
@@ -256,7 +293,7 @@ describe("publisher feed projection transport", () => {
     const result = await fetchPublisherFeedChanges({
       baseUrl: "https://clawhub.ai",
       publisherId: "publishers:alice",
-      verification: verification(key),
+      verification: verification(key, rotatedKey),
       fromSequence: 7,
       limit: 1,
       now: () => new Date("2026-07-16T00:01:00.000Z"),
@@ -265,6 +302,7 @@ describe("publisher feed projection transport", () => {
     expect(result).toMatchObject({ status: "complete", fromSequence: 7, toSequence: 9 });
     if (result.status === "complete") {
       expect(result.changes).toHaveLength(2);
+      expect(result.verification.signedBy).toBe(rotatedKey.keyId);
     }
   });
 
@@ -273,6 +311,7 @@ describe("publisher feed projection transport", () => {
     const current = {
       feedId: base.feedId,
       sequence: 7,
+      generatedAt: "2026-07-15T00:00:00.000Z",
       publisherId: "publishers:alice",
       handle: "alice",
       displayName: "Alice",
@@ -298,12 +337,14 @@ describe("publisher feed projection transport", () => {
           },
         },
       ],
+      verification: evidence,
     });
 
     expect(applied).toMatchObject({
       status: "applied",
       state: {
         sequence: 9,
+        generatedAt: base.generatedAt,
         handle: "alice-ai",
         displayName: "Alice AI",
         entries: [{ id: "skills:cuda" }],
@@ -316,6 +357,7 @@ describe("publisher feed projection transport", () => {
     const current = {
       feedId: base.feedId,
       sequence: 7,
+      generatedAt: base.generatedAt,
       publisherId: "publishers:alice",
       handle: "alice",
       displayName: "Alice",
@@ -332,6 +374,7 @@ describe("publisher feed projection transport", () => {
         { sequence: 8, operation: "upsert", entry: { ...entry, id: "skills:a" } },
         { sequence: 8, operation: "upsert", entry: { ...entry, id: "skills:Z" } },
       ],
+      verification: evidence,
     });
 
     expect(applied).toMatchObject({
@@ -340,10 +383,38 @@ describe("publisher feed projection transport", () => {
     });
   });
 
+  it("retains accepted generation time for a no-op change range", () => {
+    const current = {
+      feedId: base.feedId,
+      sequence: 7,
+      generatedAt: "2026-07-15T00:00:00.000Z",
+      publisherId: "publishers:alice",
+      handle: "alice",
+      displayName: "Alice",
+      entries: [],
+    };
+    const applied = applyPublisherFeedChanges(current, {
+      status: "complete",
+      feedId: base.feedId,
+      fromSequence: 7,
+      toSequence: 7,
+      generatedAt: base.generatedAt,
+      expiresAt: base.expiresAt,
+      changes: [],
+      verification: evidence,
+    });
+
+    expect(applied).toMatchObject({
+      status: "applied",
+      state: { sequence: 7, generatedAt: current.generatedAt },
+    });
+  });
+
   it("rejects incomplete change ranges before exposing a next state", () => {
     const current = {
       feedId: base.feedId,
       sequence: 7,
+      generatedAt: base.generatedAt,
       publisherId: "publishers:alice",
       handle: "alice",
       displayName: "Alice",
@@ -358,6 +429,7 @@ describe("publisher feed projection transport", () => {
         generatedAt: base.generatedAt,
         expiresAt: base.expiresAt,
         changes: [{ sequence: 9, operation: "upsert", entry }],
+        verification: evidence,
       }),
     ).toThrow("omitted a revision");
     expect(() =>
@@ -377,6 +449,7 @@ describe("publisher feed projection transport", () => {
           },
           { sequence: 8, operation: "upsert", entry },
         ],
+        verification: evidence,
       }),
     ).toThrow("not ordered within the signed range");
   });
@@ -387,6 +460,7 @@ describe("publisher feed projection transport", () => {
         {
           feedId: base.feedId,
           sequence: 7,
+          generatedAt: base.generatedAt,
           publisherId: "publishers:alice",
           handle: "alice",
           displayName: "Alice",
@@ -402,6 +476,7 @@ describe("publisher feed projection transport", () => {
             resetRequired: true,
             snapshotUrl: "https://clawhub.ai/api/v1/publishers/publishers%3Abob/feed",
           },
+          verification: evidence,
         },
       ),
     ).toThrow("reset does not continue");
@@ -417,7 +492,7 @@ describe("publisher feed projection transport", () => {
         fromSequence: 1,
         currentSequence: 9,
         resetRequired: true,
-        snapshotUrl: "https://clawhub.ai/api/v1/publishers/publishers%3Aalice/feed",
+        snapshotUrl: "https://clawhub.ai/api/v1/publishers/publishers%3Aalice/feed/snapshot",
       },
       409,
     );
