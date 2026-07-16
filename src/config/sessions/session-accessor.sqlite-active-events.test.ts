@@ -1,8 +1,6 @@
 // Active transcript projection tests cover branch rebuilds and bounded large-history reads.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -18,6 +16,8 @@ import {
   readSessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-active-events.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("SQLite active transcript event projection", () => {
   let stateDir: string;
   let scope: {
@@ -28,7 +28,7 @@ describe("SQLite active transcript event projection", () => {
   };
 
   beforeEach(() => {
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-active-transcript-"));
+    stateDir = tempDirs.make("openclaw-active-transcript-");
     scope = {
       agentId: "main",
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -40,7 +40,6 @@ describe("SQLite active transcript event projection", () => {
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("rebuilds branch rewinds into the same active path used by history", async () => {
