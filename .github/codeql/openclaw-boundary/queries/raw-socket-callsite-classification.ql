@@ -70,6 +70,8 @@ predicate allowedRawSocketClientCall(Expr call) {
   or
   allowedOwnerScope(call, "src/infra/net/http-connect-tunnel.ts", "startTargetTls")
   or
+  allowedOwnerScope(call, "src/infra/push-apns-http2.ts", "openApnsTlsTunnel")
+  or
   allowedOwnerScope(call, "src/infra/push-apns-http2.ts", "openProxiedApnsHttp2Session")
   or
   allowedOwnerScope(call, "src/infra/push-apns-http2.ts", "connectApnsHttp2Session")
