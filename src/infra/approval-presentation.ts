@@ -40,12 +40,6 @@ function isWithinCodePointLimit(value: string, maxLength: number): boolean {
   return Array.from(value).length <= maxLength;
 }
 
-// Display-size caps for system-agent approval text. truncateUtf16Safe keeps the
-// cut on a UTF-16 code-unit boundary so an emoji (surrogate pair) straddling the
-// limit does not leave a lone high surrogate in the reviewer-facing title/description.
-const SYSTEM_AGENT_APPROVAL_TITLE_MAX_LENGTH = 80;
-const SYSTEM_AGENT_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
-
 function sanitizeOptionalSingleLine(value: unknown): string | null {
   const normalized = normalizeOptionalString(value);
   return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
@@ -133,14 +127,8 @@ function buildSystemAgentApprovalPresentation(params: {
   }
   return {
     kind: "system-agent",
-    title: truncateUtf16Safe(
-      sanitizeExecApprovalDisplayText(title),
-      SYSTEM_AGENT_APPROVAL_TITLE_MAX_LENGTH,
-    ),
-    description: truncateUtf16Safe(
-      sanitizeExecApprovalWarningText(description),
-      SYSTEM_AGENT_APPROVAL_DESCRIPTION_MAX_LENGTH,
-    ),
+    title: truncateUtf16Safe(sanitizeExecApprovalDisplayText(title), 80),
+    description: truncateUtf16Safe(sanitizeExecApprovalWarningText(description), 512),
     proposalHash: request.proposalHash,
     agentId: sanitizeOptionalSingleLine(request.agentId),
     allowedDecisions: ["allow-once", "deny"],
