@@ -192,14 +192,21 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
-  it("adds the OpenClaw session key to the managed OpenClaw tools MCP bridge", () => {
+  it("adds the OpenClaw session key to both managed tools MCP bridges", () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
     };
     const { runtime } = makeRuntime(baseStore, {
+      pluginToolsMcpBridgeEnabled: true,
       openclawToolsMcpBridgeEnabled: true,
       mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
         {
           name: "openclaw-tools",
           command: "node",
@@ -209,12 +216,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     });
 
-    const readScopedMcpEnv = (sessionKey: string) => {
+    const readScopedMcpEnv = (sessionKey: string, serverName: string) => {
       const delegate = (
         runtime as unknown as {
-          resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+          resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
         }
-      ).resolveOpenClawToolsDelegateForSession(sessionKey) as {
+      ).resolveManagedToolsDelegateForSession(sessionKey) as {
         options: {
           mcpServers?: Array<{
             env?: Array<{ name: string; value: string }>;
@@ -222,14 +229,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
           }>;
         };
       };
-      return delegate.options.mcpServers?.find((server) => server.name === "openclaw-tools")?.env;
+      return delegate.options.mcpServers?.find((server) => server.name === serverName)?.env;
     };
 
-    expect(readScopedMcpEnv("agent:worker:main")).toContainEqual({
+    expect(readScopedMcpEnv("agent:worker:main", "openclaw-plugin-tools")).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:worker:main",
     });
-    expect(readScopedMcpEnv("agent:research:main")).toContainEqual({
+    expect(readScopedMcpEnv("agent:research:main", "openclaw-tools")).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:research:main",
     });
@@ -252,18 +259,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     });
     const exposedRuntime = runtime as unknown as {
-      openclawToolsSessionDelegates: Map<string, unknown>;
-      resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+      managedToolsSessionDelegates: Map<string, unknown>;
+      resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
     };
 
-    const firstDelegate =
-      exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:worker:main");
-    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main");
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
 
     await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
 
-    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:worker:main")).toBe(true);
-    expect(exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:worker:main")).toBe(
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+    expect(exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main")).toBe(
       firstDelegate,
     );
   });
@@ -1298,13 +1304,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     });
     const exposedRuntime = runtime as unknown as {
-      openclawToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
-      resolveOpenClawToolsDelegateForSession(sessionKey: string): {
+      managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
+      resolveManagedToolsDelegateForSession(sessionKey: string): {
         close: AcpRuntime["close"];
       };
     };
-    const scopedDelegate =
-      exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:codex:main");
+    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:codex:main");
     const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
 
     await runtime.close({
@@ -1317,7 +1322,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     expect(close).toHaveBeenCalledOnce();
-    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:codex:main")).toBe(false);
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:codex:main")).toBe(false);
   });
 
   it("cleans up OpenClaw-owned ACPX process trees after close", async () => {

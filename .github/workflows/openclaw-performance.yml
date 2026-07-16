@@ -71,7 +71,8 @@ env:
   OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa
   KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
-  KOVA_SCENARIO_TIMEOUT_MS: "300000"
+  # Release matrices cold-build the candidate runtime before measurement.
+  KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
 
 jobs:
   resolve_target:

@@ -3,6 +3,7 @@ import "./fs-safe-defaults.js";
 
 // Generic path guard facade for containment checks and safe relative paths.
 export {
+  isNotFoundPathError,
   isPathInside,
   normalizeWindowsPathForComparison,
   safeStatSync,

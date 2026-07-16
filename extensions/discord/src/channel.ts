@@ -385,6 +385,18 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             if (!resolved) {
               return null;
             }
+            // Shared directory lookup owns mutable names. Fallback may only return
+            // a canonical Discord snowflake, never an unresolved channel/user name.
+            if (!looksLikeDiscordTargetId(resolved.normalized)) {
+              return null;
+            }
+            if (
+              !looksLikeDiscordTargetId(input) &&
+              defaultKind === "channel" &&
+              resolved.kind === "user"
+            ) {
+              return null;
+            }
             return {
               to: resolved.normalized,
               kind: resolved.kind === "user" ? "user" : "channel",

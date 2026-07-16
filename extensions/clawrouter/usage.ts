@@ -145,7 +145,7 @@ export async function fetchClawRouterUsage(params: {
           ? [{ type: "spend", amount: costMicros / 1_000_000, unit: "USD" }]
           : undefined;
     return {
-      provider: "clawrouter" as ProviderUsageSnapshot["provider"],
+      provider: "clawrouter",
       displayName: "ClawRouter",
       windows,
       ...(billing ? { billing } : {}),
