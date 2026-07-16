@@ -1,5 +1,4 @@
 import {
-  allowedImplicitMentionKindsFromConfig,
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -207,7 +206,7 @@ export function resolveTlonGroupMentionDecision(params: {
     policy: {
       isGroup: true,
       requireMention: true,
-      allowedImplicitMentionKinds: allowedImplicitMentionKindsFromConfig(implicitMentions),
+      implicitMentions,
       allowTextCommands: false,
       hasControlCommand: false,
       commandAuthorized: false,

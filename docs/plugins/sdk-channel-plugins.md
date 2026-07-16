@@ -462,7 +462,6 @@ Preferred flow:
 
 ```typescript
 import {
-  allowedImplicitMentionKindsFromConfig,
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
@@ -500,7 +499,7 @@ const decision = resolveInboundMentionDecision({
   policy: {
     isGroup,
     requireMention,
-    allowedImplicitMentionKinds: allowedImplicitMentionKindsFromConfig(implicitMentions),
+    implicitMentions,
     allowTextCommands,
     hasControlCommand,
     commandAuthorized,

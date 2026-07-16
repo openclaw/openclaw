@@ -129,6 +129,49 @@ describe("resolveInboundMentionDecision", () => {
     expect(res.shouldSkip).toBe(true);
   });
 
+  it("translates positive implicit mention config inside the evaluator", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        implicitMentionKinds: ["reply_to_bot", "bot_thread_participant", "native"],
+      },
+      policy: {
+        isGroup: true,
+        requireMention: true,
+        implicitMentions: {
+          replyToBot: false,
+          quotedBot: true,
+          threadParticipation: false,
+        },
+        allowTextCommands: true,
+        hasControlCommand: false,
+        commandAuthorized: false,
+      },
+    });
+    expect(res.matchedImplicitMentionKinds).toEqual(["native"]);
+  });
+
+  it("keeps an explicit plugin allowlist ahead of implicit mention config", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        implicitMentionKinds: ["reply_to_bot", "bot_thread_participant"],
+      },
+      policy: {
+        isGroup: true,
+        requireMention: true,
+        implicitMentions: { replyToBot: false, threadParticipation: true },
+        allowedImplicitMentionKinds: ["reply_to_bot"],
+        allowTextCommands: true,
+        hasControlCommand: false,
+        commandAuthorized: false,
+      },
+    });
+    expect(res.matchedImplicitMentionKinds).toEqual(["reply_to_bot"]);
+  });
+
   it("dedupes repeated implicit mention kinds", () => {
     const res = resolveInboundMentionDecision({
       facts: {

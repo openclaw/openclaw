@@ -9,7 +9,6 @@ import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
   formatInboundEnvelope,
-  allowedImplicitMentionKindsFromConfig,
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
@@ -1205,7 +1204,7 @@ export async function prepareSlackMessage(params: {
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
-      allowedImplicitMentionKinds: allowedImplicitMentionKindsFromConfig(implicitMentions),
+      implicitMentions,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;

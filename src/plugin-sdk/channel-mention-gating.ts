@@ -13,7 +13,6 @@ export type {
   ResolveInboundMentionDecisionParams,
 } from "../channels/mention-gating.js";
 export {
-  allowedImplicitMentionKindsFromConfig,
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
   // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.

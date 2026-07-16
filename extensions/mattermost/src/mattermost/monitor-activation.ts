@@ -1,6 +1,5 @@
 // Mattermost maps transport mention facts into the shared channel evaluator.
 import {
-  allowedImplicitMentionKindsFromConfig,
   resolveInboundMentionDecision,
   type InboundImplicitMentionKind,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -33,7 +32,7 @@ export function resolveMattermostInboundMentionDecision(params: {
     policy: {
       isGroup: params.kind !== "direct",
       requireMention: params.requireMention,
-      allowedImplicitMentionKinds: allowedImplicitMentionKindsFromConfig(implicitMentions),
+      implicitMentions,
       allowTextCommands: params.allowTextCommands,
       hasControlCommand: params.hasControlCommand,
       commandAuthorized: params.commandAuthorized,

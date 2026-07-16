@@ -49,6 +49,7 @@ export type InboundMentionFacts = {
 export type InboundMentionPolicy = {
   isGroup: boolean;
   requireMention: boolean;
+  implicitMentions?: ChannelImplicitMentionsConfig;
   allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
   allowTextCommands: boolean;
   hasControlCommand: boolean;
@@ -159,6 +160,7 @@ function normalizeMentionDecisionParams(
     implicitMentionKinds,
     isGroup,
     requireMention,
+    implicitMentions,
     allowedImplicitMentionKinds,
     allowTextCommands,
     hasControlCommand,
@@ -174,6 +176,7 @@ function normalizeMentionDecisionParams(
     policy: {
       isGroup,
       requireMention,
+      implicitMentions,
       allowedImplicitMentionKinds,
       allowTextCommands,
       hasControlCommand,
@@ -186,6 +189,11 @@ export function resolveInboundMentionDecision(
   params: ResolveInboundMentionDecisionParams,
 ): InboundMentionDecision {
   const { facts, policy } = normalizeMentionDecisionParams(params);
+  const allowedImplicitMentionKinds =
+    policy.allowedImplicitMentionKinds ??
+    (policy.implicitMentions
+      ? allowedImplicitMentionKindsFromConfig(policy.implicitMentions)
+      : undefined);
   const shouldBypassMention =
     policy.isGroup &&
     policy.requireMention &&
@@ -199,7 +207,7 @@ export function resolveInboundMentionDecision(
     canDetectMention: facts.canDetectMention,
     wasMentioned: facts.wasMentioned,
     implicitMentionKinds: facts.implicitMentionKinds,
-    allowedImplicitMentionKinds: policy.allowedImplicitMentionKinds,
+    allowedImplicitMentionKinds,
     shouldBypassMention,
   });
 }
