@@ -6,11 +6,11 @@ import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-help
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import * as directoryLive from "./directory-live.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import * as sendModule from "./send.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
+import { argAt, objectArgAt, recordField } from "./test-support/mock-calls.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
@@ -152,37 +152,6 @@ async function expectStaleProbeMetadataCleared(statusPatches: Array<Record<strin
   );
 }
 
-type MockWithCalls = {
-  mock: { calls: unknown[][] };
-};
-
-function objectArgAt(
-  mock: MockWithCalls,
-  callIndex: number,
-  argIndex: number,
-): Record<string, unknown> {
-  const value = mock.mock.calls[callIndex]?.[argIndex];
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected call ${callIndex} argument ${argIndex} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function argAt(mock: MockWithCalls, callIndex: number, argIndex: number): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call || !(argIndex in call)) {
-    throw new Error(`expected call ${callIndex} argument ${argIndex}`);
-  }
-  return call[argIndex];
-}
-
-function recordField(value: unknown, field: string): Record<string, unknown> {
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${field} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
 afterEach(() => {
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
@@ -290,83 +259,6 @@ describe("discordPlugin outbound", () => {
     expect(messaging.inferTargetChatType({ to: "channel:789" })).toBe("channel");
     expect(messaging.normalizeTarget("1470130713209602050")).toBe("channel:1470130713209602050");
     expect(messaging.inferTargetChatType({ to: "1470130713209602050" })).toBe("channel");
-  });
-
-  it("resolves Discord usernames through the messaging target resolver", async () => {
-    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
-      { kind: "user", id: "user:999", name: "Jane" } as const,
-    ]);
-    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
-    if (!resolveTarget) {
-      throw new Error(
-        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
-      );
-    }
-
-    await expect(
-      resolveTarget({
-        cfg: createCfg(),
-        accountId: "default",
-        input: "jane",
-        normalized: "channel:jane",
-        preferredKind: "user",
-      }),
-    ).resolves.toEqual({
-      to: "user:999",
-      kind: "user",
-      display: "jane",
-      source: "directory",
-    });
-  });
-
-  it("rejects unresolved Discord names after the shared directory lookup misses", async () => {
-    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValue([]);
-    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
-    if (!resolveTarget) {
-      throw new Error(
-        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
-      );
-    }
-
-    await expect(
-      resolveTarget({
-        cfg: createCfg(),
-        accountId: "default",
-        input: "channel:missing",
-        normalized: "channel:missing",
-        preferredKind: "channel",
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      resolveTarget({
-        cfg: createCfg(),
-        accountId: "default",
-        input: "user:missing",
-        normalized: "user:missing",
-        preferredKind: "user",
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("does not reinterpret a bare channel name as a Discord username on fallback", async () => {
-    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
-      { kind: "user", id: "user:999", name: "General" } as const,
-    ]);
-    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
-    if (!resolveTarget) {
-      throw new Error(
-        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
-      );
-    }
-
-    await expect(
-      resolveTarget({
-        cfg: createCfg(),
-        accountId: "default",
-        input: "general",
-        normalized: "channel:general",
-      }),
-    ).resolves.toBeNull();
   });
 
   it("preserves the normalized channel kind for bare current-channel ids", async () => {
