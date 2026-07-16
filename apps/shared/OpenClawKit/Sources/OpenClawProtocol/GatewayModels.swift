@@ -8080,7 +8080,8 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let agentid: String
     public let name: String?
     public let workspace: String?
-    public let model: AnyCodable?
+    public let modelvalue: AnyCodable?
+    public var model: String? { modelvalue?.value as? String }
     public let emoji: String?
     public let avatar: String?
 
@@ -8088,23 +8089,40 @@ public struct AgentsUpdateParams: Codable, Sendable {
         agentid: String,
         name: String? = nil,
         workspace: String? = nil,
-        model: AnyCodable? = nil,
+        modelvalue: AnyCodable?,
         emoji: String? = nil,
         avatar: String? = nil)
     {
         self.agentid = agentid
         self.name = name
         self.workspace = workspace
-        self.model = model
+        self.modelvalue = modelvalue
         self.emoji = emoji
         self.avatar = avatar
+    }
+
+    public init(
+        agentid: String,
+        name: String? = nil,
+        workspace: String? = nil,
+        model: String? = nil,
+        emoji: String? = nil,
+        avatar: String? = nil)
+    {
+        self.init(
+            agentid: agentid,
+            name: name,
+            workspace: workspace,
+            modelvalue: model.map { AnyCodable($0) },
+            emoji: emoji,
+            avatar: avatar)
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case name
         case workspace
-        case model
+        case modelvalue = "model"
         case emoji
         case avatar
     }

@@ -72,13 +72,15 @@ describe("AgentsListResultSchema", () => {
 });
 
 describe("AgentsUpdateParamsSchema", () => {
-  it("accepts null to clear a model override", () => {
+  it("distinguishes omitted, cleared, and invalid model values", () => {
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work" })).toBe(true);
     expect(
       Value.Check(AgentsUpdateParamsSchema, {
         agentId: "work",
         model: null,
       }),
     ).toBe(true);
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work", model: "" })).toBe(false);
   });
 });
 

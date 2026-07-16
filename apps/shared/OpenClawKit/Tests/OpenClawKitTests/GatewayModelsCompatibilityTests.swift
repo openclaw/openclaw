@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawProtocol
 import Testing
 
@@ -47,5 +48,29 @@ struct GatewayModelsCompatibilityTests {
         #expect(params.agentid == nil)
         #expect(params.fastmodevalue == nil)
         #expect(legacyParams.fastmode == true)
+    }
+
+    @Test
+    func `agent update model keeps legacy source compatibility and nullable wire semantics`() throws {
+        let legacyParams = AgentsUpdateParams(agentid: "work", model: "openai/gpt-5.6")
+        let omittedParams = AgentsUpdateParams(agentid: "work")
+        let clearedParams = AgentsUpdateParams(agentid: "work", modelvalue: AnyCodable(NSNull()))
+
+        #expect(legacyParams.model == "openai/gpt-5.6")
+        #expect(omittedParams.modelvalue == nil)
+
+        let legacyJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(legacyParams))
+                as? [String: Any])
+        let omittedJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(omittedParams))
+                as? [String: Any])
+        let clearedJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(clearedParams))
+                as? [String: Any])
+
+        #expect(legacyJSON["model"] as? String == "openai/gpt-5.6")
+        #expect(omittedJSON["model"] == nil)
+        #expect(clearedJSON["model"] is NSNull)
     }
 }

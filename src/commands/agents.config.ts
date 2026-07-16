@@ -133,12 +133,13 @@ export function applyAgentConfig(
     ...(name ? { name } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-    ...(params.model ? { model: params.model } : {}),
     ...(mergedIdentity ? { identity: mergedIdentity } : {}),
   };
-  // Omission preserves the override; explicit null restores the inherited default.
+  // Model is tri-state: omission preserves the override, null restores inheritance.
   if (params.model === null) {
     delete nextEntry.model;
+  } else if (params.model !== undefined) {
+    nextEntry.model = params.model;
   }
   const nextList = [...list];
   if (index >= 0) {
