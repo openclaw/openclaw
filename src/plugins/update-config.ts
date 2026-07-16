@@ -20,7 +20,7 @@ import { validatePackageExtensionEntriesForInstall } from "./package-entry-resol
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
-import type { PluginUpdateLogger } from "./update.js";
+import type { PluginUpdateLogger } from "./update-source.js";
 
 export async function hasRunnableInstalledNpmPayload(params: {
   installPath: string;

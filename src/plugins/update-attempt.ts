@@ -14,14 +14,12 @@ import {
   resolveNewerExactPinnedNpmDefaultLine,
   resolveNpmResultVersion,
   shouldFallbackBetaClawHubUpdate,
+  type PluginUpdateChannelFallback,
+  type PluginUpdateIntegrityDriftParams,
+  type PluginUpdateLogger,
+  type PluginUpdateOutcome,
   type UpdatablePluginInstallRecord,
 } from "./update-source.js";
-import type {
-  PluginUpdateChannelFallback,
-  PluginUpdateIntegrityDriftParams,
-  PluginUpdateLogger,
-  PluginUpdateOutcome,
-} from "./update.js";
 
 export function formatNpmInstallFailure(params: {
   pluginId: string;

@@ -34,12 +34,10 @@ import {
   isBridgeInstalledFromFallbackSource,
   isTrustedSourceLinkedOfficialBridgeNpmInstall,
   resolveNpmSpecPackageName,
+  type PluginChannelSyncResult,
+  type PluginChannelSyncSummary,
+  type PluginUpdateLogger,
 } from "./update-source.js";
-import type {
-  PluginChannelSyncResult,
-  PluginChannelSyncSummary,
-  PluginUpdateLogger,
-} from "./update.js";
 
 export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;

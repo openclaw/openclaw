@@ -62,14 +62,12 @@ import {
   resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate,
   shouldBypassTrustedOfficialUnchangedNpmCheck,
   shouldSkipUnchangedNpmInstall,
+  type PluginUpdateChannelFallback,
+  type PluginUpdateIntegrityDriftParams,
+  type PluginUpdateLogger,
+  type PluginUpdateOutcome,
+  type PluginUpdateSummary,
 } from "./update-source.js";
-import type {
-  PluginUpdateChannelFallback,
-  PluginUpdateIntegrityDriftParams,
-  PluginUpdateLogger,
-  PluginUpdateOutcome,
-  PluginUpdateSummary,
-} from "./update.js";
 
 export async function updateNpmInstalledPlugins(params: {
   config: OpenClawConfig;
