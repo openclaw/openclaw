@@ -117,8 +117,8 @@ function canAutoFetchVerdictRegistry(registry: string): boolean {
 
 export function collectClawHubVerdictTargets(
   report: ReturnType<typeof buildWorkspaceSkillStatus>,
-): Array<{ registry: string; slug: string; version: string }> {
-  const targets = new Map<string, { registry: string; slug: string; version: string }>();
+): Array<{ registry: string; slug: string; version: string; ownerHandle?: string }> {
+  const targets = new Map<string, { registry: string; slug: string; version: string; ownerHandle?: string }>();
   for (const skill of report.skills) {
     const link = skill.clawhub;
     if (!link || link.status !== "linked" || !link.valid) {
@@ -127,23 +127,31 @@ export function collectClawHubVerdictTargets(
     if (!canAutoFetchVerdictRegistry(link.registry)) {
       continue;
     }
+    const ownerHandle = typeof link.ownerHandle === "string" && link.ownerHandle.trim()
+      ? link.ownerHandle.trim()
+      : undefined;
     const key = `${link.registry}\0${link.slug}\0${link.installedVersion}`;
     targets.set(key, {
       registry: link.registry,
       slug: link.slug,
       version: link.installedVersion,
+      ...(ownerHandle ? { ownerHandle } : {}),
     });
   }
   return [...targets.values()];
 }
 
 export async function fetchOpenClawSkillSecurityVerdicts(
-  targets: Array<{ registry: string; slug: string; version: string }>,
+  targets: Array<{ registry: string; slug: string; version: string; ownerHandle?: string }>,
 ): Promise<OpenClawSkillSecurityVerdictItem[]> {
-  const byRegistry = new Map<string, Array<{ slug: string; version: string }>>();
+  const byRegistry = new Map<string, Array<{ slug: string; version: string; ownerHandle?: string }>>();
   for (const target of targets) {
     const registryTargets = byRegistry.get(target.registry) ?? [];
-    registryTargets.push({ slug: target.slug, version: target.version });
+    registryTargets.push({
+      slug: target.slug,
+      version: target.version,
+      ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
+    });
     byRegistry.set(target.registry, registryTargets);
   }
 
@@ -160,3 +168,4 @@ export async function fetchOpenClawSkillSecurityVerdicts(
   }
   return items;
 }
+
