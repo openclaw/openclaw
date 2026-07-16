@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -467,7 +468,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         };
         if (prop === "state") {
           const baseState = getRuntimeProperty();
-          const assertPluginStateAllowed = (methodName: "openBlobStore" | "openKeyedStore") => {
+          const assertPluginStateAllowed = (
+            methodName: "openBlobStore" | "openKeyedStore" | "openChannelIngressDrain",
+          ) => {
             const record =
               pluginRuntimeRecordById.get(pluginId) ??
               registry.plugins.find((entry) => entry.id === pluginId);
@@ -504,6 +507,40 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 ...options,
                 channelId: pluginId,
                 stateDir,
+              });
+            },
+            openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+              options: Omit<
+                Parameters<
+                  typeof createChannelIngressDrain<TPayload, TMetadata, TCompletedMetadata>
+                >[0],
+                "queue"
+              > & {
+                queue?: ReturnType<
+                  typeof createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>
+                >;
+                accountId?: string;
+                stateDir?: string;
+              },
+            ) => {
+              assertPluginStateAllowed("openChannelIngressDrain");
+              const stateDir = options.stateDir ?? baseState.resolveStateDir();
+              const queue =
+                options.queue ??
+                createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
+                  channelId: pluginId,
+                  accountId: options.accountId,
+                  stateDir,
+                });
+              const {
+                queue: _queue,
+                accountId: _accountId,
+                stateDir: _stateDir,
+                ...drainOptions
+              } = options;
+              return createChannelIngressDrain<TPayload, TMetadata, TCompletedMetadata>({
+                ...drainOptions,
+                queue,
               });
             },
           } satisfies PluginRuntime["state"];

@@ -684,7 +684,7 @@ describe("scheduleRestartSentinelWake", () => {
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
-      await params.onTurnAdopted?.();
+      await params.turnAdoptionLifecycle?.onAdopted();
       await params.deliver({
         text: "done",
         replyToId: "restart-sentinel:agent:main:main:agentTurn:123",
@@ -809,7 +809,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("fences an adopted generic turn in its explicit queue state directory", async () => {
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
-      await params.onTurnAdopted?.();
+      await params.turnAdoptionLifecycle?.onAdopted();
     });
 
     await deliverQueuedSessionDelivery({
