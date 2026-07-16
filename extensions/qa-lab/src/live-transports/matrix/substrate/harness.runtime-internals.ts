@@ -37,11 +37,13 @@ export async function isMatrixVersionsReachable(
   baseUrl: string,
   fetchImpl: FetchLike,
   timeoutMs = MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS,
+  signal?: AbortSignal,
 ) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
+    const timeoutSignal = AbortSignal.timeout(Math.max(1, timeoutMs));
     response = await fetchImpl(buildVersionsUrl(baseUrl), {
-      signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
+      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
     });
     return response.ok;
   } catch {
@@ -88,30 +90,46 @@ export async function waitForReachableMatrixBaseUrl(params: {
   const pollMs = params.pollMs ?? 1_000;
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
+  const candidateBaseUrls = params.containerBaseUrl
+    ? [params.hostBaseUrl, params.containerBaseUrl]
+    : [params.hostBaseUrl];
 
   while (Date.now() < deadline) {
-    const hostRemainingMs = deadline - Date.now();
-    if (
-      hostRemainingMs > 0 &&
-      (await isMatrixVersionsReachable(
-        params.hostBaseUrl,
-        params.fetchImpl,
-        Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, hostRemainingMs),
-      ))
-    ) {
-      return params.hostBaseUrl;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
     }
-    const containerRemainingMs = deadline - Date.now();
-    if (
-      params.containerBaseUrl &&
-      containerRemainingMs > 0 &&
-      (await isMatrixVersionsReachable(
-        params.containerBaseUrl,
-        params.fetchImpl,
-        Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, containerRemainingMs),
-      ))
-    ) {
-      return params.containerBaseUrl;
+    const probeController = new AbortController();
+    let reachableCandidate: string | undefined;
+    try {
+      // Race both network paths so neither stalled probe can starve or delay
+      // a healthy peer. The outer deadline also bounds injected fetch fakes.
+      reachableCandidate = await withMatrixQaHarnessTimeout(
+        "Matrix health probes",
+        remainingMs,
+        Promise.any(
+          candidateBaseUrls.map(async (baseUrl) => {
+            if (
+              await isMatrixVersionsReachable(
+                baseUrl,
+                params.fetchImpl,
+                Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, remainingMs),
+                probeController.signal,
+              )
+            ) {
+              return baseUrl;
+            }
+            throw new Error("Matrix versions endpoint unreachable");
+          }),
+        ),
+      );
+    } catch {
+      // Poll again after every candidate fails or the discovery deadline expires.
+    } finally {
+      probeController.abort();
+    }
+    if (reachableCandidate) {
+      return reachableCandidate;
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {

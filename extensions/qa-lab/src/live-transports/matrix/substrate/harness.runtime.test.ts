@@ -289,6 +289,78 @@ describe("matrix harness runtime", () => {
     expect(sleepImpl).not.toHaveBeenCalled();
   });
 
+  it("probes the container fallback when the host versions probe stalls", async () => {
+    let hostProbeSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(async (input: string, init?: Pick<RequestInit, "signal">) => {
+      if (input.startsWith("http://172.18.0.10:8008/")) {
+        return { ok: true };
+      }
+      return await new Promise<never>((_resolve, reject) => {
+        hostProbeSignal = init?.signal ?? undefined;
+        if (!hostProbeSignal) {
+          reject(new Error("versions probe signal missing"));
+          return;
+        }
+        const rejectAborted = () => reject(new Error("versions probe aborted"));
+        if (hostProbeSignal.aborted) {
+          rejectAborted();
+          return;
+        }
+        hostProbeSignal.addEventListener("abort", rejectAborted, { once: true });
+      });
+    });
+
+    await expect(
+      testing.waitForReachableMatrixBaseUrl({
+        composeFile: "/tmp/docker-compose.matrix-qa.yml",
+        containerBaseUrl: "http://172.18.0.10:8008/",
+        fetchImpl,
+        hostBaseUrl: "http://127.0.0.1:28008/",
+        sleepImpl: vi.fn(async () => {}),
+        timeoutMs: 25,
+      }),
+    ).resolves.toBe("http://172.18.0.10:8008/");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(hostProbeSignal?.aborted).toBe(true);
+  });
+
+  it("returns the host without waiting for a stalled container versions probe", async () => {
+    let containerProbeSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(async (input: string, init?: Pick<RequestInit, "signal">) => {
+      if (input.startsWith("http://127.0.0.1:28008/")) {
+        return { ok: true };
+      }
+      return await new Promise<never>((_resolve, reject) => {
+        containerProbeSignal = init?.signal ?? undefined;
+        if (!containerProbeSignal) {
+          reject(new Error("versions probe signal missing"));
+          return;
+        }
+        const rejectAborted = () => reject(new Error("versions probe aborted"));
+        if (containerProbeSignal.aborted) {
+          rejectAborted();
+          return;
+        }
+        containerProbeSignal.addEventListener("abort", rejectAborted, { once: true });
+      });
+    });
+
+    await expect(
+      testing.waitForReachableMatrixBaseUrl({
+        composeFile: "/tmp/docker-compose.matrix-qa.yml",
+        containerBaseUrl: "http://172.18.0.10:8008/",
+        fetchImpl,
+        hostBaseUrl: "http://127.0.0.1:28008/",
+        sleepImpl: vi.fn(async () => {}),
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe("http://127.0.0.1:28008/");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(containerProbeSignal?.aborted).toBe(true);
+  });
+
   it("falls back to the container IP when the host port is unreachable", async () => {
     const calls: string[] = [];
 
@@ -335,6 +407,7 @@ describe("matrix harness runtime", () => {
         expect(fetchCalls).toEqual([
           "http://127.0.0.1:28008/_matrix/client/versions",
           "http://127.0.0.1:28008/_matrix/client/versions",
+          "http://172.18.0.10:8008/_matrix/client/versions",
           "http://127.0.0.1:28008/_matrix/client/versions",
         ]);
       },
