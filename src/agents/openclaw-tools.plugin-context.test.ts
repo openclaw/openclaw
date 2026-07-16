@@ -263,11 +263,25 @@ describe("openclaw plugin tool context", () => {
         config: {} as never,
         agentChannel: "discord",
         agentTo: "channel:111",
-        currentChannelId: "channel:222",
+        currentMessagingTarget: "channel:222",
+        currentChannelId: "333",
       },
     });
 
     expect(result.context.deliveryContext?.to).toBe("channel:111");
+  });
+
+  it("keeps the routable conversation target ahead of the native channel id", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "slack",
+        currentMessagingTarget: "user:U123",
+        currentChannelId: "D123",
+      },
+    });
+
+    expect(result.context.deliveryContext?.to).toBe("user:U123");
   });
 
   it("does not inject ambient thread defaults into plugin tools", async () => {

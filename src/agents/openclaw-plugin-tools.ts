@@ -20,7 +20,6 @@ import type { AnyAgentTool } from "./tools/common.js";
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  currentMessagingTarget?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   sandboxRoot?: string;
