@@ -737,33 +737,26 @@ describe("openclaw state database", () => {
     ).toThrow();
   });
 
-  it("doctor migrates version 2 tables to STRICT without losing rows", () => {
+  it("doctor migrates version 2 APNs tombstones to STRICT without losing rows", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const opened = openOpenClawStateDatabase(options);
     const databasePath = opened.path;
     opened.db
-      .prepare(
-        `INSERT INTO skill_curator_state (
-          id, last_attempt_at_ms, last_success_at_ms, last_error, last_result_json
-        ) VALUES (1, 10, 20, NULL, '{}')`,
-      )
-      .run();
+      .prepare("INSERT INTO apns_registration_tombstones (node_id, deleted_at_ms) VALUES (?, ?)")
+      .run("node-1", 20);
     closeOpenClawStateDatabaseForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`
-      ALTER TABLE skill_curator_state RENAME TO skill_curator_state_strict;
-      CREATE TABLE skill_curator_state (
-        id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
-        last_attempt_at_ms INTEGER NOT NULL,
-        last_success_at_ms INTEGER,
-        last_error TEXT,
-        last_result_json TEXT NOT NULL
+      ALTER TABLE apns_registration_tombstones RENAME TO apns_registration_tombstones_strict;
+      CREATE TABLE apns_registration_tombstones (
+        node_id TEXT NOT NULL PRIMARY KEY,
+        deleted_at_ms INTEGER NOT NULL
       );
-      INSERT INTO skill_curator_state SELECT * FROM skill_curator_state_strict;
-      DROP TABLE skill_curator_state_strict;
+      INSERT INTO apns_registration_tombstones SELECT * FROM apns_registration_tombstones_strict;
+      DROP TABLE apns_registration_tombstones_strict;
       PRAGMA user_version = 2;
       UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
     `);
@@ -781,15 +774,12 @@ describe("openclaw state database", () => {
     const migrated = openOpenClawStateDatabase(options);
     expect(
       migrated.db
-        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'skill_curator_state'")
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'apns_registration_tombstones'")
         .get(),
     ).toEqual({ strict: 1 });
-    expect(migrated.db.prepare("SELECT * FROM skill_curator_state").get()).toEqual({
-      id: 1,
-      last_attempt_at_ms: 10,
-      last_success_at_ms: 20,
-      last_error: null,
-      last_result_json: "{}",
+    expect(migrated.db.prepare("SELECT * FROM apns_registration_tombstones").get()).toEqual({
+      node_id: "node-1",
+      deleted_at_ms: 20,
     });
   });
 
