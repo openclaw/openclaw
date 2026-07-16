@@ -71,6 +71,8 @@ final class GatewayProcessManager {
     /// Async readiness audits may outlive stop/restart. Only the current generation may publish
     /// their failure state or retain a PID for a later repair.
     private var gatewayStartGeneration: UInt64 = 0
+    private var gatewayStartTask: Task<Void, Never>?
+    private var gatewayStartTaskGeneration: UInt64?
     #if DEBUG
     private var testingConnection: GatewayConnection?
     private var testingSkipControlChannelRefresh = false
@@ -182,18 +184,26 @@ final class GatewayProcessManager {
     private func performLaunchAgentEnable(_ request: LaunchAgentEnableRequest) async -> String? {
         // App startup and onboarding can request persistence together. One drain owns all installs;
         // a second forced install would kill the first Gateway during startup migrations.
-        if let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: request.port) {
+        let reusablePID = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: request.port)
+        if let listener = await PortGuardian.shared.describe(port: request.port) {
+            let managedPID = if let reusablePID {
+                reusablePID
+            } else {
+                await GatewayLaunchAgentManager.runningGatewayPID()
+            }
+            guard listener.pid == managedPID else {
+                // A healthy manually started Gateway may be attached without becoming app-owned.
+                // Persistence checks and retained repair markers must not replace it.
+                return nil
+            }
+        }
+
+        if let pid = reusablePID {
             let failure = LaunchAgentReadinessFailure(port: request.port, pid: pid)
             if self.launchAgentReadinessFailure != failure {
                 // A new launchd PID may still be running migrations. It must fail one complete
                 // readiness cycle before a later retry is allowed to replace it.
                 self.launchAgentReadinessFailure = nil
-                return nil
-            }
-
-            let listener = await PortGuardian.shared.describe(port: request.port)
-            if let listener, listener.pid != pid {
-                // A foreign listener must never be displaced. The attach path reports its failure.
                 return nil
             }
 
@@ -250,12 +260,28 @@ final class GatewayProcessManager {
         self.logger.debug("gateway start requested")
 
         // First try to latch onto an already-running gateway to avoid spawning a duplicate.
-        Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.gatewayStartTaskGeneration == startGeneration {
+                    self.gatewayStartTask = nil
+                    self.gatewayStartTaskGeneration = nil
+                }
+            }
             if await self.attachExistingGatewayAfterPendingDisable(startGeneration: startGeneration) {
                 return
             }
             await self.enableLaunchdGateway(startGeneration: startGeneration)
+        }
+        self.gatewayStartTaskGeneration = startGeneration
+        self.gatewayStartTask = task
+    }
+
+    func waitForStartupAttempt() async {
+        // Persistence/repair follows the complete attach-or-start decision. This prevents the
+        // automatic ensure path from replacing a PID while startup is accepting that same PID.
+        while let task = self.gatewayStartTask {
+            await task.value
         }
     }
 
@@ -589,12 +615,17 @@ final class GatewayProcessManager {
     }
 
     func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
+        let startGeneration = self.gatewayStartGeneration
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if !self.desiredActive { return false }
             do {
                 let remainingMs = max(1, deadline.timeIntervalSinceNow * 1000)
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
+                guard self.desiredActive, self.gatewayStartGeneration == startGeneration else {
+                    return false
+                }
+                self.launchAgentReadinessFailure = nil
                 self.clearLastFailure()
                 return true
             } catch {
@@ -696,6 +727,10 @@ extension GatewayProcessManager {
 
     func _testClearLaunchAgentReadinessFailure() {
         self.launchAgentReadinessFailure = nil
+    }
+
+    func _testSetLaunchAgentReadinessFailure(port: Int, pid: Int32) {
+        self.launchAgentReadinessFailure = LaunchAgentReadinessFailure(port: port, pid: pid)
     }
 
     func _testHasLaunchAgentReadinessFailure() -> Bool {
