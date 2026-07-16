@@ -12,7 +12,7 @@ import {
   type Message,
   type Model,
 } from "./llm.js";
-import { setAgentToolRoundLimit, withToolRoundLimit } from "./tool-round-limit-hook.js";
+import { setAgentToolRoundLimit, withAgentToolRoundLimit } from "./tool-round-limit-hook.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -1632,6 +1632,15 @@ describe("onBeforeToolCallingRound", () => {
     }),
   };
 
+  function withTestToolRoundLimit<T extends object>(
+    config: T,
+    hook: (round: number) => boolean | Promise<boolean>,
+  ): T {
+    const carrier = {};
+    setAgentToolRoundLimit(carrier, hook);
+    return withAgentToolRoundLimit(config, carrier);
+  }
+
   it("carries an agent-scoped internal limit into the loop", async () => {
     const { streamFn } = createToolUseStreamFn(2);
     const hook = vi.fn(() => false);
@@ -1663,7 +1672,10 @@ describe("onBeforeToolCallingRound", () => {
     await runAgentLoop(
       [{ role: "user", content: "go", timestamp: Date.now() }],
       { systemPrompt: "test", messages: [], tools: [testTool] },
-      withToolRoundLimit({ model, convertToLlm: (m) => m as Message[] }, onBeforeToolCallingRound),
+      withTestToolRoundLimit(
+        { model, convertToLlm: (m) => m as Message[] },
+        onBeforeToolCallingRound,
+      ),
       () => {},
       undefined,
       streamFn,
@@ -1683,7 +1695,10 @@ describe("onBeforeToolCallingRound", () => {
     await runAgentLoop(
       [{ role: "user", content: "go", timestamp: Date.now() }],
       { systemPrompt: "test", messages: [], tools: [testTool] },
-      withToolRoundLimit({ model, convertToLlm: (m) => m as Message[] }, onBeforeToolCallingRound),
+      withTestToolRoundLimit(
+        { model, convertToLlm: (m) => m as Message[] },
+        onBeforeToolCallingRound,
+      ),
       (event) => {
         events.push(event);
       },
@@ -1760,7 +1775,10 @@ describe("onBeforeToolCallingRound", () => {
     await runAgentLoop(
       [{ role: "user", content: "go", timestamp: Date.now() }],
       { systemPrompt: "test", messages: [], tools: [testTool] },
-      withToolRoundLimit({ model, convertToLlm: (m) => m as Message[] }, onBeforeToolCallingRound),
+      withTestToolRoundLimit(
+        { model, convertToLlm: (m) => m as Message[] },
+        onBeforeToolCallingRound,
+      ),
       () => {},
       undefined,
       streamFn,

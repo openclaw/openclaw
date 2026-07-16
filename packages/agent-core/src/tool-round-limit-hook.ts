@@ -1,4 +1,4 @@
-export type ToolRoundLimitHook = (round: number) => boolean | Promise<boolean>;
+type ToolRoundLimitHook = (round: number) => boolean | Promise<boolean>;
 
 const TOOL_ROUND_LIMIT = Symbol("openclaw.toolRoundLimit");
 const agentToolRoundLimits = new WeakMap<object, ToolRoundLimitHook>();
@@ -20,7 +20,7 @@ export function withAgentToolRoundLimit<T extends object>(config: T, agent: obje
   return hook ? withToolRoundLimit(config, hook) : config;
 }
 
-export function withToolRoundLimit<T extends object>(config: T, hook: ToolRoundLimitHook): T {
+function withToolRoundLimit<T extends object>(config: T, hook: ToolRoundLimitHook): T {
   return Object.assign(config, { [TOOL_ROUND_LIMIT]: hook });
 }
 
