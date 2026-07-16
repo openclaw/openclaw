@@ -2,8 +2,7 @@
  * Runtime-only owner display secret retention for config IO.
  * Generated secrets stay in memory by config path and are never written back into config files.
  */
-import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH } from "./io.state.js";
+import { setBoundedConfigIoMapEntry } from "./io.state.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Runtime-only owner display secrets keyed by config path during config IO. */
@@ -27,7 +26,6 @@ export function retainGeneratedOwnerDisplaySecret(params: {
 
   // Keep the generated secret available to runtime callers while preserving config object identity
   // and avoiding a write of the secret back to disk.
-  state.pendingByPath.set(configPath, generatedSecret);
-  pruneMapToMaxSize(state.pendingByPath, MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH);
+  setBoundedConfigIoMapEntry(state.pendingByPath, configPath, generatedSecret);
   return config;
 }

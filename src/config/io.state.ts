@@ -1,22 +1,27 @@
-import { createDedupeCache, type DedupeCache } from "../infra/dedupe.js";
+import { createDedupeCache } from "../infra/dedupe.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 
-const MAX_LOGGED_INVALID_CONFIGS = 4096;
-export const MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS = 4096;
-const MAX_WARNED_FUTURE_TOUCHED_VERSIONS = 4096;
-export const MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH = 4096;
+const CONFIG_IO_CACHE_MAX_SIZE = 4096;
 
 // Warning state spans fresh config snapshots; bounding it means evicted paths can re-warn.
-export const loggedInvalidConfigs: DedupeCache = createDedupeCache({
+export const loggedInvalidConfigs = createDedupeCache({
   ttlMs: 0,
-  maxSize: MAX_LOGGED_INVALID_CONFIGS,
+  maxSize: CONFIG_IO_CACHE_MAX_SIZE,
 });
 
 export const loggedConfigWarningFingerprints = new Map<string, string>();
 
 // Warning state spans fresh config snapshots; bounding it means evicted versions can re-warn.
-export const warnedFutureTouchedVersions: DedupeCache = createDedupeCache({
+export const warnedFutureTouchedVersions = createDedupeCache({
   ttlMs: 0,
-  maxSize: MAX_WARNED_FUTURE_TOUCHED_VERSIONS,
+  maxSize: CONFIG_IO_CACHE_MAX_SIZE,
 });
 
 export const autoOwnerDisplaySecretByPath = new Map<string, string>();
+
+/** Retains a config-I/O map entry as most-recently used while enforcing the shared bound. */
+export function setBoundedConfigIoMapEntry<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  pruneMapToMaxSize(map, CONFIG_IO_CACHE_MAX_SIZE);
+}

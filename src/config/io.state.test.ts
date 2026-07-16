@@ -1,176 +1,120 @@
-// Verifies config IO warning and pending-secret caches are bounded across process lifetime.
+// Verifies config IO warning and pending-secret caches stay bounded across process lifetime.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isInvalidConfigError, throwInvalidConfig } from "./io.invalid-config.js";
+import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
+import {
+  autoOwnerDisplaySecretByPath,
+  loggedConfigWarningFingerprints,
+  loggedInvalidConfigs,
+  warnedFutureTouchedVersions,
+} from "./io.state.js";
+import { logConfigWarningsOnce, warnIfConfigFromFuture } from "./io.warnings.js";
+
+const CACHE_MAX_SIZE = 4096;
+
+beforeEach(() => {
+  loggedInvalidConfigs.clear();
+  loggedConfigWarningFingerprints.clear();
+  warnedFutureTouchedVersions.clear();
+  autoOwnerDisplaySecretByPath.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function recordInvalidConfig(configPath: string, logger: Pick<typeof console, "error">): void {
+  try {
+    throwInvalidConfig({
+      configPath,
+      issues: [{ path: "root", message: "invalid" }],
+      logger,
+      loggedConfigPaths: loggedInvalidConfigs,
+    });
+  } catch (error) {
+    if (isInvalidConfigError(error)) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("expected invalid config error");
+}
 
 describe("config IO state caches", () => {
-  beforeEach(() => {
-    vi.resetModules();
+  it("keeps hot invalid-config paths while evicted paths re-warn", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    for (let i = 0; i < CACHE_MAX_SIZE; i++) {
+      recordInvalidConfig(`/config-${i}.json`, console);
+    }
+
+    recordInvalidConfig("/config-0.json", console);
+    recordInvalidConfig("/overflow.json", console);
+    recordInvalidConfig("/config-1.json", console);
+
+    expect(loggedInvalidConfigs.size()).toBe(CACHE_MAX_SIZE);
+    expect(errorSpy).toHaveBeenCalledTimes(CACHE_MAX_SIZE + 2);
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  describe("loggedInvalidConfigs dedupe cache", () => {
-    it("caps at MAX_LOGGED_INVALID_CONFIGS and re-warns evicted paths", async () => {
-      const { loggedInvalidConfigs } = await import("./io.state.js");
-      const { throwInvalidConfig } = await import("./io.invalid-config.js");
-      const MAX_LOGGED_INVALID_CONFIGS = 4096;
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-      for (let i = 0; i < MAX_LOGGED_INVALID_CONFIGS; i++) {
-        expect(() =>
-          throwInvalidConfig({
-            configPath: `/config-${i}.json`,
-            issues: [{ path: "root", message: "invalid" }],
-            logger: console,
-            loggedConfigPaths: loggedInvalidConfigs,
-          }),
-        ).toThrow();
-      }
-      expect(errorSpy).toHaveBeenCalledTimes(MAX_LOGGED_INVALID_CONFIGS);
-      expect(loggedInvalidConfigs.size()).toBe(MAX_LOGGED_INVALID_CONFIGS);
-
-      // Refresh the first entry; it stays in the cache.
-      expect(() =>
-        throwInvalidConfig({
-          configPath: "/config-0.json",
-          issues: [{ path: "root", message: "invalid" }],
-          logger: console,
-          loggedConfigPaths: loggedInvalidConfigs,
-        }),
-      ).toThrow();
-      expect(errorSpy).toHaveBeenCalledTimes(MAX_LOGGED_INVALID_CONFIGS);
-
-      // Overflow evicts the oldest entry (now config-1 because config-0 was refreshed).
-      expect(() =>
-        throwInvalidConfig({
-          configPath: "/overflow.json",
-          issues: [{ path: "root", message: "invalid" }],
-          logger: console,
-          loggedConfigPaths: loggedInvalidConfigs,
-        }),
-      ).toThrow();
-      expect(errorSpy).toHaveBeenCalledTimes(MAX_LOGGED_INVALID_CONFIGS + 1);
-
-      // The evicted entry re-warns.
-      expect(() =>
-        throwInvalidConfig({
-          configPath: "/config-1.json",
-          issues: [{ path: "root", message: "invalid" }],
-          logger: console,
-          loggedConfigPaths: loggedInvalidConfigs,
-        }),
-      ).toThrow();
-      expect(errorSpy).toHaveBeenCalledTimes(MAX_LOGGED_INVALID_CONFIGS + 2);
-    });
-  });
-
-  describe("warnedFutureTouchedVersions dedupe cache", () => {
-    it("caps at MAX_WARNED_FUTURE_TOUCHED_VERSIONS and re-warns evicted versions", async () => {
-      const { warnedFutureTouchedVersions } = await import("./io.state.js");
-      const { warnIfConfigFromFuture } = await import("./io.warnings.js");
-      const MAX_WARNED_FUTURE_TOUCHED_VERSIONS = 4096;
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-      for (let i = 0; i < MAX_WARNED_FUTURE_TOUCHED_VERSIONS; i++) {
-        warnIfConfigFromFuture(
-          { meta: { lastTouchedVersion: `3000.1.${i}` } } as Parameters<
-            typeof warnIfConfigFromFuture
-          >[0],
-          console,
-        );
-      }
-      expect(warnSpy).toHaveBeenCalledTimes(MAX_WARNED_FUTURE_TOUCHED_VERSIONS);
-      expect(warnedFutureTouchedVersions.size()).toBe(MAX_WARNED_FUTURE_TOUCHED_VERSIONS);
-
-      // Refresh the first entry.
+  it("keeps hot future versions while evicted versions re-warn", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warnVersion = (version: string) =>
       warnIfConfigFromFuture(
-        { meta: { lastTouchedVersion: "3000.1.0" } } as Parameters<
-          typeof warnIfConfigFromFuture
-        >[0],
+        { meta: { lastTouchedVersion: version } } as Parameters<typeof warnIfConfigFromFuture>[0],
         console,
       );
-      expect(warnSpy).toHaveBeenCalledTimes(MAX_WARNED_FUTURE_TOUCHED_VERSIONS);
+    for (let i = 0; i < CACHE_MAX_SIZE; i++) {
+      warnVersion(`3000.1.${i}`);
+    }
 
-      // Overflow evicts the oldest entry.
-      warnIfConfigFromFuture(
-        { meta: { lastTouchedVersion: "3000.1.9999" } } as Parameters<
-          typeof warnIfConfigFromFuture
-        >[0],
-        console,
-      );
-      expect(warnSpy).toHaveBeenCalledTimes(MAX_WARNED_FUTURE_TOUCHED_VERSIONS + 1);
+    warnVersion("3000.1.0");
+    warnVersion("3000.1.9999");
+    warnVersion("3000.1.1");
 
-      // The evicted entry re-warns.
-      warnIfConfigFromFuture(
-        { meta: { lastTouchedVersion: "3000.1.1" } } as Parameters<
-          typeof warnIfConfigFromFuture
-        >[0],
-        console,
-      );
-      expect(warnSpy).toHaveBeenCalledTimes(MAX_WARNED_FUTURE_TOUCHED_VERSIONS + 2);
-    });
+    expect(warnedFutureTouchedVersions.size()).toBe(CACHE_MAX_SIZE);
+    expect(warnSpy).toHaveBeenCalledTimes(CACHE_MAX_SIZE + 2);
   });
 
-  describe("loggedConfigWarningFingerprints map", () => {
-    it("prunes to MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS preserving newest entries", async () => {
-      const { loggedConfigWarningFingerprints, MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS } =
-        await import("./io.state.js");
-      const { logConfigWarningsOnce } = await import("./io.warnings.js");
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-      for (let i = 0; i < MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS; i++) {
-        logConfigWarningsOnce({
-          configPath: `/config-${i}.json`,
-          warnings: [{ path: "root", message: `warning-${i}` }],
-          logger: console,
-        });
-      }
-      expect(loggedConfigWarningFingerprints.size).toBe(MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS);
-      expect(loggedConfigWarningFingerprints.has("/config-0.json")).toBe(true);
-
-      // Add an overflow entry; the oldest insertion-order key is evicted.
+  it("retains a hot warning fingerprint while evicting and re-warning the cold path", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warnPath = (configPath: string) =>
       logConfigWarningsOnce({
-        configPath: "/overflow.json",
-        warnings: [{ path: "root", message: "overflow" }],
+        configPath,
+        warnings: [{ path: "root", message: "warning" }],
         logger: console,
       });
-      expect(loggedConfigWarningFingerprints.size).toBe(MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS);
-      expect(loggedConfigWarningFingerprints.has("/config-0.json")).toBe(false);
-      expect(loggedConfigWarningFingerprints.has("/overflow.json")).toBe(true);
+    for (let i = 0; i < CACHE_MAX_SIZE; i++) {
+      warnPath(`/config-${i}.json`);
+    }
 
-      expect(warnSpy).toHaveBeenCalledTimes(MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS + 1);
-    });
+    warnPath("/config-0.json");
+    warnPath("/overflow.json");
+    expect(loggedConfigWarningFingerprints.has("/config-0.json")).toBe(true);
+    expect(loggedConfigWarningFingerprints.has("/config-1.json")).toBe(false);
+
+    warnPath("/config-1.json");
+    expect(loggedConfigWarningFingerprints.size).toBe(CACHE_MAX_SIZE);
+    expect(warnSpy).toHaveBeenCalledTimes(CACHE_MAX_SIZE + 2);
   });
 
-  describe("autoOwnerDisplaySecretByPath map", () => {
-    it("prunes to MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH preserving newest entries", async () => {
-      const { autoOwnerDisplaySecretByPath, MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH } =
-        await import("./io.state.js");
-      const { retainGeneratedOwnerDisplaySecret } = await import("./io.owner-display-secret.js");
-
-      const config = {} as Parameters<typeof retainGeneratedOwnerDisplaySecret>[0]["config"];
-      for (let i = 0; i < MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH; i++) {
-        retainGeneratedOwnerDisplaySecret({
-          config,
-          configPath: `/config-${i}.json`,
-          generatedSecret: `secret-${i}`,
-          state: { pendingByPath: autoOwnerDisplaySecretByPath },
-        });
-      }
-      expect(autoOwnerDisplaySecretByPath.size).toBe(MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH);
-      expect(autoOwnerDisplaySecretByPath.has("/config-0.json")).toBe(true);
-
-      // Add an overflow entry; the oldest insertion-order key is evicted.
+  it("retains a hot pending owner value while evicting the cold path", () => {
+    const config = {} as Parameters<typeof retainGeneratedOwnerDisplaySecret>[0]["config"];
+    const retain = (configPath: string, generatedSecret: string) =>
       retainGeneratedOwnerDisplaySecret({
         config,
-        configPath: "/overflow.json",
-        generatedSecret: "overflow-secret",
+        configPath,
+        generatedSecret,
         state: { pendingByPath: autoOwnerDisplaySecretByPath },
       });
-      expect(autoOwnerDisplaySecretByPath.size).toBe(MAX_AUTO_OWNER_DISPLAY_SECRET_BY_PATH);
-      expect(autoOwnerDisplaySecretByPath.has("/config-0.json")).toBe(false);
-      expect(autoOwnerDisplaySecretByPath.has("/overflow.json")).toBe(true);
-    });
+    for (let i = 0; i < CACHE_MAX_SIZE; i++) {
+      retain(`/config-${i}.json`, `value-${i}`);
+    }
+
+    retain("/config-0.json", "value-0");
+    retain("/overflow.json", "overflow-value");
+
+    expect(autoOwnerDisplaySecretByPath.size).toBe(CACHE_MAX_SIZE);
+    expect(autoOwnerDisplaySecretByPath.get("/config-0.json")).toBe("value-0");
+    expect(autoOwnerDisplaySecretByPath.has("/config-1.json")).toBe(false);
+    expect(autoOwnerDisplaySecretByPath.get("/overflow.json")).toBe("overflow-value");
   });
 });

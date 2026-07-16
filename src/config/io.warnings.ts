@@ -1,10 +1,9 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { VERSION } from "../version.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import {
   loggedConfigWarningFingerprints,
-  MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS,
+  setBoundedConfigIoMapEntry,
   warnedFutureTouchedVersions,
 } from "./io.state.js";
 import type { OpenClawConfig } from "./types.js";
@@ -42,10 +41,10 @@ export function logConfigWarningsOnce(params: {
     .join("\n");
   const fingerprint = hashConfigRaw(details);
   if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
+    setBoundedConfigIoMapEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
     return;
   }
-  loggedConfigWarningFingerprints.set(params.configPath, fingerprint);
-  pruneMapToMaxSize(loggedConfigWarningFingerprints, MAX_LOGGED_CONFIG_WARNING_FINGERPRINTS);
+  setBoundedConfigIoMapEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
   params.logger.warn(`Config warnings:\n${details}`);
 }
 
