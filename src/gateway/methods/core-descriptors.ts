@@ -355,6 +355,12 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     startup: true,
     controlPlaneWrite: true,
   },
+  {
+    name: "sessions.reclaim",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
   { name: "models.probe", scope: "operator.admin" },
   // Memory migration reads host assistant state and writes agent workspaces.
   { name: "migrations.memory.plan", scope: "operator.admin" },

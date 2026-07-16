@@ -650,6 +650,8 @@ export const ar: TranslationMap = {
     archiveSession: "أرشفة الجلسة",
     archiveSessionCount: "أرشفة {count}",
     restoreSession: "استعادة الجلسة",
+    stopCloudWorker: "إيقاف عامل السحابة…",
+    stopCloudWorkerConfirm: 'هل تريد إيقاف عامل السحابة للجلسة "{session}"؟',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "حذف {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

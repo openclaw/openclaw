@@ -214,6 +214,62 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
   });
 
+  it("flags runtime writes to retired Web Push JSON stores", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "push", "web-push-subscriptions.json"), "{}\n");
+        await fs.writeFile(path.join(stateDir, "push", "vapid-keys.json"), "{}\n");
+      `,
+      "src/infra/push-web-file-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
+  });
+
+  it("flags runtime writes to the retired node-host JSON config", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "node.json"), "{}\n");
+      `,
+      "src/node-host/config-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to the retired subagent JSON registry", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "subagents", "runs.json"), "{}\n");
+      `,
+      "src/agents/subagent-registry-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired skill-upload staging", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "tmp", "skill-uploads", uploadId, "metadata.json"), "{}\n");
+      `,
+      "src/skills/lifecycle/upload-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
   it("flags runtime writes to retired system-agent rescue approval stores", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

@@ -661,6 +661,8 @@ export const nl: TranslationMap = {
     archiveSession: "Sessie archiveren",
     archiveSessionCount: "Archiveer {count}",
     restoreSession: "Sessie herstellen",
+    stopCloudWorker: "Cloudworker stoppen…",
+    stopCloudWorkerConfirm: 'De cloudworker voor "{session}" stoppen?',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Verwijder {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

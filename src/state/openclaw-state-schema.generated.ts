@@ -651,6 +651,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_port INTEGER,
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
+  gateway_context_path TEXT,
   updated_at_ms INTEGER NOT NULL
 );
 
@@ -1009,6 +1010,16 @@ CREATE INDEX IF NOT EXISTS idx_skill_uploads_expiry
 CREATE INDEX IF NOT EXISTS idx_skill_uploads_idempotency
   ON skill_uploads(idempotency_key_hash)
   WHERE idempotency_key_hash IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS skill_upload_chunks (
+  upload_id TEXT NOT NULL,
+  byte_offset INTEGER NOT NULL CHECK (byte_offset >= 0),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  chunk_blob BLOB NOT NULL,
+  PRIMARY KEY (upload_id, byte_offset),
+  FOREIGN KEY (upload_id) REFERENCES skill_uploads(upload_id) ON DELETE CASCADE,
+  CHECK (length(chunk_blob) = size_bytes)
+);
 
 CREATE TABLE IF NOT EXISTS capture_sessions (
   id TEXT NOT NULL PRIMARY KEY,
@@ -1706,6 +1717,37 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
+
+-- A reconciliation journal is written before managed-worktree mutation. The
+-- bounded Git base snapshot repairs any subset left by an interrupted apply.
+CREATE TABLE IF NOT EXISTS worker_workspace_reconciliations (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  environment_id TEXT NOT NULL,
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+  base_manifest_ref TEXT NOT NULL,
+  current_manifest_ref TEXT NOT NULL,
+  plan_json TEXT NOT NULL,
+  base_pack BLOB NOT NULL CHECK (length(base_pack) <= 268435456),
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+);
+
+-- A completed remote turn is fenced from stale-claim teardown until its
+-- workspace result is durably reconciled into the managed worktree.
+CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  environment_id TEXT NOT NULL,
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+  claim_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  gateway_instance_id TEXT NOT NULL,
+  recovery_requested_at_ms INTEGER,
+  workspace_accepted_at_ms INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+);
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.

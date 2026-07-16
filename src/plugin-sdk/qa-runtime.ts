@@ -234,15 +234,6 @@ export type QaReportScenario = {
   steps?: QaReportCheck[];
 };
 
-export {
-  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
-  collectLiveTransportStandardScenarioCoverage,
-  findMissingLiveTransportStandardScenarios,
-  selectLiveTransportScenarios,
-  type LiveTransportScenarioDefinition,
-  type LiveTransportStandardScenarioId,
-} from "./qa-live-transport-scenarios.js";
-
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (
   command: string,
