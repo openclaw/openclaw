@@ -8,6 +8,8 @@ import {
 } from "./owner-notice.js";
 import type { InboxEntry, ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
+type ReefRejectionNotice = Parameters<ConstructorParameters<typeof ReefReceiptNotifier>[0]>[0];
+
 const recipient: ReefPeerIdentity = {
   ed25519PublicKey: "A".repeat(43),
   x25519PublicKey: "B".repeat(43),
@@ -18,7 +20,7 @@ function rejection(peer: string, id: string, category = "guard_deny"): ReefDeliv
   return { peer, id, recipient, category };
 }
 
-async function consumeNotice(): Promise<void> {}
+async function consumeNotice(_notice: ReefRejectionNotice): Promise<void> {}
 
 function createNoticeStore() {
   const records = new Map<
