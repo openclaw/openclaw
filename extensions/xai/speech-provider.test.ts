@@ -303,6 +303,20 @@ describe("xai speech provider", () => {
     ).toBe(false);
   });
 
+  it("does not treat a blank environment api key as configured", () => {
+    process.env.XAI_API_KEY = "   ";
+    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+    const provider = buildXaiSpeechProvider();
+
+    expect(
+      provider.isConfigured({
+        cfg: {},
+        providerConfig: {},
+        timeoutMs: 5_000,
+      }),
+    ).toBe(false);
+  });
+
   it("uses direct voice-list auth and URL overrides before configured sources", async () => {
     process.env.XAI_API_KEY = "env-key";
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "oauth-bearer" });
