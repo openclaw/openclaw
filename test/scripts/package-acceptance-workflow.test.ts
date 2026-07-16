@@ -1290,6 +1290,7 @@ describe("package acceptance workflow", () => {
       "could not create workflow dispatch event: HTTP 500: Failed to run workflow dispatch",
       "gh: HTTP 502",
       "500 Internal Server Error",
+      "invalid character '<' looking for beginning of value",
       "error connecting to api.github.com",
       "context deadline exceeded",
       "read: connection reset by peer",
