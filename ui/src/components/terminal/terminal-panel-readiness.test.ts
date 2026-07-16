@@ -70,6 +70,18 @@ describe("terminal panel readiness", () => {
     await i18n.setLocale("en");
   });
 
+  it("keeps an already closed panel closed for an explicit close request", () => {
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.available = true;
+    document.body.append(panel);
+
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:terminal-toggle", { detail: { open: false } }),
+    );
+
+    expect((panel as unknown as { open: boolean }).open).toBe(false);
+  });
+
   it("shows a connecting animation while a terminal open is in flight", async () => {
     const open = deferred<{
       sessionId: string;

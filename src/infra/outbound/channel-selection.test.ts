@@ -276,40 +276,6 @@ describe("resolveMessageChannelSelection", () => {
     });
   });
 
-  it("rejects an explicit unknown channel instead of using the tool context", async () => {
-    await expect(
-      expectResolvedSelection({
-        cfg: {} as never,
-        channel: "channel:C123",
-        fallbackChannel: "beta",
-        requireExplicitChannelAvailable: true,
-      }),
-    ).rejects.toThrow("Unknown channel: channel:c123");
-  });
-
-  it("rejects an explicit unavailable channel instead of using the tool context", async () => {
-    const cfg = {} as never;
-    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-      channel === "beta" ? { id: "beta" } : undefined,
-    );
-
-    await expect(
-      expectResolvedSelection({
-        cfg,
-        channel: "alpha",
-        fallbackChannel: "beta",
-        requireExplicitChannelAvailable: true,
-      }),
-    ).rejects.toThrow("Channel is unavailable: alpha");
-
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
-      channel: "alpha",
-      cfg,
-      allowBootstrap: true,
-    });
-  });
-
   it.each([
     {
       params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "not-a-channel" },

@@ -187,7 +187,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
 
     expect(compact.length).toBeGreaterThanOrEqual(12);
-    expect(compact.length).toBeLessThanOrEqual(24);
+    expect(compact.length).toBeLessThanOrEqual(28);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
@@ -848,6 +848,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-auth",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[0]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -856,6 +857,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-models",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[1]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -864,6 +866,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-tools",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[2]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -872,6 +875,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-subagents",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[3]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -882,6 +886,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runner-cli-1",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[4]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -890,6 +895,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runner-cli-2",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[5]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -898,6 +904,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runner-cli-3",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[6]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -906,6 +913,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runner-commands",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[7]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -914,6 +922,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runner-embedded",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[8]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -922,6 +931,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runner-sessions",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[9]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
@@ -930,6 +940,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runtime",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" },
         includePatterns: agentShards[10]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,

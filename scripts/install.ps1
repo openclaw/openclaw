@@ -221,7 +221,7 @@ function Check-Node {
                 } else {
                     $sqliteVersion
                 }
-                Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) is required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required" -ForegroundColor Yellow
                 return $false
             } else {
                 Write-Host "[!] Node.js $nodeVersion found, but Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+ is required" -ForegroundColor Yellow

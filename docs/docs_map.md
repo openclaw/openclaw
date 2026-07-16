@@ -9855,6 +9855,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: JSON-only LLM steps (llm-task)
   - H3: Important limitation: embedded Lobster vs openclaw.invoke
   - H2: Workflow files (.lobster)
+  - H3: Injected environment variables
   - H2: Tool parameters
   - H3: run
   - H3: resume
@@ -10059,7 +10060,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /tools/show-widget
 - Headings:
+  - H2: How widgets work
   - H2: Use the tool
+  - H2: Interactive widgets
   - H2: Security and storage
   - H2: Related
 

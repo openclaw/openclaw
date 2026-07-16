@@ -2564,6 +2564,158 @@ public struct PushTestResult: Codable, Sendable {
     }
 }
 
+public struct UiSplitCommand: Codable, Sendable {
+    public let kind: String
+    public let direction: AnyCodable
+    public let sessionkey: String
+
+    public init(
+        kind: String,
+        direction: AnyCodable,
+        sessionkey: String)
+    {
+        self.kind = kind
+        self.direction = direction
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case direction
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiClosePaneCommand: Codable, Sendable {
+    public let kind: String
+    public let sessionkey: String
+
+    public init(
+        kind: String,
+        sessionkey: String)
+    {
+        self.kind = kind
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiFocusCommand: Codable, Sendable {
+    public let kind: String
+    public let sessionkey: String
+
+    public init(
+        kind: String,
+        sessionkey: String)
+    {
+        self.kind = kind
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiSidebarCommand: Codable, Sendable {
+    public let kind: String
+    public let visible: Bool
+
+    public init(
+        kind: String,
+        visible: Bool)
+    {
+        self.kind = kind
+        self.visible = visible
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case visible
+    }
+}
+
+public struct UiPanelCommand: Codable, Sendable {
+    public let kind: String
+    public let panel: AnyCodable
+    public let _open: Bool
+    public let dock: AnyCodable?
+
+    public init(
+        kind: String,
+        panel: AnyCodable,
+        _open: Bool,
+        dock: AnyCodable? = nil)
+    {
+        self.kind = kind
+        self.panel = panel
+        self._open = _open
+        self.dock = dock
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case panel
+        case _open = "open"
+        case dock
+    }
+}
+
+public struct UiNavigateCommand: Codable, Sendable {
+    public let kind: String
+    public let sessionkey: String
+
+    public init(
+        kind: String,
+        sessionkey: String)
+    {
+        self.kind = kind
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiCommandParams: Codable, Sendable {
+    public let command: UiCommand
+    public let sessionkey: String?
+
+    public init(
+        command: UiCommand,
+        sessionkey: String? = nil)
+    {
+        self.command = command
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct UiCommandResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+    }
+}
+
 public struct SecretsReloadParams: Codable, Sendable {}
 
 public struct SecretsResolveParams: Codable, Sendable {
@@ -13649,6 +13801,49 @@ public enum GatewaySuspendStatusResult: Codable, Sendable {
         switch self {
         case .running(let value): try value.encode(to: encoder)
         case .ready(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum UiCommand: Codable, Sendable {
+    case split(UiSplitCommand)
+    case closePane(UiClosePaneCommand)
+    case focus(UiFocusCommand)
+    case sidebar(UiSidebarCommand)
+    case panel(UiPanelCommand)
+    case navigate(UiNavigateCommand)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "split": self = try .split(UiSplitCommand(from: decoder))
+        case "close-pane": self = try .closePane(UiClosePaneCommand(from: decoder))
+        case "focus": self = try .focus(UiFocusCommand(from: decoder))
+        case "sidebar": self = try .sidebar(UiSidebarCommand(from: decoder))
+        case "panel": self = try .panel(UiPanelCommand(from: decoder))
+        case "navigate": self = try .navigate(UiNavigateCommand(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown UiCommand discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .split(let value): try value.encode(to: encoder)
+        case .closePane(let value): try value.encode(to: encoder)
+        case .focus(let value): try value.encode(to: encoder)
+        case .sidebar(let value): try value.encode(to: encoder)
+        case .panel(let value): try value.encode(to: encoder)
+        case .navigate(let value): try value.encode(to: encoder)
         }
     }
 }

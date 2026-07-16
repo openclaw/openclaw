@@ -1607,12 +1607,12 @@ export async function executePreparedCliRun(
                 },
               })
             : null;
-          let stdoutTail: Buffer = Buffer.alloc(0);
+          let stdoutTail = "";
           let stdoutParseBuffer: Buffer = Buffer.alloc(0);
           let stdoutBytes = 0;
           const stdoutHash = crypto.createHash("sha256");
           let stdoutParseExceeded = false;
-          let stderrTail: Buffer = Buffer.alloc(0);
+          let stderrTail = "";
           let stderrParseBuffer: Buffer = Buffer.alloc(0);
           let stderrBytes = 0;
           const stderrHash = crypto.createHash("sha256");
@@ -1760,9 +1760,9 @@ export async function executePreparedCliRun(
           }
 
           const stdout = stdoutParseBuffer.toString("utf8").trim();
-          const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
+          const stdoutDiagnostic = stdoutTail.trim();
           const stderr = stderrParseBuffer.toString("utf8").trim();
-          const stderrDiagnostic = stderrTail.toString("utf8").trim();
+          const stderrDiagnostic = stderrTail.trim();
           const processDiagnostics = {
             backendId: context.backendResolved.id,
             processReason: result.reason,

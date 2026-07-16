@@ -330,18 +330,6 @@ export type GatewayClientConnectionMetadata = {
   preauthHandshakeTimeoutMs?: number;
 };
 
-function readConnectChallengeTimeoutOverride(
-  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs">,
-): number | undefined {
-  if (
-    typeof opts.connectChallengeTimeoutMs === "number" &&
-    Number.isFinite(opts.connectChallengeTimeoutMs)
-  ) {
-    return opts.connectChallengeTimeoutMs;
-  }
-  return undefined;
-}
-
 function isGatewayClientStoppedError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message === "gateway client stopped" || message === "Error: gateway client stopped";
@@ -355,18 +343,6 @@ function formatGatewayClientErrorForLog(err: unknown): string {
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
     );
   return redactedUrlLikeString;
-}
-
-function resolveGatewayClientConnectChallengeTimeoutMs(
-  opts: Pick<
-    GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"
-  >,
-): number {
-  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
-    env: opts.env,
-    configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
-  });
 }
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
@@ -413,6 +389,13 @@ export class GatewayClient {
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
         ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
         : DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
+    const connectChallengeTimeoutMs = resolveConnectChallengeTimeoutMs(
+      this.opts.connectChallengeTimeoutMs,
+      {
+        env: this.opts.env,
+        configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
+      },
+    );
     this.protocol = new GatewayProtocolClient<AssembledConnect>({
       createSocket: (handlers) => this.createSocket(handlers),
       createRequestId: randomUUID,
@@ -465,9 +448,9 @@ export class GatewayClient {
         ),
       handshake: {
         mode: "require-challenge",
-        timeoutMs: resolveGatewayClientConnectChallengeTimeoutMs(this.opts),
+        timeoutMs: connectChallengeTimeoutMs,
         timeoutMessage: (elapsedMs) =>
-          `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${resolveGatewayClientConnectChallengeTimeoutMs(this.opts)}ms)`,
+          `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${connectChallengeTimeoutMs}ms)`,
       },
       reconnect: { initialMs: 1_000, multiplier: 2, maxMs: 30_000 },
       requestTimeoutMs: this.requestTimeoutMs,

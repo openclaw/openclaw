@@ -625,7 +625,7 @@ install_alpine_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(linked_node_sqlite_version)"
-    fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+); found Node ${installed_version}, SQLite ${sqlite_version}."
+    fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; found Node ${installed_version}, SQLite ${sqlite_version}."
   fi
 
   installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"

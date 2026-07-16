@@ -11,6 +11,7 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -241,7 +242,17 @@ function traceToolExecutionStart(params: {
 }
 
 const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
-const TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS = TOOL_START_WARNING_PREVIEW_MAX_CHARS + 1;
+
+function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): string | undefined {
+  if (rawArgsPreview == null) {
+    return undefined;
+  }
+  // Bound before regex normalization so malformed tool args cannot make warning work unbounded.
+  const wasTruncated = rawArgsPreview.length > TOOL_START_WARNING_PREVIEW_MAX_CHARS;
+  const bounded = truncateUtf16Safe(rawArgsPreview, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
+  const preview = sanitizeForConsole(bounded, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
+  return wasTruncated && preview ? `${preview}…` : preview;
+}
 
 type ToolStartRecord = {
   startTime: number;
@@ -983,10 +994,7 @@ export function handleToolExecutionStart(
       if (!filePath) {
         const argsType = typeof args;
         const rawArgsPreview = readStringValue(args);
-        const argsPreview = sanitizeForConsole(
-          rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS),
-          TOOL_START_WARNING_PREVIEW_MAX_CHARS,
-        );
+        const argsPreview = buildToolStartWarningArgsPreview(rawArgsPreview);
         const safeRunId = sanitizeForConsole(runId) ?? "-";
         const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
         const safeSessionId = sanitizeForConsole(ctx.params.sessionId);

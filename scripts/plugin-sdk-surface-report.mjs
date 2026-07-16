@@ -237,7 +237,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Used-union narrowing: 31 wildcard barrels drop to explicit used exports;
       // proxy stream API and codex marker/scaffold pins retained.
       // +2: generic channel retry runner and Retry-After parser.
-      7951,
+      // +1: shared speech-provider API key resolver.
+      7952,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -255,7 +256,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: widget HTML document detection and size assertion.
       // Used-union narrowing of the 31 wildcard barrels.
       // +2: generic channel retry runner and Retry-After parser.
-      4439,
+      // +1: shared speech-provider API key resolver.
+      4440,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

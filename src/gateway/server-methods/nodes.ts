@@ -370,6 +370,43 @@ function emitNodePairingDeniedSecurityEvent(params: {
   });
 }
 
+async function enforcePendingNodePairingOwnership(params: {
+  requestId: string;
+  mutation: "approve" | "reject";
+  client: GatewayClient | null;
+  context: Pick<GatewayRequestContext, "logGateway">;
+  respond: RespondFn;
+}): Promise<boolean> {
+  const action = params.mutation === "approve" ? "approval" : "rejection";
+  const controlId = params.mutation === "approve" ? "node.pair.approve" : "node.pair.reject";
+  const deniedMessage = `node pairing ${action} denied`;
+  const pending = await getPendingNodePairing(params.requestId);
+  const sessionAuthz = resolveDeviceSessionAuthz(params.client);
+  if (!pending) {
+    if (sessionAuthz.callerDeviceId && !sessionAuthz.isAdminCaller) {
+      params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deniedMessage));
+      return false;
+    }
+    return true;
+  }
+
+  const authz = resolveDeviceManagementAuthz(params.client, pending.nodeId);
+  if (!deniesCrossDeviceManagement(authz)) {
+    return true;
+  }
+  params.context.logGateway.warn(
+    `${deniedMessage} node=${pending.nodeId} reason=device-ownership-mismatch`,
+  );
+  emitNodePairingDeniedSecurityEvent({
+    authz,
+    nodeId: pending.nodeId,
+    controlId,
+    reason: "device-ownership-mismatch",
+  });
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deniedMessage));
+  return false;
+}
+
 function emitNodeRoleRemovalSecurityEvent(params: {
   authz: DeviceManagementAuthz;
   deviceId: string;
@@ -916,35 +953,16 @@ export const nodeHandlers: GatewayRequestHandlers = {
     // Intentionally fail closed for RPC callers without an explicit scoped session.
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
-      const pending = await getPendingNodePairing(requestId);
-      const sessionAuthz = resolveDeviceSessionAuthz(client);
-      if (!pending && sessionAuthz.callerDeviceId && !sessionAuthz.isAdminCaller) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "node pairing approval denied"),
-        );
+      if (
+        !(await enforcePendingNodePairingOwnership({
+          requestId,
+          mutation: "approve",
+          client,
+          context,
+          respond,
+        }))
+      ) {
         return;
-      }
-      if (pending) {
-        const authz = resolveDeviceManagementAuthz(client, pending.nodeId);
-        if (deniesCrossDeviceManagement(authz)) {
-          context.logGateway.warn(
-            `node pairing approval denied node=${pending.nodeId} reason=device-ownership-mismatch`,
-          );
-          emitNodePairingDeniedSecurityEvent({
-            authz,
-            nodeId: pending.nodeId,
-            controlId: "node.pair.approve",
-            reason: "device-ownership-mismatch",
-          });
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "node pairing approval denied"),
-          );
-          return;
-        }
       }
       const approved = await approveNodePairing(requestId, { callerScopes });
       if (!approved) {
@@ -1011,35 +1029,16 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
-      const pending = await getPendingNodePairing(requestId);
-      const sessionAuthz = resolveDeviceSessionAuthz(client);
-      if (!pending && sessionAuthz.callerDeviceId && !sessionAuthz.isAdminCaller) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "node pairing rejection denied"),
-        );
+      if (
+        !(await enforcePendingNodePairingOwnership({
+          requestId,
+          mutation: "reject",
+          client,
+          context,
+          respond,
+        }))
+      ) {
         return;
-      }
-      if (pending) {
-        const authz = resolveDeviceManagementAuthz(client, pending.nodeId);
-        if (deniesCrossDeviceManagement(authz)) {
-          context.logGateway.warn(
-            `node pairing rejection denied node=${pending.nodeId} reason=device-ownership-mismatch`,
-          );
-          emitNodePairingDeniedSecurityEvent({
-            authz,
-            nodeId: pending.nodeId,
-            controlId: "node.pair.reject",
-            reason: "device-ownership-mismatch",
-          });
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "node pairing rejection denied"),
-          );
-          return;
-        }
       }
       const rejected = await rejectNodePairing(requestId);
       if (!rejected) {
