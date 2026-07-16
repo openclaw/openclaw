@@ -2881,11 +2881,10 @@ describe("mcp loopback server", () => {
     resolveGatewayScopedToolsMock.mockImplementation(() => {
       throw new Error("tool resolution exploded");
     });
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime, port } = await startLoopbackServerForTest();
     const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
+      port,
+      token: runtime.ownerToken,
       headers: { "content-type": "application/json" },
       body: JSON.stringify([
         { jsonrpc: "2.0", method: "tools/list" },
@@ -2957,11 +2956,10 @@ describe("mcp loopback server", () => {
   });
 
   it("returns 202 with an empty body for JSON-RPC notifications", async () => {
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime, port } = await startLoopbackServerForTest();
     const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
+      port,
+      token: runtime.ownerToken,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
     });
@@ -2974,11 +2972,10 @@ describe("mcp loopback server", () => {
     resolveGatewayScopedToolsMock.mockImplementation(() => {
       throw new Error("tool resolution exploded");
     });
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime, port } = await startLoopbackServerForTest();
     const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
+      port,
+      token: runtime.ownerToken,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
     });
@@ -2989,11 +2986,10 @@ describe("mcp loopback server", () => {
   });
 
   it("returns only request responses for mixed batches", async () => {
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime, port } = await startLoopbackServerForTest();
     const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
+      port,
+      token: runtime.ownerToken,
       headers: { "content-type": "application/json" },
       body: JSON.stringify([
         { jsonrpc: "2.0", method: "tools/list" },
@@ -3012,11 +3008,10 @@ describe("mcp loopback server", () => {
       content: [{ type: "text", text: "ok" }],
     }));
     mockScopedTools([makeMessageTool({ execute })]);
-    server = await startMcpLoopbackServer(0);
-    const runtime = getActiveMcpLoopbackRuntime();
+    const { runtime, port } = await startLoopbackServerForTest();
     const response = await sendRaw({
-      port: server.port,
-      token: runtime?.ownerToken,
+      port,
+      token: runtime.ownerToken,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         jsonrpc: "2.0",
