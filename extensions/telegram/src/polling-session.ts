@@ -30,6 +30,14 @@ import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
+  buildDeferredSpooledUpdateClaimKey,
+  hasEscalatedWedgedHandler,
+  ISOLATED_INGRESS_WEDGED_HANDLER_ESCALATION_MS,
+  maybeEscalateWedgedSpooledUpdateHandler,
+  type DeferredSpooledUpdateClaimState,
+  type SpooledUpdateHandlerState,
+} from "./spooled-update-handler-lanes.js";
+import {
   resolveNonRetryableSpooledUpdateFailure,
   resolveSpooledUpdateAttemptNumber,
   resolveSpooledUpdateRetryDelayMs,
@@ -184,38 +192,11 @@ type TelegramPollingSessionOpts = {
     drainIntervalMs?: number;
     spooledUpdateHandlerTimeoutMs?: number;
     spooledUpdateHandlerAbortGraceMs?: number;
+    wedgedHandlerEscalationMs?: number;
   };
 };
 
-type SpooledUpdateHandlerState = {
-  handlerKey: string;
-  laneKey: string;
-  task: Promise<boolean>;
-  update: ClaimedTelegramSpooledUpdate;
-  updateId: number;
-  startedAt: number;
-  stopClaimRefresh: () => void;
-  backlogStatusMessage?: string;
-  timedOutAt?: number;
-  timeoutMessage?: string;
-};
-
-type DeferredSpooledUpdateClaimState = {
-  claimKey: string;
-  laneKey: string;
-  task: Promise<void>;
-  timer?: ReturnType<typeof setTimeout>;
-  timedOutMessage?: string;
-  update: ClaimedTelegramSpooledUpdate;
-  updateId: number;
-  stopClaimRefresh: () => void;
-};
-
 const deferredSpooledUpdateClaimsByKey = new Map<string, DeferredSpooledUpdateClaimState>();
-
-function buildDeferredSpooledUpdateClaimKey(update: ClaimedTelegramSpooledUpdate): string {
-  return `${update.pendingPath}:${update.claim?.claimToken ?? update.claim?.processId ?? "claimed"}`;
-}
 
 type SpooledUpdateDrainResult = {
   blockedByLane: Set<string>;
@@ -304,6 +285,7 @@ export class TelegramPollingSession {
   #stallThresholdMs: number;
   #spooledUpdateHandlerTimeoutMs: number;
   #spooledUpdateHandlerAbortGraceMs: number;
+  #wedgedHandlerEscalationMs: number;
   #deliveryDrainInFlight = false;
   #nextDeliveryDrainAt = 0;
 
@@ -324,6 +306,10 @@ export class TelegramPollingSession {
     this.#spooledUpdateHandlerAbortGraceMs = resolvePositiveTimerTimeoutMs(
       opts.isolatedIngress?.spooledUpdateHandlerAbortGraceMs,
       TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS,
+    );
+    this.#wedgedHandlerEscalationMs = resolvePositiveTimerTimeoutMs(
+      opts.isolatedIngress?.wedgedHandlerEscalationMs,
+      ISOLATED_INGRESS_WEDGED_HANDLER_ESCALATION_MS,
     );
   }
 
@@ -1033,6 +1019,13 @@ export class TelegramPollingSession {
           activeSpooledUpdateHandlersByLane.delete(handlerKey);
         }
         this.#spooledUpdateHandlerKeys.delete(handlerKey);
+        // Late settle: clear escalation only when no other wedged handler needs it.
+        if (
+          state.escalatedAt !== undefined &&
+          !hasEscalatedWedgedHandler(activeSpooledUpdateHandlersByLane.values())
+        ) {
+          this.#status.noteWedgedHandlerRecovered();
+        }
       });
       started += 1;
     }
@@ -1383,6 +1376,12 @@ export class TelegramPollingSession {
           if (handler.timeoutMessage) {
             this.#status.notePollingError(handler.timeoutMessage);
           }
+          maybeEscalateWedgedSpooledUpdateHandler({
+            handler,
+            escalationMs: this.#wedgedHandlerEscalationMs,
+            log: this.opts.log,
+            status: this.#status,
+          });
         }
         for (const handlerKey of this.#noteSpooledBacklogStalls(drain.blockedByLane)) {
           stalledBacklogKeys.add(handlerKey);

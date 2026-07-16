@@ -259,6 +259,9 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readBoolean(record, "terminalDisconnect") !== undefined
       ? { terminalDisconnect: readBoolean(record, "terminalDisconnect") }
       : {}),
+    ...(readBoolean(record, "processRestartRequired") !== undefined
+      ? { processRestartRequired: readBoolean(record, "processRestartRequired") }
+      : {}),
     ...(readBoolean(record, "busy") !== undefined ? { busy: readBoolean(record, "busy") } : {}),
     ...(readNumber(record, "activeRuns") !== undefined
       ? { activeRuns: readNumber(record, "activeRuns") }

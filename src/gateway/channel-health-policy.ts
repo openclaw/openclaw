@@ -18,6 +18,7 @@ type ChannelHealthSnapshot = {
   reconnectAttempts?: number;
   mode?: string;
   terminalDisconnect?: boolean;
+  processRestartRequired?: boolean;
 };
 
 type ChannelHealthEvaluationReason =
@@ -25,6 +26,7 @@ type ChannelHealthEvaluationReason =
   | "unmanaged"
   | "not-running"
   | "terminal-disconnect"
+  | "process-restart-required"
   | "busy"
   | "stuck"
   | "startup-connect-grace"
@@ -61,6 +63,12 @@ export function evaluateChannelHealth(
 ): ChannelHealthEvaluation {
   if (!isManagedAccount(snapshot)) {
     return { healthy: true, reason: "unmanaged" };
+  }
+  // A wedged in-process runtime outranks every other signal (including busy):
+  // channel stop/start cannot release it, so the monitor must escalate to a
+  // gateway process restart instead of restarting the channel around it.
+  if (snapshot.processRestartRequired) {
+    return { healthy: false, reason: "process-restart-required" };
   }
   if (!snapshot.running && snapshot.terminalDisconnect) {
     return { healthy: false, reason: "terminal-disconnect" };

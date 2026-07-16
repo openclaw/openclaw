@@ -4607,6 +4607,100 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("escalates a wedged guarded lane to a gateway process restart request and clears it on late settle", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const events: string[] = [];
+    const wedgedStatusPatches: Array<Omit<ChannelAccountSnapshot, "accountId">> = [];
+    let releaseFirstTurn: (() => void) | undefined;
+    const firstTurnDone = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    createTelegramBotMock.mockReturnValueOnce({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`first:${update.update_id}`);
+        if (update.update_id === 42) {
+          await firstTurnDone;
+        }
+      }),
+      stop: vi.fn(async () => undefined),
+    });
+    await writeSpooledTestUpdates(tempDir, [
+      topicUpdate(42, 10, "wedged topic 10 turn"),
+      topicUpdate(43, 10, "later topic 10 turn"),
+    ]);
+
+    const worker = createIdleIngressWorker();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      setStatus: (patch) => wedgedStatusPatches.push(patch),
+      isolatedIngress: {
+        enabled: true,
+        spoolDir: tempDir,
+        createWorker: worker.createWorker,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 100,
+        spooledUpdateHandlerAbortGraceMs: 100,
+        wedgedHandlerEscalationMs: 300,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(events).toEqual(["first:42"]));
+
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.waitFor(() => expectLogIncludes(log, "did not stop within 100ms"));
+      expect(wedgedStatusPatches.some((patch) => patch.processRestartRequired === true)).toBe(
+        false,
+      );
+
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.waitFor(() => expectLogIncludes(log, "requesting a gateway process restart"));
+      const escalated = wedgedStatusPatches.filter(
+        (patch) => patch.processRestartRequired === true,
+      );
+      expect(escalated).toHaveLength(1);
+      expect(escalated[0]?.lastError).toContain("guarded");
+      // Escalation must not release the lane in-process: the wedged handler is
+      // still the only one that ran, and the later same-lane update stays queued.
+      expect(events).toEqual(["first:42"]);
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
+
+      // Repeat drains must not re-escalate the same wedged handler.
+      await vi.advanceTimersByTimeAsync(600);
+      expect(
+        wedgedStatusPatches.filter((patch) => patch.processRestartRequired === true),
+      ).toHaveLength(1);
+
+      releaseFirstTurn?.();
+      await vi.waitFor(() => {
+        expect(wedgedStatusPatches.some((patch) => patch.processRestartRequired === false)).toBe(
+          true,
+        );
+      });
+
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      releaseFirstTurn?.();
+      abort.abort();
+      worker.stop();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("caps oversized spooled update handler abort grace timers", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");

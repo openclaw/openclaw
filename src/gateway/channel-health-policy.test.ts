@@ -86,6 +86,20 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
   });
 
+  it("escalates process-restart-required even while the channel reports busy", () => {
+    const now = 100_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, { processRestartRequired: true }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "process-restart-required" });
+  });
+
+  it("escalates process-restart-required on an otherwise healthy connected channel", () => {
+    const evaluation = evaluateHealth(connectedAccount({ processRestartRequired: true }));
+    expect(evaluation).toEqual({ healthy: false, reason: "process-restart-required" });
+  });
+
   it("ignores inherited busy flags until current lifecycle reports run activity", () => {
     const now = 100_000;
     const evaluation = evaluateHealth(

@@ -857,4 +857,95 @@ describe("channel-health-monitor", () => {
       monitor.stop();
     });
   });
+
+  describe("process restart escalation", () => {
+    const allowBudget = () => vi.fn(() => ({ allowed: true, usedInWindow: 1 }));
+
+    it("requests a gateway process restart instead of a channel restart", async () => {
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({ processRestartRequired: true }),
+      );
+      const scheduleProcessRestart = vi.fn(() => ({ ok: true }));
+      const takeEscalationBudget = allowBudget();
+      const monitor = await startAndRunCheck(manager, {
+        scheduleProcessRestart,
+        takeEscalationBudget,
+      });
+      expect(scheduleProcessRestart).toHaveBeenCalledTimes(1);
+      expect(scheduleProcessRestart).toHaveBeenCalledWith({
+        reason: "channel-health:slack:default",
+      });
+      expect(takeEscalationBudget).toHaveBeenCalledWith({
+        escalationKey: "slack:default",
+        windowMs: 60 * 60_000,
+        maxPerWindow: 10,
+        nowMs: expect.any(Number),
+      });
+      // A channel restart cannot release an in-process wedge; escalation must
+      // not fall through to stop/start.
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("applies the per-account cooldown between escalations", async () => {
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({ processRestartRequired: true }),
+      );
+      const scheduleProcessRestart = vi.fn(() => ({ ok: true }));
+      const monitor = await startAndRunCheck(manager, {
+        scheduleProcessRestart,
+        takeEscalationBudget: allowBudget(),
+      });
+      expect(scheduleProcessRestart).toHaveBeenCalledTimes(1);
+      // Default cooldown is 2 cycles; the next check inside the window must skip.
+      await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+      expect(scheduleProcessRestart).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2 * DEFAULT_CHECK_INTERVAL_MS);
+      expect(scheduleProcessRestart).toHaveBeenCalledTimes(2);
+      monitor.stop();
+    });
+
+    it("stops escalating once the flag clears", async () => {
+      const account = runningConnectedSlackAccount({ processRestartRequired: true });
+      const manager = createSlackSnapshotManager(account);
+      const scheduleProcessRestart = vi.fn(() => ({ ok: true }));
+      const monitor = await startAndRunCheck(manager, {
+        scheduleProcessRestart,
+        takeEscalationBudget: allowBudget(),
+      });
+      expect(scheduleProcessRestart).toHaveBeenCalledTimes(1);
+      account.processRestartRequired = false;
+      await vi.advanceTimersByTimeAsync(4 * DEFAULT_CHECK_INTERVAL_MS);
+      expect(scheduleProcessRestart).toHaveBeenCalledTimes(1);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("skips escalation when the persisted hourly budget is exhausted", async () => {
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({ processRestartRequired: true }),
+      );
+      const scheduleProcessRestart = vi.fn(() => ({ ok: true }));
+      // Simulate a budget row that survived earlier gateway restarts: the
+      // first two takes are allowed, everything after is capped.
+      let takes = 0;
+      const takeEscalationBudget = vi.fn(() => {
+        takes += 1;
+        return takes <= 2
+          ? { allowed: true, usedInWindow: takes }
+          : { allowed: false, usedInWindow: 2 };
+      });
+      const monitor = await startAndRunCheck(manager, {
+        scheduleProcessRestart,
+        takeEscalationBudget,
+        cooldownCycles: 0,
+        maxRestartsPerHour: 2,
+      });
+      await vi.advanceTimersByTimeAsync(10 * DEFAULT_CHECK_INTERVAL_MS);
+      expect(scheduleProcessRestart).toHaveBeenCalledTimes(2);
+      expect(takeEscalationBudget.mock.calls.length).toBeGreaterThan(2);
+      monitor.stop();
+    });
+  });
 });

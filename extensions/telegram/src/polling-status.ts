@@ -35,6 +35,21 @@ export function createTelegramPollingStatusPublisher(setStatus?: TelegramPolling
         lastError: error,
       });
     },
+    // Polling itself stays alive while a lane is wedged, so these do not touch
+    // `connected`; the flag alone routes the health monitor to escalation.
+    noteWedgedHandlerEscalation(error: string) {
+      setStatus?.({
+        mode: "polling",
+        processRestartRequired: true,
+        lastError: error,
+      });
+    },
+    noteWedgedHandlerRecovered() {
+      setStatus?.({
+        mode: "polling",
+        processRestartRequired: false,
+      });
+    },
     notePollingStop() {
       setStatus?.({
         mode: "polling",
