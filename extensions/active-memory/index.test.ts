@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  clearPluginStateStoreForTests,
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -173,6 +172,8 @@ describe("active-memory plugin", () => {
       },
     };
   });
+  let fixtureRoot = "";
+  let pluginStateDir = "";
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
   let pluginConfig: Record<string, unknown> = {
@@ -279,7 +280,7 @@ describe("active-memory plugin", () => {
         openKeyedStore: (options: OpenKeyedStoreOptions) =>
           createPluginStateKeyedStoreForTests("active-memory", {
             ...options,
-            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+            env: { ...process.env, OPENCLAW_STATE_DIR: pluginStateDir },
           }),
       },
       config: {
@@ -476,13 +477,21 @@ describe("active-memory plugin", () => {
   };
 
   beforeAll(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
+    pluginStateDir = path.join(fixtureRoot, "plugin-state");
+    stateDir = path.join(fixtureRoot, "state");
   });
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    await fs.rm(path.join(stateDir, "plugins"), { recursive: true, force: true });
-    clearPluginStateStoreForTests();
+    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    // Keep the SQLite file/schema warm, but clear the plugin's only real namespace.
+    await createPluginStateKeyedStoreForTests("active-memory", {
+      namespace: "session-toggles",
+      maxEntries: 10_000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: pluginStateDir },
+    }).clear();
     runEmbeddedAgent.mockReset();
     configFile = {
       plugins: {
@@ -594,7 +603,9 @@ describe("active-memory plugin", () => {
 
   afterAll(async () => {
     resetPluginStateStoreForTests();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
+    pluginStateDir = "";
     stateDir = "";
   });
 
