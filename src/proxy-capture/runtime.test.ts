@@ -620,6 +620,30 @@ describe("readCapturedResponseBodyBounded", () => {
     expect(arrayBufferSpy).not.toHaveBeenCalled();
   });
 
+  it("reads body via fallback when content-length is zero-padded under the cap", async () => {
+    // Padding can make the raw header wider than MAX_SAFE_INTEGER's digit
+    // count while still declaring a small under-cap length. Normalize zeroes
+    // before the width guard so capture still reads the body.
+    const body = Buffer.from("padded");
+    const arrayBufferSpy = vi
+      .fn()
+      .mockResolvedValue(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
+    const paddedLength = `${"0".repeat(20)}${body.length}`;
+    expect(paddedLength.length).toBeGreaterThan(String(Number.MAX_SAFE_INTEGER).length);
+    const mockClone = {
+      headers: new Headers({ "content-length": paddedLength }),
+      body: null,
+      arrayBuffer: arrayBufferSpy,
+    };
+    const response = {
+      clone: () => mockClone,
+    } as unknown as Response;
+    const result = await readCapturedResponseBodyBounded(response, 1024);
+    expect(result.truncated).toBe(false);
+    expect(result.buffer.equals(body)).toBe(true);
+    expect(arrayBufferSpy).toHaveBeenCalledOnce();
+  });
+
   it("reads body via fallback when content-length is within cap", async () => {
     // Body-less path with a declared length under the cap: must call
     // arrayBuffer() and return the body.

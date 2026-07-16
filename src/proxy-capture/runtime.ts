@@ -42,12 +42,15 @@ function declaredContentLengthExceedsCap(headers: Headers, maxBytes: number): bo
   if (!/^\d+$/u.test(trimmed)) {
     return false;
   }
+  // Strip leading zeroes before the digit-count guard so values like
+  // "000…001" are not treated as oversized solely due to padding width.
+  const normalized = trimmed.replace(/^0+/u, "") || "0";
   // Any digit-only value with more digits than MAX_SAFE_INTEGER is definitely
   // above the cap and cannot be safely represented as a Number.
-  if (trimmed.length > String(Number.MAX_SAFE_INTEGER).length) {
+  if (normalized.length > String(Number.MAX_SAFE_INTEGER).length) {
     return true;
   }
-  const parsed = Number.parseInt(trimmed, 10);
+  const parsed = Number.parseInt(normalized, 10);
   if (!Number.isSafeInteger(parsed)) {
     return true;
   }
