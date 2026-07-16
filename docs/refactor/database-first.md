@@ -2271,7 +2271,6 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Discord `model-picker-preferences.json`
 - Discord `command-deploy-cache.json`
 - sandbox registry shard JSON files
-- native hook relay `/tmp` bridge JSON files
 - `plugin-state/state.sqlite`
 - ad-hoc `openclaw-state.sqlite` runtime sidecars
 - `tasks/runs.sqlite`

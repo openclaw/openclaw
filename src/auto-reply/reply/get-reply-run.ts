@@ -485,7 +485,6 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
-  beforeAgentReply?: (admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>;
 };
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
@@ -1709,7 +1708,6 @@ export async function runPreparedReply(
     resetTriggered: effectiveResetTriggered,
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
-    beforeAgentReply: params.beforeAgentReply,
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

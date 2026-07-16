@@ -11,18 +11,32 @@ import type { GatewayService } from "../../daemon/service.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
-import {
-  classifyPortListener,
-  formatPortDiagnostics,
-  inspectPortUsage,
-  type PortUsage,
-} from "../../infra/ports.js";
+import { classifyPortListener, inspectPortUsage, type PortUsage } from "../../infra/ports.js";
 import {
   hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
 import { sleep } from "../../utils.js";
+import type {
+  GatewayPortHealthSnapshot,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
 import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
+import {
+  allListenersOwnedByRuntimePid,
+  hasListenerAttributionGap,
+  listenerOwnedByRuntimePid,
+} from "./restart-port-ownership.js";
+export {
+  renderGatewayPortHealthDiagnostics,
+  renderRestartDiagnostics,
+} from "./restart-health-diagnostics.js";
+export type {
+  GatewayPortHealthSnapshot,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
 export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
 
 const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
@@ -33,37 +47,6 @@ export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
 );
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
-
-export type GatewayRestartWaitOutcome =
-  | "healthy"
-  | "plugin-errors"
-  | "channel-errors"
-  | "version-mismatch"
-  | "stale-pids"
-  | "stopped-free"
-  | "timeout";
-
-export type GatewayRestartSnapshot = {
-  runtime: GatewayServiceRuntime;
-  portUsage: PortUsage;
-  healthy: boolean;
-  staleGatewayPids: number[];
-  gatewayVersion?: string | null;
-  activatedPluginErrors?: PluginHealthErrorSummary[];
-  channelProbeErrors?: Array<{ id: string; error: string }>;
-  expectedVersion?: string;
-  versionMismatch?: {
-    expected: string;
-    actual: string | null;
-  };
-  waitOutcome?: GatewayRestartWaitOutcome;
-  elapsedMs?: number;
-};
-
-export type GatewayPortHealthSnapshot = {
-  portUsage: PortUsage;
-  healthy: boolean;
-};
 
 type GatewayReachability = {
   reachable: boolean;
@@ -76,24 +59,6 @@ type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
-
-function hasListenerAttributionGap(portUsage: PortUsage): boolean {
-  // lsof/netstat may report a busy port without a PID; keep that distinct from a free port.
-  if (portUsage.status !== "busy" || portUsage.listeners.length > 0) {
-    return false;
-  }
-  if (portUsage.errors?.length) {
-    return true;
-  }
-  return portUsage.hints.some((hint) => hint.includes("process details are unavailable"));
-}
-
-function listenerOwnedByRuntimePid(params: {
-  listener: PortUsage["listeners"][number];
-  runtimePid: number;
-}): boolean {
-  return params.listener.pid === params.runtimePid || params.listener.ppid === params.runtimePid;
-}
 
 function looksLikeAuthClose(code: number | undefined, reason: string | undefined): boolean {
   if (code !== 1008) {
@@ -322,13 +287,7 @@ async function inspectGatewayPortHealth(params: {
     const expectedListenerPid = params.expectedListenerPid;
     const listenerOwnershipVerified =
       expectedListenerPid !== undefined &&
-      portUsage.listeners.length > 0 &&
-      portUsage.listeners.every((listener) =>
-        listenerOwnedByRuntimePid({
-          listener,
-          runtimePid: expectedListenerPid,
-        }),
-      );
+      allListenersOwnedByRuntimePid(portUsage.listeners, expectedListenerPid);
     try {
       healthy = (
         await confirmGatewayReachable({
@@ -715,62 +674,4 @@ export async function waitForGatewayHealthyListener(params: {
   }
 
   return snapshot;
-}
-
-function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
-  const lines: string[] = [];
-
-  if (snapshot.portUsage.status === "busy") {
-    lines.push(...formatPortDiagnostics(snapshot.portUsage));
-  } else {
-    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
-  }
-
-  if (snapshot.portUsage.errors?.length) {
-    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
-  }
-
-  return lines;
-}
-
-export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
-  const lines: string[] = [];
-  if (snapshot.versionMismatch) {
-    const actual = snapshot.versionMismatch.actual ?? "unavailable";
-    lines.push(
-      `Gateway version mismatch: expected ${snapshot.versionMismatch.expected}, running gateway reported ${actual}.`,
-    );
-  }
-  if (snapshot.activatedPluginErrors?.length) {
-    lines.push("Activated plugin load errors:");
-    for (const plugin of snapshot.activatedPluginErrors) {
-      lines.push(`- ${plugin.id}: ${plugin.error}`);
-    }
-  }
-  if (snapshot.channelProbeErrors?.length) {
-    lines.push("Channel health probe errors:");
-    for (const channel of snapshot.channelProbeErrors) {
-      lines.push(`- ${channel.id}: ${channel.error}`);
-    }
-  }
-  const runtimeSummary = [
-    snapshot.runtime.status ? `status=${snapshot.runtime.status}` : null,
-    snapshot.runtime.state ? `state=${snapshot.runtime.state}` : null,
-    snapshot.runtime.pid != null ? `pid=${snapshot.runtime.pid}` : null,
-    snapshot.runtime.lastExitStatus != null ? `lastExit=${snapshot.runtime.lastExitStatus}` : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
-
-  if (runtimeSummary) {
-    lines.push(`Service runtime: ${runtimeSummary}`);
-  }
-
-  lines.push(...renderPortUsageDiagnostics(snapshot));
-
-  return lines;
-}
-
-export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
-  return renderPortUsageDiagnostics(snapshot);
 }

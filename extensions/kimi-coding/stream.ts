@@ -8,6 +8,7 @@ import {
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isKimiK3ModelId } from "./provider-catalog.js";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -374,6 +375,22 @@ function createKimiThinkingWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (model.api === "anthropic-messages" && isKimiK3ModelId(model.id)) {
+        // Kimi Code K3 uses Claude's adaptive/max contract, not K2's budget toggle.
+        // Forcing this after onPayload prevents stale K2 settings from disabling K3 thinking.
+        payloadObj.thinking = { type: "adaptive" };
+        const outputConfig = payloadObj.output_config;
+        payloadObj.output_config =
+          outputConfig && typeof outputConfig === "object" && !Array.isArray(outputConfig)
+            ? { ...outputConfig, effort: "max" }
+            : { effort: "max" };
+        delete payloadObj.reasoning;
+        delete payloadObj.reasoning_effort;
+        delete payloadObj.reasoningEffort;
+        stripAnthropicCacheControlMarkers(payloadObj);
+        return;
+      }
+
       const normalized =
         typeof thinkingConfig === "string" ? { type: thinkingConfig } : thinkingConfig;
       payloadObj.thinking =
