@@ -1123,6 +1123,25 @@ describe("web auto-reply connection", () => {
         ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
     ).toBe(false);
     expect(
+      capture.getLastOptions()?.shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: { body: "replying with more context" },
+          quote: { id: "quoted-agent-message", body: "previous agent reply" },
+        }),
+      ),
+    ).toBe(true);
+    await expect(
+      Promise.resolve(
+        capture.getLastOptions()?.resolveDebounceDecision?.(
+          createTestWebInboundMessage({
+            payload: { body: "replying with more context" },
+            quote: { id: "quoted-agent-message", body: "previous agent reply" },
+            platform: { sendComposing, reply, sendMedia },
+          }),
+        ),
+      ),
+    ).resolves.toEqual({ action: "debounce" });
+    expect(
       await capture.getLastOptions()?.resolveDebounceDecision?.(
         createTestWebInboundMessage({
           payload: {

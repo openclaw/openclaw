@@ -327,11 +327,9 @@ export async function monitorWebChannel(
             normalized.payload.media?.url ||
             normalized.payload.mediaItems?.length,
           ),
-          allowDebounce: !(
-            normalized.payload.location ||
-            normalized.quote?.id ||
-            normalized.quote?.body
-          ),
+          // Quoted replies retain their structured context through the rich inbound
+          // debounce path, so they must follow the conversation's debounce policy.
+          allowDebounce: !normalized.payload.location,
         });
       };
       const resolveDebounceDecision = (
