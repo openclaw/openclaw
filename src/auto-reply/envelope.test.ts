@@ -79,6 +79,16 @@ describe("formatAgentEnvelope", () => {
     const body = formatAgentEnvelope({ channel: "Telegram", body: "hi" });
     expect(body).toBe("[Telegram] hi");
   });
+
+  it("formats the Unix epoch timestamp", () => {
+    const body = formatAgentEnvelope({
+      channel: "WebChat",
+      timestamp: 0,
+      envelope: { timezone: "utc" },
+      body: "hello",
+    });
+    expect(body).toBe("[WebChat Thu 1970-01-01T00:00:00Z] hello");
+  });
 });
 
 describe("formatInboundEnvelope", () => {
@@ -215,19 +225,5 @@ describe("formatInboundEnvelope", () => {
       includeElapsed: false,
       userTimezone: "Europe/Vienna",
     });
-  });
-});
-
-describe("formatEnvelopeTimestamp", () => {
-  it("formats timestamp 0 (Unix epoch) instead of rejecting it as falsy", () => {
-    withEnv({ TZ: "UTC" }, () => {
-      const result = formatEnvelopeTimestamp(0, { timezone: "utc" });
-      expect(result).toBeDefined();
-      expect(result).toContain("1970");
-    });
-  });
-
-  it("returns undefined for undefined timestamp", () => {
-    expect(formatEnvelopeTimestamp(undefined)).toBeUndefined();
   });
 });
