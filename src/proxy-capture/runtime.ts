@@ -580,10 +580,7 @@ export function captureHttpExchange(
       ? params.response.headers.get("content-length")
       : undefined,
   );
-  if (
-    declaredLength !== undefined &&
-    declaredLength > BigInt(MAX_CAPTURED_RESPONSE_BODY_BYTES)
-  ) {
+  if (declaredLength !== undefined && declaredLength > BigInt(MAX_CAPTURED_RESPONSE_BODY_BYTES)) {
     recordResponseMetadataOnly("too-large");
     return;
   }
