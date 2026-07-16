@@ -56,6 +56,22 @@ export function resolveSkillConfig(
   return entry;
 }
 
+export function isSkillEnvRequirementSatisfied(params: {
+  envName: string;
+  skillConfig?: SkillConfig;
+  primaryEnv?: string;
+}): boolean {
+  const { envName, skillConfig, primaryEnv } = params;
+  return (
+    normalizeOptionalString(process.env[envName]) !== undefined ||
+    normalizeOptionalString(skillConfig?.env?.[envName]) !== undefined ||
+    (primaryEnv === envName &&
+      (typeof skillConfig?.apiKey === "string"
+        ? normalizeOptionalString(skillConfig.apiKey) !== undefined
+        : skillConfig?.apiKey !== undefined))
+  );
+}
+
 function normalizeAllowlist(input: unknown): ReadonlySet<string> | undefined {
   if (!input) {
     return undefined;
@@ -113,11 +129,11 @@ export function shouldIncludeSkill(params: {
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
-      Boolean(
-        process.env[envName] ||
-        skillConfig?.env?.[envName] ||
-        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-      ),
+      isSkillEnvRequirementSatisfied({
+        envName,
+        skillConfig,
+        primaryEnv: entry.metadata?.primaryEnv,
+      }),
     isConfigPathTruthy: (configPath) => isSkillConfigPathTruthy(config, configPath),
   });
 }
