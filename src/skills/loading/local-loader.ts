@@ -2,10 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
+
+const skillsLogger = createSubsystemLogger("skills");
 
 type LoadedLocalSkill = {
   skill: Skill;
@@ -54,7 +57,11 @@ function loadSingleSkillDirectory(params: {
   let frontmatter: Record<string, string>;
   try {
     frontmatter = parseFrontmatter(raw);
-  } catch {
+  } catch (err) {
+    skillsLogger.warn("Failed to parse SKILL.md frontmatter.", {
+      skillFile: skillFilePath,
+      error: err instanceof Error ? err.message : "unknown error",
+    });
     return null;
   }
 
@@ -62,6 +69,9 @@ function loadSingleSkillDirectory(params: {
   const name = frontmatter.name?.trim() || fallbackName;
   const description = frontmatter.description?.trim();
   if (!name || !description) {
+    skillsLogger.debug("Skipping skill file with insufficient frontmatter.", {
+      skillFile: skillFilePath,
+    });
     return null;
   }
   const invocation = resolveSkillInvocationPolicy(frontmatter);
