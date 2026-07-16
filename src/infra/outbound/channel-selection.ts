@@ -131,7 +131,9 @@ function formatMultipleConfiguredChannelsMessage(configured: readonly string[]):
   ].join(" ");
 }
 
+const CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT = 1024;
 const loggedChannelSelectionErrors = new Set<string>();
+const channelSelectionErrorOrder: string[] = [];
 
 function logChannelSelectionError(params: {
   pluginId: string;
@@ -144,7 +146,14 @@ function logChannelSelectionError(params: {
   if (loggedChannelSelectionErrors.has(key)) {
     return;
   }
+  if (loggedChannelSelectionErrors.size >= CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT) {
+    const oldest = channelSelectionErrorOrder.shift();
+    if (oldest !== undefined) {
+      loggedChannelSelectionErrors.delete(oldest);
+    }
+  }
   loggedChannelSelectionErrors.add(key);
+  channelSelectionErrorOrder.push(key);
   defaultRuntime.error?.(
     `[channel-selection] ${params.pluginId}(${params.accountId}) ${params.operation} failed: ${message}`,
   );
