@@ -1,6 +1,6 @@
 // Covers TCP port parsing boundaries.
 import { describe, expect, it } from "vitest";
-import { parseTcpPort } from "./tcp-port.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "./tcp-port.js";
 
 describe("parseTcpPort", () => {
   it("accepts valid TCP port values", () => {
@@ -18,5 +18,14 @@ describe("parseTcpPort", () => {
     expect(parseTcpPort("100000")).toBeNull();
     expect(parseTcpPort("8080ms")).toBeNull();
     expect(parseTcpPort("1.5")).toBeNull();
+  });
+});
+
+describe("parseTcpPortFromArgs", () => {
+  it("uses the last valid port flag from repeated CLI arguments", () => {
+    expect(parseTcpPortFromArgs(["gateway", "--port", "18789", "--port", "19001"])).toBe(
+      19001,
+    );
+    expect(parseTcpPortFromArgs(["gateway", "--port=18789", "--port=19002"])).toBe(19002);
   });
 });
