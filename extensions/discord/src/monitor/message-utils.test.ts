@@ -1196,6 +1196,70 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("Forwarded component text");
   });
+
+  it("strips OpenClaw internal runtime-context wrappers from mixed user content", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: [
+          "hello from the user",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"message_id":"1527004847054913566","inbound_event_kind":"message"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+      }),
+    );
+
+    expect(text).toBe("hello from the user");
+    expect(text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+    expect(text).not.toContain("message_id");
+  });
+
+  it("returns empty text when content is only an internal runtime-context wrapper", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"chat_id":"c1","message_id":"m1"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+      }),
+    );
+
+    expect(text.trim()).toBe("");
+  });
+
+  it("strips internal runtime-context wrappers from fallback text", () => {
+    const text = resolveDiscordMessageText(asMessage({ content: "" }), {
+      fallbackText: [
+        "visible fallback",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "secret",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    });
+
+    expect(text).toBe("visible fallback");
+  });
+
+  it("strips internal runtime-context wrappers from forwarded snapshot content", () => {
+    const text = resolveDiscordMessageText(
+      asForwardedSnapshotMessage({
+        content: [
+          "forwarded hello",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"forwarded":true}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        embeds: [],
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("forwarded hello");
+    expect(text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+  });
 });
 
 describe("resolveDiscordChannelInfo", () => {

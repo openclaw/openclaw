@@ -13,6 +13,65 @@ import {
 } from "./message-forwarded.js";
 import { buildDiscordMediaPlaceholder } from "./message-media.js";
 
+// Wire-protocol markers from core internal-runtime-context. Keep in lockstep with
+// src/agents/internal-runtime-context.ts so ingress strips the same envelopes.
+const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+
+/**
+ * Strip protected OpenClaw runtime-context envelopes from ingress text.
+ * Line-anchored begin/end markers only (same delimiter contract as core).
+ * Avoids a new plugin-sdk surface export for this single channel fix.
+ */
+function stripDiscordInternalRuntimeContext(text: string): string {
+  if (!text || !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN)) {
+    return text;
+  }
+  let next = text;
+  for (;;) {
+    const start = findLineAnchoredTokenIndex(next, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0);
+    if (start === -1) {
+      return next;
+    }
+    let cursor = start + INTERNAL_RUNTIME_CONTEXT_BEGIN.length;
+    let depth = 1;
+    let finish = -1;
+    while (depth > 0) {
+      const nextBegin = findLineAnchoredTokenIndex(next, INTERNAL_RUNTIME_CONTEXT_BEGIN, cursor);
+      const nextEnd = findLineAnchoredTokenIndex(next, INTERNAL_RUNTIME_CONTEXT_END, cursor);
+      if (nextEnd === -1) {
+        break;
+      }
+      if (nextBegin !== -1 && nextBegin < nextEnd) {
+        depth += 1;
+        cursor = nextBegin + INTERNAL_RUNTIME_CONTEXT_BEGIN.length;
+        continue;
+      }
+      depth -= 1;
+      finish = nextEnd;
+      cursor = nextEnd + INTERNAL_RUNTIME_CONTEXT_END.length;
+    }
+    const before = next.slice(0, start).trimEnd();
+    if (finish === -1 || depth !== 0) {
+      return before;
+    }
+    const after = next.slice(finish + INTERNAL_RUNTIME_CONTEXT_END.length).trimStart();
+    next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
+  }
+}
+
+function findLineAnchoredTokenIndex(text: string, token: string, from: number): number {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tokenRe = new RegExp(`(?:^|\\r?\\n)${escaped}(?=\\r?\\n|$)`, "g");
+  tokenRe.lastIndex = Math.max(0, from);
+  const match = tokenRe.exec(text);
+  if (!match) {
+    return -1;
+  }
+  const prefixLength = match[0].length - token.length;
+  return match.index + prefixLength;
+}
+
 export function resolveDiscordEmbedText(
   embed?: { title?: string | null; description?: string | null } | null,
 ): string {
@@ -24,6 +83,11 @@ export function resolveDiscordEmbedText(
   return title || description || "";
 }
 
+/**
+ * Resolve Discord user-visible body text for ingress.
+ * Strip OpenClaw internal runtime-context envelopes after assembling text and
+ * resolving mentions so wrapper-only events become empty and never look user-authored.
+ */
 export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
@@ -43,7 +107,8 @@ export function resolveDiscordMessageText(
     componentText ||
     normalizeOptionalString(options?.fallbackText) ||
     "";
-  const baseText = resolveDiscordMentions(rawText, message);
+  // Mentions first so labels stay human-readable, then strip internal envelopes.
+  const baseText = stripDiscordInternalRuntimeContext(resolveDiscordMentions(rawText, message));
   if (!options?.includeForwarded) {
     return baseText;
   }
@@ -52,9 +117,10 @@ export function resolveDiscordMessageText(
     return baseText;
   }
   if (!baseText) {
-    return forwardedText;
+    // Snapshot/forward helpers strip their own bodies; keep a final pass for safety.
+    return stripDiscordInternalRuntimeContext(forwardedText);
   }
-  return `${baseText}\n${forwardedText}`;
+  return stripDiscordInternalRuntimeContext(`${baseText}\n${forwardedText}`);
 }
 
 function resolveDiscordMentions(text: string, message: Message): string {
@@ -168,5 +234,8 @@ function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): st
   });
   const embedText = resolveDiscordEmbedText(snapshot.embeds?.[0]);
   const componentText = extractDiscordComponentsV2Text(snapshot.components);
-  return content || attachmentText || embedText || componentText || "";
+  // Same ingress invariant as resolveDiscordMessageText: strip internal wrappers.
+  return stripDiscordInternalRuntimeContext(
+    content || attachmentText || embedText || componentText || "",
+  );
 }
