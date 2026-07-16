@@ -10,6 +10,7 @@ import {
   type MessagePresentation,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   buildTelegramApprovalCallbackData,
   hasTelegramApprovalCallbackPrefix,
@@ -34,6 +35,7 @@ type TelegramInlineButton = {
 export type TelegramInlineButtons = ReadonlyArray<ReadonlyArray<TelegramInlineButton>>;
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
+const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
 function toTelegramButtonStyle(
   style?: MessagePresentationButton["style"],
@@ -84,7 +86,8 @@ function toTelegramInlineButton(
 function chunkInteractiveButtons(
   buttons: readonly MessagePresentationButton[],
   rows: TelegramInlineButton[][],
-) {
+): { inputCount: number; outputCount: number } {
+  let outputCount = 0;
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
     const row = buttons
       .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
@@ -92,7 +95,19 @@ function chunkInteractiveButtons(
       .filter((button): button is TelegramInlineButton => Boolean(button));
     if (row.length > 0) {
       rows.push(row);
+      outputCount += row.length;
     }
+  }
+  return { inputCount: buttons.length, outputCount };
+}
+
+function logInlineKeyboardDrops(totalInput: number, totalOutput: number) {
+  const dropped = totalInput - totalOutput;
+  if (dropped > 0) {
+    diagLogger.warn(
+      `telegram inline keyboard: ${dropped} of ${totalInput} button(s) dropped — callback_data likely exceeds Telegram 64-byte limit.` +
+        (totalOutput === 0 ? " Message delivered as text-only." : ""),
+    );
   }
 }
 
@@ -102,16 +117,18 @@ function chunkInteractiveButtons(
 function buildTelegramInteractiveButtons(
   interactive?: InteractiveReply,
 ): TelegramInlineButtons | undefined {
+  let totalInput = 0;
   const rows = reduceInteractiveReply(
     interactive,
     [] as TelegramInlineButton[][],
     (state, block) => {
       if (block.type === "buttons") {
-        chunkInteractiveButtons(block.buttons, state);
+        const counts = chunkInteractiveButtons(block.buttons, state);
+        totalInput += counts.inputCount;
         return state;
       }
       if (block.type === "select") {
-        chunkInteractiveButtons(
+        const counts = chunkInteractiveButtons(
           block.options.map((option) => ({
             label: option.label,
             action: option.action,
@@ -119,10 +136,13 @@ function buildTelegramInteractiveButtons(
           })),
           state,
         );
+        totalInput += counts.inputCount;
       }
       return state;
     },
   );
+  const totalOutput = rows.reduce((sum, row) => sum + row.length, 0);
+  logInlineKeyboardDrops(totalInput, totalOutput);
   return rows.length > 0 ? rows : undefined;
 }
 
@@ -131,15 +151,17 @@ export function buildTelegramPresentationButtons(
   presentation?: MessagePresentation,
 ): TelegramInlineButtons | undefined {
   const rows: TelegramInlineButton[][] = [];
+  let totalInput = 0;
   for (const block of presentation?.blocks ?? []) {
     if (!isMessagePresentationInteractiveBlock(block)) {
       continue;
     }
     if (block.type === "buttons") {
-      chunkInteractiveButtons(block.buttons, rows);
+      const counts = chunkInteractiveButtons(block.buttons, rows);
+      totalInput += counts.inputCount;
       continue;
     }
-    chunkInteractiveButtons(
+    const counts = chunkInteractiveButtons(
       block.options.map((option) => ({
         label: option.label,
         action: option.action,
@@ -147,7 +169,10 @@ export function buildTelegramPresentationButtons(
       })),
       rows,
     );
+    totalInput += counts.inputCount;
   }
+  const totalOutput = rows.reduce((sum, row) => sum + row.length, 0);
+  logInlineKeyboardDrops(totalInput, totalOutput);
   return rows.length > 0 ? rows : undefined;
 }
 

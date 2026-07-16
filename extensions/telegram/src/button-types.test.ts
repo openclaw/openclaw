@@ -1,6 +1,6 @@
 // Telegram tests cover button types plugin behavior.
 import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import { buildTelegramPresentationButtons, resolveTelegramInlineButtons } from "./button-types.js";
 import { describeTelegramInteractiveButtonBehavior } from "./button-types.test-helpers.js";
@@ -9,9 +9,24 @@ import {
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
 
+const { warnMock } = vi.hoisted(() => ({
+  warnMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    warn: warnMock,
+    child: () => ({ warn: warnMock }),
+  }),
+}));
+
 describeTelegramInteractiveButtonBehavior();
 
 describe("buildTelegramInteractiveButtons callback limits", () => {
+  beforeEach(() => {
+    warnMock.mockClear();
+  });
+
   it("drops buttons whose callback payload exceeds Telegram limits", () => {
     expect(
       resolveTelegramInlineButtons({
@@ -28,6 +43,39 @@ describe("buildTelegramInteractiveButtons callback limits", () => {
         },
       }),
     ).toEqual([[{ text: "Keep", callback_data: "ok", style: undefined }]]);
+  });
+
+  it("logs a warning when callback data exceeds 64-byte limit", () => {
+    buildTelegramInteractiveButtons({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Short", value: "ok" },
+            { label: "Long", value: "x".repeat(65) },
+          ],
+        },
+      ],
+    });
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    const msg = warnMock.mock.calls[0][0];
+    expect(msg).toContain("1 of 2 button(s) dropped");
+    expect(msg).not.toContain("text-only");
+  });
+
+  it("logs a warning with text-only suffix when all buttons are dropped", () => {
+    buildTelegramInteractiveButtons({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Drop", value: "x".repeat(65) }],
+        },
+      ],
+    });
+    expect(warnMock).toHaveBeenCalledTimes(1);
+    const msg = warnMock.mock.calls[0][0];
+    expect(msg).toContain("1 of 1 button(s) dropped");
+    expect(msg).toContain("text-only");
   });
 });
 
@@ -429,5 +477,74 @@ describe("buildTelegramPresentationButtons", () => {
         ],
       }),
     ).toEqual([[{ text: "Open", url: "https://example.com/canonical", style: undefined }]]);
+  });
+
+  describe("drop diagnostics", () => {
+    beforeEach(() => {
+      warnMock.mockClear();
+    });
+
+    it("does not log when no buttons are dropped", () => {
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Short", value: "ok" }],
+          },
+        ],
+      });
+      expect(warnMock).not.toHaveBeenCalled();
+    });
+
+    it("logs a warning when callbacks exceed the 64-byte limit", () => {
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Short", value: "ok" },
+              { label: "Long", value: "x".repeat(65) },
+            ],
+          },
+        ],
+      });
+      expect(warnMock).toHaveBeenCalledTimes(1);
+      const msg = warnMock.mock.calls[0][0];
+      expect(msg).toContain("1 of 2 button(s) dropped");
+      expect(msg).not.toContain("text-only");
+    });
+
+    it("logs a warning with text-only suffix when all buttons are dropped", () => {
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Drop", value: "x".repeat(65) }],
+          },
+        ],
+      });
+      expect(warnMock).toHaveBeenCalledTimes(1);
+      const msg = warnMock.mock.calls[0][0];
+      expect(msg).toContain("1 of 1 button(s) dropped");
+      expect(msg).toContain("text-only");
+    });
+
+    it("logs a warning when all presentation buttons across blocks are dropped", () => {
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "A", value: "x".repeat(65) },
+              { label: "B", value: "x".repeat(65) },
+            ],
+          },
+        ],
+      });
+      expect(warnMock).toHaveBeenCalledTimes(1);
+      const msg = warnMock.mock.calls[0][0];
+      expect(msg).toContain("2 of 2 button(s) dropped");
+      expect(msg).toContain("text-only");
+    });
   });
 });
