@@ -58,6 +58,21 @@ export default definePluginEntry({
   name: "Codex",
   description: "Codex app-server harness and native session supervision.",
   register(api) {
+    // CLI metadata first so cli-metadata/discovery hosts can advertise the
+    // `codex` command without running full runtime registration (#107219).
+    registerCodexCliMetadata(api);
+
+    const mode = api.registrationMode;
+    // Metadata/setup loads are non-activating: descriptors only.
+    if (
+      mode === "cli-metadata" ||
+      mode === "discovery" ||
+      mode === "setup-only" ||
+      mode === "setup-runtime"
+    ) {
+      return;
+    }
+
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
@@ -106,27 +121,8 @@ export default definePluginEntry({
       },
     };
     const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
-    registerCodexCliMetadata(api);
-    const sessionCatalogControl = createCodexSessionCatalogControl({
-      getPluginConfig: resolveCurrentPluginConfig,
-      getRuntimeConfig: resolveCurrentConfig,
-    });
-    const sessionCatalogEnabled =
-      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
-    if (sessionCatalogEnabled) {
-      codexSessionCatalogRuntime.register({
-        api,
-        bindingStore,
-        control: sessionCatalogControl,
-        getRuntimeConfig: resolveCurrentConfig,
-      });
-      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
-        api.registerNodeHostCommand(command);
-      }
-    }
-    for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
-      api.registerNodeInvokePolicy(policy);
-    }
+
+    // Capability registration shared by tool-discovery and full.
     if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
       api.registerTool(
         (context) => {
@@ -147,22 +143,12 @@ export default definePluginEntry({
         { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
       );
     }
-    api.registerAgentHarness(
-      createCodexAppServerAgentHarness({
-        bindingStore,
-        sessionCatalogControl,
-        resolveConfig: resolveCurrentConfig,
-        resolvePluginConfig: resolveCurrentPluginConfig,
-        runtime: api.runtime,
-      }),
-    );
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
     api.registerWebSearchProvider(
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
-    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     api.registerTool(
       (context) =>
         createCodexThreadsTool({
@@ -180,6 +166,43 @@ export default definePluginEntry({
       risk: "high",
       tags: ["codex", "sessions"],
     });
+
+    // tool-discovery is capability-only: tools/providers, no harness/hooks/services.
+    if (mode === "tool-discovery") {
+      return;
+    }
+
+    // full: durable runtime wiring.
+    const sessionCatalogControl = createCodexSessionCatalogControl({
+      getPluginConfig: resolveCurrentPluginConfig,
+      getRuntimeConfig: resolveCurrentConfig,
+    });
+    const sessionCatalogEnabled =
+      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    if (sessionCatalogEnabled) {
+      codexSessionCatalogRuntime.register({
+        api,
+        bindingStore,
+        control: sessionCatalogControl,
+        getRuntimeConfig: resolveCurrentConfig,
+      });
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+        api.registerNodeHostCommand(command);
+      }
+    }
+    for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
+      api.registerNodeInvokePolicy(policy);
+    }
+    api.registerAgentHarness(
+      createCodexAppServerAgentHarness({
+        bindingStore,
+        sessionCatalogControl,
+        resolveConfig: resolveCurrentConfig,
+        resolvePluginConfig: resolveCurrentPluginConfig,
+        runtime: api.runtime,
+      }),
+    );
+    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
     }
