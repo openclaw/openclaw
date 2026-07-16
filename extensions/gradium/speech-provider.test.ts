@@ -53,13 +53,13 @@ describe("gradium speech provider", () => {
       delete process.env.GRADIUM_API_KEY;
       expect(
         provider.isConfigured({
-          providerConfig: { baseUrl: "https://example.com" },
+          providerConfig: { apiKey: String(true), baseUrl: "https://example.com" },
           timeoutMs: 5_000,
         }),
       ).toBe(false);
       expect(
         provider.isConfigured({
-          providerConfig: { baseUrl: "not-a-url" },
+          providerConfig: { apiKey: String(true), baseUrl: "not-a-url" },
           timeoutMs: 5_000,
         }),
       ).toBe(false);

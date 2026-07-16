@@ -39,6 +39,20 @@ function readGradiumProviderConfig(config: SpeechProviderConfig): GradiumProvide
   };
 }
 
+function isGradiumProviderConfigured(config: SpeechProviderConfig): boolean {
+  const apiKey = trimToUndefined(config.apiKey) ?? trimToUndefined(process.env.GRADIUM_API_KEY);
+  if (!apiKey) {
+    return false;
+  }
+  try {
+    normalizeGradiumBaseUrl(trimToUndefined(config.baseUrl));
+    return true;
+  } catch {
+    // Provider selection is a predicate; synthesis reports the precise URL error.
+    return false;
+  }
+}
+
 function resolveGeneratedAudioMaxBytes(req: {
   cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
 }): number {
@@ -81,17 +95,7 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeGradiumProviderConfig(rawConfig),
     parseDirectiveToken,
     listVoices: async () => GRADIUM_VOICES.map((v) => ({ id: v.id, name: v.name })),
-    isConfigured: ({ providerConfig }) => {
-      try {
-        return Boolean(
-          readGradiumProviderConfig(providerConfig).apiKey || process.env.GRADIUM_API_KEY,
-        );
-      } catch {
-        // A malformed baseUrl is not a configuration error we want to surface
-        // from a predicate; synthesis still validates before dispatch.
-        return false;
-      }
-    },
+    isConfigured: ({ providerConfig }) => isGradiumProviderConfigured(providerConfig),
     synthesize: async (req) => {
       const config = readGradiumProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
