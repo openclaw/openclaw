@@ -1054,7 +1054,7 @@ describe("buildAssistantMessage", () => {
 
   it("drops provider-returned thinking for non-reasoning models", () => {
     const response = {
-      model: "minimax-m2.7:cloud",
+      model: "minimax-m3:cloud",
       created_at: "2026-01-01T00:00:00Z",
       message: {
         role: "assistant" as const,
@@ -1067,7 +1067,7 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, {
       ...modelInfo,
-      id: "minimax-m2.7:cloud",
+      id: "minimax-m3:cloud",
       reasoning: false,
     });
     expect(result.stopReason).toBe("stop");
