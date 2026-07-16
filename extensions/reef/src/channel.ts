@@ -61,6 +61,15 @@ function listTrustedPeers(config: ReefAccount["config"]): string[] {
     : [];
 }
 
+function replyText(payload: unknown): string {
+  if (!payload || typeof payload !== "object" || !("text" in payload)) {
+    return "";
+  }
+  return typeof (payload as { text?: unknown }).text === "string"
+    ? (payload as { text: string }).text
+    : "";
+}
+
 export const reefPlugin: ChannelPlugin<ReefAccount> = {
   id: "reef",
   meta: {
@@ -240,12 +249,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             SenderIsBot: true,
           },
           deliver: async (payload) => {
-            const text =
-              payload && typeof payload === "object" && "text" in payload
-                ? typeof (payload as { text?: unknown }).text === "string"
-                  ? (payload as { text: string }).text
-                  : ""
-                : "";
+            const text = replyText(payload);
             if (text.trim()) {
               await flow.send(message.peer, text, {
                 thread: message.thread ?? message.id,
@@ -283,9 +287,65 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           }),
       });
       const receiptNotifier = new ReefReceiptNotifier(
-        ownerNotice,
-        (rejection) => {
-          trust.completeOutboundRejection(rejection.peer, rejection.id);
+        async (notice) => {
+          let resendText = "";
+          let dispatchFailure: Error | undefined;
+          await dispatchInboundDirectDmWithRuntime({
+            cfg: ctx.cfg,
+            runtime,
+            channel: "reef",
+            channelLabel: "Reef",
+            accountId: "default",
+            peer: { kind: "direct", id: notice.peer },
+            senderId: notice.peer,
+            senderAddress: `reef:${notice.peer}`,
+            recipientAddress: `reef:${ctx.account.config.handle}`,
+            conversationLabel: `Reef delivery receipt for @${notice.peer}`,
+            rawBody: notice.text,
+            bodyForAgent: notice.text,
+            messageId: `rejection-${notice.messageId}`,
+            commandAuthorized: false,
+            extraContext: {
+              ReefDeliveryRejected: true,
+              ReefEnvelopeId: notice.messageId,
+              SenderIsBot: true,
+            },
+            deliver: async (payload) => {
+              if (!notice.allowResend) {
+                return;
+              }
+              const text = replyText(payload);
+              if (text.trim()) {
+                resendText = text;
+              }
+            },
+            onRecordError: (error) =>
+              ctx.log?.error?.(`reef rejection notice record failed: ${String(error)}`),
+            onDispatchError: (error) => {
+              dispatchFailure ??= new Error("Reef rejection notice dispatch failed", {
+                cause: error,
+              });
+              ctx.log?.error?.(`reef rejection notice dispatch failed: ${String(error)}`);
+            },
+          });
+          if (dispatchFailure) {
+            throw dispatchFailure;
+          }
+          if (notice.allowResend && resendText.trim()) {
+            await flow.send(notice.peer, resendText, { replyTo: notice.messageId });
+          }
+        },
+        {
+          loadState: (peer) => trust.rejectionNoticeState(peer),
+          reserve: (rejection, noticeState) =>
+            trust.reserveOutboundRejectionNotice(rejection.peer, rejection.id, noticeState),
+          complete: (rejection, noticeState) => {
+            // Persist cooldown before deleting the reservation. A crash between
+            // those writes leaves stop-only recovery, never another resend grant.
+            if (!trust.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
+              throw new Error(`Reef rejection ${rejection.id} lost its durable delivery state`);
+            }
+          },
         },
         {
           onError: (error, receiptId) =>

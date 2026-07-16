@@ -58,4 +58,11 @@ export interface ReefDeliveryRejection {
   id: string;
   peer: string;
   category?: string;
+  /** Durable pre-notification reservation recovered after an ambiguous restart. */
+  reservedNotice?: ReefRejectionNoticeState;
+}
+
+export interface ReefRejectionNoticeState {
+  lastRejectionAt: number;
+  lastResendAt?: number;
 }

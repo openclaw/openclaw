@@ -23,7 +23,7 @@ import { processReefInboxEntriesInOrder, ReefReceiptNotifier } from "./owner-not
 import { ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
 import type { ReefTrustStore } from "./trust-store.js";
-import type { InboxEntry, ReefKeys } from "./types.js";
+import type { InboxEntry, ReefKeys, ReefRejectionNoticeState } from "./types.js";
 
 const model = "mock-2026-07-12";
 const allow: Verdict = {
@@ -79,10 +79,21 @@ function peerTrust(
 
 function trust(initial: Record<string, ReefPeerTrust>) {
   const values = new Map(Object.entries(initial));
-  const deliveries = new Map<string, { bodyHash: string; rejection?: { category?: string } }>();
+  const deliveries = new Map<
+    string,
+    {
+      bodyHash: string;
+      rejection?: {
+        category?: string;
+        notice?: ReefRejectionNoticeState;
+      };
+    }
+  >();
+  const rejectionNotices = new Map<string, ReefRejectionNoticeState>();
   return {
     values,
     deliveries,
+    rejectionNotices,
     store: {
       get: (peer: string) => values.get(peer),
       recordOutboundDelivery: (peer: string, id: string, bodyHash: string) => {
@@ -106,19 +117,62 @@ function trust(initial: Record<string, ReefPeerTrust>) {
         if (current?.bodyHash !== bodyHash) {
           return false;
         }
+        if (current.rejection) {
+          return true;
+        }
         deliveries.set(key, {
           ...current,
           rejection: category ? { category } : {},
         });
         return true;
       },
-      completeOutboundRejection: (peer: string, id: string) => {
+      reserveOutboundRejectionNotice: (
+        peer: string,
+        id: string,
+        noticeState: ReefRejectionNoticeState,
+      ) => {
         const key = `${peer}:${id}`;
-        if (!deliveries.get(key)?.rejection) {
+        const current = deliveries.get(key);
+        if (!current?.rejection) {
+          throw new Error(`missing rejection ${id}`);
+        }
+        if (current.rejection.notice) {
+          return { kind: "existing" as const, state: current.rejection.notice };
+        }
+        deliveries.set(key, {
+          ...current,
+          rejection: {
+            ...current.rejection,
+            notice: noticeState,
+          },
+        });
+        return { kind: "reserved" as const };
+      },
+      completeOutboundRejection: (
+        peer: string,
+        id: string,
+        noticeState: ReefRejectionNoticeState,
+      ) => {
+        const key = `${peer}:${id}`;
+        const previous = rejectionNotices.get(peer);
+        rejectionNotices.set(peer, {
+          lastRejectionAt: Math.max(previous?.lastRejectionAt ?? 0, noticeState.lastRejectionAt),
+          ...(previous?.lastResendAt !== undefined || noticeState.lastResendAt !== undefined
+            ? {
+                lastResendAt: Math.max(previous?.lastResendAt ?? 0, noticeState.lastResendAt ?? 0),
+              }
+            : {}),
+        });
+        const current = deliveries.get(key);
+        if (!current) {
+          return true;
+        }
+        if (!current?.rejection?.notice) {
           return false;
         }
         return deliveries.delete(key);
       },
+      rejectionNoticeState: (peer: string) => rejectionNotices.get(peer),
     } as unknown as ReefTrustStore,
   };
 }
@@ -497,8 +551,15 @@ describe("ReefMessageFlow delivery receipts", () => {
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
-    const receiptNotifier = new ReefReceiptNotifier(onOwnerNotice, (rejection) => {
-      trusted.store.completeOutboundRejection(rejection.peer, rejection.id);
+    const receiptNotifier = new ReefReceiptNotifier(onOwnerNotice, {
+      loadState: (peer) => trusted.store.rejectionNoticeState(peer),
+      reserve: (rejection, noticeState) =>
+        trusted.store.reserveOutboundRejectionNotice(rejection.peer, rejection.id, noticeState),
+      complete: (rejection, noticeState) => {
+        if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
+          throw new Error(`missing rejection ${rejection.id}`);
+        }
+      },
     });
     const id = await flow.send("alice", "ordinary coordination");
     const receipt = signReceipt(
@@ -556,10 +617,14 @@ describe("ReefMessageFlow delivery receipts", () => {
     expect(onOwnerNotice).toHaveBeenCalledWith({
       text: expect.stringMatching(/rejected by the peer's inbound guard.*at most once/),
       peer: "alice",
-      contextKey: `reef:delivery-rejected:${id}`,
-      wakeAgent: true,
+      messageId: id,
+      allowResend: true,
     });
-    expect(trusted.deliveries.size).toBe(0);
+    expect(trusted.deliveries.has(`alice:${id}`)).toBe(false);
+    expect(trusted.rejectionNotices.get("alice")).toEqual({
+      lastRejectionAt: expect.any(Number),
+      lastResendAt: expect.any(Number),
+    });
   });
 
   it("does not surface a signed rejection without matching outbound state", async () => {

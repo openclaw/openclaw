@@ -10,7 +10,7 @@ import {
   type ReefAutonomy,
   type ReefPeerTrust,
 } from "./friend-types.js";
-import type { ReefDeliveryRejection, RelayFriend } from "./types.js";
+import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } from "./types.js";
 
 export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
@@ -21,8 +21,17 @@ const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const ReefOutboundRequestSchema = z.record(z.uuid(), z.number().int().nonnegative());
+const ReefRejectionNoticeStateSchema = z
+  .object({
+    lastRejectionAt: z.number().int().nonnegative(),
+    lastResendAt: z.number().int().nonnegative().optional(),
+  })
+  .strict();
 const ReefOutboundRejectionSchema = z
-  .object({ category: z.string().min(1).max(64).optional() })
+  .object({
+    category: z.string().min(1).max(64).optional(),
+    notice: ReefRejectionNoticeStateSchema.optional(),
+  })
   .strict();
 const ReefOutboundDeliverySchema = z
   .object({
@@ -30,12 +39,12 @@ const ReefOutboundDeliverySchema = z
     rejection: ReefOutboundRejectionSchema.optional(),
   })
   .strict();
-
 const ReefPeerStateSchema = z
   .object({
     revision: z.number().int().nonnegative(),
     trust: ReefPeerTrustSchema.optional(),
     outboundRequests: ReefOutboundRequestSchema.optional(),
+    rejectionNotice: ReefRejectionNoticeStateSchema.optional(),
   })
   .strict();
 
@@ -89,7 +98,7 @@ function openStores(openStore: PluginRuntime["state"]["openSyncKeyedStore"]): Re
       overflowPolicy: "reject-new",
     }),
     // The relay retains undelivered envelopes for 30 days. Matching expiry
-    // prevents an older signed receipt from authorizing a fresh agent wake.
+    // prevents an older signed receipt from authorizing a fresh resend turn.
     deliveries: openStore<z.infer<typeof ReefOutboundDeliverySchema>>({
       namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
       maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
@@ -213,6 +222,7 @@ export class ReefTrustStore {
           safetyNumberChanged: false,
           approvedAt,
         },
+        ...(current.rejectionNotice ? { rejectionNotice: current.rejectionNotice } : {}),
       };
     });
   }
@@ -317,7 +327,7 @@ export class ReefTrustStore {
   outboundDelivery(
     peer: string,
     id: string,
-  ): { bodyHash: string; rejection?: { category?: string } } | undefined {
+  ): z.infer<typeof ReefOutboundDeliverySchema> | undefined {
     const value = this.stores.deliveries.lookup(this.#deliveryKey(peer, id));
     return value === undefined ? undefined : ReefOutboundDeliverySchema.parse(value);
   }
@@ -385,21 +395,84 @@ export class ReefTrustStore {
             id,
             peer,
             ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
+            ...(delivery.rejection.notice ? { reservedNotice: delivery.rejection.notice } : {}),
           },
         ];
       })
       .toSorted((left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1));
   }
 
-  completeOutboundRejection(peer: string, id: string): boolean {
+  reserveOutboundRejectionNotice(
+    peer: string,
+    id: string,
+    state: ReefRejectionNoticeState,
+  ): { kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState } {
+    const update = this.stores.deliveries.update;
+    if (!update) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
+    }
+    const noticeState = ReefRejectionNoticeStateSchema.parse(state);
+    let outcome:
+      | { kind: "reserved" }
+      | { kind: "existing"; state: ReefRejectionNoticeState }
+      | undefined;
+    const updated = update(this.#deliveryKey(peer, id), (value) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(value);
+      if (!parsed.success || !parsed.data.rejection) {
+        return undefined;
+      }
+      if (parsed.data.rejection.notice) {
+        outcome = { kind: "existing", state: parsed.data.rejection.notice };
+        return parsed.data;
+      }
+      outcome = { kind: "reserved" };
+      return {
+        ...parsed.data,
+        rejection: {
+          ...parsed.data.rejection,
+          notice: noticeState,
+        },
+      };
+    });
+    if (!updated || !outcome) {
+      throw new Error(`Reef rejection ${id} lost its durable delivery state`);
+    }
+    return outcome;
+  }
+
+  completeOutboundRejection(peer: string, id: string, state: ReefRejectionNoticeState): boolean {
+    const noticeState = ReefRejectionNoticeStateSchema.parse(state);
+    this.#requireUpdate()(this.#key(peer), (value) => {
+      const current = this.#parseState(value);
+      const previous = current.rejectionNotice;
+      const hasResendAt =
+        previous?.lastResendAt !== undefined || noticeState.lastResendAt !== undefined;
+      return {
+        ...current,
+        rejectionNotice: {
+          lastRejectionAt: Math.max(previous?.lastRejectionAt ?? 0, noticeState.lastRejectionAt),
+          ...(hasResendAt
+            ? {
+                lastResendAt: Math.max(previous?.lastResendAt ?? 0, noticeState.lastResendAt ?? 0),
+              }
+            : {}),
+        },
+      };
+    });
+    const key = this.#deliveryKey(peer, id);
     const deleteIf = this.stores.deliveries.deleteIf;
     if (!deleteIf) {
       throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
     }
-    return deleteIf(this.#deliveryKey(peer, id), (current) => {
-      const parsed = ReefOutboundDeliverySchema.safeParse(current);
-      return parsed.success && parsed.data.rejection !== undefined;
+    const deleted = deleteIf(key, (value) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(value);
+      return parsed.success && parsed.data.rejection?.notice !== undefined;
     });
+    return deleted || this.stores.deliveries.lookup(key) === undefined;
+  }
+
+  rejectionNoticeState(peer: string): ReefRejectionNoticeState | undefined {
+    return this.snapshot(peer).rejectionNotice;
   }
 
   #key(peer: string): string {

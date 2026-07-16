@@ -1,5 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { InboxEntry, ReefDeliveryRejection } from "./types.js";
+import type { InboxEntry, ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
 type ResolveAgentRouteParams = Parameters<
   PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
@@ -12,8 +12,15 @@ export interface ReefOwnerNotice {
   wakeAgent?: boolean;
 }
 
-const MAX_REJECTION_PEERS = 1_024;
-const REJECTION_WAKE_COOLDOWN_MS = 15 * 60 * 1_000;
+export interface ReefRejectionNotice {
+  text: string;
+  peer: string;
+  messageId: string;
+  allowResend: boolean;
+}
+
+const MAX_REJECTION_TRACKED = 1_024;
+const REJECTION_RESEND_COOLDOWN_MS = 15 * 60 * 1_000;
 const REJECTION_NOTICE_RETRY_MS = 1_000;
 
 interface ReefReceiptNotifierOptions {
@@ -22,120 +29,193 @@ interface ReefReceiptNotifierOptions {
   onError?: (error: unknown, receiptId: string) => void;
 }
 
-interface ReefPeerNoticeState {
-  lastRejectionAt?: number;
-  lastWakeAt?: number;
-  retry?: ReefNoticeRetry;
+export interface ReefRejectionNoticeStore {
+  loadState(peer: string): ReefRejectionNoticeState | undefined;
+  reserve(
+    rejection: ReefDeliveryRejection,
+    state: ReefRejectionNoticeState,
+  ): { kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState };
+  complete(rejection: ReefDeliveryRejection, state: ReefRejectionNoticeState): void;
 }
 
-type ReefNoticeRetry =
-  | {
-      kind: "notify";
-      generation: symbol;
-      rejection: ReefDeliveryRejection;
-      notice: ReefOwnerNotice;
-      covered: ReefDeliveryRejection[];
-      cleanup: ReefDeliveryRejection[];
-    }
-  | {
-      kind: "complete";
-      generation: symbol;
-      pending: ReefDeliveryRejection[];
-    };
+interface ReefPeerNoticeState {
+  lastRejectionAt?: number;
+  lastResendAt?: number;
+  resendBlocked?: boolean;
+}
+
+interface ReefNoticePlan {
+  notice: ReefRejectionNotice;
+  state: ReefRejectionNoticeState;
+}
 
 function scheduleNoticeRetry(task: () => Promise<void>, delayMs: number): void {
   setTimeout(() => void task(), delayMs).unref();
 }
 
 export class ReefReceiptNotifier {
-  private readonly noticed = new Set<string>();
+  private readonly completed = new Set<string>();
+  private readonly inFlight = new Set<string>();
   private readonly peerStates = new Map<string, ReefPeerNoticeState>();
   private readonly peerQueues = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly notify: (notice: ReefOwnerNotice) => Promise<void>,
-    private readonly complete: (rejection: ReefDeliveryRejection) => void,
+    private readonly notify: (notice: ReefRejectionNotice) => Promise<void>,
+    private readonly store: ReefRejectionNoticeStore,
     private readonly options: ReefReceiptNotifierOptions = {},
   ) {}
 
   async notifyRejections(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
+    this.seedRecoveredStates(rejections);
     for (const rejection of rejections) {
-      await this.runForPeer(rejection.peer, () => this.notifyRejection(rejection));
+      await this.runForPeer(rejection.peer, () => this.notifyRejection(rejection, true));
     }
   }
 
-  private async notifyRejection(rejection: ReefDeliveryRejection): Promise<void> {
-    if (this.noticed.has(rejection.id)) {
+  private seedRecoveredStates(rejections: readonly ReefDeliveryRejection[]): void {
+    const recoveredByPeer = new Map<string, ReefDeliveryRejection[]>();
+    for (const rejection of rejections) {
+      if (!rejection.reservedNotice) {
+        continue;
+      }
+      const recovered = recoveredByPeer.get(rejection.peer) ?? [];
+      recovered.push(rejection);
+      recoveredByPeer.set(rejection.peer, recovered);
+    }
+    for (const [peer, recovered] of recoveredByPeer) {
+      let state: ReefPeerNoticeState;
+      try {
+        state = this.touchPeerState(peer);
+      } catch (error) {
+        this.reportError(error, recovered[0]!.id);
+        // Unknown durable state may contain a newer rejection. Keep this
+        // notifier stop-only for the peer until cache eviction or restart.
+        state = { resendBlocked: true };
+      }
+      for (const rejection of recovered) {
+        this.applyState(
+          state,
+          this.mergeStates(this.snapshotState(state), rejection.reservedNotice!),
+        );
+      }
+      this.rememberPeerState(peer, state);
+    }
+  }
+
+  private async notifyRejection(
+    rejection: ReefDeliveryRejection,
+    allowRetry: boolean,
+  ): Promise<void> {
+    const key = this.rejectionKey(rejection);
+    if (this.completed.has(key) || this.inFlight.has(key)) {
       return;
     }
-    // Flow already atomically bound this rejection to a durable outbound record.
-    // This secondary bound prevents a duplicate callback from waking twice.
-    this.noticed.add(rejection.id);
-    if (this.noticed.size > MAX_REJECTION_PEERS) {
-      const oldest = this.noticed.values().next().value;
-      if (oldest !== undefined) {
-        this.noticed.delete(oldest);
+    this.inFlight.add(key);
+
+    let peerState: ReefPeerNoticeState;
+    try {
+      peerState = this.touchPeerState(rejection.peer);
+    } catch (error) {
+      this.reportError(error, rejection.id);
+      this.inFlight.delete(key);
+      return;
+    }
+
+    const previousState = this.snapshotState(peerState);
+    let plan = this.planNotice(
+      rejection,
+      previousState,
+      rejection.reservedNotice,
+      peerState.resendBlocked === true,
+    );
+    try {
+      const reservation = this.store.reserve(rejection, plan.state);
+      if (reservation.kind === "existing") {
+        plan = this.planNotice(
+          rejection,
+          previousState,
+          reservation.state,
+          peerState.resendBlocked === true,
+        );
       }
+    } catch (error) {
+      this.reportError(error, rejection.id);
+      this.scheduleNotificationRetry(rejection, allowRetry);
+      return;
+    }
+
+    if (!(await this.notifyOnce(plan.notice, rejection.id))) {
+      // Dispatch may have recorded or consumed the turn before failing. Keep the
+      // reservation so every retry is conservative stop-only guidance.
+      this.applyState(peerState, plan.state);
+      this.scheduleNotificationRetry(rejection, allowRetry);
+      return;
+    }
+
+    this.applyState(peerState, plan.state);
+    this.completeNotice(rejection, plan.state, allowRetry);
+  }
+
+  private planNotice(
+    rejection: ReefDeliveryRejection,
+    previous: ReefRejectionNoticeState | undefined,
+    reserved: ReefRejectionNoticeState | undefined,
+    resendBlocked: boolean,
+  ): ReefNoticePlan {
+    if (reserved) {
+      const state = this.mergeStates(previous, reserved);
+      return {
+        notice: this.buildNotice(rejection, false),
+        state,
+      };
     }
     const now = this.now();
-    const state = this.touchPeerState(rejection.peer);
-    const previousRetry = state.retry;
-    state.retry = undefined;
-    const covered =
-      previousRetry?.kind === "notify"
-        ? this.uniqueRejections([...previousRetry.covered, previousRetry.rejection])
-        : [];
-    const cleanup =
-      previousRetry?.kind === "notify"
-        ? previousRetry.cleanup
-        : previousRetry?.kind === "complete"
-          ? previousRetry.pending
-          : [];
-    const repeatedRejection =
-      state.lastRejectionAt !== undefined &&
-      now - state.lastRejectionAt < REJECTION_WAKE_COOLDOWN_MS;
-    const wakeAgent =
-      state.lastWakeAt === undefined || now - state.lastWakeAt >= REJECTION_WAKE_COOLDOWN_MS;
-    state.lastRejectionAt = now;
-    const guardRejected = rejection.category === "guard_deny";
-    const notice: ReefOwnerNotice = {
-      text: guardRejected
-        ? repeatedRejection
-          ? `Another Reef message to @${rejection.peer} was rejected by the peer's inbound guard (message ${rejection.id}). Stop automatic retries and wait for owner guidance.`
-          : `Your Reef message to @${rejection.peer} was rejected by the peer's inbound guard (message ${rejection.id}). Rephrase it at most once and resend if still appropriate; do not retry unchanged text. If that retry is also rejected, stop and wait for owner guidance.`
-        : repeatedRejection
-          ? `Another Reef message to @${rejection.peer} was rejected before delivery (message ${rejection.id}). Stop automatic retries and wait for owner guidance.`
-          : `Your Reef message to @${rejection.peer} was rejected before delivery (message ${rejection.id}).`,
-      peer: rejection.peer,
-      contextKey: `reef:delivery-rejected:${rejection.id}`,
-      wakeAgent,
+    const rejectionCooldownActive =
+      previous !== undefined && now - previous.lastRejectionAt < REJECTION_RESEND_COOLDOWN_MS;
+    const resendCooldownActive =
+      previous?.lastResendAt !== undefined &&
+      now - previous.lastResendAt < REJECTION_RESEND_COOLDOWN_MS;
+    const allowResend =
+      !resendBlocked &&
+      rejection.category === "guard_deny" &&
+      !rejectionCooldownActive &&
+      !resendCooldownActive;
+    return {
+      notice: this.buildNotice(rejection, allowResend),
+      state: {
+        lastRejectionAt: Math.max(previous?.lastRejectionAt ?? 0, now),
+        ...(allowResend
+          ? { lastResendAt: now }
+          : previous?.lastResendAt !== undefined
+            ? { lastResendAt: previous.lastResendAt }
+            : {}),
+      },
     };
-    if (!(await this.notifyOnce(notice, rejection.id))) {
-      this.scheduleNotifyRetry(rejection.peer, state, notice, rejection, covered, cleanup);
-      return;
-    }
-    this.commitWake(state, notice);
-    const pending = this.completeRejections([...cleanup, ...covered, rejection]);
-    if (pending.length > 0) {
-      this.scheduleCompletionRetry(rejection.peer, state, pending);
-    }
   }
 
   private now(): number {
-    return this.options.now?.() ?? performance.now();
+    return this.options.now?.() ?? Date.now();
   }
 
   private touchPeerState(peer: string): ReefPeerNoticeState {
-    const state = this.peerStates.get(peer) ?? {};
+    let state = this.peerStates.get(peer);
+    if (!state) {
+      const persisted = this.store.loadState(peer);
+      state = persisted ? { ...persisted } : {};
+    }
+    this.rememberPeerState(peer, state);
+    return state;
+  }
+
+  private rememberPeerState(peer: string, state: ReefPeerNoticeState): void {
     this.peerStates.delete(peer);
     this.peerStates.set(peer, state);
-    if (this.peerStates.size > MAX_REJECTION_PEERS) {
+    if (this.peerStates.size > MAX_REJECTION_TRACKED) {
       const oldest = this.peerStates.keys().next().value;
       if (oldest !== undefined) {
         this.peerStates.delete(oldest);
       }
     }
-    return state;
   }
 
   private runForPeer(peer: string, task: () => Promise<void>): Promise<void> {
@@ -149,15 +229,7 @@ export class ReefReceiptNotifier {
     });
   }
 
-  private commitWake(state: ReefPeerNoticeState, notice: ReefOwnerNotice): void {
-    if (notice.wakeAgent) {
-      // The cooldown starts only after the event and heartbeat are accepted.
-      // Failed notice delivery must leave the next receipt eligible to wake.
-      state.lastWakeAt = this.now();
-    }
-  }
-
-  private async notifyOnce(notice: ReefOwnerNotice, receiptId: string): Promise<boolean> {
+  private async notifyOnce(notice: ReefRejectionNotice, receiptId: string): Promise<boolean> {
     try {
       await this.notify(notice);
       return true;
@@ -167,115 +239,114 @@ export class ReefReceiptNotifier {
     }
   }
 
-  private completeRejections(
-    rejections: readonly ReefDeliveryRejection[],
-  ): ReefDeliveryRejection[] {
-    const pending: ReefDeliveryRejection[] = [];
-    for (const rejection of this.uniqueRejections(rejections)) {
-      try {
-        this.complete(rejection);
-      } catch (error) {
-        this.reportError(error, rejection.id);
-        pending.push(rejection);
-      }
-    }
-    return pending;
-  }
-
-  private uniqueRejections(rejections: readonly ReefDeliveryRejection[]): ReefDeliveryRejection[] {
-    const unique = new Map<string, ReefDeliveryRejection>();
-    for (const rejection of rejections) {
-      unique.set(`${rejection.peer}\n${rejection.id}`, rejection);
-    }
-    return [...unique.values()];
-  }
-
-  private scheduleNotifyRetry(
-    peer: string,
-    state: ReefPeerNoticeState,
-    notice: ReefOwnerNotice,
+  private completeNotice(
     rejection: ReefDeliveryRejection,
-    covered: ReefDeliveryRejection[],
-    cleanup: ReefDeliveryRejection[],
+    state: ReefRejectionNoticeState,
+    allowRetry: boolean,
   ): void {
-    const retryGeneration = Symbol(rejection.id);
-    state.retry = {
-      kind: "notify",
-      generation: retryGeneration,
-      rejection,
-      notice,
-      covered,
-      cleanup,
-    };
-    const schedule = this.options.schedule ?? scheduleNoticeRetry;
     try {
-      schedule(
-        () =>
-          this.runForPeer(peer, async () => {
-            if (
-              this.peerStates.get(peer) !== state ||
-              state.retry?.generation !== retryGeneration
-            ) {
-              return;
-            }
-            state.retry = undefined;
-            const remainingCleanup = this.completeRejections(cleanup);
-            if (!(await this.notifyOnce(notice, rejection.id))) {
-              this.noticed.delete(rejection.id);
-              for (const coveredRejection of covered) {
-                this.noticed.delete(coveredRejection.id);
-              }
-              return;
-            }
-            this.commitWake(state, notice);
-            const pending = this.completeRejections([...remainingCleanup, ...covered, rejection]);
-            if (pending.length > 0) {
-              this.scheduleCompletionRetry(peer, state, pending);
-            }
-          }),
-        REJECTION_NOTICE_RETRY_MS,
-      );
-    } catch (scheduleError) {
-      if (state.retry?.generation === retryGeneration) {
-        state.retry = undefined;
+      this.store.complete(rejection, state);
+      this.markCompleted(rejection);
+    } catch (error) {
+      this.reportError(error, rejection.id);
+      if (!allowRetry) {
+        this.inFlight.delete(this.rejectionKey(rejection));
+        return;
       }
-      this.noticed.delete(rejection.id);
-      for (const coveredRejection of covered) {
-        this.noticed.delete(coveredRejection.id);
-      }
-      this.reportError(scheduleError, rejection.id);
+      this.scheduleRetry(rejection, () => this.completeNotice(rejection, state, false));
     }
   }
 
-  private scheduleCompletionRetry(
-    peer: string,
-    state: ReefPeerNoticeState,
-    pending: ReefDeliveryRejection[],
-  ): void {
-    const retryGeneration = Symbol("reef-notice-completion");
-    state.retry = { kind: "complete", generation: retryGeneration, pending };
+  private scheduleNotificationRetry(rejection: ReefDeliveryRejection, allowRetry: boolean): void {
+    if (!allowRetry) {
+      this.inFlight.delete(this.rejectionKey(rejection));
+      return;
+    }
+    this.scheduleRetry(rejection, async () => {
+      this.inFlight.delete(this.rejectionKey(rejection));
+      await this.notifyRejection(rejection, false);
+    });
+  }
+
+  private scheduleRetry(rejection: ReefDeliveryRejection, task: () => Promise<void> | void): void {
     const schedule = this.options.schedule ?? scheduleNoticeRetry;
     try {
       schedule(
         () =>
-          this.runForPeer(peer, async () => {
-            if (
-              this.peerStates.get(peer) !== state ||
-              state.retry?.generation !== retryGeneration
-            ) {
-              return;
-            }
-            state.retry = undefined;
-            this.completeRejections(pending);
+          this.runForPeer(rejection.peer, async () => {
+            await task();
           }),
         REJECTION_NOTICE_RETRY_MS,
       );
-    } catch (scheduleError) {
-      if (state.retry?.generation === retryGeneration) {
-        state.retry = undefined;
-      }
-      this.reportError(scheduleError, pending[0]?.id ?? "unknown");
+    } catch (error) {
+      this.inFlight.delete(this.rejectionKey(rejection));
+      this.reportError(error, rejection.id);
     }
+  }
+
+  private markCompleted(rejection: ReefDeliveryRejection): void {
+    const key = this.rejectionKey(rejection);
+    this.inFlight.delete(key);
+    this.completed.delete(key);
+    this.completed.add(key);
+    if (this.completed.size > MAX_REJECTION_TRACKED) {
+      const oldest = this.completed.values().next().value;
+      if (oldest !== undefined) {
+        this.completed.delete(oldest);
+      }
+    }
+  }
+
+  private snapshotState(state: ReefPeerNoticeState): ReefRejectionNoticeState | undefined {
+    if (state.lastRejectionAt === undefined) {
+      return undefined;
+    }
+    return {
+      lastRejectionAt: state.lastRejectionAt,
+      ...(state.lastResendAt !== undefined ? { lastResendAt: state.lastResendAt } : {}),
+    };
+  }
+
+  private applyState(target: ReefPeerNoticeState, state: ReefRejectionNoticeState): void {
+    target.lastRejectionAt = state.lastRejectionAt;
+    if (state.lastResendAt === undefined) {
+      delete target.lastResendAt;
+    } else {
+      target.lastResendAt = state.lastResendAt;
+    }
+  }
+
+  private mergeStates(
+    current: ReefRejectionNoticeState | undefined,
+    persisted: ReefRejectionNoticeState,
+  ): ReefRejectionNoticeState {
+    const hasResendAt = current?.lastResendAt !== undefined || persisted.lastResendAt !== undefined;
+    return {
+      lastRejectionAt: Math.max(current?.lastRejectionAt ?? 0, persisted.lastRejectionAt),
+      ...(hasResendAt
+        ? {
+            lastResendAt: Math.max(current?.lastResendAt ?? 0, persisted.lastResendAt ?? 0),
+          }
+        : {}),
+    };
+  }
+
+  private buildNotice(rejection: ReefDeliveryRejection, allowResend: boolean): ReefRejectionNotice {
+    const guardRejected = rejection.category === "guard_deny";
+    return {
+      text: guardRejected
+        ? allowResend
+          ? `Your Reef message to @${rejection.peer} was rejected by the peer's inbound guard (message ${rejection.id}). Rephrase it at most once and resend if still appropriate; do not retry unchanged text. If that retry is also rejected, stop and wait for owner guidance.`
+          : `Another Reef message to @${rejection.peer} was rejected by the peer's inbound guard (message ${rejection.id}). Stop automatic retries and wait for owner guidance.`
+        : `Your Reef message to @${rejection.peer} was rejected before delivery (message ${rejection.id}). Stop automatic retries and wait for owner guidance.`,
+      peer: rejection.peer,
+      messageId: rejection.id,
+      allowResend,
+    };
+  }
+
+  private rejectionKey(rejection: ReefDeliveryRejection): string {
+    return `${rejection.peer}\n${rejection.id}`;
   }
 
   private reportError(error: unknown, receiptId: string): void {

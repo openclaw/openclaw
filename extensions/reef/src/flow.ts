@@ -72,7 +72,7 @@ export class ReefMessageFlow {
       reviewGate: (request) => this.options.reviews.request(request),
     });
     // Persist the exact peer/id/body binding before the relay can return a
-    // receipt. Only a matching atomic consume may later authorize a wake.
+    // receipt. Only a matching durable record may later authorize a resend turn.
     this.options.trust.recordOutboundDelivery(peer, id, hashMessageBody(body));
     await this.options.transport.sendEnvelope(peer, result.envelope);
     return id;
@@ -144,6 +144,7 @@ export class ReefMessageFlow {
       id: receipt.id,
       peer: entry.peer,
       ...(pending.category ? { category: pending.category } : {}),
+      ...(pending.notice ? { reservedNotice: pending.notice } : {}),
     };
   }
 
