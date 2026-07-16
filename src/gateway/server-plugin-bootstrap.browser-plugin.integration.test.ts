@@ -63,6 +63,7 @@ function createGatewaySurfacePluginFixture(): { rootDir: string; cleanup: () => 
           [`${id}-secrets`]: {
             source: "exec",
             command: "${node}",
+            args: ["./secret-provider.js"],
             providerAlias: `${id}-secrets`,
           },
         },
@@ -71,6 +72,7 @@ function createGatewaySurfacePluginFixture(): { rootDir: string; cleanup: () => 
       "utf8",
     );
     fs.writeFileSync(path.join(pluginDir, "index.js"), SURFACE_PLUGIN_ENTRY(id), "utf8");
+    fs.writeFileSync(path.join(pluginDir, "secret-provider.js"), "process.stdout.write('{}');\n");
   }
   return {
     rootDir,
