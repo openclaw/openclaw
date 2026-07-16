@@ -249,6 +249,23 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
       channels: { demo: { accounts: { alt: { allowFrom: [] } } } },
     });
   });
+
+  it("writes an empty channel override when removing the last effective entry", async () => {
+    const parsedConfig: Record<string, unknown> = {};
+
+    await adapter.applyConfigEdit?.({
+      cfg: {} as OpenClawConfig,
+      parsedConfig,
+      accountId: "default",
+      scope: "dm",
+      action: "remove",
+      entry: "dm-owner",
+    });
+
+    expect(parsedConfig).toMatchObject({
+      channels: { demo: { allowFrom: [] } },
+    });
+  });
 });
 
 describe("buildLegacyDmAccountAllowlistAdapter", () => {

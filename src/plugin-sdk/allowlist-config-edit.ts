@@ -336,9 +336,10 @@ function applyAccountScopedAllowlistConfigEdit(params: {
   }
 
   if (changed) {
-    // Keep an explicit empty account override after removing the last entry.
-    // Deleting the key would reactivate the inherited channel-level allowlist.
-    if (next.length === 0 && resolvedTarget.writeTarget.kind !== "account") {
+    // Effective and account-scoped lists need an explicit empty override after their last removal.
+    // Deleting the key would reactivate entries inherited from another config surface.
+    const emptyNeedsOverride = !hasStoredList || resolvedTarget.writeTarget.kind === "account";
+    if (next.length === 0 && !emptyNeedsOverride) {
       deleteNestedValue(resolvedTarget.target, params.paths.writePath);
     } else {
       setNestedValue(resolvedTarget.target, params.paths.writePath, next);
