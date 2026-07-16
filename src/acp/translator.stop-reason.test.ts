@@ -181,6 +181,120 @@ describe("acp translator stop reason mapping", () => {
     }
   });
 
+  it("records a resend-aware interruption notice when an unaccepted prompt is rejected after grace", async () => {
+    vi.useFakeTimers();
+    try {
+      let runId: string | undefined;
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "chat.send") {
+          runId = params?.idempotencyKey as string | undefined;
+          return new Promise<never>(() => {});
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const connection = createAcpConnection();
+      const sessionUpdate = connection["__sessionUpdateMock"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(connection, createAcpGateway(request), { sessionStore });
+      const promptPromise = promptAgent(agent, "session-1");
+      void promptPromise.catch(() => {});
+
+      await vi.waitFor(() => {
+        expect(runId).toBeTypeOf("string");
+      });
+      sessionUpdate.mockClear();
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+      const interruption = sessionUpdate.mock.calls
+        .map((call) => call[0])
+        .find(
+          (payload) =>
+            payload &&
+            typeof payload === "object" &&
+            (payload as { update?: { sessionUpdate?: string } }).update?.sessionUpdate ===
+              "agent_message_chunk",
+        ) as
+        | {
+            sessionId?: string;
+            update?: { sessionUpdate?: string; content?: { type?: string; text?: string } };
+          }
+        | undefined;
+      expect(interruption?.sessionId).toBe("session-1");
+      expect(interruption?.update?.content?.type).toBe("text");
+      expect(interruption?.update?.content?.text).toContain(
+        "Gateway disconnected: 1006: connection lost",
+      );
+      expect(interruption?.update?.content?.text).toContain("please resend");
+      expect(interruption?.update?.content?.text).not.toContain("do not resend");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a non-resend interruption notice when an accepted prompt is rejected after grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return {};
+        }
+        if (method === "agent.wait") {
+          return { status: "timeout" };
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const connection = createAcpConnection();
+      const sessionUpdate = connection["__sessionUpdateMock"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(connection, createAcpGateway(request), { sessionStore });
+      const promptPromise = promptAgent(agent, "session-1");
+      void promptPromise.catch(() => {});
+
+      await Promise.resolve();
+      await Promise.resolve();
+      sessionUpdate.mockClear();
+
+      // Accepted but never reconnects: deadline recheck keeps reject when still disconnected.
+      agent.handleGatewayDisconnect("1006: connection lost");
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+      const interruption = sessionUpdate.mock.calls
+        .map((call) => call[0])
+        .find(
+          (payload) =>
+            payload &&
+            typeof payload === "object" &&
+            (payload as { update?: { sessionUpdate?: string } }).update?.sessionUpdate ===
+              "agent_message_chunk",
+        ) as
+        | {
+            update?: { content?: { text?: string } };
+          }
+        | undefined;
+      expect(interruption?.update?.content?.text).toContain(
+        "Gateway disconnected: 1006: connection lost",
+      );
+      expect(interruption?.update?.content?.text).toContain("do not resend");
+      expect(interruption?.update?.content?.text).not.toContain("please resend");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps pre-ack send disconnects inside the reconnect grace window", async () => {
     vi.useFakeTimers();
     try {

@@ -721,7 +721,7 @@ export class AcpGatewayAgent implements Agent {
           if (status === "error") {
             const current = pending();
             if (current) {
-              this.rejectPendingPrompt(
+              await this.rejectPendingPrompt(
                 current,
                 new Error("Chat failed before the run started; try again."),
               );
@@ -1299,10 +1299,40 @@ export class AcpGatewayAgent implements Agent {
     this.disconnectTimer.unref?.();
   }
 
-  private rejectPendingPrompt(pending: PendingPrompt, error: Error): void {
+  private formatPendingPromptRejectionNotice(pending: PendingPrompt, error: Error): string {
+    const reason = error.message.trim() || "turn interrupted";
+    // Only invite a resend when the gateway never accepted the prompt. A
+    // post-accept "please resend" would double-send turns that already landed.
+    if (pending.sendAccepted) {
+      return `Interrupted: ${reason}. Your message was already accepted; do not resend — reconnect or start a new turn.`;
+    }
+    return `Interrupted: ${reason}. Your message was not accepted; please resend.`;
+  }
+
+  private async rejectPendingPrompt(pending: PendingPrompt, error: Error): Promise<void> {
     const currentPending = this.getPendingPrompt(pending.sessionId, pending.idempotencyKey);
     if (currentPending !== pending) {
       return;
+    }
+    // Record one user-visible interruption before reject so grace-expired
+    // turns are not silent loss in the session stream / replay ledger.
+    try {
+      await this.sessionUpdates.emit({
+        sessionId: pending.sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: this.formatPendingPromptRejectionNotice(pending, error),
+          },
+        },
+      });
+    } catch (err) {
+      this.log(`pending prompt rejection notice failed for ${pending.sessionId}: ${String(err)}`);
     }
     this.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
       denyActive: true,
@@ -1394,7 +1424,7 @@ export class AcpGatewayAgent implements Agent {
       this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
       if (deadlineExpired) {
         if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
-          this.rejectPendingPrompt(
+          await this.rejectPendingPrompt(
             pending,
             new Error(`Gateway disconnected: ${disconnectContext.reason}`),
           );
@@ -1424,7 +1454,7 @@ export class AcpGatewayAgent implements Agent {
         if (!currentDisconnectContext) {
           return false;
         }
-        this.rejectPendingPrompt(
+        await this.rejectPendingPrompt(
           currentPending,
           new Error(`Gateway disconnected: ${currentDisconnectContext.reason}`),
         );
