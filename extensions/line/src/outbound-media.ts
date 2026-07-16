@@ -95,15 +95,14 @@ export async function resolveLineOutboundMedia(
     };
   }
 
+  let parsed: URL | undefined;
   try {
-    const parsed = new URL(trimmedUrl);
-    if (parsed.protocol !== "https:") {
-      throw new Error("LINE outbound media URL must use HTTPS");
-    }
-  } catch (e) {
-    if (e instanceof Error && e.message.startsWith("LINE outbound")) {
-      throw e;
-    }
+    parsed = new URL(trimmedUrl);
+  } catch {
+    // Local paths reach the generic public-HTTPS error below.
+  }
+  if (parsed) {
+    throw new Error("LINE outbound media URL must use HTTPS");
   }
   throw new Error("LINE outbound media currently requires a public HTTPS URL");
 }
