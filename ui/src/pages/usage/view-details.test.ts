@@ -100,8 +100,16 @@ function mount(
 
 describe("renderSessionDetailPanel filtered usage", () => {
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
-    const previousTimeZone = process.env.TZ;
-    process.env.TZ = "Asia/Shanghai";
+    const localOffsetMs = 8 * 60 * 60 * 1000;
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function () {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function () {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
+    const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function () {
+      return new Date(this.getTime() + localOffsetMs).getUTCDate();
+    });
     try {
       const points = [
         point({ timestamp: Date.parse("2026-05-13T18:00:00.000Z") }),
@@ -120,11 +128,9 @@ describe("renderSessionDetailPanel filtered usage", () => {
       expect(local.querySelectorAll(".ts-bar")).toHaveLength(0);
       expect(local.querySelector(".usage-empty-block")).not.toBeNull();
     } finally {
-      if (previousTimeZone === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = previousTimeZone;
-      }
+      localYear.mockRestore();
+      localMonth.mockRestore();
+      localDay.mockRestore();
     }
   });
 
