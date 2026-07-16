@@ -89,12 +89,16 @@ export function resolveProviderXHighThinking(
 /** Resolves a provider thinking profile from active plugins or bundled policy surface. */
 export function resolveProviderThinkingProfile(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
+  options?: { allowPublicArtifactFallback?: boolean },
 ) {
   const activeProfile = resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(
     params.context,
   );
   if (activeProfile !== undefined) {
     return activeProfile;
+  }
+  if (options?.allowPublicArtifactFallback === false) {
+    return undefined;
   }
   return resolveProviderPublicPolicySurface(params.provider)?.resolveThinkingProfile?.(
     params.context,

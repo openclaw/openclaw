@@ -137,6 +137,7 @@ function registerStatusCodexHarness(): void {
   const harness: AgentHarness = {
     id: "codex",
     label: "Codex",
+    autoSelection: { providerIds: [...codexProviders] },
     supports: (ctx) =>
       codexProviders.has(ctx.provider.trim().toLowerCase())
         ? { supported: true, priority: 100 }
@@ -1528,6 +1529,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("shows DeepSeek balance summaries in /status output", async () => {
+    registerStatusCodexHarness();
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: Date.now(),
       providers: [
