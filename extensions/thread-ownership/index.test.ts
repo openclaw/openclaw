@@ -1,4 +1,5 @@
 // Thread Ownership tests cover index plugin behavior.
+import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
@@ -49,6 +50,28 @@ describe("thread-ownership plugin", () => {
       throw new Error(`expected ${label}`);
     }
     return call[0];
+  }
+
+  async function withLocalOwnershipServer<T>(
+    handler: http.RequestListener,
+    run: (url: string) => Promise<T>,
+  ): Promise<T> {
+    const server = http.createServer(handler);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP server address");
+      }
+      return await run(`http://127.0.0.1:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   }
 
   beforeEach(() => {
@@ -280,6 +303,34 @@ describe("thread-ownership plugin", () => {
       expect(result).toBeUndefined();
       const warningMessage = requireFirstLogMessage(api.logger.warn, "ownership check warning log");
       expect(warningMessage).toContain("ownership check failed");
+    });
+
+    it("fails open when a conflict response body exceeds the ownership error cap", async () => {
+      vi.unstubAllGlobals();
+      await withLocalOwnershipServer(
+        (_req, res) => {
+          res.writeHead(409, { "content-type": "application/json" });
+          res.end(JSON.stringify({ owner: "oversized-owner".repeat(8192) }));
+        },
+        async (forwarderUrl) => {
+          process.env.SLACK_FORWARDER_URL = forwarderUrl;
+          const result = await sendSlackThreadMessage();
+          const infoMessage = vi.mocked(api.logger.info).mock.calls[0]?.[0] ?? "";
+          const warningMessage = vi.mocked(api.logger.warn).mock.calls[0]?.[0] ?? "";
+          console.log(
+            `[thread-ownership oversized conflict proof] result=${JSON.stringify(
+              result,
+            )} info_bytes=${Buffer.byteLength(String(infoMessage), "utf8")} warn=${String(
+              warningMessage,
+            )}`,
+          );
+
+          expect(result).toBeUndefined();
+          expect(api.logger.info).not.toHaveBeenCalled();
+          expect(warningMessage).toContain("ownership check failed");
+          expect(warningMessage).toContain("exceeds");
+        },
+      );
     });
   });
 
