@@ -9,9 +9,8 @@ import {
 } from "openclaw/plugin-sdk/widget-html";
 import { Type } from "typebox";
 import { resolveDiscordAccount } from "../accounts.js";
-import { buildDiscordActivityCustomId } from "../component-custom-id.js";
-import { Button, Row } from "../internal/discord.js";
-import { sendMessageDiscord } from "../send.js";
+import { sendDiscordComponentMessage } from "../send.components.js";
+import { buildDiscordPresentationComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId as resolveDiscordTargetChannelId } from "../target-parsing.js";
 import type { DiscordActivitiesRuntime } from "./runtime.js";
 
@@ -22,15 +21,6 @@ const DiscordWidgetParameters = Type.Object({
   title: Type.String({ minLength: 1, maxLength: 80 }),
   button_label: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
-
-class DiscordWidgetLaunchButton extends Button {
-  constructor(
-    readonly customId: string,
-    readonly label: string,
-  ) {
-    super();
-  }
-}
 
 function currentConfig(context: OpenClawPluginToolContext, runtime: DiscordActivitiesRuntime) {
   return (
@@ -64,7 +54,7 @@ function buildDiscordWidgetDocument(title: string, html: string): string {
 
 type DiscordWidgetToolDeps = {
   runtime: DiscordActivitiesRuntime;
-  sendMessage?: typeof sendMessageDiscord;
+  sendComponentMessage?: typeof sendDiscordComponentMessage;
   now?: () => number;
 };
 
@@ -120,24 +110,43 @@ export function createDiscordWidgetTool(
         accountId: account.accountId,
         createdAt: (deps.now ?? Date.now)(),
       });
-      let result: Awaited<ReturnType<typeof sendMessageDiscord>>;
+      let result: Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
+      let deliveredResult: Awaited<ReturnType<typeof sendDiscordComponentMessage>> | undefined;
       try {
-        result = await (deps.sendMessage ?? sendMessageDiscord)(`channel:${channelId}`, title, {
-          cfg: cfg as OpenClawConfig,
-          accountId: account.accountId,
-          components: [
-            new Row([
-              new DiscordWidgetLaunchButton(
-                buildDiscordActivityCustomId(widgetId),
-                buttonLabel.trim(),
-              ),
-            ]),
+        const components = buildDiscordPresentationComponents({
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: buttonLabel.trim(),
+                  action: { type: "web-app", widgetId },
+                },
+              ],
+            },
           ],
-          allowedMentions: { parse: [] },
         });
+        if (!components) {
+          throw new Error("Discord widget launch button could not be rendered");
+        }
+        result = await (deps.sendComponentMessage ?? sendDiscordComponentMessage)(
+          `channel:${channelId}`,
+          { ...components, text: title },
+          {
+            cfg: cfg as OpenClawConfig,
+            accountId: account.accountId,
+            allowedMentions: { parse: [] },
+            onDeliveryResult: (deliveryResult) => {
+              deliveredResult = deliveryResult;
+            },
+          },
+        );
       } catch (error) {
-        await deps.runtime.store.deleteWidget(widgetId);
-        throw error;
+        if (!deliveredResult) {
+          await deps.runtime.store.deleteWidget(widgetId);
+          throw error;
+        }
+        result = deliveredResult;
       }
       return jsonResult({ widgetId, messageId: result.messageId, channelId: result.channelId });
     },
