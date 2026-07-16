@@ -62,6 +62,19 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
   prepareWorkspaceStateDeletion: workspaceStateMocks.prepareWorkspaceStateDeletion,
 }));
 
+const agentDeleteSafetyMocks = vi.hoisted(() => ({
+  shouldRemoveEmptyAgentParentDir: vi.fn(() => true),
+}));
+
+vi.mock("../agents/agent-delete-safety.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/agent-delete-safety.js")>(
+    "../agents/agent-delete-safety.js",
+  );
+  return {
+    ...actual,
+    shouldRemoveEmptyAgentParentDir: agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir,
+  };
+});
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
 
 const runtime = createTestRuntime();
@@ -152,6 +165,8 @@ describe("agents delete command", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReset();
+    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReturnValue(true);
   });
 
   it("routes deletion through the Gateway when reachable", async () => {
@@ -366,6 +381,77 @@ describe("agents delete command", () => {
         path.basename(opsAgentDir),
       );
       expect(trashedPaths).toContain(expectedAgentDir);
+    });
+  });
+
+  it("trashes the parent agent state directory after removing subdirectories", async () => {
+    await withStateDirEnv("openclaw-agents-delete-parent-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {},
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      const expectedParentDir = path.join(stateDir, "agents", "ops");
+      expect(trashedPaths).toContain(expectedParentDir);
+      // The canonical parent is only eligible when containment and emptiness
+      // checks pass.
+      expect(agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir).toHaveBeenCalledWith({
+        agentDir: path.join(stateDir, "agents", "ops", "agent"),
+        agentId: "ops",
+        stateDir,
+      });
+    });
+  });
+
+  it("preserves a custom agentDir parent on agent delete", async () => {
+    agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir.mockReturnValue(false);
+    await withStateDirEnv("openclaw-agents-delete-custom-agentdir-", async ({ stateDir }) => {
+      const customAgentDir = "/custom/path/ops";
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            {
+              id: "ops",
+              agentDir: customAgentDir,
+              workspace: path.join(stateDir, "workspace-ops"),
+            },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {},
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      // The parent of a custom agentDir must never be trashed.
+      expect(trashedPaths).not.toContain("/custom/path");
+      const canonicalParent = path.join(stateDir, "agents", "ops");
+      expect(trashedPaths).not.toContain(canonicalParent);
+      // Helper must have been consulted with the custom agentDir.
+      expect(agentDeleteSafetyMocks.shouldRemoveEmptyAgentParentDir).toHaveBeenCalledWith({
+        agentDir: customAgentDir,
+        agentId: "ops",
+        stateDir,
+      });
     });
   });
 

@@ -16,7 +16,10 @@ import {
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createAgent } from "../../agents/agent-create.js";
-import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
+import {
+  findOverlappingWorkspaceAgentIds,
+  removeEmptyAgentParentDir,
+} from "../../agents/agent-delete-safety.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
@@ -46,7 +49,11 @@ import {
   isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
-import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
+import { resolveStateDir } from "../../config/paths.js";
+import {
+  purgeAgentSessionStoreEntries,
+  resolveSessionTranscriptsDirForAgent,
+} from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
@@ -657,6 +664,24 @@ export const agentsHandlers: GatewayRequestHandlers = {
         [deleteResult.agentDir, deleteResult.sessionsDir].map(removeAgentPath),
       );
       stateOutcomes.forEach(recordOutcome);
+
+      // After removing agent/ and sessions/ subdirectories, clean up the
+      // now-empty canonical parent directory so no stale agent folder
+      // remains on disk. Only the default <stateDir>/agents/<agentId> root
+      // is eligible; custom agentDir paths are preserved to avoid data loss.
+      if (
+        removeEmptyAgentParentDir({
+          agentDir: deleteResult.agentDir,
+          agentId,
+          stateDir: resolveStateDir(),
+        })
+      ) {
+        try {
+          await movePathToTrash(path.dirname(deleteResult.agentDir));
+        } catch {
+          // Best-effort: parent may have leftover files from other tooling.
+        }
+      }
     }
 
     respond(

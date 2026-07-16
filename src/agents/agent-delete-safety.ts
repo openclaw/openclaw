@@ -29,6 +29,35 @@ function workspacePathsOverlap(left: string, right: string): boolean {
   );
 }
 
+/**
+ * Returns true when the canonical per-agent state parent directory should be
+ * removed after deleting the agent/ and sessions/ subdirectories.
+ *
+ * Only the default {@code <stateDir>/agents/<agentId>} root is eligible.
+ * Custom agentDir values that resolve outside this root are preserved to
+ * avoid removing unrelated user files. The directory must also be empty after
+ * subdirectories have been trashed; a non-empty parent is left in place.
+ */
+export function shouldRemoveEmptyAgentParentDir(params: {
+  agentDir: string;
+  agentId: string;
+  stateDir: string;
+}): boolean {
+  const canonicalRoot = path.resolve(params.stateDir, "agents", params.agentId);
+  const actualParent = path.dirname(params.agentDir);
+  // Only the canonical per-agent root may be removed; custom or configured
+  // agentDir paths may have a parent containing unrelated user files.
+  if (canonicalRoot !== actualParent) {
+    return false;
+  }
+  // Guard against deleting a directory with unexpected remaining content.
+  try {
+    return fs.readdirSync(canonicalRoot).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Lists other agents whose workspaces overlap a candidate delete target. */
 export function findOverlappingWorkspaceAgentIds(
   cfg: OpenClawConfig,
