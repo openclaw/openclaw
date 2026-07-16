@@ -1,5 +1,5 @@
 // Qa Lab tests cover lab server plugin behavior.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -606,9 +606,13 @@ describe("qa-lab server", () => {
     const repoRoot = await createQaLabRepoRootFixture();
     const evidenceDir = path.join(repoRoot, ".artifacts", "qa-e2e", "utf8-preview");
     const previewBytes = 12 * 1024;
+    const shortReadBytes = 1024;
+    const readBoundaryPrefix = "a".repeat(shortReadBytes - 1);
+    const readBoundaryText = `${readBoundaryPrefix}😀tail`;
     const splitPrefix = "a".repeat(previewBytes - 1);
     const completePrefix = "a".repeat(previewBytes - Buffer.byteLength("😀"));
     await mkdir(evidenceDir, { recursive: true });
+    await writeFile(path.join(evidenceDir, "short-read.log"), readBoundaryText, "utf8");
     await writeFile(path.join(evidenceDir, "split.log"), `${splitPrefix}😀tail`, "utf8");
     await writeFile(path.join(evidenceDir, "complete.log"), `${completePrefix}😀tail`, "utf8");
     await writeFile(
@@ -641,6 +645,7 @@ describe("qa-lab server", () => {
                 },
                 packageSource: { kind: "source-checkout" },
                 artifacts: [
+                  { kind: "log", path: "short-read.log", source: "vitest" },
                   { kind: "log", path: "split.log", source: "vitest" },
                   { kind: "log", path: "complete.log", source: "vitest" },
                 ],
@@ -654,6 +659,27 @@ describe("qa-lab server", () => {
       )}\n`,
       "utf8",
     );
+
+    const realOpen = fs.open;
+    const readPositions = new Map<string, number[]>();
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      const realRead = handle.read.bind(handle);
+      const artifactName = path.basename(filePath.toString());
+      Object.defineProperty(handle, "read", {
+        configurable: true,
+        value: async (buffer: Buffer, offset: number, length: number, position: number) => {
+          const positions = readPositions.get(artifactName) ?? [];
+          positions.push(position);
+          readPositions.set(artifactName, positions);
+          return await realRead(buffer, offset, Math.min(length, shortReadBytes), position);
+        },
+      });
+      return handle;
+    });
+    cleanups.push(async () => {
+      openSpy.mockRestore();
+    });
 
     const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
@@ -672,10 +698,14 @@ describe("qa-lab server", () => {
       evidence: { entries: Array<{ artifacts: Array<{ path: string; preview: string | null }> }> };
     };
     const artifacts = payload.evidence.entries[0]?.artifacts ?? [];
+    const shortRead = artifacts.find((artifact) => artifact.path.endsWith("short-read.log"));
     const split = artifacts.find((artifact) => artifact.path.endsWith("split.log"));
     const complete = artifacts.find((artifact) => artifact.path.endsWith("complete.log"));
+    expect(shortRead?.preview).toBe(readBoundaryText);
     expect(split?.preview).toBe(splitPrefix);
     expect(complete?.preview).toBe(`${completePrefix}😀`);
+    expect(readPositions.get("short-read.log")?.slice(0, 2)).toEqual([0, shortReadBytes]);
+    expect(readPositions.get("short-read.log")?.at(-1)).toBe(Buffer.byteLength(readBoundaryText));
     expect(JSON.stringify(payload)).not.toContain("�");
   });
 
