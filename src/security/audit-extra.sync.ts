@@ -77,6 +77,24 @@ function looksLikeEnvRef(value: string): boolean {
   return v.startsWith("${") && v.endsWith("}");
 }
 
+function isExternalEnvRef(value: string, cfg: OpenClawConfig): boolean {
+  if (!looksLikeEnvRef(value)) {
+    return false;
+  }
+  const name = value.trim().slice(2, -1).trim();
+  if (!name) {
+    return false;
+  }
+  // OpenClaw supports both `env.vars.NAME` and the documented direct `env.NAME`
+  // form. A secret authored through either is persisted in openclaw.json, so it
+  // must keep the stored-secret finding rather than be treated as external.
+  const directEnvValue = cfg.env?.[name];
+  if (typeof directEnvValue === "string") {
+    return false;
+  }
+  return cfg.env?.vars?.[name] === undefined;
+}
+
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   if (bind !== "loopback") {
@@ -578,10 +596,15 @@ export function collectSyncedFolderFindings(params: {
   return findings;
 }
 
-export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+export function collectSecretsInConfigFindings(
+  cfg: OpenClawConfig,
+  includedSourceConfig?: OpenClawConfig,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  if (password && !looksLikeEnvRef(password)) {
+  const sourcePassword =
+    normalizeOptionalString(includedSourceConfig?.gateway?.auth?.password) ?? password;
+  if (password && !isExternalEnvRef(sourcePassword, cfg)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -594,7 +617,9 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   }
 
   const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
+  const sourceHooksToken =
+    normalizeOptionalString(includedSourceConfig?.hooks?.token) ?? hooksToken;
+  if (cfg.hooks?.enabled === true && hooksToken && !isExternalEnvRef(sourceHooksToken, cfg)) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",

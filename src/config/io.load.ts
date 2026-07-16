@@ -57,11 +57,9 @@ export function loadConfigFromContext(
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = deps.json5.parse(raw);
-    const readResolution = resolveConfigForRead(
-      resolveConfigIncludesForRead(parsed, configPath, deps),
-      deps.env,
-      deps.lowerPrecedenceEnv,
-    );
+    const resolvedConfig = resolveConfigIncludesForRead(parsed, configPath, deps);
+    const readResolution = resolveConfigForRead(resolvedConfig, deps.env, deps.lowerPrecedenceEnv);
+    const includedSourceConfig = coerceConfig(resolvedConfig);
     const migration = context.migrateAndStripShippedPluginInstallConfigRecords(
       readResolution.resolvedConfigRaw,
       { persist: false, rootConfigRaw: parsed },
@@ -85,6 +83,7 @@ export function loadConfigFromContext(
           exists: true,
           raw: snapshotRaw,
           parsed: snapshotParsed,
+          includedSourceConfig,
           sourceConfig: {},
           valid: true,
           runtimeConfig: {},
@@ -121,6 +120,7 @@ export function loadConfigFromContext(
           exists: true,
           raw: snapshotRaw,
           parsed: snapshotParsed,
+          includedSourceConfig,
           sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: false,
           runtimeConfig: coerceConfig(effectiveConfigRaw),
@@ -177,6 +177,7 @@ export function loadConfigFromContext(
         exists: true,
         raw: snapshotRaw,
         parsed: snapshotParsed,
+        includedSourceConfig,
         sourceConfig: coerceConfig(effectiveConfigRaw),
         valid: true,
         runtimeConfig: cfg,

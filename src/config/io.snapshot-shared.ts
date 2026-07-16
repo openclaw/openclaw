@@ -8,6 +8,7 @@ export function createConfigFileSnapshot(params: {
   exists: boolean;
   raw: string | null;
   parsed: unknown;
+  includedSourceConfig?: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   valid: boolean;
   runtimeConfig: OpenClawConfig;
@@ -19,7 +20,7 @@ export function createConfigFileSnapshot(params: {
 }): ConfigFileSnapshot {
   const sourceConfig = asResolvedSourceConfig(params.sourceConfig);
   const runtimeConfig = asRuntimeConfig(params.runtimeConfig);
-  return {
+  const snapshot: ConfigFileSnapshot = {
     path: params.path,
     exists: params.exists,
     raw: params.raw,
@@ -35,6 +36,10 @@ export function createConfigFileSnapshot(params: {
     warnings: params.warnings,
     legacyIssues: params.legacyIssues,
   };
+  if (params.includedSourceConfig !== undefined) {
+    snapshot.includedSourceConfig = params.includedSourceConfig;
+  }
+  return snapshot;
 }
 
 export async function finalizeReadConfigSnapshotInternalResult(
