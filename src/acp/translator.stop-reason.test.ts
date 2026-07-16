@@ -227,6 +227,73 @@ describe("acp translator stop reason mapping", () => {
     }
   });
 
+  it("separates a disconnect interruption from partial assistant output", async () => {
+    vi.useFakeTimers();
+    try {
+      const eventLedger = createInMemoryAcpEventLedger();
+      await eventLedger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: "/tmp",
+        complete: true,
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return {};
+        }
+        if (method === "agent.wait") {
+          throw new Error("gateway closed (1006): connection lost");
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const { agent, sessionId, sessionUpdate } = createSessionAgentHarness(request, {
+        eventLedger,
+      });
+      const promptPromise = promptAgent(agent, sessionId);
+      void promptPromise.catch(() => {});
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("chat.send", expect.any(Object), { timeoutMs: null });
+      });
+      const runId = requireFirstRequestIdempotencyKey(request);
+      await agent.handleGatewayEvent(
+        createChatEvent({
+          runId,
+          sessionKey: "agent:main:main",
+          state: "delta",
+          message: { content: [{ type: "text", text: "partial response" }] },
+        }),
+      );
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+      const liveText = sessionUpdatePayloads(sessionUpdate, "agent_message_chunk").map((entry) =>
+        entry.update.content.type === "text" ? entry.update.content.text : "",
+      );
+      expect(liveText).toHaveLength(2);
+      expect(liveText.join("")).toContain(
+        "partial response\n\n[OpenClaw interruption] Gateway disconnected",
+      );
+
+      const replay = await eventLedger.readReplay({
+        sessionId,
+        sessionKey: "agent:main:main",
+      });
+      const replayText = replay.events
+        .filter((event) => event.update.sessionUpdate === "agent_message_chunk")
+        .map((event) =>
+          event.update.sessionUpdate === "agent_message_chunk" &&
+          event.update.content.type === "text"
+            ? event.update.content.text
+            : "",
+        );
+      expect(replayText).toEqual(liveText);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps pre-ack send disconnects inside the reconnect grace window", async () => {
     vi.useFakeTimers();
     try {

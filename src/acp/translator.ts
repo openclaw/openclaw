@@ -1336,6 +1336,7 @@ export class AcpGatewayAgent implements Agent {
         this.clearDisconnectTimer();
       }
       try {
+        const interruptionPrefix = (pending.sentTextLength ?? 0) > 0 ? "\n\n" : "";
         await this.sessionUpdates.emit({
           sessionId: pending.sessionId,
           sessionKey: pending.sessionKey,
@@ -1344,7 +1345,10 @@ export class AcpGatewayAgent implements Agent {
           record: true,
           update: {
             sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: `[OpenClaw interruption] ${error.message}` },
+            content: {
+              type: "text",
+              text: `${interruptionPrefix}[OpenClaw interruption] ${error.message}`,
+            },
           },
         });
       } catch (err) {
