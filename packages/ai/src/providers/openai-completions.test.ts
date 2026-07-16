@@ -667,6 +667,26 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedMaxTokens).toBe(32_000);
   });
 
+  it("uses max_tokens for Z.AI requests", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        maxTokens: 1_024,
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ max_tokens: 1_024 });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("max_completion_tokens");
+  });
+
   it("forwards simple stop sequences to request params", async () => {
     let capturedStop: unknown;
     const stream = streamSimpleOpenAICompletions(createModel(32_000), context, {
