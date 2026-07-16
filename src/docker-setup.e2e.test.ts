@@ -851,11 +851,14 @@ describe("scripts/docker/setup.sh", () => {
     // Verify that a root-user chown step runs before setup.
     const log = await readDockerLog(activeSandbox);
     const chownIdx = log.indexOf("--user root");
+    const safePathIdx = log.indexOf(`${prestartSafePath}; export PATH`);
+    const stateRepairIdx = log.indexOf(noFollowOwnershipRepair("/home/node/.openclaw"));
     const onboardIdx = log.indexOf("onboard");
     expect(chownIdx).toBeGreaterThanOrEqual(0);
+    expect(safePathIdx).toBeGreaterThan(chownIdx);
+    expect(stateRepairIdx).toBeGreaterThan(safePathIdx);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
-    expect(log).toContain(`${prestartSafePath}; export PATH`);
     expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw"));
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
