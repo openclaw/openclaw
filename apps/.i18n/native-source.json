@@ -36347,7 +36347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 545,
+      "line": 588,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift",
       "source": "z",
       "surface": "apple",
