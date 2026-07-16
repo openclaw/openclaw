@@ -3743,4 +3743,20 @@ describe("ci workflow guards", () => {
       'call.getFile().getRelativePath() = "extensions/codex/src/app-server/transport-websocket.ts"',
     );
   });
+
+  it("bounds actionlint release download curls with connection and transfer deadlines", () => {
+    const source = readFileSync(".github/workflows/workflow-sanity.yml", "utf8");
+    const actionlintCurls =
+      source.match(
+        /curl --retry[^\n]*-o[^\n]*\$\{archive\}[^\n]*|curl --retry[^\n]*-o checksums\.txt[^\n]*/g,
+      ) ?? [];
+
+    expect(actionlintCurls.length).toBeGreaterThanOrEqual(2);
+    for (const line of actionlintCurls) {
+      expect(line).toContain("--retry");
+      expect(line).toContain("--retry-all-errors");
+      expect(line).toContain("--connect-timeout");
+      expect(line).toContain("--max-time");
+    }
+  });
 });

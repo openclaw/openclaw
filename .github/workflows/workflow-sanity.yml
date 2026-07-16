@@ -185,9 +185,10 @@ jobs:
           base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
           # GitHub release downloads occasionally return transient 5xx responses.
           # Retry all curl errors here so workflow-sanity does not fail closed on
-          # a one-off release edge outage.
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          # a one-off release edge outage.  --connect-timeout and --max-time
+          # prevent individual retries from blocking forever on hung connections.
+          curl --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -sSfL -o "${archive}" "${base_url}/${archive}"
+          curl --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           grep " ${archive}\$" checksums.txt | sha256sum -c -
           tar -xzf "${archive}" actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
