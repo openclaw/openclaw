@@ -35,6 +35,7 @@ describe("buildBotLogsResult", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
