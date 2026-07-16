@@ -1553,8 +1553,31 @@ describe("openai-completions stop-reason tool-call guard", () => {
     });
     const result = await stream.result();
 
-    expect(result.content[0]).toEqual({ type: "text", text: "Use <" });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: "Use <",
+      textSignature: JSON.stringify({ v: 1, id: "chatcmpl-test", phase: "commentary" }),
+    });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
+  });
+
+  it("tags text before a tool-call completion as commentary", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("I'll inspect the workspace first."),
+      makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: "I'll inspect the workspace first.",
+      textSignature: JSON.stringify({ v: 1, id: "chatcmpl-test", phase: "commentary" }),
+    });
   });
 
   it("strips toolCall blocks when finish_reason is length but tool_calls were accumulated", async () => {

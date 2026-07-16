@@ -852,6 +852,12 @@ export function handleMessageUpdate(
   // unphased deltas out of durable block replies until that phase is known.
   const isPhasePendingAnthropicText =
     evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
+  // Chat Completions reports tool use only after its preamble has streamed.
+  // Buffer unphased deltas until the transport can classify text_end safely.
+  const isPhasePendingOpenAiCompletionsText =
+    evtType !== "text_end" &&
+    !deliveryPhase &&
+    isOpenAiCompletionsAssistantMessage(partialAssistant);
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -928,7 +934,12 @@ export function handleMessageUpdate(
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply && !isPhasePendingAnthropicText) {
+    if (
+      !skipLiveStream &&
+      !shouldUsePhaseAwareBlockReply &&
+      !isPhasePendingAnthropicText &&
+      !isPhasePendingOpenAiCompletionsText
+    ) {
       appendBlockReplyChunk(ctx, chunk);
     }
   }

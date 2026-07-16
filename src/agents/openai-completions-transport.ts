@@ -805,6 +805,23 @@ async function processOpenAICompletionsStream(
   if (hasToolCalls && output.stopReason !== "toolUse") {
     output.content = output.content.filter((block) => block.type !== "toolCall");
   }
+  if (output.stopReason === "toolUse") {
+    const textSignature = JSON.stringify({
+      v: 1,
+      id:
+        output.responseId ??
+        output.content.find((block) => block.type === "toolCall")?.id ??
+        "chat-completion",
+      phase: "commentary",
+    });
+    // Chat Completions exposes the tool boundary only at completion. Preserve
+    // that result on pre-tool text so delivery keeps it out of final replies.
+    for (const block of output.content) {
+      if (block.type === "text" && block.text.trim().length > 0 && !block.textSignature) {
+        block.textSignature = textSignature;
+      }
+    }
+  }
 }
 
 type CompletionsReasoningDelta =

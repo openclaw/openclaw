@@ -520,6 +520,28 @@ export const streamOpenAICompletions: StreamFunction<
 
       flushPartitionedContent();
 
+      if (output.stopReason === "toolUse") {
+        const textSignature = JSON.stringify({
+          v: 1,
+          id:
+            output.responseId ??
+            output.content.find((block) => block.type === "toolCall")?.id ??
+            "chat-completion",
+          phase: "commentary",
+        });
+        // Chat Completions exposes the tool boundary only at completion. Tag
+        // preceding text before text_end so delivery routes it as private commentary.
+        for (const block of output.content) {
+          if (
+            block.type === "text" &&
+            block.text.trim().length > 0 &&
+            block.textSignature === undefined
+          ) {
+            block.textSignature = textSignature;
+          }
+        }
+      }
+
       for (const block of blocks) {
         finishBlock(block);
       }

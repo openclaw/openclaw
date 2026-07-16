@@ -16,6 +16,17 @@ function anthropicAssistant(text: string, extra?: AssistantMessage["content"]): 
   } as unknown as AssistantMessage;
 }
 
+function openAiCompletionsAssistant(
+  text: string,
+  extra?: AssistantMessage["content"],
+): AssistantMessage {
+  return {
+    role: "assistant",
+    api: "openai-completions",
+    content: [{ type: "text", text }, ...(extra ?? [])],
+  } as unknown as AssistantMessage;
+}
+
 function postedBlockReplyText(onBlockReply: ReturnType<typeof vi.fn>): string {
   return onBlockReply.mock.calls.map((call) => call[0]?.text ?? "").join(" ");
 }
@@ -66,6 +77,49 @@ describe("subscribeEmbeddedAgentSession — Anthropic pre-tool narration", () =>
     });
 
     expect(postedBlockReplyText(onBlockReply)).not.toContain("Let me check the files");
+  });
+
+  it("withholds OpenAI Completions pre-tool narration until its phase is known", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onBlockReply = vi.fn();
+    subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-completions-withhold",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 4, maxChars: 200 },
+    });
+
+    const narration = "I'll inspect the workspace before I answer. ";
+    const commentary = openAiCompletionsAssistant(narration, [
+      { type: "toolCall", id: "tool-1", name: "bash", arguments: {} },
+    ]);
+    (commentary.content[0] as { textSignature?: string }).textSignature = JSON.stringify({
+      v: 1,
+      id: "chatcmpl-test",
+      phase: "commentary",
+    });
+
+    emit({ type: "message_start", message: openAiCompletionsAssistant("") });
+    emit({
+      type: "message_update",
+      message: openAiCompletionsAssistant(narration),
+      assistantMessageEvent: { type: "text_delta", delta: narration },
+    });
+    emit({
+      type: "tool_execution_start",
+      toolName: "bash",
+      toolCallId: "tool-1",
+      args: { command: "ls" },
+    });
+    emit({
+      type: "message_update",
+      message: commentary,
+      assistantMessageEvent: { type: "text_end", contentIndex: 0, partial: commentary },
+    });
+    emit({ type: "message_end", message: commentary });
+
+    expect(postedBlockReplyText(onBlockReply)).not.toContain("I'll inspect the workspace");
   });
 
   it("still delivers a non-tool Anthropic answer in full on a text_end channel", async () => {

@@ -57,6 +57,37 @@ describe("openai transport stream", () => {
     expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
   });
 
+  it("tags text before a tool-call completion as commentary", async () => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ content: "I'll inspect the workspace first." }),
+        makeCompletionsChunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_1",
+              type: "function",
+              function: { name: "bash", arguments: '{"cmd":"ls"}' },
+            },
+          ],
+        }),
+        makeCompletionsChunk({}, "tool_calls"),
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content[0]).toEqual({
+      type: "text",
+      text: "I'll inspect the workspace first.",
+      textSignature: JSON.stringify({ v: 1, id: "chatcmpl-test", phase: "commentary" }),
+    });
+  });
+
   it("drops mirrored reasoning when disabled without recovering hidden reasoning tags", async () => {
     const model = makeCompletionsModel({
       id: "MiniMax-M2.7",

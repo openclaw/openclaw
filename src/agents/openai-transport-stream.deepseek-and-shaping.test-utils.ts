@@ -21,6 +21,12 @@ import {
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
 import { testing } from "./openai-transport-stream.test-support.js";
+
+const commentarySignature = JSON.stringify({
+  v: 1,
+  id: "chatcmpl-test",
+  phase: "commentary",
+});
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 describe("openai transport stream", () => {
@@ -94,7 +100,7 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "before  after" },
+      { type: "text", text: "before  after", textSignature: commentarySignature },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -133,7 +139,7 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "I'll check" },
+      { type: "text", text: "I'll check", textSignature: commentarySignature },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -181,7 +187,7 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " visible" },
+      { type: "text", text: " visible", textSignature: commentarySignature },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
@@ -217,7 +223,7 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "before " },
+      { type: "text", text: "before ", textSignature: commentarySignature },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -225,7 +231,7 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " after" },
+      { type: "text", text: " after", textSignature: commentarySignature },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
