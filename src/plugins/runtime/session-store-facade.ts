@@ -105,6 +105,24 @@ function recoveryStateForSameSession(
     : undefined;
 }
 
+function indexSessionKeysBySessionId(
+  store: Record<string, Pick<SessionEntry, "sessionId">>,
+): Map<string, string[]> {
+  const keysBySessionId = new Map<string, string[]>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (!entry.sessionId) {
+      continue;
+    }
+    const existing = keysBySessionId.get(entry.sessionId);
+    if (existing) {
+      existing.push(sessionKey);
+    } else {
+      keysBySessionId.set(entry.sessionId, [sessionKey]);
+    }
+  }
+  return keysBySessionId;
+}
+
 function clearRecoveryStateForRotatedMergePatch(
   existingEntry: InternalSessionEntry,
   publicPatch: Partial<SessionEntry>,
@@ -119,6 +137,9 @@ export function reconcilePluginSessionStore(params: {
   internalStore: Record<string, InternalSessionEntry>;
   publicStore: Record<string, SessionEntry>;
 }): void {
+  const originalStore = { ...params.internalStore };
+  const originalKeysBySessionId = indexSessionKeysBySessionId(originalStore);
+  const publicKeysBySessionId = indexSessionKeysBySessionId(params.publicStore);
   for (const sessionKey of Object.keys(params.internalStore)) {
     if (!Object.hasOwn(params.publicStore, sessionKey)) {
       delete params.internalStore[sessionKey];
@@ -126,10 +147,17 @@ export function reconcilePluginSessionStore(params: {
   }
   for (const [sessionKey, publicEntry] of Object.entries(params.publicStore)) {
     const projectedEntry = projectPluginSessionEntry(publicEntry as InternalSessionEntry);
-    const existingRecovery = recoveryStateForSameSession(
-      params.internalStore[sessionKey],
+    let existingRecovery = recoveryStateForSameSession(
+      originalStore[sessionKey],
       projectedEntry.sessionId,
     );
+    if (existingRecovery === undefined && projectedEntry.sessionId) {
+      const originalKeys = originalKeysBySessionId.get(projectedEntry.sessionId);
+      const publicKeys = publicKeysBySessionId.get(projectedEntry.sessionId);
+      if (originalKeys?.length === 1 && publicKeys?.length === 1) {
+        existingRecovery = originalStore[originalKeys[0]!]?.mainRestartRecovery;
+      }
+    }
     params.internalStore[sessionKey] = existingRecovery
       ? { ...projectedEntry, mainRestartRecovery: existingRecovery }
       : projectedEntry;

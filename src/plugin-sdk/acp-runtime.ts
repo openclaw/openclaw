@@ -1,9 +1,19 @@
 // Public ACP runtime helpers for plugins that integrate with ACP control/session state.
 
+import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import {
   testing as managerTesting,
   getAcpSessionManager as getInternalAcpSessionManager,
-  type AcpSessionManager,
+  type AcpCloseSessionInput,
+  type AcpCloseSessionResult,
+  type AcpInitializeSessionInput,
+  type AcpManagerObservabilitySnapshot,
+  type AcpRunTurnInput,
+  type AcpSessionManager as InternalAcpSessionManager,
+  type AcpSessionResolution,
+  type AcpSessionRuntimeOptions,
+  type AcpSessionStatus,
+  type AcpStartupIdentityReconcileResult,
 } from "../acp/control-plane/manager.js";
 import { testing as registryTesting } from "../acp/runtime/registry.js";
 import {
@@ -11,12 +21,57 @@ import {
   type AcpSessionStoreEntry,
 } from "../acp/runtime/session-meta.js";
 import type { InternalSessionEntry } from "../config/sessions/main-session-recovery.types.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionEntry } from "../plugins/runtime/session-store-facade.js";
 
-type PluginAcpSessionManagerFacade = Pick<AcpSessionManager, keyof AcpSessionManager>;
+/** Public ACP manager methods exposed without the internal class instance or dependencies. */
+export interface AcpSessionManagerFacade {
+  resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution;
+  getObservabilitySnapshot(cfg: OpenClawConfig): AcpManagerObservabilitySnapshot;
+  reconcilePendingSessionIdentities(params: {
+    cfg: OpenClawConfig;
+  }): Promise<AcpStartupIdentityReconcileResult>;
+  initializeSession(input: AcpInitializeSessionInput): Promise<{
+    runtime: AcpRuntime;
+    handle: AcpRuntimeHandle;
+    meta: SessionAcpMeta;
+  }>;
+  getSessionStatus(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    signal?: AbortSignal;
+  }): Promise<AcpSessionStatus>;
+  setSessionRuntimeMode(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    runtimeMode: string;
+  }): Promise<AcpSessionRuntimeOptions>;
+  setSessionConfigOption(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    key: string;
+    value: string;
+  }): Promise<AcpSessionRuntimeOptions>;
+  updateSessionRuntimeOptions(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    patch: Partial<AcpSessionRuntimeOptions>;
+  }): Promise<AcpSessionRuntimeOptions>;
+  resetSessionRuntimeOptions(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+  }): Promise<AcpSessionRuntimeOptions>;
+  runTurn(input: AcpRunTurnInput): Promise<void>;
+  cancelSession(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    reason?: string;
+  }): Promise<void>;
+  closeSession(input: AcpCloseSessionInput): Promise<AcpCloseSessionResult>;
+}
 
-const pluginAcpManagerFacades = new WeakMap<AcpSessionManager, PluginAcpSessionManagerFacade>();
+const pluginAcpManagerFacades = new WeakMap<InternalAcpSessionManager, AcpSessionManagerFacade>();
 
 function projectAcpSessionStoreEntry(
   storeEntry: AcpSessionStoreEntry | null,
@@ -41,14 +96,19 @@ export function readAcpSessionEntry(params: {
   return projectAcpSessionStoreEntry(readInternalAcpSessionEntry(params));
 }
 
-/** Returns the ACP manager through the same plugin-facing session projection boundary. */
-export function getAcpSessionManager(): AcpSessionManager {
+/**
+ * Returns a stable, frozen facade over the ACP manager.
+ *
+ * The facade deliberately has no internal class identity or prototype so plugins cannot bypass
+ * the session projection boundary through the manager constructor.
+ */
+export function getAcpSessionManager(): AcpSessionManagerFacade {
   const manager = getInternalAcpSessionManager();
   const existing = pluginAcpManagerFacades.get(manager);
   if (existing) {
-    return existing as AcpSessionManager;
+    return existing;
   }
-  const resolveSession = ((params: Parameters<AcpSessionManager["resolveSession"]>[0]) => {
+  const resolveSession: AcpSessionManagerFacade["resolveSession"] = (params) => {
     const resolved = manager.resolveSession(params);
     if (resolved.kind !== "ready" || !resolved.entry) {
       return resolved;
@@ -57,7 +117,7 @@ export function getAcpSessionManager(): AcpSessionManager {
       ...resolved,
       entry: projectPluginSessionEntry(resolved.entry as InternalSessionEntry),
     };
-  }) as AcpSessionManager["resolveSession"];
+  };
   const facade = {
     resolveSession,
     getObservabilitySnapshot: manager.getObservabilitySnapshot.bind(manager),
@@ -71,11 +131,11 @@ export function getAcpSessionManager(): AcpSessionManager {
     runTurn: manager.runTurn.bind(manager),
     cancelSession: manager.cancelSession.bind(manager),
     closeSession: manager.closeSession.bind(manager),
-  } satisfies PluginAcpSessionManagerFacade;
+  } satisfies AcpSessionManagerFacade;
   Object.setPrototypeOf(facade, null);
   Object.freeze(facade);
   pluginAcpManagerFacades.set(manager, facade);
-  return facade as AcpSessionManager;
+  return facade;
 }
 
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";

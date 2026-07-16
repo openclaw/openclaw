@@ -299,7 +299,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/json-unsafe-integers` | JSON parsing helpers that preserve unsafe integer literals as strings |
     | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
-    | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
+    | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers. `getAcpSessionManager()` returns a stable frozen `AcpSessionManagerFacade`, not the internal manager class instance. |
     | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
     | `plugin-sdk/acp-binding-resolve-runtime` | Read-only ACP binding resolution without lifecycle startup imports |
     | `plugin-sdk/agent-config-primitives` | Deprecated agent runtime config-schema primitives; import schema primitives from a maintained plugin-owned surface |

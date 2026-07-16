@@ -2,13 +2,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AcpSessionManager } from "../acp/control-plane/manager.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import type { InternalSessionEntry } from "../config/sessions/main-session-recovery.types.js";
 import {
   loadSessionEntry as loadInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { getAcpSessionManager, readAcpSessionEntry, testing } from "./acp-runtime.js";
+import {
+  getAcpSessionManager,
+  readAcpSessionEntry,
+  testing,
+  type AcpSessionManagerFacade,
+} from "./acp-runtime.js";
+
+type AcpSdkReturnClaimsInternalClass =
+  ReturnType<typeof getAcpSessionManager> extends AcpSessionManager ? true : false;
+const acpSdkReturnClaimsInternalClass: AcpSdkReturnClaimsInternalClass = false;
 
 describe("acp-runtime session isolation", () => {
   let previousStateDir: string | undefined;
@@ -69,6 +79,7 @@ describe("acp-runtime session isolation", () => {
 
     const direct = readAcpSessionEntry({ cfg, sessionKey });
     const manager = getAcpSessionManager();
+    const publicManager: AcpSessionManagerFacade = manager;
     const resolved = manager.resolveSession({ cfg, sessionKey });
 
     expect({
@@ -79,7 +90,8 @@ describe("acp-runtime session isolation", () => {
       managerFacadeHidesConstructor: Reflect.get(manager, "constructor") === undefined,
       managerFacadeHidesDeps: Reflect.get(manager, "deps") === undefined,
       managerFacadeHasNullPrototype: Object.getPrototypeOf(manager) === null,
-      boundManagerMethodWorks: manager.getObservabilitySnapshot(cfg).turns.active === 0,
+      boundManagerMethodWorks: publicManager.getObservabilitySnapshot(cfg).turns.active === 0,
+      returnTypeClaimsInternalClass: acpSdkReturnClaimsInternalClass,
     }).toEqual({
       directReadExposedPrivateState: false,
       managerResolutionExposedPrivateState: false,
@@ -88,6 +100,7 @@ describe("acp-runtime session isolation", () => {
       managerFacadeHidesDeps: true,
       managerFacadeHasNullPrototype: true,
       boundManagerMethodWorks: true,
+      returnTypeClaimsInternalClass: false,
     });
     const internalEntry = loadInternalSessionEntry({ sessionKey, storePath }) as
       | InternalSessionEntry
