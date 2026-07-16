@@ -125,10 +125,26 @@ describe("anthropic provider replay hooks", () => {
       id: "claude-sonnet-5",
       name: "Claude Sonnet 5 (Claude CLI)",
       contextWindow: 1_000_000,
+      maxTokens: 128_000,
       mediaInput: {
         image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
       },
     });
+  });
+
+  it("publishes exact GA 1M Claude CLI limits", () => {
+    const models = buildClaudeCliCatalogEntries();
+    for (const id of [
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+    ]) {
+      expect(models.find((model) => model.id === id)).toMatchObject({
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      });
+    }
   });
 
   it("owns native reasoning output mode for Claude transports", async () => {
@@ -585,8 +601,8 @@ describe("anthropic provider replay hooks", () => {
       id: "claude-opus-4-8",
       api: "anthropic-messages",
       reasoning: true,
-      contextWindow: 1_048_576,
-      contextTokens: 1_048_576,
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
       maxTokens: 128_000,
     });
     const opus48Profile = provider.resolveThinkingProfile?.({
@@ -949,8 +965,8 @@ describe("anthropic provider replay hooks", () => {
       } as never),
       {
         reasoning: false,
-        contextWindow: 1_048_576,
-        contextTokens: 1_048_576,
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
         maxTokens: 128_000,
         thinkingLevelMap: {
           xhigh: "xhigh",
@@ -1087,7 +1103,7 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it("normalizes GA 1M Claude variants to 1M context", async () => {
+  it("normalizes GA 1M Claude variants to their exact context and output limits", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     for (const [runtimeProvider, modelId] of [
@@ -1115,8 +1131,9 @@ describe("anthropic provider replay hooks", () => {
           },
         } as never),
         {
-          contextWindow: 1_048_576,
-          contextTokens: 1_048_576,
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+          maxTokens: 128_000,
         },
       );
     }
@@ -1142,8 +1159,8 @@ describe("anthropic provider replay hooks", () => {
     } as never);
 
     expectFields(normalized, {
-      contextWindow: 1_048_576,
-      contextTokens: 1_048_576,
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
       maxTokens: 128_000,
     });
   });

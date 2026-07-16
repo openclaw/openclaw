@@ -78,8 +78,7 @@ const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
 const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
-const ANTHROPIC_GA_1M_CONTEXT_TOKENS = 1_048_576;
-const ANTHROPIC_EXACT_1M_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_1M_CONTEXT_TOKENS = 1_000_000;
 const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
 // Anthropic's introductory rate expires at the documented UTC month boundary.
 const ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
@@ -401,17 +400,19 @@ function isAnthropicSonnet5Model(modelId: string): boolean {
 }
 
 function resolveAnthropicFixedContextWindow(modelId: string): number | undefined {
-  if (isAnthropicMandatoryClaude5Model(modelId) || isAnthropicSonnet5Model(modelId)) {
-    return ANTHROPIC_EXACT_1M_CONTEXT_TOKENS;
-  }
-  return isAnthropicGa1MModel(modelId) ? ANTHROPIC_GA_1M_CONTEXT_TOKENS : undefined;
+  return isAnthropicMandatoryClaude5Model(modelId) ||
+    isAnthropicSonnet5Model(modelId) ||
+    isAnthropicGa1MModel(modelId)
+    ? ANTHROPIC_1M_CONTEXT_TOKENS
+    : undefined;
 }
 
 function isAnthropic128kOutputModel(modelId: string): boolean {
-  if (isAnthropicMandatoryClaude5Model(modelId) || isAnthropicSonnet5Model(modelId)) {
-    return true;
-  }
-  return /^claude-opus-4-8(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity({ id: modelId }));
+  return (
+    isAnthropicMandatoryClaude5Model(modelId) ||
+    isAnthropicSonnet5Model(modelId) ||
+    isAnthropicGa1MModel(modelId)
+  );
 }
 
 function isAnthropicLargeImageModel(modelId: string): boolean {
