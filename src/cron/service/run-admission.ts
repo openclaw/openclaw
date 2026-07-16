@@ -67,22 +67,35 @@ export function reserveQueuedCronRun(
   jobId: string,
   reservationAt: number,
   opts?: { preserveWhenDisabled?: boolean },
-): void {
+): object {
+  const identity = {};
   state.queuedRunReservationsByJobId.set(jobId, {
+    identity,
     reservedAtMs: reservationAt,
     preserveWhenDisabled: opts?.preserveWhenDisabled === true,
   });
+  return identity;
 }
 
 export function releaseQueuedCronRun(
   state: CronServiceState,
   jobId: string,
-  reservationAt?: number,
-): void {
+  identity: object,
+): boolean {
   const reservation = state.queuedRunReservationsByJobId.get(jobId);
-  if (reservationAt === undefined || reservation?.reservedAtMs === reservationAt) {
-    state.queuedRunReservationsByJobId.delete(jobId);
+  if (reservation?.identity !== identity) {
+    return false;
   }
+  state.queuedRunReservationsByJobId.delete(jobId);
+  return true;
+}
+
+export function isQueuedCronRunReservationCurrent(
+  state: CronServiceState,
+  jobId: string,
+  identity: object,
+): boolean {
+  return state.queuedRunReservationsByJobId.get(jobId)?.identity === identity;
 }
 
 /** A matching process-local record means this durable marker is queued, not stuck. */

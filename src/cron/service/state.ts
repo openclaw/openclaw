@@ -205,6 +205,7 @@ export type CronRunAdmission = {
 };
 
 export type QueuedCronRunReservation = {
+  identity: object;
   reservedAtMs: number;
   preserveWhenDisabled: boolean;
 };

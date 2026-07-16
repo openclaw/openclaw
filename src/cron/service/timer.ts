@@ -83,6 +83,7 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import {
+  isQueuedCronRunReservationCurrent,
   releaseQueuedCronRun,
   resolveRunConcurrency,
   reserveQueuedCronRun,
@@ -172,6 +173,7 @@ type StartupCatchupCandidate = {
   jobId: string;
   job: CronJob;
   reservedAtMs: number;
+  reservationIdentity: object;
 };
 
 type StartupDeferredJob = {
@@ -1345,30 +1347,32 @@ async function onAdmittedTimer(state: CronServiceState) {
         job.state.runningAtMs = now;
       }
       await persist(state);
-      for (const job of due) {
-        reserveQueuedCronRun(state, job.id, now);
-      }
+      const reservedDue = due.map((job) => ({
+        id: job.id,
+        job,
+        reservedAtMs: now,
+        reservationIdentity: reserveQueuedCronRun(state, job.id, now),
+      }));
       if (state.stopped) {
-        for (const job of due) {
-          delete job.state.runningAtMs;
-          releaseQueuedCronRun(state, job.id, now);
+        for (const candidate of reservedDue) {
+          if (!releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity)) {
+            continue;
+          }
+          delete candidate.job.state.runningAtMs;
         }
         recomputeNextRunsForMaintenance(state);
         await persist(state);
         return [];
       }
 
-      return due.map((j) => ({
-        id: j.id,
-        job: j,
-        reservedAtMs: now,
-      }));
+      return reservedDue;
     });
 
     const runDueJob = async (params: {
       id: string;
       job: CronJob;
       reservedAtMs: number;
+      reservationIdentity: object;
       startedAt: number;
     }): Promise<TimedCronRunOutcome> => {
       const { id, job, startedAt } = params;
@@ -1497,10 +1501,13 @@ async function onAdmittedTimer(state: CronServiceState) {
             continue;
           }
           const job = state.store?.jobs.find((entry) => entry.id === due.id);
-          if (job?.state && job.state.runningAtMs === due.reservedAtMs) {
+          if (
+            releaseQueuedCronRun(state, due.id, due.reservationIdentity) &&
+            job?.state &&
+            job.state.runningAtMs === due.reservedAtMs
+          ) {
             delete job.state.runningAtMs;
           }
-          releaseQueuedCronRun(state, due.id, due.reservedAtMs);
         }
         recomputeNextRunsForMaintenance(state);
         await persist(state);
@@ -1529,8 +1536,12 @@ async function onAdmittedTimer(state: CronServiceState) {
                 return undefined;
               }
               const job = state.store?.jobs.find((entry) => entry.id === due.id);
-              if (!job || job.state.runningAtMs !== due.reservedAtMs) {
-                releaseQueuedCronRun(state, due.id, due.reservedAtMs);
+              if (
+                !job ||
+                !isQueuedCronRunReservationCurrent(state, due.id, due.reservationIdentity) ||
+                job.state.runningAtMs !== due.reservedAtMs
+              ) {
+                releaseQueuedCronRun(state, due.id, due.reservationIdentity);
                 return undefined;
               }
               const dueProbe = structuredClone(job);
@@ -1540,28 +1551,36 @@ async function onAdmittedTimer(state: CronServiceState) {
                 !isRunnableJob({ state, job: dueProbe, nowMs: state.deps.nowMs() })
               ) {
                 delete job.state.runningAtMs;
-                releaseQueuedCronRun(state, due.id, due.reservedAtMs);
-                await persist(state);
+                try {
+                  await persist(state);
+                } finally {
+                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+                }
                 return undefined;
               }
               const startedAt = state.deps.nowMs();
+              const previousLastError = job.state.lastError;
               job.state.runningAtMs = startedAt;
               job.state.lastError = undefined;
               try {
                 await persist(state);
               } catch (error) {
                 job.state.runningAtMs = due.reservedAtMs;
-                releaseQueuedCronRun(state, due.id, due.reservedAtMs);
+                job.state.lastError = previousLastError;
                 throw error;
               }
               if (state.stopped || state.restartRecoveryPending) {
                 stopAdmittingDueJobs = true;
                 delete job.state.runningAtMs;
-                releaseQueuedCronRun(state, due.id, due.reservedAtMs);
-                await persist(state);
+                job.state.lastError = previousLastError;
+                try {
+                  await persist(state);
+                } finally {
+                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+                }
                 return undefined;
               }
-              releaseQueuedCronRun(state, due.id, due.reservedAtMs);
+              releaseQueuedCronRun(state, due.id, due.reservationIdentity);
               return { ...due, job, startedAt };
             });
             if (!currentDueJob) {
@@ -1821,19 +1840,22 @@ async function releaseStartupCatchupReservationsAfterFailure(
   plan: StartupCatchupPlan,
   outcomes: readonly TimedCronRunOutcome[],
 ): Promise<void> {
-  // Process-local reservations must not outlive a failed catch-up pass.
-  for (const candidate of plan.candidates) {
-    releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
-  }
-  await locked(state, async () => {
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    const released = releaseUnstartedStartupCatchupReservations(state, plan, outcomes);
-    if (!released) {
-      return;
+  try {
+    await locked(state, async () => {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      const released = releaseUnstartedStartupCatchupReservations(state, plan, outcomes);
+      if (!released) {
+        return;
+      }
+      recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
+      await persist(state);
+    });
+  } finally {
+    // A failed store cleanup must not retain process-local reservations forever.
+    for (const candidate of plan.candidates) {
+      releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
     }
-    recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-    await persist(state);
-  });
+  }
 }
 
 /** Runs or defers missed startup jobs using restart catch-up limits. */
@@ -1954,18 +1976,15 @@ async function planStartupCatchup(
     }
     for (const job of startupCandidates) {
       job.state.runningAtMs = now;
-      job.state.lastError = undefined;
     }
     await persist(state);
-    for (const job of startupCandidates) {
-      reserveQueuedCronRun(state, job.id, now);
-    }
 
     return {
       candidates: startupCandidates.map((job) => ({
         jobId: job.id,
         job,
         reservedAtMs: now,
+        reservationIdentity: reserveQueuedCronRun(state, job.id, now),
       })),
       deferredJobs: deferred,
     };
@@ -1986,13 +2005,19 @@ async function executeStartupCatchupPlan(
         const startedCandidate = await locked(state, async () => {
           await ensureLoaded(state, { forceReload: true, skipRecompute: true });
           const job = state.store?.jobs.find((entry) => entry.id === candidate.jobId);
+          if (state.stopped || state.restartRecoveryPending) {
+            return undefined;
+          }
           if (
-            state.stopped ||
-            state.restartRecoveryPending ||
             !job ||
+            !isQueuedCronRunReservationCurrent(
+              state,
+              candidate.jobId,
+              candidate.reservationIdentity,
+            ) ||
             job.state.runningAtMs !== candidate.reservedAtMs
           ) {
-            releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
+            releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
             return undefined;
           }
           const dueProbe = structuredClone(job);
@@ -2007,28 +2032,36 @@ async function executeStartupCatchupPlan(
             })
           ) {
             delete job.state.runningAtMs;
-            releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
             recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
-            await persist(state);
+            try {
+              await persist(state);
+            } finally {
+              releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
+            }
             return undefined;
           }
           const startedAt = state.deps.nowMs();
+          const previousLastError = job.state.lastError;
           job.state.runningAtMs = startedAt;
           job.state.lastError = undefined;
           try {
             await persist(state);
           } catch (error) {
             job.state.runningAtMs = candidate.reservedAtMs;
-            releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
+            job.state.lastError = previousLastError;
             throw error;
           }
           if (state.stopped || state.restartRecoveryPending) {
             delete job.state.runningAtMs;
-            releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
-            await persist(state);
+            job.state.lastError = previousLastError;
+            try {
+              await persist(state);
+            } finally {
+              releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
+            }
             return undefined;
           }
-          releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
+          releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
           return { ...candidate, job, startedAt };
         });
         return startedCandidate

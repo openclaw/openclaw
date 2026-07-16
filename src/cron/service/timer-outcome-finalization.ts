@@ -18,7 +18,7 @@ type CronTaskRunFinalizationOutcome = {
 };
 
 type StartupCatchupReservationPlan = {
-  candidates: readonly { jobId: string; reservedAtMs: number }[];
+  candidates: readonly { jobId: string; reservedAtMs: number; reservationIdentity: object }[];
 };
 
 export function finishPersistedQuietCronTaskRuns(
@@ -71,11 +71,14 @@ export function releaseUnstartedStartupCatchupReservations(
       continue;
     }
     const job = state.store?.jobs.find((entry) => entry.id === candidate.jobId);
-    if (job?.state && job.state.runningAtMs === candidate.reservedAtMs) {
+    if (
+      releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity) &&
+      job?.state &&
+      job.state.runningAtMs === candidate.reservedAtMs
+    ) {
       delete job.state.runningAtMs;
       changed = true;
     }
-    releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
   }
   return changed;
 }

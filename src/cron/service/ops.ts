@@ -47,6 +47,7 @@ import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import {
   cancelCronRunAdmissionWaiters,
+  isQueuedCronRunReservationCurrent,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
   runWithCronAdmission,
@@ -722,6 +723,7 @@ type PreparedManualRun =
       runId?: string;
       terminalTracker?: ManualRunTerminalTracker;
       reservationAt: number;
+      reservationIdentity: object;
       wasEnabled: boolean;
       payload?: CronPayload;
     }
@@ -943,21 +945,22 @@ async function prepareManualRun(
       return { ok: true, ran: false, reason: "not-due" as const };
     }
     job.state.runningAtMs = reservationAt;
-    job.state.lastError = undefined;
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
-    reserveQueuedCronRun(state, job.id, reservationAt, {
+    const reservationIdentity = reserveQueuedCronRun(state, job.id, reservationAt, {
       preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
     });
     if (state.stopped) {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       const persistedJob = state.store?.jobs.find((entry) => entry.id === id);
-      if (persistedJob?.state.runningAtMs === reservationAt) {
+      if (
+        releaseQueuedCronRun(state, job.id, reservationIdentity) &&
+        persistedJob?.state.runningAtMs === reservationAt
+      ) {
         delete persistedJob.state.runningAtMs;
         await persist(state);
       }
-      releaseQueuedCronRun(state, job.id, reservationAt);
       return { ok: true, ran: false, reason: "stopped" as const };
     }
     return {
@@ -967,6 +970,7 @@ async function prepareManualRun(
       runId: opts?.runId,
       terminalTracker: opts?.terminalTracker,
       reservationAt,
+      reservationIdentity,
       wasEnabled: isJobEnabled(job),
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
     } as const;
@@ -998,6 +1002,7 @@ async function activatePreparedManualRun(
     if (
       !job ||
       !dueProbe ||
+      !isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity) ||
       (prepared.wasEnabled && !isJobEnabled(job)) ||
       job.state.runningAtMs !== prepared.reservationAt ||
       !isJobDue(dueProbe, state.deps.nowMs(), { forced: mode === "force" })
@@ -1007,26 +1012,32 @@ async function activatePreparedManualRun(
     }
 
     const startedAt = state.deps.nowMs();
+    const previousLastError = job.state.lastError;
     job.state.runningAtMs = startedAt;
     job.state.lastError = undefined;
     try {
       await persist(state);
     } catch (error) {
       job.state.runningAtMs = prepared.reservationAt;
+      job.state.lastError = previousLastError;
       await releasePreparedManualReservation(state, prepared);
       throw error;
     }
     if (state.stopped || state.restartRecoveryPending) {
       delete job.state.runningAtMs;
-      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationAt);
-      await persist(state);
+      job.state.lastError = previousLastError;
+      try {
+        await persist(state);
+      } finally {
+        releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+      }
       return {
         ok: true,
         ran: false,
         reason: state.stopped ? "stopped" : "restart-recovery-pending",
       } as const;
     }
-    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationAt);
+    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
     emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
     const taskRunId = tryCreateCronTaskRun({
       state,
@@ -1061,13 +1072,20 @@ async function releasePreparedManualReservation(
   state: CronServiceState,
   prepared: Extract<PreparedManualRun, { ran: true }>,
 ): Promise<void> {
-  releaseQueuedCronRun(state, prepared.jobId, prepared.reservationAt);
+  if (!isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity)) {
+    return;
+  }
   const job = state.store?.jobs.find((entry) => entry.id === prepared.jobId);
   if (job?.state.runningAtMs !== prepared.reservationAt) {
+    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
     return;
   }
   delete job.state.runningAtMs;
-  await persist(state);
+  try {
+    await persist(state);
+  } finally {
+    releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+  }
 }
 
 async function finishPreparedManualRun(
