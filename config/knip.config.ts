@@ -22,6 +22,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/codex-media-path/client.mjs!",
   "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs!",
   "scripts/e2e/lib/codex-media-path/write-config.mjs!",
+  "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs!",
   "scripts/e2e/lib/config-reload/assert-log.mjs!",
   "scripts/e2e/lib/config-reload/mutate-metadata.mjs!",
   "scripts/e2e/lib/docker-artifact-proof/write-identities.ts!",
