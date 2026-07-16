@@ -38,7 +38,12 @@ const SESSIONS_SEARCH_MAX_BYTES = 32 * 1024;
 const SESSIONS_SEARCH_SNIPPET_MAX_CHARS = 300;
 
 const SessionsSearchToolSchema = Type.Object({
-  query: Type.String({ maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS }),
+  // No `maxLength` here: it compiles to that many repeated GBNF rules and 4096
+  // blows past llama.cpp's ~2000 repetition ceiling (#108580). The cap stays
+  // enforced at runtime in the execute path below.
+  query: Type.String({
+    description: `Search query (max ${SESSIONS_SEARCH_MAX_QUERY_CHARS} chars).`,
+  }),
   sessionKey: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema({ maximum: SESSIONS_SEARCH_MAX_LIMIT }),
 });

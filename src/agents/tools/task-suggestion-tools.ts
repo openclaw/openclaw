@@ -12,6 +12,9 @@ import {
 import { type AnyAgentTool, ToolInputError, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 
+// No `maxLength` on prompt/cwd: a bounded length compiles to that many repeated
+// GBNF rules and 32768/4096 blow past llama.cpp's ~2000 repetition ceiling
+// (#108580). The gateway RPC schema (task-suggestions params) keeps those caps.
 const SpawnTaskToolSchema = Type.Object(
   {
     title: Type.String({
@@ -21,7 +24,6 @@ const SpawnTaskToolSchema = Type.Object(
     }),
     prompt: Type.String({
       minLength: 1,
-      maxLength: 32_768,
       description: "Self-contained task prompt with relevant file paths and context.",
     }),
     tldr: Type.String({
@@ -32,7 +34,6 @@ const SpawnTaskToolSchema = Type.Object(
     cwd: Type.Optional(
       Type.String({
         minLength: 1,
-        maxLength: 4_096,
         description: "Absolute project directory; defaults to the current project.",
       }),
     ),
