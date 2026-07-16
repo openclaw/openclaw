@@ -11,7 +11,7 @@ let cleanup: (() => Promise<void>) | undefined;
 
 async function createRealtimeServer(onRequest: (url: URL) => void) {
   const server = createServer();
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
   server.on("upgrade", (request, socket, head) => {
     onRequest(new URL(request.url ?? "/", "http://127.0.0.1"));
