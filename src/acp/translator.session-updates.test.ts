@@ -153,4 +153,56 @@ describe("AcpTranslatorSessionUpdates", () => {
     releaseFirstDelivery();
     await firstEmit;
   });
+
+  it("does not let a stalled ledger session block another session", async () => {
+    let releaseFirstWrite!: () => void;
+    const firstWrite = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const ledger = createLedger();
+    vi.mocked(ledger.recordUpdate).mockImplementation(async ({ sessionId }) => {
+      if (sessionId === "session-1") {
+        await firstWrite;
+      }
+    });
+    const updates = createUpdates({ ledger });
+
+    const stalledEmit = updates.emit({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      record: true,
+      waitForDelivery: false,
+      update,
+    });
+    await vi.waitFor(() => {
+      expect(ledger.recordUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    const queuedSameSessionEmit = updates.emit({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      record: true,
+      waitForDelivery: false,
+      update,
+    });
+    await updates.emit({
+      sessionId: "session-2",
+      sessionKey: "agent:main:session-2",
+      record: true,
+      waitForDelivery: false,
+      update,
+    });
+
+    expect(vi.mocked(ledger.recordUpdate).mock.calls.map(([params]) => params.sessionId)).toEqual([
+      "session-1",
+      "session-2",
+    ]);
+    releaseFirstWrite();
+    await Promise.all([stalledEmit, queuedSameSessionEmit]);
+    expect(vi.mocked(ledger.recordUpdate).mock.calls.map(([params]) => params.sessionId)).toEqual([
+      "session-1",
+      "session-2",
+      "session-1",
+    ]);
+  });
 });

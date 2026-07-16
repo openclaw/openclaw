@@ -33,9 +33,9 @@ function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: 
 /** Helper that keeps ACP client updates and replay ledger writes in sync. */
 export class AcpTranslatorSessionUpdates {
   private stopped = false;
-  // Queue ledger mutations at emission time so a detached disconnect notice
-  // cannot overtake an older update whose ACP delivery is backpressured.
-  private ledgerMutationTail: Promise<void> = Promise.resolve();
+  // Queue each ledger session at emission time so a detached disconnect notice
+  // cannot overtake its older update or block unrelated session settlement.
+  private ledgerMutationTails = new Map<string, Promise<void>>();
 
   constructor(private options: AcpTranslatorSessionUpdatesOptions) {}
 
@@ -111,7 +111,7 @@ export class AcpTranslatorSessionUpdates {
     runId: string,
     prompt: PromptRequest["prompt"],
   ): Promise<void> {
-    await this.enqueueLedgerMutation(async () => {
+    await this.enqueueLedgerMutation(resolveLedgerSessionId(session), async () => {
       if (this.stopped) {
         return;
       }
@@ -190,7 +190,7 @@ export class AcpTranslatorSessionUpdates {
     runId?: string;
     update: SessionUpdate;
   }): Promise<void> {
-    await this.enqueueLedgerMutation(async () => {
+    await this.enqueueLedgerMutation(params.ledgerSessionId ?? params.sessionId, async () => {
       if (this.stopped) {
         return;
       }
@@ -214,9 +214,19 @@ export class AcpTranslatorSessionUpdates {
     });
   }
 
-  private enqueueLedgerMutation(mutation: () => Promise<void>): Promise<void> {
-    const pending = this.ledgerMutationTail.then(mutation, mutation);
-    this.ledgerMutationTail = pending.catch(() => {});
+  private enqueueLedgerMutation(
+    ledgerSessionId: string,
+    mutation: () => Promise<void>,
+  ): Promise<void> {
+    const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
+    const pending = previous.then(mutation, mutation);
+    const tail = pending.catch(() => {});
+    this.ledgerMutationTails.set(ledgerSessionId, tail);
+    void tail.then(() => {
+      if (this.ledgerMutationTails.get(ledgerSessionId) === tail) {
+        this.ledgerMutationTails.delete(ledgerSessionId);
+      }
+    });
     return pending;
   }
 
