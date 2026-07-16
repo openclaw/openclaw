@@ -102,9 +102,7 @@ export class ReefMessageFlow {
     return rejections;
   }
 
-  private async processReceipt(
-    entry: InboxEntry & { kind: "receipt" },
-  ): Promise<ReefDeliveryRejection | undefined> {
+  private async processReceipt(entry: InboxEntry): Promise<ReefDeliveryRejection | undefined> {
     const receipt = entry.receipt;
     const friend = this.options.trust.get(entry.peer);
     if (!receipt || !friend) {
