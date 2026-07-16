@@ -1808,9 +1808,10 @@ describe("state migrations", () => {
     const cfg = createConfig();
 
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    expect(detected.preview).toContain(
+    expect(detected.preview.filter((line) => line.startsWith("- Shared SQLite schema:"))).toEqual([
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
-    );
+      "- Shared SQLite schema: tables → SQLite STRICT typing",
+    ]);
 
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(result.warnings).toStrictEqual([]);

@@ -21,6 +21,17 @@ import {
   validateLineMediaUrl,
 } from "./outbound-media.js";
 
+const HTTPS_URL_ERROR = new Error("LINE outbound media URL must use HTTPS");
+
+function createCredentialBearingHttpUrl(): string {
+  const url = new URL("http://example.com/image.jpg");
+  url.username = ["line", "user"].join("-");
+  url.password = ["line", "fixture"].join("-");
+  url.searchParams.set("auth", ["line", "query"].join("-"));
+  url.hash = ["line", "fragment"].join("-");
+  return url.href;
+}
+
 describe("validateLineMediaUrl", () => {
   beforeEach(() => {
     ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
@@ -44,11 +55,33 @@ describe("validateLineMediaUrl", () => {
     });
   });
 
-  it("rejects HTTP URL", async () => {
-    await expect(validateLineMediaUrl("http://example.com/image.jpg")).rejects.toThrow(
-      /must use HTTPS/i,
-    );
-    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
+  it.each([
+    {
+      name: "malformed media URL",
+      run: () => validateLineMediaUrl("not a url?query=fixture#fragment"),
+      expected: new Error("LINE outbound media URL must be a valid URL"),
+    },
+    {
+      name: "insecure media URL",
+      run: () => validateLineMediaUrl(createCredentialBearingHttpUrl()),
+      expected: HTTPS_URL_ERROR,
+    },
+    {
+      name: "insecure preview URL",
+      run: () =>
+        resolveLineOutboundMedia("https://example.com/video.mp4", {
+          mediaKind: "video",
+          previewImageUrl: createCredentialBearingHttpUrl(),
+        }),
+      expected: HTTPS_URL_ERROR,
+    },
+    {
+      name: "insecure resolved media URL",
+      run: () => resolveLineOutboundMedia(createCredentialBearingHttpUrl()),
+      expected: HTTPS_URL_ERROR,
+    },
+  ])("does not expose credentials from a $name", async ({ run, expected }) => {
+    await expect(run()).rejects.toThrow(expected);
   });
 
   it("rejects URL longer than 2000 chars", async () => {
@@ -142,15 +175,6 @@ describe("resolveLineOutboundMedia", () => {
     });
   });
 
-  it("validates previewImageUrl when provided", async () => {
-    await expect(
-      resolveLineOutboundMedia("https://example.com/video.mp4", {
-        mediaKind: "video",
-        previewImageUrl: "http://example.com/preview.jpg",
-      }),
-    ).rejects.toThrow(/must use HTTPS/i);
-  });
-
   it("falls back to image when no explicit LINE media options or known extension are present", async () => {
     await expect(
       resolveLineOutboundMedia("https://example.com/download?id=audio"),
@@ -163,12 +187,6 @@ describe("resolveLineOutboundMedia", () => {
   it("rejects local paths because LINE outbound media requires public HTTPS URLs", async () => {
     await expect(resolveLineOutboundMedia("./assets/image.jpg")).rejects.toThrow(
       /requires a public https url/i,
-    );
-  });
-
-  it("rejects non-HTTPS URL explicitly", async () => {
-    await expect(resolveLineOutboundMedia("http://example.com/image.jpg")).rejects.toThrow(
-      /must use HTTPS/i,
     );
   });
 });

@@ -1350,6 +1350,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 // The caller owns the state.schema.ensure transaction so every probe, DDL
 // change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");

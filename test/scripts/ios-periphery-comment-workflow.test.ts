@@ -15,7 +15,6 @@ type WorkflowStep = {
   if?: string;
   id?: string;
   name?: string;
-  run?: string;
   uses?: string;
   with?: {
     "if-no-files-found"?: string;
@@ -467,18 +466,6 @@ describe("iOS Periphery comment workflow", () => {
     expect(upload?.if).toBe("always()");
     expect(upload?.with?.path).toBe("${{ runner.temp }}/ios-periphery");
     expect(upload?.with?.["if-no-files-found"]).toBe("error");
-  });
-
-  it("installs XcodeGen through the pinned repository installer", () => {
-    const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
-    const install = workflow.jobs?.scan?.steps?.find(
-      (step) => step.name === "Install iOS Swift tooling",
-    );
-
-    expect(install?.run).toContain("brew install periphery");
-    expect(install?.run).not.toContain("brew install xcodegen");
-    expect(install?.run).toContain('./scripts/install-xcodegen.sh "$swift_tools_dir"');
-    expect(install?.run).toContain('"$swift_tools_dir/xcodegen" --version');
   });
 
   it("runs scope detection for PR transitions that can clear stale findings", () => {

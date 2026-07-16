@@ -20,6 +20,7 @@ import {
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
+  runDetachedWebhookWork,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
@@ -31,7 +32,6 @@ import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
-  createImageMessage,
   createLocationMessage,
   createQuickReplyItems,
   createTextMessageWithQuickReplies,
@@ -231,7 +231,6 @@ export async function monitorLineProvider(
                       createTextMessageWithQuickReplies,
                       pushMessagesLine,
                       createFlexMessage,
-                      createImageMessage,
                       buildMediaMessage: buildLineMediaMessage,
                       createLocationMessage,
                       onReplyError: (replyErr) => {
@@ -385,13 +384,15 @@ export async function monitorLineProvider(
 
           if (body.events && body.events.length > 0) {
             logVerbose(`line: received ${body.events.length} webhook events`);
-            void Promise.resolve()
-              .then(() => match.target.bot.handleWebhook(body))
-              .catch((err: unknown) => {
+            // Detach event processing from the request admission before the ack
+            // releases it; an inherited released admission refuses queue work.
+            void runDetachedWebhookWork(() => match.target.bot.handleWebhook(body)).catch(
+              (err: unknown) => {
                 match.target.runtime.error?.(
                   danger(`line webhook dispatch failed: ${String(err)}`),
                 );
-              });
+              },
+            );
           }
         } catch (err) {
           if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {

@@ -1248,9 +1248,11 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
     );
     const payload = result.details as {
+      channelId?: string;
       messages: Array<{ timestampMs?: number; timestampUtc?: string }>;
     };
 
+    expect(payload.channelId).toBe("C1");
     const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
     const message = expectDefined(payload.messages[0], "Discord message result");
     expect(message.timestampMs).toBe(expectedMs);

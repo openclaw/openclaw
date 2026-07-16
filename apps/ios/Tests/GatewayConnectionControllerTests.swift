@@ -1055,13 +1055,13 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         defer { appModel.disconnectGateway() }
         appModel.applyGatewayConnectConfig(config)
 
-        let emptyIssuanceOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let emptyIssuanceOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: [],
             nodeOptions: nodeOptions)
-        let operatorOnlyOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let operatorOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["operator"],
             nodeOptions: nodeOptions)
-        let nodeOnlyOptions = appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let nodeOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["node"],
             nodeOptions: nodeOptions)
         #expect(emptyIssuanceOptions == nil)
@@ -1084,9 +1084,10 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
             gatewayID: stableID)
         let bootstrapOptions = nodeOptions
         appModel._test_setGatewayLoopTasks(node: nil, operator: Task {})
-        nodeOptions = try #require(appModel._test_completeSuccessfulGatewayAuthHandoff(
+        let completedOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
             issuedRoles: ["node", "operator"],
-            nodeOptions: nodeOptions))
+            nodeOptions: nodeOptions)
+        nodeOptions = try #require(completedOptions)
 
         #expect(nodeOptions.allowStoredDeviceAuth)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true)
