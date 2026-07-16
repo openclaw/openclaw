@@ -1,9 +1,11 @@
 // Voice Call tests cover tunnel plugin behavior.
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessByStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
 import os from "node:os";
-import { PassThrough } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type RealPipeChild = ChildProcessByStdio<null, Readable, Readable>;
 
 class FakeChildProcess extends EventEmitter {
   // PassThrough honors setEncoding("utf8") like real child pipes, so split
@@ -117,7 +119,7 @@ function mockSpawnUtf8SplitChild(params: {
   text: string;
   splitAt: number;
   delayMs?: number;
-}): { getChild: () => ChildProcessWithoutNullStreams } {
+}): { getChild: () => RealPipeChild } {
   const delayMs = params.delayMs ?? 40;
   const script = [
     `const bytes=Buffer.from(${JSON.stringify(params.text)},"utf8");`,
@@ -126,7 +128,7 @@ function mockSpawnUtf8SplitChild(params: {
     `stream.write(bytes.subarray(0,split));`,
     `setTimeout(()=>stream.write(bytes.subarray(split),()=>{}),${delayMs});`,
   ].join("");
-  let child: ChildProcessWithoutNullStreams | undefined;
+  let child: RealPipeChild | undefined;
   mocks.spawn.mockImplementationOnce(() => {
     const spawnReal = mocks.realSpawn;
     if (!spawnReal) {
@@ -134,7 +136,7 @@ function mockSpawnUtf8SplitChild(params: {
     }
     child = spawnReal(process.execPath, ["-e", script], {
       stdio: ["ignore", "pipe", "pipe"],
-    }) as ChildProcessWithoutNullStreams;
+    });
     return child;
   });
   return {
