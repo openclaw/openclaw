@@ -154,19 +154,16 @@ final class GatewayProcessManager {
                 return nil
             }
 
-            if let listener = await PortGuardian.shared.describe(port: request.port) {
-                // Never replace a service while any process owns its port. Only the matching PID
-                // proves this launch finished; a foreign listener is reported by the attach path.
-                if listener.pid == pid {
-                    self.launchAgentReadinessFailure = nil
-                }
+            let listener = await PortGuardian.shared.describe(port: request.port)
+            if let listener, listener.pid != pid {
+                // A foreign listener must never be displaced. The attach path reports its failure.
                 return nil
             }
 
             self.appendLog(
-                "[gateway] launchd pid \(pid) failed readiness without binding port \(request.port); repairing\n")
+                "[gateway] launchd pid \(pid) failed readiness on port \(request.port); repairing\n")
             self.logger.warning(
-                "gateway launchd pid=\(pid) failed readiness without binding port=\(request.port); repairing")
+                "gateway launchd pid=\(pid) failed readiness on port=\(request.port); repairing")
         }
         self.launchAgentReadinessFailure = nil
         self.appendLog(
@@ -180,9 +177,14 @@ final class GatewayProcessManager {
     private func recordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
         guard let startingPID,
               let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port),
-              pid == startingPID,
-              await PortGuardian.shared.describe(port: port) == nil
+              pid == startingPID
         else {
+            self.launchAgentReadinessFailure = nil
+            return
+        }
+        // A stable launchd PID that owns the port can still have a wedged health RPC. A listener
+        // owned by anyone else is protected and surfaced through the attach path instead.
+        if let listener = await PortGuardian.shared.describe(port: port), listener.pid != pid {
             self.launchAgentReadinessFailure = nil
             return
         }
@@ -552,6 +554,10 @@ extension GatewayProcessManager {
 
     func _testClearLaunchAgentReadinessFailure() {
         self.launchAgentReadinessFailure = nil
+    }
+
+    func _testPendingLaunchAgentPort() -> Int? {
+        self.launchAgentEnablePendingRequest?.port
     }
 }
 #endif
