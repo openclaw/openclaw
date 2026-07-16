@@ -88,6 +88,46 @@ disable-model-invocation: true
     expect(resolveOpenClawMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
   });
 
+  it("loads skills with unindented JSON5-style metadata frontmatter", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-scan-");
+    const skillDir = path.join(tempDir, "json5-unindented-metadata");
+    await fs.mkdir(skillDir);
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(
+      skillFile,
+      `---
+name: json5-unindented-metadata
+description: Skill with unindented JSON5-style metadata.
+metadata:
+{
+"openclaw":
+{
+"requires":
+{
+"env": ["EXAMPLE_VAR"],
+},
+},
+}
+---
+# JSON5 Metadata
+`,
+      "utf-8",
+    );
+
+    const result = loadSkillsFromPath(tempDir);
+    const frontmatter = parseFrontmatter(await fs.readFile(skillFile, "utf-8"));
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.skills).toEqual([
+      expect.objectContaining({
+        name: "json5-unindented-metadata",
+        description: "Skill with unindented JSON5-style metadata.",
+        filePath: skillFile,
+      }),
+    ]);
+    expect(resolveOpenClawMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
+  });
+
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {
     const tempDir = tempDirs.make("openclaw-skill-scan-");
     const brokenDir = path.join(tempDir, "broken");

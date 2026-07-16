@@ -79,6 +79,57 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
   return result;
 }
 
+function flowBalanceDelta(line: string): number {
+  let delta = 0;
+  let quote: string | undefined;
+  let escaped = false;
+  for (const char of line) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote) {
+      if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === "{" || char === "[") {
+      delta += 1;
+    } else if (char === "}" || char === "]") {
+      delta -= 1;
+    }
+  }
+  return delta;
+}
+
+function normalizeUnindentedFlowContinuations(block: string): string {
+  const lines = block.split("\n");
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    if (!/^([\w-]+):\s*$/.test(lines[index] ?? "")) {
+      continue;
+    }
+    const next = lines[index + 1];
+    if (!next || /^[ \t]/.test(next) || !/^\s*[\[{]/.test(next)) {
+      continue;
+    }
+    let balance = 0;
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      lines[cursor] = `  ${lines[cursor]}`;
+      balance += flowBalanceDelta(lines[cursor] ?? "");
+      if (balance <= 0) {
+        index = cursor;
+        break;
+      }
+    }
+  }
+  return lines.join("\n");
+}
+
 function normalizeFreeformDescription(block: string): string {
   const doc = parseDocument(block, { schema: "core", prettyErrors: false });
   if (!isMap(doc.contents)) {
@@ -109,7 +160,8 @@ function parseYamlFrontmatterOnce(
   fallback: ParsedFrontmatter,
 ): ParsedFrontmatterBlockResult {
   try {
-    const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+    const normalizedBlock = normalizeUnindentedFlowContinuations(block);
+    const doc = parseDocument(normalizedBlock, { schema: "core", prettyErrors: false });
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
       return {
         frontmatter: fallback,
@@ -140,8 +192,8 @@ function parseYamlFrontmatterOnce(
       if (start === undefined) {
         continue;
       }
-      const lineEnd = block.indexOf("\n", start);
-      const line = block.slice(start, lineEnd === -1 ? block.length : lineEnd);
+      const lineEnd = normalizedBlock.indexOf("\n", start);
+      const line = normalizedBlock.slice(start, lineEnd === -1 ? normalizedBlock.length : lineEnd);
       const match = line.match(/^([\w-]+):\s*(.*)$/);
       if (match?.[1] && match[2]?.includes(":")) {
         inlineColonKeys.add(match[1]);
