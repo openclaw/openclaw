@@ -1,4 +1,3 @@
-// Imported by openai-transport-stream.test.ts to keep its mocked suite in one Vitest module graph.
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
