@@ -1837,6 +1837,7 @@ jobs:
         env:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
+          RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
@@ -1875,7 +1876,14 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              pnpm lint --threads=8
+              # Control-UI i18n catalogs only change with ui/ sources or the
+              # i18n tooling (manifest-gated); oxlint always runs.
+              if [ "$RUN_CONTROL_UI_I18N" = "true" ]; then
+                pnpm lint --threads=8
+              else
+                echo "[skip] changed scope cannot affect control-UI i18n catalogs"
+                node scripts/run-oxlint-shards.mjs --threads=8
+              fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
               fi

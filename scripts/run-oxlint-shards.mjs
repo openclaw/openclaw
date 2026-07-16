@@ -19,6 +19,11 @@ const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
+// CI runners are dedicated: Blacksmith's 16 vCPU class carries 32GB, which the
+// local-Mac threshold above misreads as too small and forces serial shards.
+// Three concurrent oxlint shards peak well under 24GB.
+const CI_PARALLEL_MIN_CPUS = 8;
+const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
@@ -155,8 +160,8 @@ export function shouldRunOxlintShardsSerial({
   const resources = resolveHostResources(hostResources);
   if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
     return (
-      resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
-      resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
+      resources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES ||
+      resources.logicalCpuCount < CI_PARALLEL_MIN_CPUS
     );
   }
   return (
