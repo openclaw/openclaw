@@ -61,6 +61,7 @@ const state = vi.hoisted(() => ({
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
   resolveAgentDeliveryPlanMock: vi.fn(),
+  resolveAgentDeliveryPlanWithSessionRouteMock: vi.fn(),
   resolveAgentOutboundTargetMock: vi.fn(),
   resolveMessageChannelSelectionMock: vi.fn(),
   createTrajectoryRuntimeRecorderMock: vi.fn(),
@@ -329,6 +330,8 @@ vi.mock("../infra/outbound/session-context.js", () => ({
 
 vi.mock("../infra/outbound/agent-delivery.js", () => ({
   resolveAgentDeliveryPlan: (...args: unknown[]) => state.resolveAgentDeliveryPlanMock(...args),
+  resolveAgentDeliveryPlanWithSessionRoute: (...args: unknown[]) =>
+    state.resolveAgentDeliveryPlanWithSessionRouteMock(...args),
   resolveAgentOutboundTarget: (...args: unknown[]) => state.resolveAgentOutboundTargetMock(...args),
 }));
 
@@ -1145,6 +1148,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         };
       },
     );
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockImplementation((params: unknown) =>
+      state.resolveAgentDeliveryPlanMock(params),
+    );
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
     state.prepareInternalSessionEffectsSessionMock.mockResolvedValue({
@@ -1471,6 +1477,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       )
       .find((event) => event.stream === "lifecycle" && event.data?.phase === "end");
     expect(lifecycleEnd?.lifecycleGeneration).toBe("post-restart-generation");
+    expect(state.clearAgentRunContextMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "post-restart-generation",
+    );
+  });
+
+  it("uses an embedded queue rebound generation for cleanup when the attempt fails", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      (
+        attemptParams as {
+          onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
+        }
+      ).onLifecycleGenerationChanged?.("post-restart-generation");
+      throw new Error("attempt failed after queue rebound");
+    });
+
+    await expect(runBasicAgentCommand()).rejects.toThrow("attempt failed after queue rebound");
+
     expect(state.clearAgentRunContextMock).toHaveBeenCalledWith(
       expect.any(String),
       "post-restart-generation",
@@ -2257,6 +2282,51 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves restart recovery ownership when delivery fails after a session rebound", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const sessionStore = state.sessionStoreMock as Record<string, SessionEntry>;
+    const claimedEntry = expectDefined(
+      sessionStore["agent:main:main"],
+      "preclaimed restart recovery session",
+    );
+    claimedEntry.restartRecoveryDeliveryRunId = "session-1";
+    claimedEntry.restartRecoveryDeliveryContext = {
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
+    };
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "session-rebound",
+      sessionEntry: undefined,
+    });
+    state.deliverAgentCommandResultMock.mockRejectedValue(new Error("delivery failed"));
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        deliver: true,
+      }),
+    ).rejects.toThrow("delivery failed");
+
+    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("session-1");
   });
 
   it("persists only the CLI assistant reply after the runner persists the current user turn", async () => {
@@ -3188,6 +3258,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await agentCommand({
       message: "hello",
       sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "discord:dm:123",
+      accountId: "main",
       deliver: true,
       runId: "stale-run",
     });
@@ -3340,7 +3413,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(sessionStore["agent:main:main"]).toEqual(laterRunEntry);
   });
 
-  it("stores pending final delivery with the current run delivery context", async () => {
+  it("stores and delivers with the prepared canonical current-run target", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     const sessionEntry: SessionEntry = {
@@ -3351,11 +3424,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionStoreMock = { "agent:main:main": sessionEntry };
     state.storePathMock = "/tmp/openclaw-sessions.json";
     state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: false });
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:1524410080953634829",
+      resolvedAccountId: "main",
+      deliveryTargetMode: "explicit",
+    });
 
     await agentCommand({
       message: "hello",
       channel: "discord",
-      to: "discord:dm:123",
+      to: "channel:general",
       accountId: "main",
       deliver: true,
     });
@@ -3368,10 +3448,71 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         pendingFinalDeliveryText: "ok",
         pendingFinalDeliveryContext: {
           channel: "discord",
-          to: "discord:dm:123",
+          to: "channel:1524410080953634829",
           accountId: "main",
         },
       }),
+    );
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({
+          replyChannel: "discord",
+          replyTo: "channel:1524410080953634829",
+          replyAccountId: "main",
+          deliveryTargetMode: "explicit",
+        }),
+      }),
+    );
+  });
+
+  it("rejects a strict delivery target before the model run", async () => {
+    setupSingleAttemptFallback();
+    const targetError = new Error('Unknown Discord target "channel:missing"');
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:missing",
+      deliveryTargetMode: "explicit",
+      targetResolutionError: targetError,
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "channel:missing",
+        deliver: true,
+      }),
+    ).rejects.toBe(targetError);
+
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it("downgrades a rejected best-effort target to session-only before the model run", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+      baseDelivery: {},
+      resolvedChannel: "discord",
+      resolvedTo: "channel:missing",
+      deliveryTargetMode: "explicit",
+      targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
+    });
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        channel: "discord",
+        to: "channel:missing",
+        deliver: true,
+        bestEffortDeliver: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: expect.objectContaining({ deliver: false }) }),
     );
   });
 
@@ -3397,6 +3538,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await agentCommand({
       message: "hello",
+      channel: "whatsapp",
       to: "+1234567890",
       deliver: true,
     });

@@ -23,7 +23,6 @@ import {
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
-import { createAgentEntrySubagentsSchema } from "./zod-schema.subagents.js";
 
 function validateSandboxBindEntries(
   binds: readonly string[] | undefined,
@@ -1070,7 +1069,16 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
-    subagents: createAgentEntrySubagentsSchema(AgentModelSchema),
+    subagents: z
+      .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
+        allowAgents: z.array(z.string()).optional(),
+        model: AgentModelSchema.optional(),
+        thinking: z.string().optional(),
+        requireAgentId: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,

@@ -48,6 +48,10 @@ by default). Use `sessions_history` for a bounded, safety-filtered recall
 view from within an agent turn, or inspect the transcript path on disk for
 the raw full transcript.
 
+In the Control UI, parent sessions with recent child runs have an expandable
+sidebar row. The nested rows show child status and runtime, and selecting one
+opens that child's chat while preserving the parent hierarchy.
+
 ### Thread binding controls
 
 These commands work on channels with persistent thread bindings. See
@@ -143,7 +147,7 @@ session to confirm the effective tool list.
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
 - **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout). `sessions_spawn` does not accept per-call timeout overrides.
-- **Announce target:** native sub-agents use `announceTarget: "channel"` by default, which preserves direct completion delivery for top-level requester sessions. Set `announceTarget: "parent"` per spawn, per requester agent, or globally to wake the requester session with `deliver: false` and let the parent decide what to say externally.
+- **Announce target:** native sub-agents keep the normal parent-first completion path when `announceTarget` is omitted. Set `announceTarget: "parent"` on an individual spawn to wake the requester session with `deliver: false` and let the parent decide what to say externally.
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
 Accepted native sub-agent spawns include the resolved child model metadata
@@ -204,8 +208,8 @@ Per-agent override: `agents.list[].subagents.delegationMode`.
 <ParamField path="streamTo" type='"parent"'>
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
-<ParamField path="announceTarget" type='"channel" | "parent"' default='"channel"'>
-  Native sub-agent completion routing. `"channel"` preserves existing direct completion behavior for top-level requester sessions. `"parent"` wakes the requester session with `deliver: false`, does not publish a direct channel announce, and is independent from ACP `streamTo`.
+<ParamField path="announceTarget" type='"parent"'>
+  Native per-spawn completion routing. `"parent"` wakes the requester session with `deliver: false` and suppresses automatic external delivery, so the parent can decide what to publish. Omit this field to preserve the normal parent-first completion path. This is independent from ACP `streamTo`.
 </ParamField>
 <ParamField path="model" type="string">
   Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
@@ -354,10 +358,6 @@ See [Configuration reference](/gateway/configuration-reference) and
 <ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
   Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout.
 </ParamField>
-<ParamField path="agents.defaults.subagents.announceTarget" type='"channel" | "parent"' default='"channel"'>
-  Default native sub-agent completion routing. Per-agent override: `agents.list[].subagents.announceTarget`. A per-call `sessions_spawn.announceTarget` wins over both.
-</ParamField>
-
 If the requester session is sandboxed, `sessions_spawn` rejects targets
 that would run unsandboxed.
 
@@ -482,7 +482,7 @@ Sub-agents report back via an announce step:
 Delivery depends on requester depth:
 
 - Top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`).
-- Top-level requester sessions with `announceTarget: "parent"` use the same follow-up `agent` handoff with `deliver=false`; OpenClaw never falls back to a direct channel announce for that completion.
+- Top-level requester sessions with the per-spawn `announceTarget: "parent"` opt-in use the same follow-up `agent` handoff with `deliver=false`; OpenClaw never falls back to automatic external delivery for that completion.
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 

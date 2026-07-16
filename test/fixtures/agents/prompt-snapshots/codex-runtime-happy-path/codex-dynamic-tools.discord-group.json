@@ -145,8 +145,8 @@
           "type": "string"
         },
         "announceTarget": {
-          "description": "Native completion routing. \"channel\" preserves direct channel announce; \"parent\" wakes the requester session with no direct channel announce.",
-          "enum": ["channel", "parent"],
+          "description": "Native completion routing. Set \"parent\" to wake the requester session without automatic external delivery; omit to preserve the normal parent-first completion path.",
+          "enum": ["parent"],
           "type": "string"
         },
         "attachAs": {
@@ -479,7 +479,6 @@
                   "description": "Idempotent declaration key.",
                   "maxLength": 200,
                   "minLength": 1,
-                  "pattern": "\\S",
                   "type": "string"
                 },
                 "deleteAfterRun": {

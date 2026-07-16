@@ -1,6 +1,5 @@
 // Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
-import { SUBAGENT_ANNOUNCE_TARGETS } from "../agents/subagent-announce-target.types.js";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
@@ -268,7 +267,6 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
-        announceTarget: z.enum(SUBAGENT_ANNOUNCE_TARGETS).optional(),
         requireAgentId: z.boolean().optional(),
       })
       .strict()

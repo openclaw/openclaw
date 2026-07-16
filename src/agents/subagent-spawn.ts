@@ -57,10 +57,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
-import {
-  resolveConfiguredSubagentAnnounceTarget,
-  shouldAnnounceCompletionForInitialChildRun,
-} from "./subagent-announce-target.js";
+import { shouldAnnounceCompletionForInitialChildRun } from "./subagent-announce-target.js";
 import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
@@ -1106,11 +1103,7 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
-  const announceTarget = resolveConfiguredSubagentAnnounceTarget({
-    cfg,
-    requesterAgentId,
-    announceTarget: params.announceTarget,
-  });
+  const announceTarget = params.announceTarget;
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??

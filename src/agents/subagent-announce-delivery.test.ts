@@ -247,7 +247,7 @@ async function deliverSlackThreadAnnouncement(params: {
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
   requesterAbandoned?: boolean;
-  announceTarget?: "channel" | "parent";
+  announceTarget?: "parent";
 }) {
   // Slack thread delivery exercises all origins because direct, session, and
   // completion routing can differ after a child run outlives its requester.

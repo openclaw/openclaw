@@ -17,7 +17,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../subagent-spawn.js", () => ({
-  SUBAGENT_ANNOUNCE_TARGETS: ["channel", "parent"],
+  SUBAGENT_ANNOUNCE_TARGETS: ["parent"],
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
@@ -268,7 +268,7 @@ describe("sessions_spawn tool", () => {
       };
     };
 
-    expect(schema.properties?.announceTarget?.enum).toEqual(["channel", "parent"]);
+    expect(schema.properties?.announceTarget?.enum).toEqual(["parent"]);
     expect(schema.properties?.announceTarget?.description).toContain("Native completion routing");
     expect(schema.properties?.streamTo?.description).toContain("ACP only");
     expect(schema.properties?.streamTo?.description).toContain("Ignored by subagent");

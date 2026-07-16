@@ -19,12 +19,10 @@ export function sessionsSpawnRoutingSchemas(spawnModes: readonly string[]) {
 function sessionsSpawnAnnounceTargetSchema() {
   return optionalStringEnum(SUBAGENT_ANNOUNCE_TARGETS, {
     description:
-      'Native completion routing. "channel" preserves direct channel announce; "parent" wakes the requester session with no direct channel announce.',
+      'Native completion routing. Set "parent" to wake the requester session without automatic external delivery; omit to preserve the normal parent-first completion path.',
   });
 }
 
 export function readSessionsSpawnAnnounceTarget(params: { announceTarget?: unknown }) {
-  return params.announceTarget === "channel" || params.announceTarget === "parent"
-    ? params.announceTarget
-    : undefined;
+  return params.announceTarget === "parent" ? params.announceTarget : undefined;
 }

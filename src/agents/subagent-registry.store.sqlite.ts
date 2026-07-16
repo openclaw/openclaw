@@ -3,7 +3,6 @@
  * store preserves typed columns for hot delivery state while retaining the
  * normalized payload JSON for forward-compatible record hydration.
  */
-import fs from "node:fs";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -12,11 +11,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { readSubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import {
-  loadSubagentRegistryFromDisk,
-  resolveSubagentRegistryPath,
-} from "./subagent-registry.store.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
@@ -134,6 +130,7 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
       }
     : undefined;
   const delivery = createDeliveryFromTypedColumns(row, payload.delivery);
+  const announceTarget = readSubagentAnnounceTarget(row.announce_target);
   const record = normalizeSubagentRunState({
     ...payload,
     runId: row.run_id,
@@ -173,9 +170,7 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
     ...(sqliteBool(row.expects_completion_message) !== undefined
       ? { expectsCompletionMessage: sqliteBool(row.expects_completion_message) }
       : {}),
-    ...(row.announce_target === "channel" || row.announce_target === "parent"
-      ? { announceTarget: row.announce_target }
-      : {}),
+    ...(announceTarget ? { announceTarget } : {}),
     ...(row.ended_reason
       ? { endedReason: row.ended_reason as SubagentRunRecord["endedReason"] }
       : {}),
@@ -268,17 +263,10 @@ function readSubagentRegistryRows(): SubagentRunSqliteRow[] {
   ).rows;
 }
 
-function removeLegacySubagentRegistryFile(): void {
-  try {
-    fs.unlinkSync(resolveSubagentRegistryPath());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-}
-
-function loadSubagentRegistryFromSqliteOnly(): Map<string, SubagentRunRecord> {
+/** Loads the canonical subagent registry from shared SQLite state. */
+export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> {
+  // Retired file-era runs are intentionally not recovered here: after SQLite
+  // pruning, the file cannot prove whether a run is live or stale. Doctor owns discard.
   const runs = new Map<string, SubagentRunRecord>();
   for (const row of readSubagentRegistryRows()) {
     const entry = rowToSubagentRunRecord(row);
@@ -287,21 +275,6 @@ function loadSubagentRegistryFromSqliteOnly(): Map<string, SubagentRunRecord> {
     }
   }
   return runs;
-}
-
-/** Loads subagent runs from sqlite, importing and deleting the legacy JSON store when needed. */
-export function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> {
-  const runs = loadSubagentRegistryFromSqliteOnly();
-  if (runs.size > 0) {
-    return runs;
-  }
-  const legacyRuns = loadSubagentRegistryFromDisk();
-  if (legacyRuns.size === 0) {
-    return runs;
-  }
-  saveSubagentRegistryToSqlite(legacyRuns);
-  removeLegacySubagentRegistryFile();
-  return loadSubagentRegistryFromSqliteOnly();
 }
 
 /** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */
