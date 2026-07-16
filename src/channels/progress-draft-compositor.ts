@@ -10,6 +10,7 @@ import {
 } from "./progress-draft-status-text.js";
 import {
   createChannelProgressDraftGate,
+  type AgentPlanStep,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
@@ -96,6 +97,8 @@ export function createChannelProgressDraftCompositor(params: {
   let preambleItemId: string | undefined;
   let preambleAt: number | undefined;
   let narrationText = "";
+  let planSteps: AgentPlanStep[] | undefined;
+  let planExplanation = "";
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
   let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -110,7 +113,10 @@ export function createChannelProgressDraftCompositor(params: {
   const resolveStatusText = () => {
     const preambleIsFresh =
       preambleAt !== undefined && now() - preambleAt < PROGRESS_STATUS_PREAMBLE_FRESH_MS;
-    return preambleText && (preambleIsFresh || !narrationText) ? preambleText : narrationText;
+    const effectiveNarration = narrationText || planExplanation;
+    return preambleText && (preambleIsFresh || !effectiveNarration)
+      ? preambleText
+      : effectiveNarration;
   };
 
   const formatDraftText = (draftLines = lines, options?: { formatted?: boolean }) =>
@@ -120,6 +126,7 @@ export function createChannelProgressDraftCompositor(params: {
       seed: params.seed,
       formatLine: options?.formatted === false ? undefined : params.formatLine,
       narration: resolveStatusText() || undefined,
+      plan: planSteps,
     });
 
   const clearProgressState = (suppressed: boolean) => {
@@ -133,6 +140,8 @@ export function createChannelProgressDraftCompositor(params: {
     preambleItemId = undefined;
     preambleAt = undefined;
     narrationText = "";
+    planSteps = undefined;
+    planExplanation = "";
   };
 
   const render = async (options?: { flush?: boolean }): Promise<boolean> => {
@@ -290,7 +299,10 @@ export function createChannelProgressDraftCompositor(params: {
       return gate.hasStarted && !finalReplyStarted && !finalReplyDelivered;
     },
     get hasStatusHeadline() {
-      return Boolean(preambleText);
+      return Boolean(resolveStatusText());
+    },
+    get hasPlanProgress() {
+      return Boolean(planSteps?.length);
     },
     markFinalReplyStarted() {
       finalReplyStarted = true;
@@ -354,6 +366,43 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     },
     pushToolProgress: noteProgress,
+    async pushPlanProgress(
+      steps?: AgentPlanStep[],
+      options?: { explanation?: string },
+    ): Promise<boolean> {
+      if (
+        !params.active ||
+        params.mode !== "progress" ||
+        progressSuppressed ||
+        finalReplyStarted ||
+        finalReplyDelivered
+      ) {
+        return false;
+      }
+      planSteps = steps && steps.length > 0 ? steps.map((entry) => ({ ...entry })) : undefined;
+      planExplanation = options?.explanation?.replace(/\s+/g, " ").trim() ?? "";
+      if (!planSteps && !planExplanation) {
+        if (!gate.hasStarted) {
+          return false;
+        }
+        const rendered = await render();
+        if (rendered || formatDraftText()) {
+          return rendered;
+        }
+        lastRenderedText = "";
+        await params.deleteCurrent?.();
+        return true;
+      }
+      const alreadyStarted = gate.hasStarted;
+      await gate.startNow();
+      if (!gate.hasStarted) {
+        return false;
+      }
+      if (alreadyStarted) {
+        await render();
+      }
+      return true;
+    },
     async pushPreambleHeadline(text?: string, options?: { itemId?: string }) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
         return false;

@@ -12,6 +12,7 @@ import {
   resolveImplicitDefaultAgentModelRef,
   resolveRuntime,
   resolveRuntimeModelRef,
+  type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import {
   collectCodexRuntimeModelPolicyRefs,
@@ -34,6 +35,7 @@ function collectModelsMapRefs(params: {
   hits: CodexRouteHit[];
   path: string;
   models: unknown;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const record = asMutableRecord(params.models);
   if (!record) {
@@ -47,6 +49,7 @@ function collectModelsMapRefs(params: {
       hits: params.hits,
       path: `${params.path}.${modelRef}`,
       model: modelRef,
+      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
 }
@@ -57,6 +60,7 @@ function collectAgentModelRefs(params: {
   path: string;
   runtime?: string;
   collectModelsMap?: boolean;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const agent = asMutableRecord(params.agent);
   if (!agent) {
@@ -68,6 +72,7 @@ function collectAgentModelRefs(params: {
       path: `${params.path}.${key}`,
       value: agent[key],
       runtime: key === "model" ? params.runtime : undefined,
+      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
   for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
@@ -75,39 +80,48 @@ function collectAgentModelRefs(params: {
       hits: params.hits,
       path: `${params.path}.${key}`,
       value: agent[key],
+      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.heartbeat.model`,
     value: asMutableRecord(agent.heartbeat)?.model,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectModelConfigSlot({
     hits: params.hits,
     path: `${params.path}.subagents.model`,
     value: asMutableRecord(agent.subagents)?.model,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   const compaction = asMutableRecord(agent.compaction);
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.compaction.model`,
     value: compaction?.model,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.compaction.memoryFlush.model`,
     value: asMutableRecord(compaction?.memoryFlush)?.model,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
   if (params.collectModelsMap) {
     collectModelsMapRefs({
       hits: params.hits,
       path: `${params.path}.models`,
       models: agent.models,
+      blockedModelIdentities: params.blockedModelIdentities,
     });
   }
 }
 
-export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
+export function collectConfigModelRefs(
+  cfg: OpenClawConfig,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): CodexRouteHit[] {
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
   const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
@@ -117,6 +131,7 @@ export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
     path: "agents.defaults",
     runtime: resolveRuntime({ defaultsRuntime }),
     collectModelsMap: true,
+    blockedModelIdentities,
   });
 
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
@@ -134,6 +149,7 @@ export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
         agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
         defaultsRuntime,
       }),
+      blockedModelIdentities,
     });
   }
 
@@ -148,6 +164,7 @@ export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
         hits,
         path: `channels.modelByChannel.${channelId}.${targetId}`,
         value: model,
+        blockedModelIdentities,
       });
     }
   }
@@ -157,18 +174,26 @@ export function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
       hits,
       path: `hooks.mappings.${index}.model`,
       value: mapping.model,
+      blockedModelIdentities,
     });
   }
-  collectStringModelSlot({ hits, path: "hooks.gmail.model", value: cfg.hooks?.gmail?.model });
+  collectStringModelSlot({
+    hits,
+    path: "hooks.gmail.model",
+    value: cfg.hooks?.gmail?.model,
+    blockedModelIdentities,
+  });
   collectStringModelSlot({
     hits,
     path: "messages.tts.summaryModel",
     value: cfg.messages?.tts?.summaryModel,
+    blockedModelIdentities,
   });
   collectStringModelSlot({
     hits,
     path: "channels.discord.voice.model",
     value: asMutableRecord(asMutableRecord(cfg.channels?.discord)?.voice)?.model,
+    blockedModelIdentities,
   });
   return hits;
 }

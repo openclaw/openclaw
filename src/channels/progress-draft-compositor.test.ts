@@ -7,6 +7,39 @@ import {
 import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
 
 describe("createChannelProgressDraftCompositor", () => {
+  it("starts immediately for plans, replaces snapshots, and clears them on reset", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushPreambleHeadline("Implementing the change.");
+    await progress.pushPlanProgress([
+      { step: "Inspect", status: "completed" },
+      { step: "Patch", status: "in_progress" },
+    ]);
+
+    expect(progress.hasStarted).toBe(true);
+    expect(update).toHaveBeenLastCalledWith(
+      "Implementing the change.\n\n✅ Inspect\n▸ Patch",
+      expect.objectContaining({ flush: true }),
+    );
+
+    await progress.pushPlanProgress([{ step: "Test", status: "in_progress" }]);
+    expect(update).toHaveBeenLastCalledWith(
+      "Implementing the change.\n\n▸ Test",
+      expect.anything(),
+    );
+
+    progress.reset();
+    await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
+    expect(update).toHaveBeenLastCalledWith("🛠️ Next", expect.anything());
+  });
+
   it("keeps the progress label visible when tool lines are hidden", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
@@ -495,6 +528,31 @@ describe("createChannelProgressDraftCompositor", () => {
 
     expect(update).toHaveBeenLastCalledWith(
       "Shelling\n\nComparing the configuration now.",
+      expect.anything(),
+    );
+  });
+
+  it("uses a plan explanation after the preamble becomes stale", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.");
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
+      explanation: "Applying the revised plan.",
+    });
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nApplying the revised plan.\n\n▸ Patch",
       expect.anything(),
     );
   });

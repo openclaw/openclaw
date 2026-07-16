@@ -98,7 +98,7 @@ export function renderTerminalPanelTabs(params: {
             aria-label=${`${t("terminal.closeSession")}: ${terminalTabLabel(tab)}`}
             @click=${() => params.onClose(tab.id)}
           >
-            ${CLOSE_GLYPH}
+            <span class="tp-tab__close-box">${CLOSE_GLYPH}</span>
           </button>
         `;
       })}

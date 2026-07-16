@@ -214,6 +214,10 @@ function createContext(controlUiBasePath?: string) {
   return {
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
+    approvalEvents: {
+      publishRequested: vi.fn(() => 0),
+      publishResolved: vi.fn(),
+    },
     getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),
     getRuntimeConfig: () => ({ gateway: { controlUi: { basePath: controlUiBasePath } } }),
     logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
@@ -874,6 +878,14 @@ describe("unified approval handlers", () => {
       new Set(["approval-client"]),
       { dropIfSlow: true },
     );
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "plugin",
+      expect.objectContaining({
+        id: pending.record.id,
+        decision: "deny",
+        resolvedBy: "Approval Test",
+      }),
+    );
     expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
       kind: "device",
       id: "phone-device",
@@ -965,6 +977,10 @@ describe("unified approval handlers", () => {
     );
     expect(context.logGateway.error).toHaveBeenCalledWith(
       expect.stringContaining("exec approvals: unified resolve forwarder failed"),
+    );
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "exec",
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
     );
   });
 
