@@ -52,6 +52,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
+const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
 function formatUpdateRunErrorMessage(err: unknown): string {
   if (err instanceof Error) {
@@ -168,6 +169,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     let handoff:
       | { status: "started"; pid?: number; command: string }
+      | { status: "already-running"; command: string; message: string }
       | { status: "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
@@ -276,14 +278,14 @@ export const updateHandlers: GatewayRequestHandlers = {
             });
             ownsManagedServiceHandoff = started.ownsHandoff;
             sentinelMeta.handoffId = started.handoffId ?? handoffId;
-            handoff = {
-              status: "started",
-              ...(started.pid ? { pid: started.pid } : {}),
-              command: started.command,
-            };
             // The owner pairs helper creation with parent exit before any
             // persistence can fail. Joiners leave both to the active owner.
             if (ownsManagedServiceHandoff) {
+              handoff = {
+                status: "started",
+                ...(started.pid ? { pid: started.pid } : {}),
+                command: started.command,
+              };
               managedHandoffRestart = scheduleGatewaySigusr1Restart({
                 delayMs: managedRestartDelayMs,
                 reason: "update.run",
@@ -296,22 +298,34 @@ export const updateHandlers: GatewayRequestHandlers = {
                   changedPaths: [],
                 },
               });
+            } else {
+              // A restart sentinel has one continuation owner. Reject this RPC
+              // instead of accepting metadata that the active handoff cannot persist.
+              handoff = {
+                status: "already-running",
+                command: started.command,
+                message: "Another managed update is already running; retry after it completes.",
+              };
             }
             result = {
               status: "skipped",
               mode: installSurface.mode,
               root: installSurface.root,
-              reason: CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+              reason: ownsManagedServiceHandoff
+                ? CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON
+                : MANAGED_HANDOFF_ALREADY_RUNNING_REASON,
               ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
-              steps: [
-                {
-                  name: "managed-service update handoff",
-                  command: started.command,
-                  cwd: root,
-                  durationMs: Date.now() - startedAt,
-                  exitCode: null,
-                },
-              ],
+              steps: ownsManagedServiceHandoff
+                ? [
+                    {
+                      name: "managed-service update handoff",
+                      command: started.command,
+                      cwd: root,
+                      durationMs: Date.now() - startedAt,
+                      exitCode: null,
+                    },
+                  ]
+                : [],
               durationMs: Date.now() - startedAt,
             };
           } catch (err) {

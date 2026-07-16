@@ -544,7 +544,7 @@ describe("update.run restart scheduling", () => {
     );
   });
 
-  it("does not replace sentinel ownership or schedule restart when joining a handoff", async () => {
+  it("rejects a joining request instead of dropping its restart continuation", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
     startManagedServiceUpdateHandoffMock.mockResolvedValueOnce({
@@ -557,13 +557,33 @@ describe("update.run restart scheduling", () => {
     });
 
     const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload(),
+      captureUpdateRunPayload({
+        sessionKey: "agent:main:webchat:dm:user-123",
+        continuationMessage: "Report the update result after restart.",
+      }),
     );
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
-    expect(payload?.ok).toBe(true);
-    expect(payload?.handoff?.status).toBe("started");
+    expect(capturedPayload).toBeUndefined();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          sessionKey: "agent:main:webchat:dm:user-123",
+          continuationMessage: "Report the update result after restart.",
+        }),
+      }),
+    );
+    expect(payload?.ok).toBe(false);
+    expect(payload?.result).toMatchObject({
+      status: "skipped",
+      reason: "managed-service-handoff-already-running",
+    });
+    expect(payload?.handoff).toEqual({
+      status: "already-running",
+      command: "openclaw update --yes --timeout 1800",
+      message: "Another managed update is already running; retry after it completes.",
+    });
     expect(payload?.sentinel?.persisted).toBe(false);
   });
 
