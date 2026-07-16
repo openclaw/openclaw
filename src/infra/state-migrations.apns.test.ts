@@ -278,6 +278,22 @@ describe("legacy APNs Doctor migration", () => {
       { registrationsByNodeId: { "legacy-relay": relayRegistration({ distribution: "beta" }) } },
     ],
     [
+      "exhausted direct timestamp",
+      {
+        registrationsByNodeId: {
+          node: directRegistration({ nodeId: "node", updatedAtMs: Number.MAX_SAFE_INTEGER }),
+        },
+      },
+    ],
+    [
+      "exhausted relay timestamp",
+      {
+        registrationsByNodeId: {
+          "legacy-relay": relayRegistration({ updatedAtMs: Number.MAX_SAFE_INTEGER }),
+        },
+      },
+    ],
+    [
       "overlong relay handle",
       {
         registrationsByNodeId: {
@@ -311,6 +327,26 @@ describe("legacy APNs Doctor migration", () => {
 
     expect(result.warnings[0]).toMatch(/legacy APNs/i);
     await expect(loadApnsRegistration("node", stateDir)).resolves.toBeNull();
+    expect(fs.existsSync(sourcePath)).toBe(true);
+  });
+
+  it("sanitizes malformed JSON warnings", async () => {
+    const stateDir = useStateDir();
+    const sourcePath = path.join(stateDir, "push", "apns-registrations.json");
+    const privateMarker = "must-not-appear-in-doctor-output";
+    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fsp.writeFile(
+      sourcePath,
+      `{"registrationsByNodeId":{"node":{"nodeId":"node","value":${privateMarker}}}}`,
+      "utf8",
+    );
+
+    const result = await migrate(stateDir);
+
+    expect(result.warnings).toEqual([
+      "Failed reading legacy APNs state: Error: legacy JSON store contains invalid JSON",
+    ]);
+    expect(result.warnings.join("\n")).not.toContain(privateMarker);
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 

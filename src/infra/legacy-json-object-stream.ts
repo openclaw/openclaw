@@ -56,6 +56,16 @@ class JsonCharacterCursor {
   }
 }
 
+function parseLegacyJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    // V8 parse errors can quote source bytes. Legacy state may contain device
+    // credentials, so Doctor warnings must expose only a content-free message.
+    throw new Error("legacy JSON store contains invalid JSON");
+  }
+}
+
 async function expectCharacter(cursor: JsonCharacterCursor, expected: string): Promise<void> {
   await cursor.skipWhitespace();
   const actual = await cursor.take();
@@ -86,7 +96,7 @@ async function readJsonString(cursor: JsonCharacterCursor): Promise<string> {
       continue;
     }
     if (character === '"') {
-      const parsed = JSON.parse(raw) as unknown;
+      const parsed = parseLegacyJson(raw);
       if (typeof parsed !== "string") {
         throw new Error("invalid string in legacy JSON store");
       }
@@ -128,7 +138,7 @@ async function readJsonObject(cursor: JsonCharacterCursor): Promise<unknown> {
       depth -= 1;
     }
   }
-  return JSON.parse(raw) as unknown;
+  return parseLegacyJson(raw);
 }
 
 async function parseSinglePropertyObject(params: {
