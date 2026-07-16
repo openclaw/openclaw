@@ -1,5 +1,6 @@
 // Msteams plugin module implements token behavior.
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
@@ -47,6 +48,20 @@ function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
   return "secret";
 }
 
+function resolveFederatedString(configValue: unknown, envValue: unknown): string | undefined {
+  return normalizeOptionalString(configValue) ?? normalizeOptionalString(envValue);
+}
+
+function resolveFederatedPath(configValue?: string, envValue?: string): string | undefined {
+  if (normalizeOptionalString(configValue)) {
+    return configValue;
+  }
+  if (normalizeOptionalString(envValue)) {
+    return envValue;
+  }
+  return undefined;
+}
+
 // ── hasConfiguredMSTeamsCredentials ────────────────────────────────────────
 
 export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
@@ -62,7 +77,9 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
   );
 
   if (authType === "federated") {
-    const hasCert = Boolean(cfg?.certificatePath || process.env.MSTEAMS_CERTIFICATE_PATH);
+    const hasCert = Boolean(
+      resolveFederatedPath(cfg?.certificatePath, process.env.MSTEAMS_CERTIFICATE_PATH),
+    );
     const hasManagedIdentity =
       cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
 
@@ -95,17 +112,23 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   }
 
   if (authType === "federated") {
-    const certificatePath =
-      cfg?.certificatePath || process.env.MSTEAMS_CERTIFICATE_PATH || undefined;
+    const certificatePath = resolveFederatedPath(
+      cfg?.certificatePath,
+      process.env.MSTEAMS_CERTIFICATE_PATH,
+    );
 
-    const certificateThumbprint =
-      cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;
+    const certificateThumbprint = resolveFederatedString(
+      cfg?.certificateThumbprint,
+      process.env.MSTEAMS_CERTIFICATE_THUMBPRINT,
+    );
 
     const useManagedIdentity =
       cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
 
-    const managedIdentityClientId =
-      cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
+    const managedIdentityClientId = resolveFederatedString(
+      cfg?.managedIdentityClientId,
+      process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID,
+    );
 
     // At least one federated mechanism must be configured.
     if (!certificatePath && !useManagedIdentity) {
