@@ -24,7 +24,7 @@ vi.mock("../../utils/platform.js", () => ({
   isWindows: () => false,
 }));
 
-import { buildBotLogsResult, testing } from "./log-helpers.js";
+import { buildBotLogsResult } from "./log-helpers.js";
 
 describe("buildBotLogsResult", () => {
   let tempHome: string;
@@ -62,7 +62,9 @@ describe("buildBotLogsResult", () => {
   });
 
   it("completes short fs.readSync tail windows before selecting lines", () => {
-    const logFile = path.join(tempHome, "gateway.log");
+    const logDir = path.join(tempHome, ".openclaw", "logs");
+    fs.mkdirSync(logDir, { recursive: true });
+    const logFile = path.join(logDir, "gateway.log");
     const lines = Array.from(
       { length: 40 },
       (_, index) => `line ${String(index + 1).padStart(2, "0")}`,
@@ -81,10 +83,16 @@ describe("buildBotLogsResult", () => {
       return realReadSync(fd, buffer, offset, Math.min(length, 7), position);
     }) as typeof fs.readSync);
 
-    const result = testing.tailFileLines(logFile, 5);
+    const result = buildBotLogsResult();
 
     expect(readSpy.mock.calls.length).toBeGreaterThan(1);
-    expect(result.tail).toEqual(["line 37", "line 38", "line 39", "line 40", ""]);
-    expect(result.tail.join("\n")).not.toContain("\0");
+    expect(typeof result).toBe("object");
+    if (!result || typeof result === "string") {
+      throw new Error("expected file upload result");
+    }
+    const exportedLogs = fs.readFileSync(result.filePath, "utf8");
+    expect(exportedLogs).toContain("line 01");
+    expect(exportedLogs).toContain("line 40");
+    expect(exportedLogs).not.toContain("\0");
   });
 });

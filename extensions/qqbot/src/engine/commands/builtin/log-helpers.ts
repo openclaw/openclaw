@@ -273,7 +273,6 @@ function tailFileLines(
     fs.closeSync(fd);
   }
 }
-export const testing = { tailFileLines };
 
 /**
  * Build the /bot-logs result: collect recent log files, write them to a temp file.
