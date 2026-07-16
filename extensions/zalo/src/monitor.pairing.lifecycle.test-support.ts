@@ -1,4 +1,4 @@
-// Zalo tests cover monitor.pairing.lifecycle plugin behavior.
+// Zalo test support covers monitor.pairing.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {

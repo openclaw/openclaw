@@ -1,4 +1,4 @@
-// Zalo tests cover monitor.reply once.lifecycle plugin behavior.
+// Zalo test support covers monitor.reply once.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";

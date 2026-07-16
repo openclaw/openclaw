@@ -1,4 +1,4 @@
-// Zalo tests cover monitor durable plugin behavior.
+// Zalo test support covers monitor durable plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareZaloDurableReplyPayload,

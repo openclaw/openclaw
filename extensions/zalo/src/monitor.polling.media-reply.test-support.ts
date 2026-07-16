@@ -1,4 +1,4 @@
-// Zalo tests cover monitor.polling.media reply plugin behavior.
+// Zalo test support covers monitor.polling.media reply plugin behavior.
 import type { ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
