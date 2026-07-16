@@ -2911,6 +2911,36 @@ describe("agent event handler", () => {
     expect(clearAgentRunContext).not.toHaveBeenCalled();
   });
 
+  it("cancels deferred lifecycle errors when the handler is disposed", () => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-dispose",
+      lifecycleErrorRetryGraceMs: 100,
+    });
+
+    handler({
+      runId: "run-dispose",
+      seq: 1,
+      stream: "lifecycle",
+      sessionKey: "session-dispose",
+      ts: 2_000,
+      data: { phase: "error", error: "retryable provider failure" },
+    });
+    expect(vi.getTimerCount()).toBe(1);
+
+    handler.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(100);
+
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+    expect(
+      chatBroadcastCalls(broadcast).some(
+        ([, payload]) => (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+  });
+
   it("clears tracked active runs before terminal sessions.changed broadcasts", async () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",

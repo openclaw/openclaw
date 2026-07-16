@@ -33,52 +33,42 @@ const nodeHostMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
-  const resolveWithTestShellPath = (
-    command: string,
-    pathEnv: string,
-    env: NodeJS.ProcessEnv | undefined,
-    options:
-      | {
-          fallbackToLoginShell?: boolean;
-          preferLoginShell?: boolean;
-          withPathEnv?: boolean;
-        }
-      | undefined,
-  ) => {
-    const fallbackPath = options?.fallbackToLoginShell
-      ? nodeHostMocks.userShellPaths.get(command)
-      : undefined;
-    const directResolution = actual.resolveExecutableFromPathEnv(command, pathEnv, env, {
-      withPathEnv: true,
-    });
-    if (directResolution && !options?.preferLoginShell) {
-      return directResolution;
-    }
-    if (!fallbackPath) {
-      return directResolution;
-    }
-    const shellResolution = actual.resolveExecutableFromPathEnv(command, fallbackPath, env, {
-      withPathEnv: true,
-    });
-    return shellResolution ? { ...shellResolution, pathEnv: fallbackPath } : directResolution;
-  };
   return {
     ...actual,
     runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveExecutableFromPathEnv: (
+    resolveNodeHostExecutable: (
       command: string,
-      pathEnv: string,
-      env: NodeJS.ProcessEnv | undefined,
-      options:
-        | {
-            fallbackToLoginShell?: boolean;
-            preferLoginShell?: boolean;
-            withPathEnv?: boolean;
-          }
-        | undefined,
+      options: {
+        env?: NodeJS.ProcessEnv;
+        pathEnv?: string;
+        includeExtensionless?: boolean;
+        strategy: "direct" | "fallback" | "prefer";
+      },
     ) => {
-      const resolution = resolveWithTestShellPath(command, pathEnv, env, options);
-      return options?.withPathEnv ? resolution : resolution?.executable;
+      const env = options.env ?? process.env;
+      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
+      const direct = actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv,
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+      if (direct && options.strategy !== "prefer") {
+        return direct;
+      }
+      const shellPath = nodeHostMocks.userShellPaths.get(command);
+      if (!shellPath) {
+        return direct;
+      }
+      const shellExecutable = actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: shellPath,
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+      return shellExecutable
+        ? { executable: shellExecutable.executable, pathEnv: shellPath }
+        : direct;
     },
   };
 });

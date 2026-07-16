@@ -22,8 +22,10 @@ vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
     },
 }));
 vi.mock("openclaw/plugin-sdk/command-auth-native", () => ({
-  hasControlCommand: (text: string) => text.trim().startsWith("!"),
-  shouldComputeCommandAuthorized: (text: string) => text.trim().startsWith("!"),
+  hasControlCommand: (text: string) => {
+    const body = text.trim().toLowerCase();
+    return body === "/status" || body.startsWith("/status ");
+  },
   resolveControlCommandGate: ({
     hasControlCommand,
     authorizers,
@@ -443,7 +445,7 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m3a", type: "text", text: "!status", quoteToken: "quote-token" },
+          message: { id: "m3a", type: "text", text: "/status", quoteToken: "quote-token" },
           source: { type: "group", groupId: "group-1", userId: "user-ag" },
           webhookEventId: "evt-3a",
         }),
@@ -466,12 +468,87 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("does not bypass requireMention for a plain allowlisted message with an inline slash token", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: { id: "m-bypass-1", type: "text", text: "cd /home", quoteToken: "quote-token" },
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-1",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("still bypasses requireMention for an allowlisted real control command", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: { id: "m-bypass-2", type: "text", text: "/status", quoteToken: "quote-token" },
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-2",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps command authorization for mentioned group text with an inline command token", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-bypass-mentioned",
+            type: "text",
+            text: "@Bot please check /status",
+            mention: {
+              mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }],
+            },
+          } as MessageEvent["message"],
+          source: { type: "group", groupId: "group-1", userId: "user-cmd" },
+          webhookEventId: "evt-bypass-mentioned",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["user-cmd"],
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ commandAuthorized: true }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks unauthorized group control commands even when an open group sender is allowed", async () => {
     const processMessage = vi.fn();
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m3b", type: "text", text: "!status", quoteToken: "quote-token" },
+          message: { id: "m3b", type: "text", text: "/status", quoteToken: "quote-token" },
           source: { type: "group", groupId: "group-1", userId: "user-open" },
           webhookEventId: "evt-3b",
         }),
@@ -1026,6 +1103,33 @@ describe("handleLineWebhookEvents", () => {
     );
 
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps command authorization for DM text with an inline command token", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-command-dm",
+        type: "text",
+        text: "please check /status",
+        quoteToken: "test-token-placeholder",
+      },
+      source: { type: "user", userId: "user-dm" },
+      webhookEventId: "evt-command-dm",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ commandAuthorized: true }),
+    );
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 

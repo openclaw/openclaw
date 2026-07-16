@@ -6,12 +6,13 @@ scenario:
     primary:
       - channels.threads
   execution:
+    profiles: { "matrix:all": 59, "matrix:e2ee-smoke": 1 }
     kind: flow
     channel: matrix
     timeoutMs: 75000
     retryCount: 0
+    driver: live
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         encryption: true
         startupVerification: off

@@ -40,6 +40,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
+    "src/state/openclaw-state-db-operator-approval-migration.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
@@ -71,7 +72,6 @@ const rawSqliteAllowPathGroups = {
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
-    "src/agents/subagent-registry.store.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",

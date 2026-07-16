@@ -4,6 +4,7 @@
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
@@ -187,6 +188,14 @@ export async function startClickClackGatewayAccount(
     workspace: workspaceId,
     botUserId: configuredAccount.botUserId ?? me.id,
   };
+  const processIncomingEvent = (event: ClickClackEvent) =>
+    processEvent({
+      account,
+      config: ctx.cfg,
+      client,
+      event,
+      botUserId: account.botUserId,
+    });
   if (account.commandMenu) {
     await syncClickClackCommandMenu({ cfg: ctx.cfg, client, log: ctx.log });
   }
@@ -221,15 +230,7 @@ export async function startClickClackGatewayAccount(
           workspaceId,
           afterCursor,
           abortSignal: ctx.abortSignal,
-          onEvent: async (event) => {
-            await processEvent({
-              account,
-              config: ctx.cfg,
-              client,
-              event,
-              botUserId: account.botUserId,
-            });
-          },
+          onEvent: processIncomingEvent,
         });
       }
       if (ctx.abortSignal.aborted) {
@@ -239,14 +240,27 @@ export async function startClickClackGatewayAccount(
       await new Promise<void>((resolve, reject) => {
         let settled = false;
         let removeAbortListener: (() => void) | undefined;
-        const finishSocketCycle = () => {
+        const finishSocketCycle = (error?: unknown) => {
           if (settled) {
             return;
           }
           settled = true;
           removeAbortListener?.();
           removeAbortListener = undefined;
-          resolve();
+          if (error === undefined) {
+            resolve();
+            return;
+          }
+          // A failed message ends this socket's ownership. Closing it prevents
+          // the old connection from surviving beside the supervisor's restart.
+          socket.close();
+          reject(
+            error instanceof Error
+              ? error
+              : new Error(`ClickClack ws message failed: ${formatErrorMessage(error)}`, {
+                  cause: error,
+                }),
+          );
         };
         const abort = () => {
           socket.close();
@@ -264,24 +278,10 @@ export async function startClickClackGatewayAccount(
               return;
             }
             afterCursor = event.cursor || afterCursor;
-            await processEvent({
-              account,
-              config: ctx.cfg,
-              client,
-              event,
-              botUserId: account.botUserId ?? "",
-            });
-          })().catch((e: unknown) =>
-            reject(
-              e instanceof Error
-                ? e
-                : new Error(`ClickClack ws message failed: ${formatErrorMessage(e)}`, {
-                    cause: e,
-                  }),
-            ),
-          );
+            await processIncomingEvent(event);
+          })().catch(finishSocketCycle);
         });
-        socket.on("close", finishSocketCycle);
+        socket.on("close", () => finishSocketCycle());
         socket.on("error", (error) => {
           if (settled || ctx.abortSignal.aborted) {
             finishSocketCycle();
@@ -297,9 +297,15 @@ export async function startClickClackGatewayAccount(
         });
       });
       if (!ctx.abortSignal.aborted) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, account.reconnectMs);
-        });
+        try {
+          // The gateway abort owns both the active socket and its reconnect delay;
+          // otherwise shutdown can remain pending for the full configured backoff.
+          await sleepWithAbort(account.reconnectMs, ctx.abortSignal);
+        } catch (error) {
+          if (!ctx.abortSignal.aborted) {
+            throw error;
+          }
+        }
       }
     }
   } finally {

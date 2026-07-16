@@ -1,7 +1,7 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { resolveExecutableFromPathEnv } from "openclaw/plugin-sdk/node-host";
+import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -16,7 +16,6 @@ import type {
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   OPENCODE_LOCAL_SESSION_HOST_ID as LOCAL_HOST_ID,
   OPENCODE_NODE_INVOKE_TIMEOUT_MS as NODE_TIMEOUT_MS,
@@ -46,7 +45,6 @@ export {
 
 const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
-const MAX_SEARCH_LENGTH = 500;
 const TRANSCRIPT_ITEM_TYPES = new Set([
   "userMessage",
   "agentMessage",
@@ -244,9 +242,7 @@ async function listOpenCodeNodeHost(
       command: OPENCODE_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search?.trim()
-          ? { searchTerm: truncateUtf16Safe(query.search.trim(), MAX_SEARCH_LENGTH) }
-          : {}),
+        ...(query.search ? { searchTerm: query.search } : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
@@ -317,14 +313,13 @@ async function listOpenCodeHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const searchTerm = query.search
-    ? truncateUtf16Safe(query.search.trim(), MAX_SEARCH_LENGTH) || undefined
-    : undefined;
   const hosts: SessionCatalogHost[] = [];
   if (
     (!requested || requested.has(LOCAL_HOST_ID)) &&
-    resolveExecutableFromPathEnv("opencode", process.env.PATH ?? "", process.env, {
-      fallbackToLoginShell: true,
+    resolveNodeHostExecutable("opencode", {
+      env: process.env,
+      pathEnv: process.env.PATH ?? "",
+      strategy: "fallback",
     })
   ) {
     try {
@@ -335,7 +330,7 @@ async function listOpenCodeHosts(
         connected: true,
         ...(await listLocalOpenCodeSessionPage({
           limit: query.limitPerHost,
-          ...(searchTerm ? { searchTerm } : {}),
+          ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         }).then((page) => setTerminalCapability(page, true))),
       });

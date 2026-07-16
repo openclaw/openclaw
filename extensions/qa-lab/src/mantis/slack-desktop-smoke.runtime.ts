@@ -8,7 +8,7 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
-import { listSlackQaScenarioCatalog } from "../live-transports/slack/slack-live.runtime.js";
+import { listSlackQaScenarioCatalog } from "../live-transports/slack/slack-live.scenarios.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
@@ -1159,9 +1159,9 @@ if [ "$qa_status" -ne 0 ]; then
   find "$out" -maxdepth 3 -type f -printf "%p %s bytes\\n" | sort || true
   for diagnostic_file in \
     "$out/slack-desktop-command.log" \
-    "$out/slack-qa/slack-qa-report.md" \
-    "$out/slack-qa/slack-qa-summary.json" \
-    "$out/slack-qa/slack-qa-observed-messages.json" \
+    "$out/slack-qa/qa-suite-report.md" \
+    "$out/slack-qa/qa-suite-summary.json" \
+    "$out/slack-qa/qa-evidence.json" \
     "$out/remote-command-timeout.txt" \
     "$out/approval-checkpoint-watcher.log" \
     "$out/chrome.log" \

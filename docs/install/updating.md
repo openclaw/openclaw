@@ -15,7 +15,7 @@ state needs manual repair.
 
 ## Recommended: `openclaw update`
 
-Detects your install type (npm or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
+Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
 
 ```bash
 openclaw update
@@ -179,6 +179,20 @@ explicit OpenClaw update means "install the selected release now."
 pnpm add -g openclaw@latest
 ```
 
+If pnpm 11 installed OpenClaw 2026.7.1, run that manual command once. That
+release predates pnpm 11's isolated global-package layout, so its updater can
+mistake another npm installation for the running CLI. Later releases retain
+pnpm ownership and follow the replacement package root during updates. They
+also use the owning manager's reported global bin directory and stop before
+mutation when the available pnpm command reports another global root or major,
+or when the invoking package is orphaned or not the only active OpenClaw
+install there.
+
+If OpenClaw shares a pnpm 11 global install group with another package, the
+automatic updater stops before changing the group. Update the original
+comma-separated group manually so its sibling packages and build policy stay
+intact.
+
 ```bash
 bun add -g openclaw@latest
 ```
@@ -253,8 +267,9 @@ Gateways, and manually managed local Gateways.
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the
 app runs `openclaw update --tag <app-version> --json`, restarts its Gateway,
-and verifies health in a setup-style progress window. Failure details stay
-visible with Retry, [Update guide](/install/updating), and
+and verifies health in a setup-style progress window. The window appears only
+when that managed Gateway needs update, repair, or installation; app-only updates relaunch
+directly into the app. Failure details stay visible with Retry, [Update guide](/install/updating), and
 [Discord](https://discord.gg/clawd) actions. The app never uses this coordinated
 path for a remote or externally managed Gateway, never downgrades a newer
 Gateway, and never overrides an `extended-stable` channel pin.

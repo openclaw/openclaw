@@ -311,6 +311,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/clickclack
 - Headings:
   - H2: Quick setup
+  - H3: Alternative: env-based token
+  - H3: JSON5 reference
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
@@ -320,6 +322,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Targets
   - H2: Permissions
   - H2: Troubleshooting
+
+## channels/discord-activities.md
+
+- Route: /channels/discord-activities
+- Headings:
+  - H2: Prerequisites
+  - H2: Setup
+  - H2: Security model
+  - H2: Troubleshooting
+  - H3: The Activity says “Gateway offline”
+  - H3: Discord opens a blank page or reports blocked:csp
+  - H3: “Not authorized”
+  - H3: “Widget unavailable”
 
 ## channels/discord.md
 
@@ -342,6 +357,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Voice messages
   - H2: Troubleshooting
   - H2: Configuration reference
+  - H3: Discord Activities
   - H2: Safety and operations
   - H2: Related
 
@@ -2804,7 +2820,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Discord Mantis scenarios
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
-  - H2: Live transport coverage
+  - H2: Canonical scenario coverage
   - H2: Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
   - H3: Telegram QA
@@ -5971,6 +5987,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Policy tiers and approvals
   - H2: Inspect status and audit history
   - H2: 1Password CLI behavior
+  - H2: Error codes
 
 ## plugins/plugin-inventory.md
 

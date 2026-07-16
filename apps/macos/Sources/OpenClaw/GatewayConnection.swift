@@ -170,6 +170,7 @@ actor GatewayConnection {
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
         case execApprovalResolve = "exec.approval.resolve"
+        case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
         case cronRuns = "cron.runs"
         case cronRun = "cron.run"

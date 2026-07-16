@@ -118,6 +118,17 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
 ]);
 const DEFAULT_WHOLE_GROUP_SECONDS = 25;
 const DEFAULT_SECONDS_PER_TEST_FILE = 0.5;
+// Spawn/signal-timing suites (process-group waits, PTY smoke) flake when a
+// concurrent sibling Vitest run competes for the 4 vCPU runner. Pack them
+// into bins the shard runner executes at concurrency 1.
+const EXCLUSIVE_COMPACT_GROUP_RE =
+  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$/u;
+// Exclusive bins run serially, so their packed estimate is their wall clock.
+const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
+
+function isExclusiveCompactGroup(group) {
+  return EXCLUSIVE_COMPACT_GROUP_RE.test(group.shard_name);
+}
 
 function estimateCompactGroupSeconds(group) {
   const hint = COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name);
@@ -891,6 +902,7 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "core-unit-fast",
         configs: [
           "test/vitest/vitest.unit-fast.config.ts",
+          "test/vitest/vitest.unit-fast-isolated.config.ts",
           "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         ],
         requiresDist: false,
@@ -1335,17 +1347,25 @@ function createCompactNodeTestShardBundles(options = {}) {
     );
     for (const group of sortedGroups) {
       const weight = estimateCompactGroupSeconds(group);
+      const exclusive = isExclusiveCompactGroup(group);
+      const secondsCap = exclusive ? COMPACT_EXCLUSIVE_JOB_SECONDS : COMPACT_NODE_TEST_JOB_SECONDS;
       const bin = bins.find(
         (candidate) =>
+          candidate.exclusive === exclusive &&
           candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
-          candidate.weight + weight <= COMPACT_NODE_TEST_JOB_SECONDS,
+          candidate.weight + weight <= secondsCap,
       );
       if (bin) {
         bin.groups.push(group);
         bin.weight += weight;
         bin.hasWholeConfigGroup ||= !group.includePatterns;
       } else {
-        bins.push({ groups: [group], hasWholeConfigGroup: !group.includePatterns, weight });
+        bins.push({
+          exclusive,
+          groups: [group],
+          hasWholeConfigGroup: !group.includePatterns,
+          weight,
+        });
       }
     }
 
@@ -1362,6 +1382,12 @@ function createCompactNodeTestShardBundles(options = {}) {
         ...(bin.hasWholeConfigGroup
           ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
           : {}),
+        // Every compact bin runs its plans serially. Overlapping two Vitest
+        // runs on one runner starves timing-sensitive tests on both runner
+        // classes (worker-startup timeouts on 4 vCPU, UI-animation and
+        // lock-timing flakes on 8 vCPU), and the packed weights are
+        // contention-inflated so serializing is roughly wall-neutral.
+        planConcurrency: 1,
       });
     }
   }

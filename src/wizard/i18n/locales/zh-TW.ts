@@ -622,6 +622,25 @@ export const zh_TW = {
       helpCreateBot: "2) 建立 bot 並複製它的 token",
       helpOpenConsole: "1) Mattermost System Console -> Integrations -> Bot Accounts",
     },
+    clickclack: {
+      baseUrlPrompt: "ClickClack 伺服器 URL",
+      botToken: "ClickClack bot token",
+      botTokenInput: "輸入 ClickClack bot token",
+      botTokenKeep: "ClickClack bot token 已設定。保留目前值？",
+      botTokenTitle: "ClickClack bot token",
+      connectionFailed: "連線檢查失敗：{error}。設定已儲存；修正連線後重新執行設定。",
+      connectionTitle: "ClickClack 連線",
+      connected: "已連線為 @{handle} — 工作區 {workspace} 已解析。",
+      envPrompt: "偵測到 CLICKCLACK_BOT_TOKEN。使用環境變數？",
+      helpCreateToken:
+        "在 ClickClack 中：工作區設定 → Integrations → OpenClaw → 建立 bot → 複製 token",
+      invalidToken: "ClickClack 拒絕了 bot token（401）。複製目前 token 後重新執行設定。",
+      validationWarningTitle: "ClickClack 連線檢查",
+      workspaceHelp: "可使用 wsp_… ID、工作區 slug 或顯示名稱。",
+      workspaceNotFound:
+        "找不到工作區「{workspace}」。請檢查 ID、slug 或名稱，列出可用工作區後重新執行設定。",
+      workspacePrompt: "工作區（ID、slug 或名稱）",
+    },
     nextcloudTalk: {
       allowFromPrompt: "Nextcloud Talk allowFrom（使用者 ID）",
       apiPassword: "API 密碼",

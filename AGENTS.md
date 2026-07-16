@@ -182,6 +182,7 @@ Skills own workflows; root owns hard policy and routing.
 - `gh pr view` takes the branch positionally; no `--head` flag.
 - `gh pr diff` has no `--stat`; use `gh pr view --json changedFiles,additions,deletions` or `git diff --stat`.
 - zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
+- `gh pr checks --json`: use `link`, not nonexistent `detailsUrl`.
 - Blacksmith Testbox status/stop: `--id <tbx_id>`; no status JSON flag.
 - Crabbox final timing JSON = proof complete; if portal sync hangs after it, interrupt wrapper only.
 - Sparse-sync temp checkout may claim kept Testbox; repo-path reuse needs `--reclaim`.
@@ -199,6 +200,7 @@ Skills own workflows; root owns hard policy and routing.
 - `rg`: options/globs before `--`; `--` immediately before a leading-dash pattern only.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
 - Shared checkout: serialize `git fetch`; on ref-lock failure, re-read the ref before retry.
+- Git fetch/pull yielding without completion: inspect/stop only the owned process before retry; never overlap retries.
 - `gh api --paginate '<endpoint>' | jq -s ...`; gh `--slurp` may emit nothing and forbids `--jq`/`--template`.
 - Main-bound workflow dispatch: resolve server `main` SHA immediately before dispatch; retry if identity fails after `main` advances.
 - `gh run view --json` uses `attempt`, not `attemptNumber`.
