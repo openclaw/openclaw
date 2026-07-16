@@ -414,10 +414,14 @@ const McpServerSchema = z
   })
   .superRefine((data, ctx) => {
     if (Object.hasOwn(data, "disabled")) {
+      const disabled = Reflect.get(data, "disabled") as unknown;
+      const replacement =
+        typeof disabled === "boolean"
+          ? `"enabled: ${!disabled}" instead, then run "openclaw doctor --fix" to migrate existing config`
+          : 'the canonical "enabled" boolean instead';
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message:
-          'unsupported key "disabled"; use "enabled: false" instead, then run "openclaw doctor --fix" to migrate existing config',
+        message: `unsupported key "disabled"; use ${replacement}`,
         path: ["disabled"],
       });
     }

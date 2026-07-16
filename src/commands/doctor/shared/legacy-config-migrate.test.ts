@@ -73,46 +73,40 @@ describe("compatibility binding repair migrate", () => {
 });
 
 describe("legacy MCP server config migrate", () => {
-  it("moves disabled to the inverse canonical enabled value", () => {
-    const res = migrateLegacyConfigForTest({
+  it("moves disabled to enabled, preserves canonical values, and is idempotent", () => {
+    const raw = {
       mcp: {
         servers: {
           disabled: { command: "example-mcp", disabled: true },
           enabled: { command: "example-mcp", disabled: false },
+          canonical: { command: "example-mcp", disabled: true, enabled: true },
         },
       },
-    });
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      expect.objectContaining({
+        path: "mcp.servers",
+        message: expect.stringContaining('unsupported "disabled" key'),
+      }),
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
 
     expect(res.config?.mcp?.servers).toEqual({
       disabled: { command: "example-mcp", enabled: false },
       enabled: { command: "example-mcp", enabled: true },
+      canonical: { command: "example-mcp", enabled: true },
     });
     expect(res.changes).toEqual([
       "Moved mcp.servers.disabled.disabled true → enabled false.",
       "Moved mcp.servers.enabled.disabled false → enabled true.",
+      "Removed mcp.servers.canonical.disabled true because enabled is already set to true.",
     ]);
-  });
-
-  it("keeps explicit enabled when removing disabled", () => {
-    const res = migrateLegacyConfigForTest({
-      mcp: {
-        servers: {
-          example: { command: "example-mcp", disabled: true, enabled: true },
-        },
-      },
-    });
-
-    expect(res.config?.mcp?.servers?.example).toEqual({
-      command: "example-mcp",
-      enabled: true,
-    });
-    expect(res.changes).toEqual([
-      "Removed mcp.servers.example.disabled true because enabled is already set to true.",
-    ]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });
 
   it("migrates node-host MCP server disabled flags", () => {
-    const res = migrateLegacyConfigForTest({
+    const raw = {
       nodeHost: {
         mcp: {
           servers: {
@@ -120,7 +114,15 @@ describe("legacy MCP server config migrate", () => {
           },
         },
       },
-    });
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      expect.objectContaining({
+        path: "nodeHost.mcp.servers",
+        message: expect.stringContaining('unsupported "disabled" key'),
+      }),
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
 
     expect(res.config?.nodeHost?.mcp?.servers?.example).toEqual({
       command: "example-mcp",
