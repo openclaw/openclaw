@@ -3,12 +3,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { SANDBOX_STAT_PARENT_NOT_FOUND_EXIT_CODE } from "./fs-bridge-shell-command-plans.js";
 import {
   createHostEscapeFixture,
   createSandbox,
   createSandboxFsBridge,
+  dockerExecResult,
   expectMkdirpAllowsExistingDirectory,
   findCallByDockerArg,
+  findCallByScriptFragment,
+  getDockerArg,
+  getDockerScript,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
   withTempDir,
@@ -117,5 +122,69 @@ describe("sandbox fs bridge boundary validation", () => {
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
     await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/ENOENT|no such file/i);
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+  });
+
+  // Stat must work for every existing in-mount path shape the Codex sandbox
+  // exec-server probes: the mount root itself, directories, and paths whose
+  // parents do not exist yet. Regressions here break native apply_patch
+  // writes, which pre-check the target's parent directory through stat.
+  it("stats the workspace mount root instead of escaping to its parent", async () => {
+    await withTempDir("openclaw-fs-bridge-root-stat-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+
+      await expect(bridge.stat({ filePath: "/workspace" })).resolves.not.toBeNull();
+
+      const statCall = findCallByScriptFragment('stat -c "%F|%s|%y"');
+      if (!statCall) {
+        throw new Error("expected docker stat call");
+      }
+      // Anchored at the mount root itself; its parent lives outside the mounts.
+      expect(getDockerArg(statCall[0], 1)).toBe("/workspace");
+      expect(getDockerArg(statCall[0], 2)).toBe(".");
+    });
+  });
+
+  it("stats an existing directory target", async () => {
+    await withTempDir("openclaw-fs-bridge-dir-stat-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+
+      await expect(bridge.stat({ filePath: "subdir" })).resolves.not.toBeNull();
+    });
+  });
+
+  it("returns null instead of throwing when intermediate directories are missing", async () => {
+    await withTempDir("openclaw-fs-bridge-missing-parent-stat-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes('stat -c "%F|%s|%y"')) {
+          return {
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.alloc(0),
+            code: SANDBOX_STAT_PARENT_NOT_FOUND_EXIT_CODE,
+          };
+        }
+        return dockerExecResult("");
+      });
+
+      // A missing-parent stat is a not-found result, not a bridge failure;
+      // writers rely on the not-found signal to create parent directories.
+      await expect(bridge.stat({ filePath: "ghost/sub/file.txt" })).resolves.toBeNull();
+    });
   });
 });
