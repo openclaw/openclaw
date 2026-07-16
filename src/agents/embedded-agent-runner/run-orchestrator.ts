@@ -10,6 +10,7 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -255,30 +256,28 @@ async function runEmbeddedAgentInternal(
           channelContext: params.channelContext,
         }),
       };
-      const supportsBeforeAgentReply =
-        params.trigger === "user" || params.trigger === "heartbeat" || params.trigger === "cron";
-      if (supportsBeforeAgentReply && hookRunner?.hasHooks("before_agent_reply")) {
-        notifyExecutionPhase("before_agent_reply", { provider, model: modelId });
-        const hookResult = await hookRunner.runBeforeAgentReply(
-          { cleanedBody: params.prompt },
-          hookCtx,
-        );
-        if (hookResult?.handled) {
-          return {
-            payloads: buildHandledReplyPayloads(hookResult.reply),
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta: {
-                sessionId: params.sessionId,
-                provider,
-                model: modelId,
-              },
-              finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-              finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+      const hookResult = await runBeforeAgentReplyForTurn({
+        runId: params.runId,
+        trigger: params.trigger,
+        event: { cleanedBody: params.prompt },
+        context: hookCtx,
+        onDispatch: () => notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
+        onDeclined: () => notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
+      });
+      if (hookResult?.handled) {
+        return {
+          payloads: buildHandledReplyPayloads(hookResult.reply),
+          meta: {
+            durationMs: Date.now() - started,
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider,
+              model: modelId,
             },
-          };
-        }
-        notifyExecutionPhase("runtime_plugins", { provider, model: modelId });
+            finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+            finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+          },
+        };
       }
 
       return executePreparedEmbeddedRun({

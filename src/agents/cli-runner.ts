@@ -12,6 +12,7 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runBeforeAgentReplyForTurn } from "../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -485,11 +486,11 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
   // backend resources released only by runPreparedCliAgent's try…finally.
   params.onExecutionStarted?.();
   const hookStartedAt = Date.now();
-  const earlyHookRunner = getGlobalHookRunner();
-  const supportsBeforeAgentReply =
-    params.trigger === "user" || params.trigger === "heartbeat" || params.trigger === "cron";
-  if (supportsBeforeAgentReply && earlyHookRunner?.hasHooks("before_agent_reply")) {
-    const hookContext = {
+  const hookResult = await runBeforeAgentReplyForTurn({
+    runId: params.runId,
+    trigger: params.trigger,
+    event: { cleanedBody: params.prompt },
+    context: {
       runId: params.runId,
       jobId: params.jobId,
       agentId: params.agentId,
@@ -504,45 +505,43 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
         chatId: params.chatId,
         channelContext: params.channelContext,
       }),
-    } as const;
-    params.onExecutionPhase?.({
-      phase: "before_agent_reply",
-      provider: params.provider,
-      model: params.model ?? "",
+    },
+    onDispatch: () =>
+      params.onExecutionPhase?.({
+        phase: "before_agent_reply",
+        provider: params.provider,
+        model: params.model ?? "",
+      }),
+    onDeclined: () =>
+      params.onExecutionPhase?.({
+        phase: "runtime_plugins",
+        provider: params.provider,
+        model: params.model ?? "",
+      }),
+  });
+  if (hookResult?.handled) {
+    const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
+    const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
+      agentId: params.agentId,
     });
-    const hookResult = await earlyHookRunner.runBeforeAgentReply(
-      { cleanedBody: params.prompt },
-      hookContext,
+    const sessionBindingDisabled = syntheticBackend?.config.sessionMode === "none";
+    cliBackendLog.info(
+      `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(finalText)}`,
     );
-    if (hookResult?.handled) {
-      const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
-      const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
-        agentId: params.agentId,
-      });
-      const sessionBindingDisabled = syntheticBackend?.config.sessionMode === "none";
-      cliBackendLog.info(
-        `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(finalText)}`,
-      );
-      return {
-        payloads: buildHandledReplyPayloads(hookResult.reply),
-        meta: {
-          durationMs: Date.now() - hookStartedAt,
-          agentMeta: {
-            sessionId: "",
-            provider: params.provider,
-            model: params.model ?? "",
-            ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
-          },
-          finalAssistantVisibleText: finalText,
-          finalAssistantRawText: finalText,
+    return {
+      payloads: buildHandledReplyPayloads(hookResult.reply),
+      meta: {
+        durationMs: Date.now() - hookStartedAt,
+        agentMeta: {
+          sessionId: "",
+          provider: params.provider,
+          model: params.model ?? "",
+          ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
         },
-      };
-    }
-    params.onExecutionPhase?.({
-      phase: "runtime_plugins",
-      provider: params.provider,
-      model: params.model ?? "",
-    });
+        finalAssistantVisibleText: finalText,
+        finalAssistantRawText: finalText,
+      },
+    };
   }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
   const context = await prepareCliRunContext(params);

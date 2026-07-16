@@ -161,6 +161,27 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe("user turn claimed");
   });
 
+  it("lets before_agent_reply claim heartbeat runs before the embedded attempt starts", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: { text: "heartbeat claimed" },
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "heartbeat",
+    });
+
+    expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+    const [, hookContext] = firstBeforeAgentReplyCall();
+    expect(hookContext?.trigger).toBe("heartbeat");
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.text).toBe("heartbeat claimed");
+  });
+
   it("preserves native user identity in the before_agent_reply context", async () => {
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName: string) => hookName === "before_agent_reply",
@@ -185,20 +206,23 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     );
   });
 
-  it("does not expose internal manual runs to before_agent_reply hooks", async () => {
-    mockedGlobalHookRunner.hasHooks.mockImplementation(
-      (hookName: string) => hookName === "before_agent_reply",
-    );
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+  it.each(["manual", "memory", "overflow"] as const)(
+    "does not expose internal %s runs to before_agent_reply hooks",
+    async (trigger) => {
+      mockedGlobalHookRunner.hasHooks.mockImplementation(
+        (hookName: string) => hookName === "before_agent_reply",
+      );
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      trigger: "manual",
-    });
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        trigger,
+      });
 
-    expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-  });
+      expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("forwards one-shot auxiliary-run flags into the embedded attempt", async () => {
     // Auxiliary-run flags are request-scoped; they must pass through to the

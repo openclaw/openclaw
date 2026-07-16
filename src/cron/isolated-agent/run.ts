@@ -22,6 +22,7 @@ import {
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   releaseAgentRunContext,
+  withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -1774,8 +1775,10 @@ export async function runCronIsolatedAgentTurn(params: {
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     };
-    const execution = await prepared.context.sessionWorkAdmission.run(async () =>
-      executeCronRun(executionParams),
+    const execution = await prepared.context.sessionWorkAdmission.run(() =>
+      withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
+        executeCronRun(executionParams),
+      ),
     );
     const finalized = await finalizeCronRun({
       prepared: prepared.context,
