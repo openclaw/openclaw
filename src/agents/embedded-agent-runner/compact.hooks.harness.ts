@@ -591,6 +591,7 @@ export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
   compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
   testing: typeof import("./compact.js").testing;
+  withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 }> {
@@ -1053,17 +1054,20 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
-    import("./compact.js"),
-    import("./compact.queued.js"),
-    import("../../sessions/transcript-events.js"),
-  ]);
+  const [compactModule, compactQueuedModule, transcriptEvents, transcriptWriteContext] =
+    await Promise.all([
+      import("./compact.js"),
+      import("./compact.queued.js"),
+      import("../../sessions/transcript-events.js"),
+      import("../../config/sessions/transcript-write-context.js"),
+    ]);
 
   return {
     ...compactModule,
     compactEmbeddedAgentSession: compactQueuedModule.compactEmbeddedAgentSession,
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
     onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
+    withOwnedSessionTranscriptWrites: transcriptWriteContext.withOwnedSessionTranscriptWrites,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
