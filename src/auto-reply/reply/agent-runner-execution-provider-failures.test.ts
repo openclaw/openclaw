@@ -13,6 +13,7 @@ import {
   getRunAgentTurnWithFallback,
   createMockTypingSignaler,
   createFollowupRun,
+  createMockReplyOperation,
   createMinimalRunAgentTurnParams,
   NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
@@ -371,6 +372,35 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     },
   );
 
+  it.each(["tool_execution_started", "assistant_output_started"] as const)(
+    "cancels the pending overload notice after %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      let resolveRetry!: (value: unknown) => void;
+      const retryResult = new Promise<unknown>((resolve) => {
+        resolveRetry = resolve;
+      });
+      state.runEmbeddedAgentMock
+        .mockRejectedValueOnce(new Error("model is overloaded"))
+        .mockImplementationOnce((params: EmbeddedAgentParams) => {
+          params.onExecutionPhase?.({ phase });
+          return retryResult;
+        });
+      const onBlockReply = vi.fn();
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const resultPromise = runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+      expect(onBlockReply).not.toHaveBeenCalled();
+
+      resolveRetry({ payloads: [{ text: "recovered" }], meta: {} });
+      await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
+    },
+  );
+
   it("sends the delayed overload notice while a retry provider call is still running", async () => {
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     vi.useFakeTimers();
@@ -439,20 +469,32 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     vi.useFakeTimers();
     state.runEmbeddedAgentMock.mockRejectedValue(new Error("model is overloaded"));
     const abortController = new AbortController();
+    const { replyOperation } = createMockReplyOperation();
+    replyOperation.abortSignal = abortController.signal;
     const onBlockReply = vi.fn();
 
     const resultPromise = runAgentTurnWithFallback(
       createMinimalRunAgentTurnParams({
-        opts: { abortSignal: abortController.signal, onBlockReply },
+        opts: { onBlockReply },
+        replyOperation,
       }),
     );
-    const rejection = expect(resultPromise).rejects.toThrow("aborted");
     await vi.advanceTimersByTimeAsync(0);
     abortController.abort();
-    await rejection;
+    await expect(resultPromise).resolves.toMatchObject({
+      kind: "final",
+      payload: { text: SILENT_REPLY_TOKEN },
+    });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(onBlockReply).not.toHaveBeenCalled();
+    const agentEvents = await import("../../infra/agent-events.js");
+    expect(vi.mocked(agentEvents.emitAgentEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "error", aborted: true }),
+      }),
+    );
   });
 
   it("cancels the overload notice immediately when a slow retrying turn is aborted", async () => {

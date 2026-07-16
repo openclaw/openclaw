@@ -80,16 +80,26 @@ export type OverloadRetryState = {
   completed: boolean;
 };
 
-/** Stops the turn-owned overload notice once no retry can still be running. */
-export async function cancelOverloadRetryNotice(state: OverloadRetryState): Promise<void> {
-  state.completed = true;
+function stopOverloadRetryNotice(state: OverloadRetryState, reason: Error) {
   if (state.noticeTimer) {
     clearTimeout(state.noticeTimer);
     state.noticeTimer = undefined;
   }
   state.noticeAbortCleanup?.();
   state.noticeAbortCleanup = undefined;
-  state.noticeAbortController?.abort(new Error("overload retry finished"));
+  state.noticeAbortController?.abort(reason);
+}
+
+/** Prevents a full-turn replay or stale retry notice after observable work begins. */
+export function markOverloadRetryUnsafeToReplay(state: OverloadRetryState): void {
+  state.unsafeToReplay = true;
+  stopOverloadRetryNotice(state, new Error("overload retry became unsafe to replay"));
+}
+
+/** Stops the turn-owned overload notice once no retry can still be running. */
+export async function cancelOverloadRetryNotice(state: OverloadRetryState): Promise<void> {
+  state.completed = true;
+  stopOverloadRetryNotice(state, new Error("overload retry finished"));
   await state.noticeDelivery;
 }
 
@@ -256,7 +266,6 @@ export async function handleAgentExecutionError(params: {
     !params.overloadRetryState.unsafeToReplay &&
     params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES
   ) {
-    params.state.pendingLifecycleTerminal = undefined;
     params.overloadRetryState.retryCount += 1;
     const retryCount = params.overloadRetryState.retryCount;
     const retryDelayMs = Math.min(
@@ -284,6 +293,7 @@ export async function handleAgentExecutionError(params: {
         if (
           params.overloadRetryState.noticeSent ||
           params.overloadRetryState.completed ||
+          params.overloadRetryState.unsafeToReplay ||
           retryAbortSignal?.aborted
         ) {
           return;
@@ -379,6 +389,7 @@ export async function handleAgentExecutionError(params: {
       }
       throw sleepError;
     }
+    params.state.pendingLifecycleTerminal = undefined;
     turn.replyOperation?.recordActivity();
     return { kind: "retry" };
   }

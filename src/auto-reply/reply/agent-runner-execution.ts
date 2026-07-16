@@ -34,6 +34,7 @@ import {
 import {
   cancelOverloadRetryNotice,
   handleAgentExecutionError,
+  markOverloadRetryUnsafeToReplay,
   type OverloadRetryState,
 } from "./agent-runner-error-handler.js";
 import type {
@@ -183,8 +184,7 @@ async function runAgentTurnWithFallbackInternalWithRetryState(
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
     if (info.phase === "tool_execution_started" || info.phase === "assistant_output_started") {
-      // A full-turn retry after observable output or tool work could duplicate messages or mutations.
-      overloadRetryState.unsafeToReplay = true;
+      markOverloadRetryUnsafeToReplay(overloadRetryState);
     }
     const isUserVisibleExecutionActivity =
       info.phase === "turn_accepted" ||
