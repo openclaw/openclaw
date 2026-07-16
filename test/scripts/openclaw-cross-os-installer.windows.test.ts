@@ -1,0 +1,130 @@
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  buildInstallerSmokeScript,
+  runCommand,
+} from "../../scripts/lib/cross-os-release-checks/index.ts";
+
+function powerShellSingleQuote(value: string) {
+  return value.replace(/'/gu, "''");
+}
+
+async function runPowerShell(params: {
+  script: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
+  return runCommand(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      params.script,
+    ],
+    {
+      check: false,
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 10_000,
+    },
+  );
+}
+
+function installerTempFiles(dir: string) {
+  return readdirSync(dir).filter(
+    (entry) => entry.startsWith("openclaw-installer-") && entry.endsWith(".ps1"),
+  );
+}
+
+describe("cross-OS Windows installer fetch", () => {
+  it.runIf(process.platform === "win32")(
+    "times out stalled bodies without executing partial scripts or leaking temp files",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-installer-"));
+      const healthyMarker = join(dir, "healthy.txt");
+      const stalledMarker = join(dir, "stalled.txt");
+      const server = createServer((request, response) => {
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        if (request.url === "/healthy") {
+          response.end(
+            [
+              "param([string] $Tag, [switch] $NoOnboard)",
+              `[System.IO.File]::WriteAllText('${powerShellSingleQuote(healthyMarker)}', "tag=$Tag noOnboard=$($NoOnboard.IsPresent)")`,
+            ].join("\n"),
+          );
+          return;
+        }
+        response.write(
+          `[System.IO.File]::WriteAllText('${powerShellSingleQuote(stalledMarker)}', 'executed')\n`,
+        );
+      });
+
+      try {
+        await new Promise<void>((resolvePromise, rejectPromise) => {
+          server.once("error", rejectPromise);
+          server.listen(0, "127.0.0.1", resolvePromise);
+        });
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Windows installer proof server did not bind to a TCP port.");
+        }
+        const baseUrl = `http://127.0.0.1:${address.port}`;
+        const env = { ...process.env, TEMP: dir, TMP: dir };
+        const timeouts = { connectTimeoutSeconds: 2, requestTimeoutSeconds: 1 };
+
+        const healthy = await runPowerShell({
+          script: buildInstallerSmokeScript(
+            {
+              installerUrl: `${baseUrl}/healthy`,
+              installTarget: "proof-target",
+              platform: "win32",
+            },
+            timeouts,
+          ),
+          cwd: dir,
+          env,
+          logPath: join(dir, "healthy.log"),
+        });
+
+        expect(healthy.exitCode).toBe(0);
+        expect(readFileSync(healthyMarker, "utf8")).toBe("tag=proof-target noOnboard=True");
+        expect(installerTempFiles(dir)).toEqual([]);
+
+        const stalled = await runPowerShell({
+          script: buildInstallerSmokeScript(
+            {
+              installerUrl: `${baseUrl}/stalled`,
+              installTarget: "proof-target",
+              platform: "win32",
+            },
+            timeouts,
+          ),
+          cwd: dir,
+          env,
+          logPath: join(dir, "stalled.log"),
+        });
+
+        expect(stalled.exitCode).not.toBe(0);
+        expect(`${stalled.stdout}\n${stalled.stderr}`).toContain("exit 28");
+        expect(existsSync(stalledMarker)).toBe(false);
+        expect(installerTempFiles(dir)).toEqual([]);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolvePromise) => {
+          server.close(() => resolvePromise());
+        });
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+});

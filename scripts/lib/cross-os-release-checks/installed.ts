@@ -126,16 +126,24 @@ async function runPowerShellScript(script: string, options: CommandOptions) {
   );
 }
 
-export function buildInstallerSmokeScript(params: {
-  installerUrl: string;
-  installTarget: string;
-  platform?: NodeJS.Platform;
-}) {
+export function buildInstallerSmokeScript(
+  params: {
+    installerUrl: string;
+    installTarget: string;
+    platform?: NodeJS.Platform;
+  },
+  options: {
+    connectTimeoutSeconds?: number;
+    requestTimeoutSeconds?: number;
+  } = {},
+) {
+  const connectTimeoutSeconds = options.connectTimeoutSeconds ?? INSTALLER_CONNECT_TIMEOUT_SECONDS;
+  const requestTimeoutSeconds = options.requestTimeoutSeconds ?? INSTALLER_REQUEST_TIMEOUT_SECONDS;
   if ((params.platform ?? process.platform) === "win32") {
     return `
 $installerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-installer-" + [guid]::NewGuid().ToString("N") + ".ps1")
 try {
-  & curl.exe -fsSL --connect-timeout ${INSTALLER_CONNECT_TIMEOUT_SECONDS} --max-time ${INSTALLER_REQUEST_TIMEOUT_SECONDS} -o $installerPath '${powerShellSingleQuote(params.installerUrl)}'
+  & curl.exe -fsSL --connect-timeout ${connectTimeoutSeconds} --max-time ${requestTimeoutSeconds} -o $installerPath '${powerShellSingleQuote(params.installerUrl)}'
   if ($LASTEXITCODE -ne 0) {
     throw "curl.exe failed to download the OpenClaw installer (exit $LASTEXITCODE)"
   }
@@ -150,7 +158,7 @@ try {
   // Do not retry a streamed installer: a partial first response could be concatenated with the retry.
   return [
     "set -euo pipefail",
-    `curl -fsSL --connect-timeout ${INSTALLER_CONNECT_TIMEOUT_SECONDS} --max-time ${INSTALLER_REQUEST_TIMEOUT_SECONDS} '${shellEscapeForSh(params.installerUrl)}' | bash -s -- --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
+    `curl -fsSL --connect-timeout ${connectTimeoutSeconds} --max-time ${requestTimeoutSeconds} '${shellEscapeForSh(params.installerUrl)}' | bash -s -- --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
   ].join("\n");
 }
 
