@@ -241,8 +241,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: generic channel retry runner and Retry-After parser.
       // +1: shared speech-provider API key resolver.
       // +32: shared channel setup, config-schema, policy, and status helpers.
-      // +1: shared channel replay-guard factory.
-      7985,
+      // +2: shared channel replay-guard factory and claim handle.
+      7986,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

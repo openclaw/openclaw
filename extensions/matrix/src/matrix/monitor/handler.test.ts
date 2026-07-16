@@ -2559,8 +2559,6 @@ describe("matrix monitor handler durable inbound dedupe", () => {
   it("skips replayed inbound events before session recording", async () => {
     const inboundDeduper = {
       claim: vi.fn(async () => ({ kind: "duplicate" as const })),
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
     };
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       inboundDeduper,
@@ -2583,23 +2581,24 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       eventId: "$dup",
     });
     expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(inboundDeduper.commit).not.toHaveBeenCalled();
-    expect(inboundDeduper.release).not.toHaveBeenCalled();
   });
 
   it("commits inbound events only after queued replies finish delivering", async () => {
     const callOrder: string[] = [];
+    const commit = vi.fn(async () => {
+      callOrder.push("commit");
+      return true;
+    });
+    const release = vi.fn(() => {
+      callOrder.push("release");
+    });
     const inboundDeduper = {
       claim: vi.fn(async () => {
         callOrder.push("claim");
-        return { kind: "claimed" as const, keys: ["test"] as [string] };
-      }),
-      commit: vi.fn(async () => {
-        callOrder.push("commit");
-        return true;
-      }),
-      release: vi.fn(() => {
-        callOrder.push("release");
+        return {
+          kind: "claimed" as const,
+          handle: { keys: ["test"] as const, commit, release },
+        };
       }),
     };
     const recordInboundSession = vi.fn(async () => {
@@ -2653,14 +2652,17 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       "dispatch-idle",
       "commit",
     ]);
-    expect(inboundDeduper.release).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
   });
 
   it("commits a claimed event when bot loop protection suppresses dispatch", async () => {
+    const commit = vi.fn(async () => true);
+    const release = vi.fn();
     const inboundDeduper = {
-      claim: vi.fn(async () => ({ kind: "claimed" as const, keys: ["test"] as [string] })),
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
+      claim: vi.fn(async () => ({
+        kind: "claimed" as const,
+        handle: { keys: ["test"] as const, commit, release },
+      })),
     };
     const runPrepared = vi.fn(
       async (turn: { ctxPayload: Record<string, unknown>; routeSessionKey: string }) => ({
@@ -2691,18 +2693,18 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     );
 
     expect(recordInboundSession).not.toHaveBeenCalled();
-    expect(inboundDeduper.commit).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$bot-loop-drop",
-    });
-    expect(inboundDeduper.release).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
   });
 
   it("releases a claimed event when reply dispatch fails before completion", async () => {
+    const commit = vi.fn(async () => true);
+    const release = vi.fn();
     const inboundDeduper = {
-      claim: vi.fn(async () => ({ kind: "claimed" as const, keys: ["test"] as [string] })),
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
+      claim: vi.fn(async () => ({
+        kind: "claimed" as const,
+        handle: { keys: ["test"] as const, commit, release },
+      })),
     };
     const runtime = {
       error: vi.fn(),
@@ -2727,19 +2729,19 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       }),
     );
 
-    expect(inboundDeduper.commit).not.toHaveBeenCalled();
-    expect(inboundDeduper.release).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$release-on-error",
-    });
+    expect(commit).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
     expectRuntimeErrorContaining(runtime.error, "matrix handler failed");
   });
 
   it("keeps replay committed when queued final delivery fails after a generic error", async () => {
+    const commit = vi.fn(async () => true);
+    const release = vi.fn();
     const inboundDeduper = {
-      claim: vi.fn(async () => ({ kind: "claimed" as const, keys: ["test"] as [string] })),
-      commit: vi.fn(async () => true),
-      release: vi.fn(),
+      claim: vi.fn(async () => ({
+        kind: "claimed" as const,
+        handle: { keys: ["test"] as const, commit, release },
+      })),
     };
     const runtime = {
       error: vi.fn(),
@@ -2772,21 +2774,21 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       }),
     );
 
-    expect(inboundDeduper.commit).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$release-on-final-delivery-error",
-    });
-    expect(inboundDeduper.release).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
     expectRuntimeErrorContaining(runtime.error, "matrix final reply failed");
   });
 
   it.each(["tool", "block"] as const)(
     "keeps replay committed when queued %s delivery fails after a generic error and no final reply exists",
     async (kind) => {
+      const commit = vi.fn(async () => true);
+      const release = vi.fn();
       const inboundDeduper = {
-        claim: vi.fn(async () => ({ kind: "claimed" as const, keys: ["test"] as [string] })),
-        commit: vi.fn(async () => true),
-        release: vi.fn(),
+        claim: vi.fn(async () => ({
+          kind: "claimed" as const,
+          handle: { keys: ["test"] as const, commit, release },
+        })),
       };
       const runtime = {
         error: vi.fn(),
@@ -2823,28 +2825,28 @@ describe("matrix monitor handler durable inbound dedupe", () => {
         }),
       );
 
-      expect(inboundDeduper.commit).toHaveBeenCalledWith({
-        roomId: "!room:example.org",
-        eventId: `$release-on-${kind}-delivery-error`,
-      });
-      expect(inboundDeduper.release).not.toHaveBeenCalled();
+      expect(commit).toHaveBeenCalledOnce();
+      expect(release).not.toHaveBeenCalled();
       expectRuntimeErrorContaining(runtime.error, `matrix ${kind} reply failed`);
     },
   );
 
   it("commits a claimed event when dispatch completes without a final reply", async () => {
     const callOrder: string[] = [];
+    const commit = vi.fn(async () => {
+      callOrder.push("commit");
+      return true;
+    });
+    const release = vi.fn(() => {
+      callOrder.push("release");
+    });
     const inboundDeduper = {
       claim: vi.fn(async () => {
         callOrder.push("claim");
-        return { kind: "claimed" as const, keys: ["test"] as [string] };
-      }),
-      commit: vi.fn(async () => {
-        callOrder.push("commit");
-        return true;
-      }),
-      release: vi.fn(() => {
-        callOrder.push("release");
+        return {
+          kind: "claimed" as const,
+          handle: { keys: ["test"] as const, commit, release },
+        };
       }),
     };
     const { handler } = createMatrixHandlerTestHarness({
@@ -2870,7 +2872,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     );
 
     expect(callOrder).toEqual(["claim", "record", "dispatch", "commit"]);
-    expect(inboundDeduper.release).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
   });
 });
 

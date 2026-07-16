@@ -212,7 +212,7 @@ type MatrixMonitorHandlerParams = {
   startupMs: number;
   startupGraceMs: number;
   dropPreStartupMessages: boolean;
-  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim" | "commit" | "release">;
+  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim">;
   directTracker: {
     isDirectMessage: (params: {
       roomId: string;
@@ -577,7 +577,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
   return async (roomId: string, event: MatrixRawEvent) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
-    let claimedInboundEvent = false;
+    let inboundReplayClaim:
+      | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
+      | undefined;
     let draftStreamRef: MatrixDraftStreamHandle | undefined;
     let draftConsumed = false;
     try {
@@ -614,11 +616,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const eventTs = event.origin_server_ts;
       const eventAge = event.unsigned?.age;
       const commitInboundEventIfClaimed = async () => {
-        if (!claimedInboundEvent || !inboundDeduper || !eventId) {
+        if (!inboundReplayClaim) {
           return;
         }
-        await inboundDeduper.commit({ roomId, eventId });
-        claimedInboundEvent = false;
+        await inboundReplayClaim.commit();
+        inboundReplayClaim = undefined;
       };
       const readIngressPrefix = async () => {
         const selfUserId = await client.getUserId();
@@ -666,8 +668,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (eventId && inboundDeduper) {
           const claim = await inboundDeduper.claim({ roomId, eventId });
           // Missing identifiers fail open; committed and in-flight events do not.
-          claimedInboundEvent = claim.kind === "claimed" || claim.kind === "invalid";
-          if (!claimedInboundEvent) {
+          if (claim.kind === "claimed") {
+            inboundReplayClaim = claim.handle;
+          } else if (claim.kind !== "invalid") {
             logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
             return undefined;
           }
@@ -2592,9 +2595,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
       }
-      if (claimedInboundEvent && inboundDeduper && eventId) {
-        inboundDeduper.release({ roomId, eventId });
-      }
+      inboundReplayClaim?.release();
     }
   };
 }

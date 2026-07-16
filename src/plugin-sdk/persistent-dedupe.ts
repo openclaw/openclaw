@@ -11,12 +11,15 @@ import type { PluginStateSyncKeyedStore } from "../plugin-state/plugin-state-sto
 import {
   createChannelReplayGuardWithDedupe,
   type ChannelReplayGuard,
+  type ChannelReplayClaimHandle,
   type ChannelReplayGuardParams,
 } from "./channel-replay-guard.js";
 import type { FileLockOptions } from "./file-lock.js";
 
 const LEGACY_PATH_OWNER_ID = "core:persistent-dedupe";
 const DEFAULT_NAMESPACE_PREFIX = "persistent-dedupe";
+
+export type { ChannelReplayClaimHandle };
 
 export type PersistentDedupeEntry = {
   key: string;
@@ -777,7 +780,7 @@ export function createClaimableDedupe(
   };
 }
 
-/** Create an event-keyed replay guard with shared claim, commit, and release orchestration. */
+/** Create an event-keyed replay guard whose claims own their settlement handles. */
 export function createChannelReplayGuard<TEvent>(
   params: ChannelReplayGuardParams<TEvent>,
 ): ChannelReplayGuard<TEvent> {

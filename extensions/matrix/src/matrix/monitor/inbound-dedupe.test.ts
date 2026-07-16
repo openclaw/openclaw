@@ -30,8 +30,11 @@ describe("Matrix inbound event dedupe", () => {
   it("persists committed events across restarts", async () => {
     const env = createStateEnv();
     const first = createMatrixInboundEventDeduper({ auth, env });
-    await expect(first.claim(event)).resolves.toMatchObject({ kind: "claimed" });
-    await first.commit(event);
+    const firstClaim = await first.claim(event);
+    expect(firstClaim.kind).toBe("claimed");
+    if (firstClaim.kind === "claimed") {
+      await firstClaim.handle.commit();
+    }
 
     // A fresh instance has an empty memory layer, so the duplicate verdict
     // must come from the persisted plugin-state SQLite rows.
@@ -42,8 +45,11 @@ describe("Matrix inbound event dedupe", () => {
   it("scopes dedupe state per account", async () => {
     const env = createStateEnv();
     const ops = createMatrixInboundEventDeduper({ auth: { accountId: "ops" }, env });
-    await expect(ops.claim(event)).resolves.toMatchObject({ kind: "claimed" });
-    await ops.commit(event);
+    const opsClaim = await ops.claim(event);
+    expect(opsClaim.kind).toBe("claimed");
+    if (opsClaim.kind === "claimed") {
+      await opsClaim.handle.commit();
+    }
 
     const home = createMatrixInboundEventDeduper({ auth: { accountId: "home" }, env });
     await expect(home.claim(event)).resolves.toMatchObject({ kind: "claimed" });
@@ -58,7 +64,6 @@ describe("Matrix inbound event dedupe", () => {
     await expect(deduper.claim({ roomId: " ", eventId: "$x" })).resolves.toEqual({
       kind: "invalid",
     });
-    await expect(deduper.commit({ roomId: "!r:x", eventId: "" })).resolves.toBe(false);
   });
 
   it("keeps committed events in memory when plugin-state persistence fails", async () => {
@@ -72,8 +77,12 @@ describe("Matrix inbound event dedupe", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(filePath, "nested") },
     });
 
-    await expect(deduper.claim(event)).resolves.toMatchObject({ kind: "claimed" });
-    await expect(deduper.commit(event)).resolves.toBe(true);
+    const claim = await deduper.claim(event);
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") {
+      throw new Error(`expected claimed result, received ${claim.kind}`);
+    }
+    await expect(claim.handle.commit()).resolves.toBe(true);
     await expect(deduper.claim(event)).resolves.toEqual({ kind: "duplicate" });
     expect(warnSpy).toHaveBeenCalledWith(
       "MatrixInboundDedupe",

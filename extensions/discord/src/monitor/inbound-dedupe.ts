@@ -18,8 +18,6 @@ export function createDiscordInboundReplayGuard() {
   });
 }
 
-export type DiscordInboundReplayGuard = ReturnType<typeof createDiscordInboundReplayGuard>;
-
 export class DiscordRetryableInboundError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);

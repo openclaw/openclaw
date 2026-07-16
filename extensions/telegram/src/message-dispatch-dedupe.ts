@@ -2,7 +2,10 @@
 import path from "node:path";
 import type { Message } from "grammy/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
+import {
+  createChannelReplayGuard,
+  type ChannelReplayClaimHandle,
+} from "openclaw/plugin-sdk/persistent-dedupe";
 
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE = "global";
@@ -12,9 +15,11 @@ const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
 type TelegramMessageDispatchClaim =
-  | { kind: "claimed"; key: string }
+  | { kind: "claimed"; handle: ChannelReplayClaimHandle }
   | { kind: "duplicate" }
   | { kind: "invalid" };
+
+export type TelegramMessageDispatchReplayClaim = ChannelReplayClaimHandle;
 
 type TelegramMessageDispatchReplayForgetFailure = {
   key: string;
@@ -114,7 +119,7 @@ export function createTelegramMessageDispatchReplayGuard(
 
 type TelegramMessageDispatchReplayGuard = Pick<
   ReturnType<typeof createTelegramMessageDispatchReplayGuard>,
-  "claim" | "commit" | "release" | "forget" | "warmup"
+  "claim" | "forget" | "warmup"
 >;
 
 export async function claimTelegramMessageDispatchReplay(params: {
@@ -129,7 +134,7 @@ export async function claimTelegramMessageDispatchReplay(params: {
       msg: params.msg,
     });
     if (claim.kind === "claimed") {
-      return { kind: "claimed", key: claim.keys[0] };
+      return { kind: "claimed", handle: claim.handle };
     }
     if (claim.kind === "duplicate" || claim.kind === "invalid") {
       return claim;
@@ -148,27 +153,25 @@ export async function claimTelegramMessageDispatchReplay(params: {
 
 export async function commitTelegramMessageDispatchReplay(params: {
   guard: TelegramMessageDispatchReplayGuard;
-  keys?: readonly string[];
+  claims?: readonly TelegramMessageDispatchReplayClaim[];
   /** Require every claim to reach SQLite before the caller acknowledges durable adoption. */
   requirePersistent?: boolean;
 }): Promise<void> {
-  const keys = [...new Set((params.keys ?? []).map((key) => key.trim()).filter(Boolean))];
+  const claims = [...new Set(params.claims ?? [])];
   const committedKeys: string[] = [];
   // Commit serially so a later failure has no still-running sibling write that
   // can race rollback and recreate a key after it was forgotten.
-  for (const [index, key] of keys.entries()) {
+  for (const [index, claim] of claims.entries()) {
     let diskError: unknown;
     try {
-      const recorded = await params.guard.commit(
-        { keys: [key] },
+      const recorded = await claim.commit(
         params.requirePersistent === true
           ? {
-              namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
               onDiskError: (error) => {
                 diskError = error;
               },
             }
-          : { namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE },
+          : undefined,
       );
       if (params.requirePersistent === true && diskError !== undefined) {
         throw diskError instanceof Error
@@ -176,11 +179,11 @@ export async function commitTelegramMessageDispatchReplay(params: {
           : new Error(formatErrorMessage(diskError), { cause: diskError });
       }
       if (recorded) {
-        committedKeys.push(key);
+        committedKeys.push(...claim.keys);
       }
     } catch (error) {
-      for (const pendingKey of keys.slice(index + 1)) {
-        params.guard.release({ keys: [pendingKey] }, { error });
+      for (const pendingClaim of claims.slice(index + 1)) {
+        pendingClaim.release({ error });
       }
 
       const failures: TelegramMessageDispatchReplayForgetFailure[] = [];
@@ -198,7 +201,7 @@ export async function commitTelegramMessageDispatchReplay(params: {
       let failedKeyCleanupError: unknown;
       try {
         await params.guard.forget(
-          { keys: [key] },
+          { keys: claim.keys },
           {
             onDiskError: (rollbackError) => {
               failedKeyCleanupError = rollbackError;
@@ -209,7 +212,7 @@ export async function commitTelegramMessageDispatchReplay(params: {
         failedKeyCleanupError = rollbackError;
       }
       if (failedKeyCleanupError !== undefined) {
-        failures.push({ key, error: failedKeyCleanupError });
+        failures.push(...claim.keys.map((key) => ({ key, error: failedKeyCleanupError })));
       }
       if (failures.length > 0) {
         throw new TelegramMessageDispatchReplayForgetError(failures);
@@ -220,9 +223,10 @@ export async function commitTelegramMessageDispatchReplay(params: {
 }
 
 export function releaseTelegramMessageDispatchReplay(params: {
-  guard: TelegramMessageDispatchReplayGuard;
-  keys?: readonly string[];
+  claims?: readonly TelegramMessageDispatchReplayClaim[];
   error?: unknown;
 }): void {
-  params.guard.release({ keys: params.keys }, { error: params.error });
+  for (const claim of new Set(params.claims ?? [])) {
+    claim.release({ error: params.error });
+  }
 }

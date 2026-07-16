@@ -27,6 +27,7 @@ import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
@@ -682,11 +683,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
     message: IMessagePayload;
-    // Exact replay-guard key claimed for this row at ingestion (GUID or, for a
-    // GUID-less row, the composite fallback). Carried through so flush commits
-    // or releases the same key it claimed, even after a debounce merge rewrites
-    // the payload identity. null when the row had no derivable key (fail open).
-    replayKey: string | null;
+    // The ingestion claim owns the exact GUID/composite key even when debounce
+    // later rewrites the payload identity. Missing handles fail open.
+    replayClaim?: ChannelReplayClaimHandle;
   }>({
     cfg,
     channel: "imessage",
@@ -743,28 +742,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // dispatch throws so a transient failure can retry on a later re-emit. Per
       // unit so a failure in one bucket entry cannot strand another's claim.
       const dispatchUnit = async (
-        unitEntries: { message: IMessagePayload; replayKey: string | null }[],
+        unitEntries: { message: IMessagePayload; replayClaim?: ChannelReplayClaimHandle }[],
         message: IMessagePayload,
       ) => {
-        const keys = unitEntries
-          .map((entry) => entry.replayKey)
-          .filter((key): key is string => key !== null);
+        const replayClaims = unitEntries
+          .map((entry) => entry.replayClaim)
+          .filter((claim): claim is ChannelReplayClaimHandle => claim !== undefined);
         try {
           await handleMessageNow(message);
-          await inboundReplayGuard.commit({
-            accountId: accountInfo.accountId,
-            keys,
-          });
+          await Promise.all(replayClaims.map((claim) => claim.commit()));
           advanceRecoveryCursorAfterHandled(unitEntries);
         } catch (err) {
           holdRecoveryCursorBeforeFailedRows(unitEntries);
-          inboundReplayGuard.release(
-            {
-              accountId: accountInfo.accountId,
-              keys,
-            },
-            { error: err },
-          );
+          for (const claim of replayClaims) {
+            claim.release({ error: err });
+          }
           runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
         }
       };
@@ -788,7 +780,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // Standalone URL preview rows merge with the immediately preceding row;
       // already-complete URL messages flush any pending ordinary row first.
       if (messages.some(hasIMessageUrlBalloonBundleID)) {
-        let pending: { message: IMessagePayload; replayKey: string | null } | null = null;
+        let pending: {
+          message: IMessagePayload;
+          replayClaim?: ChannelReplayClaimHandle;
+        } | null = null;
         for (const entry of entries) {
           if (isStandaloneIMessageUrlPreviewPayload(entry.message) && pending) {
             const unitEntries = [pending, entry];
@@ -1584,7 +1579,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         message,
       });
       if (suppressedKey) {
-        await inboundReplayGuard.commit({
+        await inboundReplayGuard.shouldProcess({
           accountId: accountInfo.accountId,
           keys: [suppressedKey],
         });
@@ -1615,7 +1610,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     trackPendingRecoveryReplayRow(repairedMessage);
     await inboundDebouncer.enqueue({
       message: repairedMessage,
-      replayKey: replay.kind === "claimed" ? (replay.keys[0] ?? null) : null,
+      ...(replay.kind === "claimed" ? { replayClaim: replay.handle } : {}),
     });
   };
 

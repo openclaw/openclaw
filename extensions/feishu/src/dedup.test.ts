@@ -52,28 +52,32 @@ describe("Feishu claimable dedupe", () => {
     await restartFeishuDedup();
     await expect(
       claimUnprocessedFeishuMessage({ messageId: "msg-4", namespace: "account-a" }),
-    ).resolves.toBe("duplicate");
+    ).resolves.toEqual({ kind: "duplicate" });
     await expect(
       finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
     ).resolves.toBe(false);
   });
 
   it("commits a held claim without reclaiming it", async () => {
-    await expect(
-      claimUnprocessedFeishuMessage({ messageId: "msg-5", namespace: "account-a" }),
-    ).resolves.toBe("claimed");
+    const claim = await claimUnprocessedFeishuMessage({
+      messageId: "msg-5",
+      namespace: "account-a",
+    });
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") {
+      throw new Error(`expected claimed result, received ${claim.kind}`);
+    }
     await expect(
       finalizeFeishuMessageProcessing({
         messageId: "msg-5",
         namespace: "account-a",
-        claimHeld: true,
+        processingClaim: claim.handle,
       }),
     ).resolves.toBe(true);
     await expect(
       finalizeFeishuMessageProcessing({
         messageId: "msg-5",
         namespace: "account-a",
-        claimHeld: true,
       }),
     ).resolves.toBe(false);
   });
@@ -116,7 +120,7 @@ describe("Feishu claimable dedupe", () => {
     await expect(recordProcessedFeishuMessage("msg-9", "account-a", log)).resolves.toBe(true);
     await expect(
       claimUnprocessedFeishuMessage({ messageId: "msg-9", namespace: "account-a", log }),
-    ).resolves.toBe("duplicate");
+    ).resolves.toEqual({ kind: "duplicate" });
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("feishu-dedup: persistent state error"),
     );
