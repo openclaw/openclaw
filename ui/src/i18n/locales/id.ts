@@ -3070,7 +3070,7 @@ export const id: TranslationMap = {
     emptySubtitle: "Masuk ke penyedia atau tambahkan kunci API, lalu segarkan.",
     status: {
       ok: "Terhubung",
-      expiring: "Kedaluwarsa",
+      expiring: "Akan kedaluwarsa",
       expired: "Kedaluwarsa",
       missing: "Belum masuk",
       apiKey: "Kunci API",
