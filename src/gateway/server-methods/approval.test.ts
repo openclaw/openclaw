@@ -282,12 +282,14 @@ describe("unified approval handlers", () => {
       systemAgentApprovalManager: managers.systemAgent,
       databaseOptions,
     });
+    const context = createContext();
 
     const response = await invoke({
       handlers,
       method: "approval.resolve",
       body: { id: pending.record.id, kind: "system-agent", decision: "allow-once" },
       client: createClient({ deviceId: "reviewer" }),
+      context,
     });
 
     expect(response.result).toMatchObject({
@@ -303,6 +305,9 @@ describe("unified approval handlers", () => {
       },
     });
     await expect(pending.decision).resolves.toBe("allow-once");
+    expect(context.getApprovalClientConnIds).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "system-agent" }),
+    );
   });
 
   it("returns an exact-id, deep-linkable exec projection without execution bindings", async () => {
@@ -900,6 +905,7 @@ describe("unified approval handlers", () => {
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
+          approvalKind?: string;
           filter?: (
             client: GatewayRequestHandlerOptions["client"],
             record?: { id: string },
@@ -907,6 +913,7 @@ describe("unified approval handlers", () => {
           record?: { id: string };
         }
       | undefined;
+    expect(recipientOptions?.approvalKind).toBe("plugin");
     expect(
       recipientOptions?.filter?.(createClient({ deviceId: "unrelated" }), recipientOptions.record),
     ).toBe(false);
@@ -1121,6 +1128,7 @@ describe("unified approval handlers", () => {
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
+          approvalKind?: string;
           filter?: (
             client: GatewayRequestHandlerOptions["client"],
             record?: { requestedByConnId?: string | null },
@@ -1128,6 +1136,7 @@ describe("unified approval handlers", () => {
           record?: { requestedByConnId?: string | null };
         }
       | undefined;
+    expect(recipientOptions?.approvalKind).toBe("exec");
     expect(recipientOptions?.record?.requestedByConnId).toBe("requester-connection");
     expect(
       recipientOptions?.filter?.(

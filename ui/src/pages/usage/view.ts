@@ -865,6 +865,7 @@ export function renderUsage(props: UsageProps) {
                         filters.startDate,
                         filters.endDate,
                         filters.selectedDays,
+                        filters.timeZone,
                         detail.sessionLogs,
                         detail.sessionLogsLoading,
                         detail.sessionLogsExpanded,

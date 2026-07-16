@@ -401,11 +401,17 @@ async function resolveChannel(
   cfg: OpenClawConfig,
   params: Record<string, unknown>,
   toolContext?: { currentChannelProvider?: string },
+  action?: ChannelMessageActionName,
 ) {
+  const channel = readStringParam(params, "channel");
+  // Explicit reads must never switch to the source conversation when their
+  // requested provider is unknown or unavailable.
+  const fallbackChannel =
+    action === "read" && channel ? undefined : toolContext?.currentChannelProvider;
   const selection = await resolveMessageChannelSelection({
     cfg,
-    channel: readStringParam(params, "channel"),
-    fallbackChannel: toolContext?.currentChannelProvider,
+    channel,
+    fallbackChannel,
   });
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;
@@ -1728,7 +1734,7 @@ export async function runMessageAction(
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, params)) {
     throw new Error(`Action ${action} requires a target.`);
   }
-  const channel = await resolveChannel(cfg, params, input.toolContext);
+  const channel = await resolveChannel(cfg, params, input.toolContext, action);
   params.channel = channel;
   const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
   const pluginOwnedAction = action !== "send" && action !== "poll";

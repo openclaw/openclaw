@@ -360,6 +360,7 @@ export function prepareEmbeddedAttemptStream(input: {
       input.runAbortController.signal.aborted,
     isCompacting: () => subscription.isCompacting(),
     supportsTranscriptCommitWait: true,
+    supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,

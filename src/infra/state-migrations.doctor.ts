@@ -25,6 +25,7 @@ import { DEFAULT_ACCOUNT_ID, DEFAULT_MAIN_KEY, normalizeAgentId } from "../routi
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
   repairOpenClawStateDatabaseSchema,
+  type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
 import {
   detectLegacyApnsRegistrations,
@@ -132,6 +133,20 @@ import {
   resolveLegacyUpdateCheckPath,
 } from "./state-migrations.update-check.js";
 import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
+
+function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigration): string {
+  switch (migration.kind) {
+    case "agent-databases-composite-primary-key":
+      return "agent database registry primary key → agent_id,path";
+    case "audit-events-v2":
+      return "audit event ledger → versioned message lifecycle schema";
+    case "operator-approvals-system-agent":
+      return "operator approvals → OpenClaw system changes";
+    case "strict-tables-v3":
+      return "tables → SQLite STRICT typing";
+  }
+  return migration.kind satisfies never;
+}
 
 let autoMigrateChecked = false;
 
@@ -537,11 +552,7 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (stateSchemaMigrations.length > 0) {
     for (const migration of stateSchemaMigrations) {
-      preview.push(
-        migration.kind === "agent-databases-composite-primary-key"
-          ? "- Shared SQLite schema: agent database registry primary key → agent_id,path"
-          : "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
-      );
+      preview.push(`- Shared SQLite schema: ${describeStateSchemaMigration(migration)}`);
     }
     preview.push(
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
