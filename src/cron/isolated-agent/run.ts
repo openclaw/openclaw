@@ -38,7 +38,6 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
-import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -156,6 +155,9 @@ const runtimePluginsLoader = createLazyImportLoader(
 const codexNativeWebSearchLoader = createLazyImportLoader(
   () => import("../../agents/codex-native-web-search.js"),
 );
+const webToolRuntimeContextLoader = createLazyImportLoader(
+  () => import("../../agents/tools/web-tool-runtime-context.js"),
+);
 const webSearchRuntimeLoader = createLazyImportLoader(() => import("../../web-search/runtime.js"));
 
 async function loadSessionAccessorRuntime() {
@@ -196,6 +198,10 @@ async function loadRuntimePlugins() {
 
 async function loadCodexNativeWebSearch() {
   return await codexNativeWebSearchLoader.load();
+}
+
+async function loadWebToolRuntimeContext() {
+  return await webToolRuntimeContextLoader.load();
 }
 
 async function loadWebSearchRuntime() {
@@ -390,24 +396,27 @@ async function createCronToolsAllowPreflightDiagnostics(params: {
     ) {
       return undefined;
     }
-    const { listWebSearchProviders, resolveWebSearchProviderId } = await loadWebSearchRuntime();
-    // Match agent-side web_search: plugin-owned credentials live in the active
-    // secrets snapshot and may be absent from the general runtime config.
-    const webSearchConfig = getActiveSecretsRuntimeConfigSnapshot()?.config ?? params.cfg;
-    const webSearchProviders = listWebSearchProviders({ config: webSearchConfig });
+    const { resolveWebSearchToolRuntimeContext } = await loadWebToolRuntimeContext();
+    const { config, preferRuntimeProviders, runtimeWebSearch } = resolveWebSearchToolRuntimeContext(
+      {
+        config: params.cfg,
+        lateBindRuntimeConfig: true,
+      },
+    );
+    const { hasUsableWebSearchProvider } = await loadWebSearchRuntime();
+    const hasWebSearchProvider = hasUsableWebSearchProvider({
+      config,
+      agentDir: params.agentDir,
+      runtimeWebSearch,
+      preferRuntimeProviders,
+    });
     return createCronRunDiagnosticsFromMissingWebSearchProvider({
       toolsAllow,
-      hasWebSearchProvider: Boolean(
-        resolveWebSearchProviderId({
-          config: webSearchConfig,
-          agentDir: params.agentDir,
-          providers: webSearchProviders,
-        }),
-      ),
+      hasWebSearchProvider,
     });
   } catch (error) {
     logWarn(
-      `[cron:${params.jobId}] Failed to inspect web_search providers for toolsAllow diagnostics: ${String(error)}`,
+      `[cron:${params.jobId}] Failed to inspect web_search provider state for toolsAllow diagnostics: ${String(error)}`,
     );
     return undefined;
   }
