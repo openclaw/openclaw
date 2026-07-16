@@ -252,6 +252,12 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         self.onFailure()
     }
 
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // Process loss does not prove the capability expired. Reload the same
+        // document; normal navigation failures own the one allowed token refresh.
+        webView.load(URLRequest(url: self.expectedURL, cachePolicy: .reloadIgnoringLocalCacheData))
+    }
+
     private func matchesExpectedDocument(_ candidate: URL) -> Bool {
         guard var expected = URLComponents(url: self.expectedURL, resolvingAgainstBaseURL: false),
               var candidate = URLComponents(url: candidate, resolvingAgainstBaseURL: false)
