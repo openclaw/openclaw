@@ -494,14 +494,19 @@ final class GatewayProcessManager {
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
                 let snap = decodeHealthSnapshot(from: data)
                 let details = self.describe(details: instanceText, port: port, snap: snap)
+                let endpointPIDChanged = Self.gatewayPIDChanged(
+                    from: self.lastObservedGatewayPID,
+                    to: instance?.pid)
                 self.existingGatewayDetails = details
                 self.setLaunchAgentReadinessState(candidate: nil, failure: nil)
                 self.clearLastFailure()
                 self.status = .attachedExisting(details: details)
-                self.lastObservedGatewayPID = instance?.pid
                 self.appendLog("[gateway] using existing instance: \(details)\n")
                 self.logger.info("gateway using existing instance details=\(details)")
-                self.refreshControlChannelIfNeeded(reason: "attach existing")
+                self.refreshControlChannelIfNeeded(
+                    reason: "attach existing",
+                    force: endpointPIDChanged)
+                self.lastObservedGatewayPID = instance?.pid ?? self.lastObservedGatewayPID
                 self.refreshLog()
                 return true
             } catch {
@@ -653,17 +658,21 @@ final class GatewayProcessManager {
                 } else {
                     false
                 }
+                let previouslyObservedPIDChanged = Self.gatewayPIDChanged(
+                    from: self.lastObservedGatewayPID,
+                    to: instance?.pid)
                 let launchAgentReplaced = enableResult.installed ||
                     self.launchAgentInstallGeneration == startGeneration ||
-                    endpointPIDChanged
+                    endpointPIDChanged ||
+                    previouslyObservedPIDChanged
                 self.setLaunchAgentReadinessState(candidate: nil, failure: nil)
                 self.clearLastFailure()
                 self.status = .running(details: details)
-                self.lastObservedGatewayPID = instance?.pid ?? self.lastObservedGatewayPID
                 self.logger.info("gateway started details=\(details ?? "ok")")
                 self.refreshControlChannelIfNeeded(
                     reason: "gateway started",
                     force: launchAgentReplaced)
+                self.lastObservedGatewayPID = instance?.pid ?? self.lastObservedGatewayPID
                 if self.launchAgentInstallGeneration == startGeneration {
                     self.launchAgentInstallGeneration = nil
                 }
@@ -774,6 +783,11 @@ final class GatewayProcessManager {
             nsError.code == URLError.cancelled.rawValue
     }
 
+    private static func gatewayPIDChanged(from previousPID: Int32?, to observedPID: Int32?) -> Bool {
+        guard let previousPID, let observedPID else { return false }
+        return previousPID != observedPID
+    }
+
     private func appendLog(_ chunk: String) {
         self.log.append(chunk)
         if self.log.count > self.logLimit {
@@ -839,14 +853,11 @@ final class GatewayProcessManager {
                 } else {
                     self.status = .running(details: details)
                 }
-                let endpointPIDBaseline = readinessCandidate?.failure.pid ?? endpointPIDBeforeProbe
-                let endpointPIDChanged = if let endpointPIDBaseline,
-                                            let observedPID = instance?.pid
-                {
-                    endpointPIDBaseline != observedPID
-                } else {
-                    false
-                }
+                let endpointPIDChanged = Self.gatewayPIDChanged(
+                    from: endpointPIDBeforeProbe,
+                    to: instance?.pid) || Self.gatewayPIDChanged(
+                    from: readinessCandidate?.failure.pid,
+                    to: instance?.pid)
                 // A replaced process can leave the old socket briefly marked connected. Routine
                 // audits retain the connected channel; only replacement evidence forces refresh.
                 self.refreshControlChannelIfNeeded(

@@ -1103,6 +1103,55 @@ struct GatewayProcessManagerTests {
         await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
     }
 
+    @Test func `readiness retains the endpoint pid from before a launchd candidate`() async throws {
+        let port = GatewayEnvironment.gatewayPort()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    })
+            })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let connection = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let descriptor = PortGuardian.Descriptor(
+            pid: 4242,
+            command: "openclaw-gateway",
+            executablePath: "/tmp/openclaw-gateway")
+
+        let manager = GatewayProcessManager.shared
+        manager.setTestingConnection(connection)
+        manager.setTestingDesiredActive(true)
+        manager.setTestingStatus(.running(details: "pid 4141"))
+        manager.setTestingSkipControlChannelRefresh(true)
+        manager._testClearControlChannelRefreshForces()
+        manager._testClearLaunchAgentReadinessFailure()
+        manager._testClearLaunchAgentInstallEvidence()
+        manager._testSetLastObservedGatewayPID(4141)
+        manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
+        await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+        defer {
+            manager.setTestingConnection(nil)
+            manager.setTestingDesiredActive(false)
+            manager.setTestingSkipControlChannelRefresh(false)
+            manager._testClearControlChannelRefreshForces()
+            manager._testClearLaunchAgentReadinessFailure()
+            manager._testClearLaunchAgentInstallEvidence()
+            manager._testSetLastObservedGatewayPID(nil)
+        }
+
+        #expect(await manager.waitForGatewayReady(timeout: 0.5))
+        #expect(manager._testControlChannelRefreshForces().last == true)
+        #expect(manager.status == .running(details: "pid 4242"))
+
+        await connection.shutdown()
+        await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+    }
+
     @Test func `responsive health rejection does not arm launchd repair`() async throws {
         let port = 19105
         let marker = FileManager.default.temporaryDirectory
@@ -1670,6 +1719,8 @@ struct GatewayProcessManagerTests {
             manager.setTestingConnection(connection)
             manager.setTestingSkipControlChannelRefresh(true)
             manager.setTestingLastFailureReason("stale")
+            manager._testClearControlChannelRefreshForces()
+            manager._testSetLastObservedGatewayPID(4141)
 
             @MainActor
             func cleanup() async {
@@ -1677,6 +1728,8 @@ struct GatewayProcessManagerTests {
                 manager.setTestingSkipControlChannelRefresh(false)
                 manager.setTestingDesiredActive(false)
                 manager.setTestingLastFailureReason(nil)
+                manager._testClearControlChannelRefreshForces()
+                manager._testSetLastObservedGatewayPID(nil)
                 await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             }
 
@@ -1694,6 +1747,7 @@ struct GatewayProcessManagerTests {
                 #expect(details.contains("Telegram linked"))
                 #expect(details.contains("auth 1m"))
                 #expect(details.contains("pid 4242 openclaw-gateway @ /tmp/openclaw-gateway"))
+                #expect(manager._testControlChannelRefreshForces().last == true)
                 await cleanup()
             } catch {
                 await cleanup()
