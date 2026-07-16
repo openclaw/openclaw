@@ -1207,7 +1207,7 @@ Runtime entrypoint fields do not override package-boundary checks for source ent
 
 Use it when setup, doctor, status, or read-only presence flows need a cheap yes/no auth probe before the full channel plugin loads. Persisted auth state is not configured channel state: do not use this metadata to auto-enable plugins, repair runtime dependencies, or decide whether a channel runtime should load. The target export should be a small function that reads persisted state only; do not route it through the full channel runtime barrel.
 
-`openclaw.channel.configuredState` follows the same shape for cheap env-only configured checks:
+`openclaw.channel.configuredState` supports cheap configured checks. Prefer declarative env metadata when environment variables are sufficient:
 
 ```json
 {
@@ -1215,15 +1215,16 @@ Use it when setup, doctor, status, or read-only presence flows need a cheap yes/
     "channel": {
       "id": "telegram",
       "configuredState": {
-        "specifier": "./configured-state",
-        "exportName": "hasTelegramConfiguredState"
+        "env": {
+          "allOf": ["TELEGRAM_BOT_TOKEN"]
+        }
       }
     }
   }
 }
 ```
 
-Use it when a channel can answer configured-state from env or other tiny non-runtime inputs. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`; when `env` is present, OpenClaw uses it without loading that module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
 
 ## Discovery precedence (duplicate plugin ids)
 

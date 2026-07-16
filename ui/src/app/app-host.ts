@@ -1,8 +1,13 @@
 import { ContextProvider } from "@lit/context";
+import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import { hasStoredGatewayAuth, type GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  type GatewayEventFrame,
+  hasStoredGatewayAuth,
+  type GatewayBrowserClient,
+} from "../api/gateway.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/connection-banner.ts";
@@ -11,6 +16,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
+import "../components/onboarding-memory-import.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
@@ -28,6 +34,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  UI_COMMAND_EVENT,
   type PanelToggleElement,
 } from "../components/panel-toggle-contract.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
@@ -490,6 +497,10 @@ class OpenClawShell extends OpenClawLightDomElement {
         (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway.snapshot),
       )
+      .effect(
+        () => this.context?.gateway,
+        (gateway) => gateway.subscribeEvents(this.handleGatewayEvent),
+      )
       .watch(
         () => this.context?.config,
         (config, notify) => config.subscribe(notify),
@@ -585,6 +596,51 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.settingsPreloadTimers.clear();
   }
+
+  private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
+    if (event.event !== "ui.command" || !event.payload) {
+      return;
+    }
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const commandParams = event.payload as UiCommandParams;
+    const { command } = commandParams;
+    if (!command) {
+      return;
+    }
+    if (command.kind === "sidebar") {
+      context.navigation.update({ navCollapsed: !command.visible });
+      return;
+    }
+    if (command.kind === "panel") {
+      window.dispatchEvent(
+        new CustomEvent(
+          command.panel === "terminal" ? TERMINAL_PANEL_TOGGLE_EVENT : BROWSER_PANEL_TOGGLE_EVENT,
+          {
+            detail: {
+              open: command.open,
+              ...(command.dock ? { dock: command.dock } : {}),
+              ...(command.panel === "terminal" && command.terminalSessionId
+                ? { terminalSessionId: command.terminalSessionId }
+                : {}),
+            },
+          },
+        ),
+      );
+      return;
+    }
+
+    const handled = !window.dispatchEvent(
+      new CustomEvent(UI_COMMAND_EVENT, { detail: commandParams, cancelable: true }),
+    );
+    if (handled || (command.kind !== "navigate" && command.kind !== "split")) {
+      return;
+    }
+    context.gateway.setSessionKey(command.sessionKey);
+    this.navigate("chat", { search: searchForSession(command.sessionKey) });
+  };
 
   private readonly handleThemeChange = (event: CustomEvent<ThemeModeChangeDetail>) => {
     const context = this.context;
@@ -1372,6 +1428,12 @@ class OpenClawShell extends OpenClawLightDomElement {
             this.navigate("nodes");
           },
         })}
+        ${this.onboarding
+          ? html`<openclaw-onboarding-memory-import
+              .active=${true}
+              .context=${context}
+            ></openclaw-onboarding-memory-import>`
+          : nothing}
       </div>
     `;
   }

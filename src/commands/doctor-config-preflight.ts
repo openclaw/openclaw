@@ -225,13 +225,6 @@ export async function runDoctorConfigPreflight(
     skipPristineCoreStateMigrations?: boolean;
     /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
     skipPristineStartupStateMigrations?: boolean;
-    /**
-     * Allows legacy imports whose source lives in the DEFAULT home state dir
-     * while OPENCLAW_STATE_DIR points elsewhere. Only explicit doctor repair
-     * runs opt in; the implicit CLI/gateway preflight must never archive
-     * files that belong to another install's state dir.
-     */
-    crossStateDirImports?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -420,7 +413,6 @@ export async function runDoctorConfigPreflight(
                 : {}),
               env: process.env,
               recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -433,7 +425,6 @@ export async function runDoctorConfigPreflight(
           noteStartupStateMigrationResult(
             await autoMigrateLegacyTaskStateSidecars({
               env: process.env,
-              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         }
@@ -441,7 +432,6 @@ export async function runDoctorConfigPreflight(
         noteStartupStateMigrationResult(
           await autoMigrateLegacyTaskStateSidecars({
             env: process.env,
-            crossStateDirImports: options.crossStateDirImports,
           }),
         );
       }

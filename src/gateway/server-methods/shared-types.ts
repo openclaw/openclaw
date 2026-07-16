@@ -164,6 +164,7 @@ export type GatewayRequestContext = {
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
   getApprovalClientConnIds?: <TPayload>(params?: {
+    approvalKind?: "exec" | "plugin" | "system-agent";
     excludeConnId?: string;
     filter?: (client: GatewayClient, record?: ExecApprovalRecord<TPayload>) => boolean;
     record?: ExecApprovalRecord<TPayload>;

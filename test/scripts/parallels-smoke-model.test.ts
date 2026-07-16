@@ -318,14 +318,43 @@ describe("Parallels smoke model selection", () => {
       "10",
       "--max-time",
       "120",
-      "--retry",
-      "2",
       "https://example.test/metadata",
     ]);
 
     const controller = readFileSync(WINDOWS_PREPARE_WRAPPER, "utf8");
     expect(controller.match(/\bcurl -fsSL\b/g)).toHaveLength(1);
     expect(controller.match(/\bfetch_host_metadata\b/g)).toHaveLength(5);
+    expect(controller).toContain("for attempt in 1 2 3");
+    expect(controller).not.toContain("--retry 2");
+
+    const tempDir = makeTempDir(tempDirs, "openclaw-windows-metadata-retry-");
+    const callCount = join(tempDir, "curl-calls");
+    writeFileSync(callCount, "0\n");
+    const retryResult = spawnSync(
+      "bash",
+      [
+        "-c",
+        `OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"
+curl() {
+  count="$(<"$CURL_CALL_COUNT")"
+  count=$((count + 1))
+  printf '%s\\n' "$count" >"$CURL_CALL_COUNT"
+  if [[ "$count" == "1" ]]; then
+    printf 'partial-'
+    return 28
+  fi
+  printf 'complete'
+}
+sleep() { :; }
+fetch_host_metadata "https://example.test/metadata"`,
+        "bash",
+        WINDOWS_PREPARE_WRAPPER,
+      ],
+      { encoding: "utf8", env: { ...process.env, CURL_CALL_COUNT: callCount } },
+    );
+    expect(retryResult.status, retryResult.stderr).toBe(0);
+    expect(retryResult.stdout).toBe("complete");
+    expect(readFileSync(callCount, "utf8")).toBe("2\n");
   });
 
   it("accepts leading package-manager separators and still honors later terminators", () => {

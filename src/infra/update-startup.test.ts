@@ -215,6 +215,7 @@ describe("update-startup", () => {
       prefix: "openclaw-update-check-suite-",
       env: {
         OPENCLAW_NO_AUTO_UPDATE: undefined,
+        OPENCLAW_SUPERVISOR_MODE: undefined,
         OPENCLAW_SERVICE_KIND: undefined,
         OPENCLAW_SERVICE_MARKER: undefined,
         OPENCLAW_GATEWAY_SERVICE_PID: undefined,
@@ -1002,6 +1003,28 @@ describe("update-startup", () => {
         tag: "beta",
       },
     ]);
+  });
+
+  it("delegates configured auto-updates to an external supervisor", async () => {
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    const log = { info: vi.fn() };
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log,
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("auto-update delegated to external supervisor", {
+      version: "2.0.0-beta.1",
+      tag: "beta",
+      reason: "external-supervisor-update-required",
+    });
   });
 
   it("uses current runtime + entrypoint for default auto-update command execution", async () => {

@@ -183,7 +183,6 @@ describe("ensureConfigReady", () => {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
-        crossStateDirImports: false,
       });
     }
   });
@@ -205,7 +204,6 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
-      crossStateDirImports: false,
     });
   });
 
@@ -220,7 +218,6 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
-      crossStateDirImports: false,
     });
   });
 
@@ -231,7 +228,6 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      crossStateDirImports: false,
       requireStartupMigrationCheckpoint: true,
     });
   });
@@ -264,7 +260,6 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      crossStateDirImports: false,
     });
   });
 
@@ -288,7 +283,6 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      crossStateDirImports: false,
     });
   });
 
@@ -313,7 +307,6 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      crossStateDirImports: false,
     });
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       migratedSnapshot.runtimeConfig,
@@ -336,7 +329,7 @@ describe("ensureConfigReady", () => {
     { commandPath: ["plugins", "list"], source: "exec-approvals.json" },
     { commandPath: ["tasks", "list"], source: "plugin-binding-approvals.json" },
   ])(
-    "runs notice-only preflight for $commandPath with default-state $source",
+    "ignores default-state $source while $commandPath uses custom state",
     async ({ commandPath, source }) => {
       const root = useTempOpenClawHome();
       const stateDir = path.join(root, "custom-state");
@@ -347,14 +340,7 @@ describe("ensureConfigReady", () => {
 
       await runEnsureConfigReady(commandPath);
 
-      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
-        migrateState: true,
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        ...(commandPath[0] === "status" ? { observe: false } : {}),
-        crossStateDirImports: false,
-      });
+      expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
       expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
       expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
       expect(fs.existsSync(path.join(stateDir, "exec-approvals.json"))).toBe(false);

@@ -180,6 +180,7 @@ export type CodexThreadForkParams = JsonObject & {
 export type CodexThreadForkResponse = CodexThreadStartResponse;
 
 export const CODEX_INTERACTIVE_THREAD_SOURCE_KINDS = ["cli", "vscode"] as const;
+export const CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES = ["atlas", "chatgpt"] as const;
 
 type CodexThreadSourceKind =
   | (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number]
