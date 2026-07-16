@@ -1,12 +1,14 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildInstallerSmokeScript,
   runCommand,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function powerShellSingleQuote(value: string) {
   return value.replace(/'/gu, "''");
@@ -49,7 +51,7 @@ describe("cross-OS Windows installer fetch", () => {
   it.runIf(process.platform === "win32")(
     "times out stalled bodies without executing partial scripts or leaking temp files",
     async () => {
-      const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-installer-"));
+      const dir = tempDirs.make("openclaw-cross-os-installer-");
       const healthyMarker = join(dir, "healthy.txt");
       const stalledMarker = join(dir, "stalled.txt");
       const server = createServer((request, response) => {
@@ -122,7 +124,6 @@ describe("cross-OS Windows installer fetch", () => {
         await new Promise<void>((resolvePromise) => {
           server.close(() => resolvePromise());
         });
-        rmSync(dir, { recursive: true, force: true });
       }
     },
     15_000,
