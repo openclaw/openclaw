@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
+- **Tool-result media replay:** require inline payload bytes before provider transports advertise or emit image and audio attachments, so URL/path-only media husks fall back to real text or no-output handling instead of replacing tool results with `(see attached image)`. Fixes #104721. Thanks @amknight, @SunnyShu0925, @Cleymo, and @clawdieclawdita.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
 - **LINE reply-token media kinds:** honor video and audio metadata on inbound replies, share the canonical media builder with proactive sends, and fail visibly instead of recording empty media-only deliveries. (#106515) Thanks @edenfunf.
 - **Mattermost websocket connection deadlines:** bound opening handshakes so stalled TCP peers cannot hang channel startup indefinitely and reconnect control resumes after timeout. (#105553) Thanks @hugenshen.
