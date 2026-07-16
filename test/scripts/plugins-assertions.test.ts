@@ -14,11 +14,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import {
+  cleanupTempDirs,
+  makeTempDir,
+  useAutoCleanupTempDirTracker,
+} from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/plugins/assertions.mjs";
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
@@ -742,8 +747,7 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
   });
 
   it("rejects oversized upstream bodies without stopping the fixture registry", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-limit-");
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-limit-");
     const portFile = path.join(root, "port");
     const tarballPath = path.join(root, "demo-plugin.tgz");
     writeFileSync(tarballPath, "fixture package archive", "utf8");
@@ -811,7 +815,6 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
       });
-      cleanupTempDirs(tempDirs);
     }
   });
 
