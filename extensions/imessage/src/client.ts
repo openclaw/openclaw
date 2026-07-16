@@ -156,17 +156,24 @@ export class IMessageRpcClient {
     const child = this.child;
     this.child = null;
 
-    await Promise.race([
-      this.closed,
-      new Promise<void>((resolve) => {
-        setTimeout(() => {
-          if (!child.killed) {
-            child.kill("SIGTERM");
-          }
-          resolve();
-        }, 500);
-      }),
-    ]);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.closed,
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(() => {
+            if (!child.killed) {
+              child.kill("SIGTERM");
+            }
+            resolve();
+          }, 500);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   async waitForClose(): Promise<void> {
