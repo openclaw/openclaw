@@ -29,7 +29,9 @@ const {
   detectRespawnSupervisorMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(() => ({})),
   scheduleGatewaySigusr1RestartMock: vi.fn(() => ({ scheduled: true })),
-  startManagedServiceUpdateHandoffMock: vi.fn(async () => ({
+  startManagedServiceUpdateHandoffMock: vi.fn<
+    typeof import("./update-managed-service-handoff.js").startManagedServiceUpdateHandoff
+  >(async () => ({
     status: "started" as const,
     pid: 12345,
     command: "openclaw update --yes --channel beta --timeout 2700",
