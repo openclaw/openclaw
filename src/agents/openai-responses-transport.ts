@@ -1244,6 +1244,7 @@ async function processResponsesStream(
   let pendingMessageText: string | null = null;
   const streamStartedAt = Date.now();
   let eventCount = 0;
+  let terminalState: "none" | "completed" | "incomplete" = "none";
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
@@ -1699,6 +1700,7 @@ async function processResponsesStream(
         }
       }
     } else if (type === "response.completed") {
+      terminalState = "completed";
       if (streamingToolCalls.hasActive()) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
@@ -1752,6 +1754,58 @@ async function processResponsesStream(
       ) {
         output.stopReason = "toolUse";
       }
+    } else if (type === "response.incomplete") {
+      terminalState = "incomplete";
+      if (streamingToolCalls.hasActive()) {
+        throw new Error("Responses stream ended with unresolved tool calls");
+      }
+      const incompleteResponse = event.response as Record<string, unknown> | undefined;
+      if (typeof incompleteResponse?.id === "string") {
+        output.responseId = incompleteResponse.id;
+      }
+      backfillCompletedResponseOutput(incompleteResponse);
+      const incompleteUsage = incompleteResponse?.usage as
+        | {
+            input_tokens?: number;
+            output_tokens?: number;
+            total_tokens?: number;
+            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+            output_tokens_details?: { reasoning_tokens?: number };
+            service_tier?: ResponseCreateParamsStreaming["service_tier"];
+            status?: string;
+          }
+        | undefined;
+      if (incompleteUsage) {
+        const cachedTokens = incompleteUsage.input_tokens_details?.cached_tokens || 0;
+        const cacheWriteTokens = incompleteUsage.input_tokens_details?.cache_write_tokens || 0;
+        const inputTokens = incompleteUsage.input_tokens || 0;
+        const outputTokens = incompleteUsage.output_tokens || 0;
+        const reasoningTokens = incompleteUsage.output_tokens_details?.reasoning_tokens;
+        const input = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
+        output.usage = {
+          input,
+          output: outputTokens,
+          cacheRead: cachedTokens,
+          cacheWrite: cacheWriteTokens,
+          ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+            ? { reasoningTokens }
+            : {}),
+          totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        };
+      }
+      calculateCost(model as never, output.usage as never);
+      if (options?.applyServiceTierPricing) {
+        options.applyServiceTierPricing(
+          output.usage,
+          (incompleteResponse?.service_tier as
+            | ResponseCreateParamsStreaming["service_tier"]
+            | undefined) ?? options.serviceTier,
+        );
+      }
+      output.stopReason = mapResponsesStopReason(
+        (incompleteResponse?.status ?? "incomplete") as string | undefined,
+      );
     } else if (type === "error") {
       throw new Error(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
@@ -1768,7 +1822,9 @@ async function processResponsesStream(
     }
     await cooperativeScheduler.afterEvent();
   }
-  if (streamingToolCalls.hasActive()) {
+  if (terminalState === "none") {
+    output.stopReason = "error";
+  } else if (streamingToolCalls.hasActive()) {
     throw new Error("Responses stream ended with unresolved tool calls");
   }
   const eventTypeSummary = [...eventTypes.entries()]
@@ -1971,7 +2027,11 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           throw new Error("Request was aborted");
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
+          throw new Error(
+            output.stopReason === "error"
+              ? "Responses stream did not produce a terminal event"
+              : "An unknown error occurred",
+          );
         }
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
@@ -2367,7 +2427,11 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           throw new Error("Request was aborted");
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
+          throw new Error(
+            output.stopReason === "error"
+              ? "Responses stream did not produce a terminal event"
+              : "An unknown error occurred",
+          );
         }
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
