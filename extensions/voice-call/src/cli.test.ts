@@ -26,6 +26,7 @@ function captureStdout() {
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
+    vi.restoreAllMocks();
   });
 
   function buildProgram(
@@ -144,5 +145,43 @@ describe("voice-call CLI status fallback", () => {
       }),
     ).rejects.toThrow("voicecall continue timed out waiting for gateway operation");
     expect(callGatewayFromCliMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps continue.result gateway timeout to the remaining poll deadline", async () => {
+    callGatewayFromCliMock
+      .mockResolvedValueOnce({
+        operationId: "op-1",
+        status: "pending",
+        pollTimeoutMs: 1_000,
+      })
+      .mockResolvedValueOnce({ status: "completed", result: { transcript: "hello" } });
+
+    // deadline = 0 + 1000. Later Date.now() reads return 900 so remaining is 100ms,
+    // proving the poll RPC uses min(5000, remaining) instead of a full 5s budget.
+    let nowCalls = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      nowCalls += 1;
+      return nowCalls === 1 ? 0 : 900;
+    });
+
+    const program = buildProgram({}, { transcriptTimeoutMs: 100 });
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(
+        ["voicecall", "continue", "--call-id", "call-1", "--message", "hello"],
+        { from: "user" },
+      );
+    } finally {
+      capturer.restore();
+    }
+
+    expect(JSON.parse(capturer.output().trim())).toEqual({ transcript: "hello" });
+    expect(callGatewayFromCliMock).toHaveBeenNthCalledWith(
+      2,
+      "voicecall.continue.result",
+      { json: true, timeout: "100" },
+      { operationId: "op-1" },
+      { progress: false },
+    );
   });
 });

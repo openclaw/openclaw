@@ -194,10 +194,17 @@ async function pollVoiceCallContinueGateway(params: {
   const deadlineMs = resolveVoiceCallDeadlineMs(params.timeoutMs);
 
   while (Date.now() <= deadlineMs) {
+    // Sleep already clamps to remaining budget; the gateway RPC must too.
+    // Otherwise the final poll can overrun the user-facing continue timeout by
+    // a full VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS.
+    const remainingMs = Math.max(0, deadlineMs - Date.now());
+    if (remainingMs <= 0) {
+      break;
+    }
     const gateway = await callVoiceCallGateway(
       "voicecall.continue.result",
       { operationId: params.operationId },
-      { timeoutMs: VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS },
+      { timeoutMs: Math.min(VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS, remainingMs) },
     );
     if (!gateway.ok) {
       throw new Error(
@@ -213,9 +220,14 @@ async function pollVoiceCallContinueGateway(params: {
     if (result.status === "failed") {
       throw new Error(result.error);
     }
-    await sleep(
-      Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, Math.max(1, deadlineMs - Date.now())),
+    const sleepMs = Math.min(
+      VOICE_CALL_GATEWAY_POLL_INTERVAL_MS,
+      Math.max(0, deadlineMs - Date.now()),
     );
+    if (sleepMs <= 0) {
+      break;
+    }
+    await sleep(sleepMs);
   }
 
   throw new Error("voicecall continue timed out waiting for gateway operation");
