@@ -34,7 +34,7 @@ const update: SessionUpdate = {
   availableCommands: [],
 };
 
-describe("AcpTranslatorSessionUpdates shutdown", () => {
+describe("AcpTranslatorSessionUpdates", () => {
   it("blocks ledger reads and writes after shutdown starts", async () => {
     const ledger = createLedger();
     const sessionUpdate = vi.fn(async () => {});
@@ -100,5 +100,57 @@ describe("AcpTranslatorSessionUpdates shutdown", () => {
     await emitPromise;
 
     expect(ledger.recordUpdate).not.toHaveBeenCalled();
+  });
+
+  it("preserves ledger order without waiting for ACP delivery", async () => {
+    let releaseFirstDelivery!: () => void;
+    const firstDelivery = new Promise<void>((resolve) => {
+      releaseFirstDelivery = resolve;
+    });
+    let deliveryCount = 0;
+    const ledger = createLedger();
+    const updates = createUpdates({
+      ledger,
+      sessionUpdate: vi.fn(async () => {
+        deliveryCount += 1;
+        if (deliveryCount === 1) {
+          await firstDelivery;
+        }
+      }),
+    });
+    const firstUpdate: SessionUpdate = {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "first" },
+    };
+    const interruptionUpdate: SessionUpdate = {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "interrupted" },
+    };
+
+    const firstEmit = updates.emit({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      record: true,
+      update: firstUpdate,
+    });
+    await vi.waitFor(() => {
+      expect(ledger.recordUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    await updates.emit({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      record: true,
+      waitForDelivery: false,
+      update: interruptionUpdate,
+    });
+
+    expect(vi.mocked(ledger.recordUpdate).mock.calls.map(([params]) => params.update)).toEqual([
+      firstUpdate,
+      interruptionUpdate,
+    ]);
+    await expect(Promise.race([firstEmit, Promise.resolve("pending")])).resolves.toBe("pending");
+    releaseFirstDelivery();
+    await firstEmit;
   });
 });
