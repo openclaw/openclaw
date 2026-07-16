@@ -1,7 +1,7 @@
-// Detects and decodes Windows console output encodings.
+// Detects Windows console/OEM code pages and decodes console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getWindowsCmdExePath } from "./windows-install-roots.js";
+import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
@@ -23,8 +23,44 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
 };
 const WINDOWS_ENCODING_PROBE_TIMEOUT_MS = 5_000;
 
+// Fresh consoles (Task Scheduler, Startup, double-click) initialize their code
+// page from the boot-time registry OEMCP; `chcp` only reports the mutable
+// per-session value, so generated launcher scripts must encode against this.
+const WINDOWS_NLS_CODEPAGE_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage";
+
+const WINDOWS_OEM_CODEPAGE_ENCODING_MAP: Record<number, string> = {
+  65001: "utf-8",
+  // DBCS locales pair identical ANSI and OEM pages; labels match the ANSI map.
+  874: "windows-874",
+  932: "shift_jis",
+  936: "gbk",
+  949: "euc-kr",
+  950: "big5",
+  // OEM-only single-byte pages used by windows-125x ANSI hosts, iconv-lite
+  // `cp###` labels. 864 is omitted: real CP864 repurposes ASCII 0x25 "%",
+  // which generated cmd scripts contain. 1258 (Vietnamese, OEM==ANSI) is
+  // omitted: iconv-lite cannot round-trip Vietnamese in windows-1258.
+  437: "cp437",
+  720: "cp720",
+  737: "cp737",
+  775: "cp775",
+  850: "cp850",
+  852: "cp852",
+  855: "cp855",
+  857: "cp857",
+  858: "cp858",
+  860: "cp860",
+  861: "cp861",
+  862: "cp862",
+  863: "cp863",
+  865: "cp865",
+  866: "cp866",
+  869: "cp869",
+};
+
 let cachedWindowsConsoleEncoding: string | null | undefined;
 let cachedWindowsSystemEncoding: string | null | undefined;
+let cachedWindowsOemEncoding: string | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
 function parseWindowsCodePage(raw: string): number | null {
@@ -96,6 +132,21 @@ export function resolveWindowsSystemEncoding(): string | null {
     cachedWindowsSystemEncoding = null;
   }
   return cachedWindowsSystemEncoding;
+}
+
+/** Resolves and caches the boot-time Windows OEM encoding cmd.exe reads batch files with. */
+export function resolveWindowsOemEncoding(): string | null {
+  if (process.platform !== "win32") {
+    return null;
+  }
+  if (cachedWindowsOemEncoding !== undefined) {
+    return cachedWindowsOemEncoding;
+  }
+  const raw = queryWindowsRegistryValue(WINDOWS_NLS_CODEPAGE_KEY, "OEMCP");
+  const codePage = raw === null ? null : parseWindowsCodePage(raw);
+  cachedWindowsOemEncoding =
+    codePage !== null ? (WINDOWS_OEM_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+  return cachedWindowsOemEncoding;
 }
 
 /** Decodes one complete subprocess output buffer, preferring valid UTF-8 before legacy code pages. */

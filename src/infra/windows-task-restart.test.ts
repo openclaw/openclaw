@@ -17,8 +17,8 @@ const resolveTaskScriptPathMock = vi.hoisted(() =>
   }),
 );
 // Pin code page detection so hosts with CJK home paths cannot leak the real
-// PowerShell probe into script-encoding assertions.
-const resolveWindowsSystemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
+// registry OEM probe into script-encoding assertions.
+const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -41,7 +41,7 @@ vi.mock("./windows-encoding.js", async () => {
     await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
   return {
     ...actual,
-    resolveWindowsSystemEncoding: () => resolveWindowsSystemEncodingMock(),
+    resolveWindowsOemEncoding: () => resolveWindowsOemEncodingMock(),
   };
 });
 
@@ -102,8 +102,8 @@ describe("relaunchGatewayScheduledTask", () => {
       const home = env.USERPROFILE || env.HOME || os.homedir();
       return path.join(home, ".openclaw", "gateway.cmd");
     });
-    resolveWindowsSystemEncodingMock.mockReset();
-    resolveWindowsSystemEncodingMock.mockReturnValue(null);
+    resolveWindowsOemEncodingMock.mockReset();
+    resolveWindowsOemEncodingMock.mockReturnValue(null);
   });
 
   it("writes a detached schtasks relaunch helper", () => {
@@ -275,7 +275,7 @@ describe("relaunchGatewayScheduledTask", () => {
   };
 
   it("writes marked code-page bytes for CJK task names that decode back exactly", () => {
-    resolveWindowsSystemEncodingMock.mockReturnValue("gbk");
+    resolveWindowsOemEncodingMock.mockReturnValue("gbk");
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
       return { unref: vi.fn() };
@@ -302,7 +302,7 @@ describe("relaunchGatewayScheduledTask", () => {
   });
 
   it("returns failed instead of writing an unrepresentable helper script", () => {
-    resolveWindowsSystemEncodingMock.mockReturnValue("gbk");
+    resolveWindowsOemEncodingMock.mockReturnValue("gbk");
     spawnMock.mockImplementation(() => {
       throw new Error("spawn should not be reached");
     });

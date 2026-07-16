@@ -1,4 +1,4 @@
-// Covers Windows launcher script encoding for wscript/cmd code page contracts (#107416).
+// Covers Windows launcher script encoding for wscript/cmd code page contracts (#107416, #108774).
 import iconv from "iconv-lite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -6,14 +6,14 @@ import {
   encodeWindowsLauncherScript,
 } from "./windows-launcher-encoding.js";
 
-const resolveWindowsSystemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
+const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 vi.mock("./windows-encoding.js", async () => {
   const actual =
     await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
   return {
     ...actual,
-    resolveWindowsSystemEncoding: () => resolveWindowsSystemEncodingMock(),
+    resolveWindowsOemEncoding: () => resolveWindowsOemEncodingMock(),
   };
 });
 
@@ -21,10 +21,12 @@ const CJK_SCRIPT_PATH = "C:\\Users\\苗振\\.openclaw\\gateway.cmd";
 const REPLACEMENT_CHAR = String.fromCharCode(0xfffd);
 const GBK_MARKER = "@rem openclaw-launcher-encoding=gbk\r\n";
 const EUC_KR_MARKER = "@rem openclaw-launcher-encoding=euc-kr\r\n";
+const CP857_MARKER = "@rem openclaw-launcher-encoding=cp857\r\n";
+const CP850_MARKER = "@rem openclaw-launcher-encoding=cp850\r\n";
 
 beforeEach(() => {
-  resolveWindowsSystemEncodingMock.mockReset();
-  resolveWindowsSystemEncodingMock.mockReturnValue(null);
+  resolveWindowsOemEncodingMock.mockReset();
+  resolveWindowsOemEncodingMock.mockReturnValue(null);
 });
 
 describe("encodeWindowsLauncherScript", () => {
@@ -49,11 +51,11 @@ describe("encodeWindowsLauncherScript", () => {
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
 
     expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(true);
-    expect(resolveWindowsSystemEncodingMock).not.toHaveBeenCalled();
+    expect(resolveWindowsOemEncodingMock).not.toHaveBeenCalled();
   });
 
   it("encodes non-ASCII cmd scripts with a marker line plus CJK code page bytes", () => {
-    resolveWindowsSystemEncodingMock.mockReturnValue("gbk");
+    resolveWindowsOemEncodingMock.mockReturnValue("gbk");
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振\\.openclaw"\r\nnode gateway.js\r\n`;
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
 
@@ -63,7 +65,7 @@ describe("encodeWindowsLauncherScript", () => {
   });
 
   it("round-trips cmd content whose GBK bytes are also valid UTF-8 (隆 -> C2 A1 -> ¡)", () => {
-    resolveWindowsSystemEncodingMock.mockReturnValue("gbk");
+    resolveWindowsOemEncodingMock.mockReturnValue("gbk");
     // Verify the trap on this iconv build: valid UTF-8, wrong string, no U+FFFD.
     const collisionBytes = iconv.encode("隆", "gbk");
     expect(collisionBytes.toString("utf8")).not.toBe("隆");
@@ -81,7 +83,7 @@ describe("encodeWindowsLauncherScript", () => {
   });
 
   it("encodes cp949 extension syllables that Node ICU's euc-kr decoder rejects", () => {
-    resolveWindowsSystemEncodingMock.mockReturnValue("euc-kr");
+    resolveWindowsOemEncodingMock.mockReturnValue("euc-kr");
     // Windows code page 949 is cp949/UHC; "똠" (8C 63) is a UHC extension syllable
     // iconv encodes and round-trips, but new TextDecoder("euc-kr") cannot decode
     // (KS X 1001 only). The guard must verify euc-kr with iconv, not ICU.
@@ -96,15 +98,34 @@ describe("encodeWindowsLauncherScript", () => {
     expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
   });
 
-  it("falls back to UTF-8 when no system code page is available", () => {
+  it("encodes Turkish profile paths with the cp857 OEM page cmd.exe reads (#108774)", () => {
+    resolveWindowsOemEncodingMock.mockReturnValue("cp857");
+    const content = `@echo off\r\ncd /d "C:\\Users\\Yiğit Öğün\\.openclaw"\r\nnode gateway.js\r\n`;
+    const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
+
+    expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(false);
+    expect(encoded.equals(iconv.encode(CP857_MARKER + content, "cp857"))).toBe(true);
+    expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
+  });
+
+  it("encodes Western European profile paths with the cp850 OEM page", () => {
+    resolveWindowsOemEncodingMock.mockReturnValue("cp850");
+    const content = '@echo off\r\ncd /d "C:\\Users\\café"\r\nnode gateway.js\r\n';
+    const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
+
+    expect(encoded.equals(iconv.encode(CP850_MARKER + content, "cp850"))).toBe(true);
+    expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
+  });
+
+  it("falls back to UTF-8 when no OEM code page is available", () => {
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振"\r\n`;
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
 
     expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(true);
   });
 
-  it("falls back to UTF-8 on windows-125x hosts whose console page differs from ANSI", () => {
-    resolveWindowsSystemEncodingMock.mockReturnValue("windows-1252");
+  it("keeps plain UTF-8 on hosts whose OEM page is already UTF-8 (65001)", () => {
+    resolveWindowsOemEncodingMock.mockReturnValue("utf-8");
     const content = '@echo off\r\ncd /d "C:\\Users\\café"\r\n';
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
 
@@ -112,11 +133,20 @@ describe("encodeWindowsLauncherScript", () => {
   });
 
   it("fails the install instead of writing unrepresentable cmd content", () => {
-    resolveWindowsSystemEncodingMock.mockReturnValue("gbk");
+    resolveWindowsOemEncodingMock.mockReturnValue("gbk");
     const content = '@echo off\r\nset "OC_LABEL=🚀"\r\n';
 
     expect(() => encodeWindowsLauncherScript({ format: "cmd", content })).toThrow(
-      /cannot be represented in the Windows system code page \(gbk\)/,
+      /cannot be represented in the Windows console code page \(gbk\)/,
+    );
+  });
+
+  it("fails the install for characters outside the single-byte OEM page", () => {
+    resolveWindowsOemEncodingMock.mockReturnValue("cp857");
+    const content = `@echo off\r\ncd /d "C:\\Users\\苗振"\r\n`;
+
+    expect(() => encodeWindowsLauncherScript({ format: "cmd", content })).toThrow(
+      /cannot be represented in the Windows console code page \(cp857\)/,
     );
   });
 });
