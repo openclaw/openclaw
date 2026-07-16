@@ -11,7 +11,7 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { API, Credentials, LoginQRCallbackEvent } from "./zca-client.js";
+import type { API, LoginQRCallbackEvent } from "./zca-client.js";
 import { LoginQRCallbackEventType } from "./zca-constants.js";
 
 const createZaloMock = vi.hoisted(() => vi.fn());
@@ -24,7 +24,9 @@ vi.mock("./zca-client.js", () => ({
 
 import { setZalouserRuntime } from "./runtime.js";
 import {
+  clearStoredZaloCredentials,
   loadStoredZaloCredentials,
+  refreshStoredZaloCredentials,
   resolveLegacyZalouserCredentialsPath,
   saveStoredZaloCredentials,
   type StoredZaloCredentials,
@@ -100,6 +102,33 @@ describe("zalouser credential persistence", () => {
       createPluginStateSyncKeyedStoreForTests<T>("zalouser", options);
     setZalouserRuntime(runtime);
     createZaloMock.mockReset();
+  });
+
+  it("does not let a delayed credential refresh undo explicit logout", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const profile = "revoked-refresh";
+    const stored = {
+      imei: "device",
+      cookie: [{ key: "zpsid", value: "old", domain: "chat.zalo.me" }],
+      userAgent: "agent",
+      createdAt: "2026-04-01T00:00:00.000Z",
+    };
+    try {
+      saveStoredZaloCredentials(profile, stored, env);
+      clearStoredZaloCredentials(profile, env);
+
+      expect(
+        refreshStoredZaloCredentials(
+          profile,
+          { ...stored, cookie: [{ key: "zpsid", value: "late", domain: "chat.zalo.me" }] },
+          env,
+        ),
+      ).toBe(false);
+      expect(loadStoredZaloCredentials(profile, env)).toBeNull();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("persists the final API cookie jar after QR login", async () => {

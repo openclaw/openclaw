@@ -25,6 +25,7 @@ import { createZalouserSendReceipt } from "./send-receipt.js";
 import {
   clearStoredZaloCredentials,
   loadStoredZaloCredentials,
+  refreshStoredZaloCredentials,
   saveStoredZaloCredentials,
   type StoredZaloCredentials,
 } from "./session-state.js";
@@ -570,7 +571,11 @@ function canonicalCredentialCookie(cookie: Credentials["cookie"]): unknown {
   );
 }
 
-function writeCredentials(profile: string, credentials: ZaloCredentialPayload): void {
+function writeCredentials(
+  profile: string,
+  credentials: ZaloCredentialPayload,
+  allowRevokedReplace: boolean,
+): boolean {
   const existing = readCredentials(profile);
   const now = new Date().toISOString();
   const next: StoredZaloCredentials = {
@@ -580,8 +585,14 @@ function writeCredentials(profile: string, credentials: ZaloCredentialPayload): 
     lastUsedAt: now,
   };
   const { profile: _profile, ...stored } = next;
-  saveStoredZaloCredentials(profile, stored);
+  const saved = allowRevokedReplace
+    ? (saveStoredZaloCredentials(profile, stored), true)
+    : refreshStoredZaloCredentials(profile, stored);
+  if (!saved) {
+    return false;
+  }
   credentialSignaturesByProfile.set(profile, credentialSignature(next));
+  return true;
 }
 
 function snapshotApiCredentials(
@@ -612,8 +623,9 @@ function writeApiCredentials(
   profile: string,
   api: API,
   fallback?: Partial<ZaloCredentialPayload>,
+  allowRevokedReplace = false,
 ): void {
-  writeCredentials(profile, snapshotApiCredentials(api, fallback));
+  writeCredentials(profile, snapshotApiCredentials(api, fallback), allowRevokedReplace);
 }
 
 function writeApiCredentialsIfChanged(profile: string, api: API): boolean {
@@ -622,8 +634,7 @@ function writeApiCredentialsIfChanged(profile: string, api: API): boolean {
   if (credentialSignaturesByProfile.get(profile) === signature) {
     return false;
   }
-  writeCredentials(profile, credentials);
-  return true;
+  return writeCredentials(profile, credentials, false);
 }
 
 function persistApiCredentialsIfChanged(profile: string, api: API): void {
@@ -1568,7 +1579,7 @@ export async function startZaloQrLogin(params: {
         if (!owned || owned.id !== login.id) {
           return;
         }
-        writeApiCredentials(profile, api, capturedCredentials ?? undefined);
+        writeApiCredentials(profile, api, capturedCredentials ?? undefined, true);
         invalidateApi(profile);
         apiByProfile.set(profile, api);
         current.connected = true;

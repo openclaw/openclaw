@@ -528,7 +528,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         params.stateDir,
         MSTEAMS_DELEGATED_TOKEN_LEGACY_FILENAME,
       );
-      let token: MSTeamsDelegatedTokens | null = null;
+      let token: MSTeamsDelegatedTokens | null;
       try {
         token = normalizeMSTeamsDelegatedTokens(
           JSON.parse(await fs.readFile(filePath, "utf8")) as unknown,

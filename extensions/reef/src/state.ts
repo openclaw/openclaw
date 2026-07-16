@@ -1,6 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
@@ -9,15 +7,11 @@ import {
   base64,
   base64url,
   canonicalBytes,
-  createAuditEntry,
   decodeUtf8,
   fromBase64,
   fromBase64url,
   generateIdentity,
   validateMessageBody,
-  verifyChain,
-  type AuditEntry,
-  type AuditStore,
   type CompletedReplay,
   type MessageBody,
   type ReplayClaim,
@@ -26,7 +20,12 @@ import {
   type ReviewRequest,
   type SignedReceipt,
 } from "../protocol/index.js";
+import { openReefAuditStore } from "./audit-state.js";
+import { loadReefIdentityBinding } from "./registration-state.js";
 import type { ReefKeys } from "./types.js";
+
+export * from "./audit-state.js";
+export * from "./registration-state.js";
 
 export const REEF_KEYS_NAMESPACE = "identity";
 export const REEF_KEYS_KEY = "keys";
@@ -34,44 +33,36 @@ export const REEF_KEYS_MAX_ENTRIES = 1;
 export const REEF_KEYS_MIGRATION_NAMESPACE = "identity-migration";
 export const REEF_KEYS_MIGRATION_KEY = "keys-json";
 export const REEF_KEYS_MIGRATION_MAX_ENTRIES = 1;
-export const REEF_AUDIT_NAMESPACE = "audit";
-export const REEF_AUDIT_HEAD_KEY = "head";
-export const REEF_AUDIT_MAX_ENTRIES = 30_000;
-const REEF_REPLAY_NAMESPACE = "replay";
-const REEF_REPLAY_MAX_ENTRIES = 3_000;
-const REEF_REVIEWS_NAMESPACE = "reviews";
-const REEF_REVIEWS_MAX_ENTRIES = 2_000;
-const REEF_DELIVERED_NAMESPACE = "delivered";
-const REEF_DELIVERED_MAX_ENTRIES = 5_000;
-export const REEF_REGISTRATION_NAMESPACE = "registration";
-export const REEF_REGISTRATION_IDENTITY_KEY = "identity";
-export const REEF_REGISTRATION_SESSION_KEY = "setup-session";
-export const REEF_REGISTRATION_MAX_ENTRIES = 2;
+export const REEF_DURABLE_MIGRATION_NAMESPACE = "durable-migration";
+export const REEF_DURABLE_MIGRATION_KEY = "legacy-files";
+export const REEF_DURABLE_MIGRATION_MAX_ENTRIES = 1;
+export const REEF_REPLAY_NAMESPACE = "replay";
+export const REEF_REPLAY_MAX_ENTRIES = 3_000;
+export const REEF_REVIEWS_NAMESPACE = "reviews";
+export const REEF_REVIEWS_MAX_ENTRIES = 2_000;
+export const REEF_DELIVERED_NAMESPACE = "delivered";
+export const REEF_DELIVERED_MAX_ENTRIES = 5_000;
 
-type ReefAuditHeadRecord = { kind: "head"; hash: string; seq: number };
-type ReefAuditEntryRecord = { kind: "entry"; entry: AuditEntry };
-export type ReefAuditStateRecord = ReefAuditHeadRecord | ReefAuditEntryRecord;
-
-type ReefReplayRecord = {
+export type ReefReplayRecord = {
   peer: string;
   id: string;
   envelopeHash: string;
   state: "available" | "in_flight" | "completed" | "consumed";
   claimOwner?: string;
+  claimExpiresAt?: number;
   receipt?: SignedReceipt;
   body?: { enc: string };
 };
 
-const REEF_REPLAY_PROCESS_ID = randomUUID();
+const REEF_REPLAY_CLAIM_LEASE_MS = 5 * 60_000;
 
-type ReefReviewRecord = { review: ReviewRequest; approved?: boolean };
+export type ReefReviewRecord = { review: ReviewRequest; approved?: boolean };
 
-export type ReefIdentityBinding = { handle: string; relayUrl: string };
-export type ReefSetupSession = { session: string; relayUrl: string; email: string };
-
-export function resolveStateDir(configured?: string): string {
-  return configured ?? join(homedir(), ".openclaw", "data", "reef");
-}
+export type ReefIdentityMigrationRecord = {
+  pending: true;
+  identityBindingRequired: boolean;
+};
+export type ReefDurableMigrationRecord = { pending: true };
 
 export function parseReefKeys(value: unknown): ReefKeys {
   if (!value || typeof value !== "object") {
@@ -101,15 +92,35 @@ function openKeysStore(runtime: PluginRuntime): PluginStateSyncKeyedStore<ReefKe
   });
 }
 
-export async function generateAndStoreKeys(runtime: PluginRuntime): Promise<ReefKeys> {
-  const migration = runtime.state.openSyncKeyedStore<{ pending: true }>({
+function assertReefIdentityMigrationComplete(runtime: PluginRuntime): void {
+  const durableMigration = runtime.state.openSyncKeyedStore<ReefDurableMigrationRecord>({
+    namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
+    maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+  });
+  if (durableMigration.lookup(REEF_DURABLE_MIGRATION_KEY)) {
+    throw new Error(
+      "Reef durable state migration is incomplete; repair the legacy state files and rerun openclaw doctor --fix",
+    );
+  }
+  const migration = runtime.state.openSyncKeyedStore<ReefIdentityMigrationRecord>({
     namespace: REEF_KEYS_MIGRATION_NAMESPACE,
     maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
     overflowPolicy: "reject-new",
   });
   if (migration.lookup(REEF_KEYS_MIGRATION_KEY)) {
     throw new Error(
-      "Reef identity key migration is incomplete; repair the legacy keys.json and rerun openclaw doctor --fix",
+      "Reef identity migration is incomplete; repair the legacy identity files and rerun openclaw doctor --fix",
+    );
+  }
+}
+
+export async function generateAndStoreKeys(runtime: PluginRuntime): Promise<ReefKeys> {
+  assertReefIdentityMigrationComplete(runtime);
+  const binding = loadReefIdentityBinding(runtime);
+  if (binding) {
+    throw new Error(
+      `Reef identity @${binding.handle} on ${binding.relayUrl} has no canonical keys; restore the original keys before registration`,
     );
   }
   const identity = generateIdentity();
@@ -127,6 +138,7 @@ export async function generateAndStoreKeys(runtime: PluginRuntime): Promise<Reef
 }
 
 export async function loadKeys(runtime: PluginRuntime): Promise<ReefKeys> {
+  assertReefIdentityMigrationComplete(runtime);
   const value = openKeysStore(runtime).lookup(REEF_KEYS_KEY);
   if (!value) {
     const error = new Error("Reef keys are missing from plugin state") as Error & {
@@ -138,109 +150,7 @@ export async function loadKeys(runtime: PluginRuntime): Promise<ReefKeys> {
   return parseReefKeys(value);
 }
 
-export function reefAuditEntryKey(entryHash: string): string {
-  return `entry:${entryHash}`;
-}
-
-function parseAuditHead(value: ReefAuditStateRecord | undefined): ReefAuditHeadRecord {
-  if (value === undefined) {
-    return { kind: "head", hash: "", seq: 0 };
-  }
-  if (
-    value.kind !== "head" ||
-    typeof value.hash !== "string" ||
-    !Number.isSafeInteger(value.seq) ||
-    value.seq < 0 ||
-    (value.seq === 0) !== (value.hash === "")
-  ) {
-    throw new Error("invalid Reef audit head");
-  }
-  return value;
-}
-
-function parseAuditEntryRecord(value: ReefAuditStateRecord | undefined): AuditEntry {
-  if (!value || value.kind !== "entry") {
-    throw new Error("missing Reef audit entry");
-  }
-  return value.entry;
-}
-
-class ReefSqliteAuditStore implements AuditStore {
-  readonly #auditKey: Uint8Array;
-  readonly #rng: (length: number) => Uint8Array;
-  readonly #store: PluginStateSyncKeyedStore<ReefAuditStateRecord>;
-
-  constructor(
-    runtime: PluginRuntime,
-    auditKey: Uint8Array,
-    rng: (length: number) => Uint8Array = randomBytes,
-  ) {
-    if (auditKey.length !== 32) {
-      throw new Error("audit key must be 32 bytes");
-    }
-    this.#auditKey = auditKey.slice();
-    this.#rng = rng;
-    this.#store = runtime.state.openSyncKeyedStore<ReefAuditStateRecord>({
-      namespace: REEF_AUDIT_NAMESPACE,
-      maxEntries: REEF_AUDIT_MAX_ENTRIES,
-      overflowPolicy: "reject-new",
-    });
-  }
-
-  async appendEvent(
-    type: string,
-    payload: unknown,
-    ts = Math.floor(Date.now() / 1000),
-  ): Promise<AuditEntry> {
-    const update = this.#store.update;
-    if (!update) {
-      throw new Error("Reef audit state requires atomic plugin-state updates");
-    }
-    for (let attempt = 0; attempt < 32; attempt++) {
-      const head = parseAuditHead(this.#store.lookup(REEF_AUDIT_HEAD_KEY));
-      const entry = createAuditEntry(type, payload, ts, this.#auditKey, head, this.#rng);
-      const entryKey = reefAuditEntryKey(entry.entryHash);
-      const inserted = this.#store.registerIfAbsent(entryKey, { kind: "entry", entry });
-      let advanced = false;
-      update(REEF_AUDIT_HEAD_KEY, (current) => {
-        const latest = parseAuditHead(current);
-        if (latest.hash !== head.hash || latest.seq !== head.seq) {
-          return latest;
-        }
-        advanced = true;
-        return { kind: "head", hash: entry.entryHash, seq: entry.event.seq };
-      });
-      if (advanced) {
-        return structuredClone(entry);
-      }
-      if (inserted) {
-        this.#store.delete(entryKey);
-      }
-    }
-    throw new Error("Reef audit append contention exceeded retry budget");
-  }
-
-  async entries(): Promise<AuditEntry[]> {
-    const head = parseAuditHead(this.#store.lookup(REEF_AUDIT_HEAD_KEY));
-    const reversed: AuditEntry[] = [];
-    let hash = head.hash;
-    for (let seq = head.seq; seq > 0; seq--) {
-      const entry = parseAuditEntryRecord(this.#store.lookup(reefAuditEntryKey(hash)));
-      if (entry.entryHash !== hash || entry.event.seq !== seq) {
-        throw new Error("invalid Reef audit chain state");
-      }
-      reversed.push(entry);
-      hash = entry.prevHash;
-    }
-    const entries = reversed.reverse();
-    if (hash !== "" || !verifyChain(entries, { head: head.hash, length: head.seq })) {
-      throw new Error("invalid Reef audit chain state");
-    }
-    return structuredClone(entries);
-  }
-}
-
-function reefReplayStoreKey(peer: string, id: string): string {
+export function reefReplayStoreKey(peer: string, id: string): string {
   return `binding:${createHash("sha256")
     .update(JSON.stringify([peer, id]))
     .digest("hex")}`;
@@ -254,7 +164,12 @@ function parseReplayRecord(value: ReefReplayRecord | undefined): ReefReplayRecor
     typeof value.peer !== "string" ||
     typeof value.id !== "string" ||
     typeof value.envelopeHash !== "string" ||
-    !["available", "in_flight", "completed", "consumed"].includes(value.state)
+    !["available", "in_flight", "completed", "consumed"].includes(value.state) ||
+    (value.state === "in_flight" &&
+      (typeof value.claimOwner !== "string" ||
+        value.claimOwner.length === 0 ||
+        !Number.isSafeInteger(value.claimExpiresAt) ||
+        (value.claimExpiresAt ?? 0) <= 0))
   ) {
     throw new Error("invalid Reef replay state");
   }
@@ -296,6 +211,7 @@ class ReefSqliteReplayStore implements ReplayStore {
   readonly #bodyKey: Uint8Array;
   readonly #rng: (length: number) => Uint8Array;
   readonly #store: PluginStateSyncKeyedStore<ReefReplayRecord>;
+  readonly #claimOwners = new Map<string, string>();
 
   constructor(
     runtime: PluginRuntime,
@@ -310,7 +226,37 @@ class ReefSqliteReplayStore implements ReplayStore {
     this.#store = runtime.state.openSyncKeyedStore<ReefReplayRecord>({
       namespace: REEF_REPLAY_NAMESPACE,
       maxEntries: REEF_REPLAY_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
     });
+  }
+
+  #makeRoomForNewBinding(key: string): void {
+    const entries = this.#store.entries();
+    if (entries.length < REEF_REPLAY_MAX_ENTRIES) {
+      return;
+    }
+    const deleteIf = this.#store.deleteIf;
+    if (!deleteIf) {
+      throw new Error("Reef replay retention requires atomic plugin-state deleteIf");
+    }
+    const candidate = entries
+      .filter(
+        (entry) =>
+          entry.key !== key &&
+          (entry.value.state !== "in_flight" || (entry.value.claimExpiresAt ?? 0) <= Date.now()),
+      )
+      .toSorted((left, right) => left.createdAt - right.createdAt)[0];
+    if (
+      !candidate ||
+      !deleteIf(
+        candidate.key,
+        (current) =>
+          (current.state !== "in_flight" || (current.claimExpiresAt ?? 0) <= Date.now()) &&
+          JSON.stringify(current) === JSON.stringify(candidate.value),
+      )
+    ) {
+      throw new Error("Reef replay binding capacity is exhausted by in-flight claims");
+    }
   }
 
   #update(
@@ -328,7 +274,13 @@ class ReefSqliteReplayStore implements ReplayStore {
   }
 
   async claim(peer: string, id: string, envelopeHash: string): Promise<ReplayClaim> {
+    const key = reefReplayStoreKey(peer, id);
+    if (!this.#store.lookup(key)) {
+      this.#makeRoomForNewBinding(key);
+    }
     let result: ReplayClaim = "new";
+    const owner = randomUUID();
+    const claimExpiresAt = Date.now() + REEF_REPLAY_CLAIM_LEASE_MS;
     this.#update(peer, id, (existing) => {
       if (!existing) {
         return {
@@ -336,7 +288,8 @@ class ReefSqliteReplayStore implements ReplayStore {
           id,
           envelopeHash,
           state: "in_flight",
-          claimOwner: REEF_REPLAY_PROCESS_ID,
+          claimOwner: owner,
+          claimExpiresAt,
         };
       }
       if (existing.peer !== peer || existing.id !== id || existing.envelopeHash !== envelopeHash) {
@@ -347,13 +300,40 @@ class ReefSqliteReplayStore implements ReplayStore {
         result = "duplicate";
         return existing;
       }
-      if (existing.state === "in_flight" && existing.claimOwner === REEF_REPLAY_PROCESS_ID) {
+      if (existing.state === "in_flight" && (existing.claimExpiresAt ?? 0) > Date.now()) {
         result = "in_flight";
         return existing;
       }
-      return { ...existing, state: "in_flight", claimOwner: REEF_REPLAY_PROCESS_ID };
+      return {
+        ...existing,
+        state: "in_flight",
+        claimOwner: owner,
+        claimExpiresAt,
+      };
     });
+    if (result === "new") {
+      this.#claimOwners.set(key, owner);
+    }
     return result;
+  }
+
+  async refresh(peer: string, id: string): Promise<void> {
+    const key = reefReplayStoreKey(peer, id);
+    const owner = this.#claimOwners.get(key);
+    let refreshed = false;
+    if (owner) {
+      this.#update(peer, id, (existing) => {
+        if (existing?.state !== "in_flight" || existing.claimOwner !== owner) {
+          return existing;
+        }
+        refreshed = true;
+        return { ...existing, claimExpiresAt: Date.now() + REEF_REPLAY_CLAIM_LEASE_MS };
+      });
+    }
+    if (!refreshed) {
+      this.#claimOwners.delete(key);
+      throw new Error("replay claim is not in flight");
+    }
   }
 
   async complete(
@@ -366,14 +346,17 @@ class ReefSqliteReplayStore implements ReplayStore {
       throw new Error("receipt id does not match replay claim");
     }
     validateReplayCompletion(receipt, body);
+    const key = reefReplayStoreKey(peer, id);
+    const owner = this.#claimOwners.get(key);
     let completed = false;
     this.#update(peer, id, (existing) => {
-      if (existing?.state !== "in_flight" || existing.claimOwner !== REEF_REPLAY_PROCESS_ID) {
+      if (existing?.state !== "in_flight" || existing.claimOwner !== owner) {
         return existing;
       }
       completed = true;
+      const { claimOwner: _claimOwner, claimExpiresAt: _claimExpiresAt, ...rest } = existing;
       return {
-        ...existing,
+        ...rest,
         state: "completed",
         receipt: structuredClone(receipt),
         ...(body ? { body: encryptReplayBody(body, this.#bodyKey, this.#rng) } : {}),
@@ -382,29 +365,47 @@ class ReefSqliteReplayStore implements ReplayStore {
     if (!completed) {
       throw new Error("replay claim is not in flight");
     }
+    this.#claimOwners.delete(key);
   }
 
   async consume(peer: string, id: string): Promise<void> {
+    const key = reefReplayStoreKey(peer, id);
+    const owner = this.#claimOwners.get(key);
     let consumed = false;
     this.#update(peer, id, (existing) => {
-      if (existing?.state !== "in_flight" || existing.claimOwner !== REEF_REPLAY_PROCESS_ID) {
+      if (existing?.state !== "in_flight" || existing.claimOwner !== owner) {
         return existing;
       }
       consumed = true;
-      const { receipt: _receipt, body: _body, ...rest } = existing;
+      const {
+        receipt: _receipt,
+        body: _body,
+        claimOwner: _claimOwner,
+        claimExpiresAt: _claimExpiresAt,
+        ...rest
+      } = existing;
       return { ...rest, state: "consumed" };
     });
     if (!consumed) {
       throw new Error("replay claim is not in flight");
     }
+    this.#claimOwners.delete(key);
   }
 
   async release(peer: string, id: string): Promise<void> {
+    const key = reefReplayStoreKey(peer, id);
+    const owner = this.#claimOwners.get(key);
     this.#update(peer, id, (existing) =>
-      existing?.state === "in_flight" && existing.claimOwner === REEF_REPLAY_PROCESS_ID
-        ? { ...existing, state: "available", claimOwner: undefined }
+      existing?.state === "in_flight" && existing.claimOwner === owner
+        ? {
+            peer: existing.peer,
+            id: existing.id,
+            envelopeHash: existing.envelopeHash,
+            state: "available",
+          }
         : existing,
     );
+    this.#claimOwners.delete(key);
   }
 
   async completed(peer: string, id: string): Promise<CompletedReplay | undefined> {
@@ -428,13 +429,35 @@ class ReefSqliteReplayStore implements ReplayStore {
 
 export class ReviewApprovalStore {
   readonly #store: PluginStateSyncKeyedStore<ReefReviewRecord>;
+  readonly #maxEntries: number;
 
-  constructor(runtime: PluginRuntime) {
+  constructor(runtime: PluginRuntime, maxEntries = REEF_REVIEWS_MAX_ENTRIES) {
+    this.#maxEntries = maxEntries;
     this.#store = runtime.state.openSyncKeyedStore<ReefReviewRecord>({
       namespace: REEF_REVIEWS_NAMESPACE,
-      maxEntries: REEF_REVIEWS_MAX_ENTRIES,
+      maxEntries,
       overflowPolicy: "reject-new",
     });
+  }
+
+  #makeRoomForPendingReview(): void {
+    const deleteIf = this.#store.deleteIf;
+    if (!deleteIf) {
+      throw new Error("Reef review retention requires atomic plugin-state deleteIf");
+    }
+    while (true) {
+      const entries = this.#store.entries();
+      if (entries.length < this.#maxEntries) {
+        return;
+      }
+      const completed = entries
+        .filter((entry) => entry.value.approved !== undefined)
+        .toSorted((left, right) => left.createdAt - right.createdAt)[0];
+      if (!completed) {
+        throw new Error("Reef pending review capacity is exhausted");
+      }
+      deleteIf(completed.key, (current) => current.approved !== undefined);
+    }
   }
 
   async request(review: ReviewRequest): Promise<ReviewApproval | undefined> {
@@ -442,8 +465,14 @@ export class ReviewApprovalStore {
     if (current?.approved !== undefined) {
       return { approved: current.approved, approvalDigest: review.approvalDigest };
     }
+    if (!current) {
+      this.#makeRoomForPendingReview();
+    }
     this.#store.registerIfAbsent(review.approvalDigest, { review: structuredClone(review) });
     const persisted = this.#store.lookup(review.approvalDigest);
+    if (!persisted) {
+      throw new Error("Failed persisting Reef pending review");
+    }
     return persisted?.approved === undefined
       ? undefined
       : { approved: persisted.approved, approvalDigest: review.approvalDigest };
@@ -480,6 +509,9 @@ export class ReefDeliveredStore {
     this.#store = runtime.state.openSyncKeyedStore<{ id: string }>({
       namespace: REEF_DELIVERED_NAMESPACE,
       maxEntries: REEF_DELIVERED_MAX_ENTRIES,
+      // Plugin state performs eviction and insertion in one SQLite write
+      // transaction while protecting the just-registered key.
+      overflowPolicy: "evict-oldest",
     });
   }
 
@@ -488,86 +520,23 @@ export class ReefDeliveredStore {
   }
 
   async add(id: string): Promise<void> {
-    this.#store.register(id, { id });
+    if (this.#store.lookup(id)?.id === id) {
+      return;
+    }
+    if (!this.#store.registerIfAbsent(id, { id }) && this.#store.lookup(id)?.id !== id) {
+      throw new Error("Failed persisting Reef delivered marker");
+    }
   }
 }
 
-function openRegistrationStore(
+export function openStores(
   runtime: PluginRuntime,
-): PluginStateSyncKeyedStore<ReefIdentityBinding | ReefSetupSession> {
-  return runtime.state.openSyncKeyedStore<ReefIdentityBinding | ReefSetupSession>({
-    namespace: REEF_REGISTRATION_NAMESPACE,
-    maxEntries: REEF_REGISTRATION_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-  });
-}
-
-export function parseReefIdentityBinding(value: unknown): ReefIdentityBinding | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const parsed = value as Partial<ReefIdentityBinding>;
-  return typeof parsed.handle === "string" &&
-    parsed.handle.length > 0 &&
-    typeof parsed.relayUrl === "string" &&
-    parsed.relayUrl.length > 0
-    ? { handle: parsed.handle, relayUrl: parsed.relayUrl }
-    : undefined;
-}
-
-export function parseReefSetupSession(value: unknown): ReefSetupSession | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const parsed = value as Partial<ReefSetupSession>;
-  return typeof parsed.session === "string" &&
-    parsed.session.length > 0 &&
-    typeof parsed.relayUrl === "string" &&
-    parsed.relayUrl.length > 0 &&
-    typeof parsed.email === "string" &&
-    parsed.email.length > 0
-    ? { session: parsed.session, relayUrl: parsed.relayUrl, email: parsed.email }
-    : undefined;
-}
-
-export function loadReefIdentityBinding(runtime: PluginRuntime): ReefIdentityBinding | undefined {
-  return parseReefIdentityBinding(
-    openRegistrationStore(runtime).lookup(REEF_REGISTRATION_IDENTITY_KEY),
-  );
-}
-
-export function saveReefIdentityBinding(
-  runtime: PluginRuntime,
-  binding: ReefIdentityBinding,
-): void {
-  const parsed = parseReefIdentityBinding(binding);
-  if (!parsed) {
-    throw new Error("invalid Reef identity binding");
-  }
-  openRegistrationStore(runtime).register(REEF_REGISTRATION_IDENTITY_KEY, parsed);
-}
-
-export function loadReefSetupSession(runtime: PluginRuntime): ReefSetupSession | undefined {
-  return parseReefSetupSession(
-    openRegistrationStore(runtime).lookup(REEF_REGISTRATION_SESSION_KEY),
-  );
-}
-
-export function saveReefSetupSession(runtime: PluginRuntime, session: ReefSetupSession): void {
-  const parsed = parseReefSetupSession(session);
-  if (!parsed) {
-    throw new Error("invalid Reef setup session");
-  }
-  openRegistrationStore(runtime).register(REEF_REGISTRATION_SESSION_KEY, parsed);
-}
-
-export function clearReefSetupSession(runtime: PluginRuntime): void {
-  openRegistrationStore(runtime).delete(REEF_REGISTRATION_SESSION_KEY);
-}
-
-export function openStores(runtime: PluginRuntime, keys: ReefKeys) {
+  keys: ReefKeys,
+  options: { auditMaxEntries?: number } = {},
+) {
+  assertReefIdentityMigrationComplete(runtime);
   return {
-    audit: new ReefSqliteAuditStore(runtime, fromBase64url(keys.auditKey)),
+    audit: openReefAuditStore(runtime, fromBase64url(keys.auditKey), options.auditMaxEntries),
     replay: new ReefSqliteReplayStore(runtime, fromBase64url(keys.replayKey)),
     reviews: new ReviewApprovalStore(runtime),
     delivered: new ReefDeliveredStore(runtime),

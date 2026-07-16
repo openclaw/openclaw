@@ -3,16 +3,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  createPluginStateSyncKeyedStoreForTests,
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+import { setZalouserRuntime } from "./src/runtime.js";
 import {
+  clearStoredZaloCredentials,
   resolveLegacyZalouserCredentialsPath,
   zalouserCredentialStoreKey,
   ZALOUSER_CREDENTIALS_MAX_ENTRIES,
@@ -96,6 +100,48 @@ describe("zalouser doctor state migration", () => {
       ...legacy,
       createdAt,
     });
+    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("archives legacy credentials without restoring an explicitly cleared profile", async () => {
+    const profile = "work";
+    const filePath = resolveLegacyZalouserCredentialsPath(profile, env);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        imei: "legacy-imei",
+        cookie: [{ key: "zpsid", value: "legacy", domain: "chat.zalo.me" }],
+        userAgent: "legacy-agent",
+      }),
+    );
+    const runtime = createPluginRuntimeMock();
+    runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateSyncKeyedStoreForTests<T>("zalouser", {
+        ...options,
+        env: options.env ?? env,
+      });
+    setZalouserRuntime(runtime);
+    clearStoredZaloCredentials(profile, env);
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+    const migration = stateMigrations.find(
+      (entry) => entry.id === "zalouser-credentials-json-to-plugin-state",
+    )!;
+
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Archived revoked Zalo Personal credential legacy source for profile work",
+      expect.stringContaining("Archived Zalo Personal credentials legacy source"),
+    ]);
     await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
   });
 });

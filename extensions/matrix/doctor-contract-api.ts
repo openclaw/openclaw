@@ -29,8 +29,10 @@ import {
 import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
   MATRIX_CREDENTIALS_NAMESPACE,
+  isMatrixCredentialRevocation,
   matrixCredentialsStoreKey,
   normalizeMatrixStoredCredentials,
+  type MatrixCredentialStateRecord,
   type MatrixStoredCredentialRecord,
 } from "./src/matrix/credentials-read.js";
 import {
@@ -230,7 +232,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const sources = await collectLegacyMatrixCredentialSources(params);
-      const store = params.context.openPluginStateKeyedStore<MatrixStoredCredentialRecord>({
+      const store = params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>({
         namespace: MATRIX_CREDENTIALS_NAMESPACE,
         maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
         overflowPolicy: "reject-new",
@@ -250,10 +252,20 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           continue;
         }
         const key = matrixCredentialsStoreKey(source.accountId);
-        const existing = normalizeMatrixStoredCredentials(
-          await store.lookup(key),
-          source.accountId,
-        );
+        const stored = await store.lookup(key);
+        if (isMatrixCredentialRevocation(stored, source.accountId)) {
+          changes.push(
+            `Archived revoked Matrix credential legacy source for account ${source.accountId}`,
+          );
+          await archiveLegacyStateSource({
+            filePath: source.filePath,
+            label: "Matrix credentials",
+            changes,
+            warnings,
+          });
+          continue;
+        }
+        const existing = normalizeMatrixStoredCredentials(stored, source.accountId);
         if (existing && JSON.stringify(existing) !== JSON.stringify(credentials)) {
           warnings.push(
             `Kept existing Matrix credentials for account ${source.accountId}; left differing legacy source in place`,

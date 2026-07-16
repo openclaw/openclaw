@@ -5,7 +5,7 @@ import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
   MATRIX_CREDENTIALS_NAMESPACE,
   normalizeMatrixStoredCredentials,
-  type MatrixStoredCredentialRecord,
+  type MatrixCredentialStateRecord,
 } from "./src/matrix/credentials-read.js";
 
 type MatrixAuthPresenceParams =
@@ -22,7 +22,7 @@ export function hasAnyMatrixAuth(
   const resolvedEnv =
     params && typeof params === "object" && "cfg" in params ? (params.env ?? env) : env;
   try {
-    const store = createPluginStateSyncKeyedStore<MatrixStoredCredentialRecord>("matrix", {
+    const store = createPluginStateSyncKeyedStore<MatrixCredentialStateRecord>("matrix", {
       namespace: MATRIX_CREDENTIALS_NAMESPACE,
       maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
       overflowPolicy: "reject-new",

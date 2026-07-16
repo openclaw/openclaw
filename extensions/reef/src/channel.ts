@@ -14,6 +14,7 @@ import {
   ReefChannelConfigSchema,
   autonomyBudget,
   normalizeReefTarget,
+  parseReefRelayUrl,
   resolveReefConfig,
   type ReefCoreConfig,
 } from "./config-schema.js";
@@ -29,7 +30,7 @@ import {
 import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
-import { loadKeys, openStores } from "./state.js";
+import { assertReefIdentityBinding, loadKeys, openStores } from "./state.js";
 import {
   ReefInboxConnection,
   ReefTransportClient,
@@ -192,6 +193,10 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       }
       const runtime = getReefRuntime();
       const keys = await loadKeys(runtime);
+      assertReefIdentityBinding(runtime, {
+        handle: ctx.account.config.handle!,
+        relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
+      });
       const transport = new ReefTransportClient(
         ctx.account.config.relayUrl,
         ctx.account.config.handle!,

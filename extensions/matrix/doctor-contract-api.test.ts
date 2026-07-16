@@ -21,6 +21,7 @@ import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
   MATRIX_CREDENTIALS_NAMESPACE,
   matrixCredentialsStoreKey,
+  type MatrixCredentialStateRecord,
   type MatrixStoredCredentialRecord,
 } from "./src/matrix/credentials-read.js";
 import {
@@ -114,6 +115,45 @@ describe("matrix doctor contract state migrations", () => {
       accountId: "ops",
       ...credentials,
     });
+    expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
+  });
+
+  it("archives legacy credentials without restoring an explicitly cleared account", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const credentialsDir = path.join(stateDir, "credentials", "matrix");
+    const filePath = path.join(credentialsDir, "credentials-ops.json");
+    fs.mkdirSync(credentialsDir, { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "legacy-token",
+        createdAt: "2026-07-01T12:00:00.000Z",
+      }),
+    );
+    const params = createMigrationParams(stateDir);
+    const credentialStore = params.context.openPluginStateKeyedStore<MatrixCredentialStateRecord>({
+      namespace: MATRIX_CREDENTIALS_NAMESPACE,
+      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await credentialStore.register(matrixCredentialsStoreKey("ops"), {
+      accountId: "ops",
+      kind: "revoked",
+      revokedAt: "2026-07-02T12:00:00.000Z",
+    });
+
+    const result = await migrationById(
+      "matrix-credentials-json-to-plugin-state",
+    ).migrateLegacyState(params);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Archived revoked Matrix credential legacy source for account ops",
+      expect.stringContaining("Archived Matrix credentials legacy source"),
+    ]);
     expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
   });
 

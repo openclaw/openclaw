@@ -13,18 +13,25 @@ import {
 } from "./config-schema.js";
 import { ReefAutonomySchema } from "./friend-types.js";
 import { ReefFriendManager } from "./friends.js";
+import { assertLegacyReefKeysMigrated, REEF_LEGACY_KEYS_PENDING_CODE } from "./legacy-key-guard.js";
 import { getReefRuntime } from "./runtime.js";
 import {
+  assertReefIdentityBinding,
   clearReefSetupSession,
+  finalizeReefIdentityBinding,
   generateAndStoreKeys,
   loadKeys,
   loadReefIdentityBinding,
   loadReefSetupSession,
-  resolveStateDir,
-  saveReefIdentityBinding,
+  releaseReefIdentityReservation,
+  reserveReefIdentityBinding,
   saveReefSetupSession,
 } from "./state.js";
-import { ReefTransportClient } from "./transport.js";
+import {
+  isDefinitiveReefRegistrationFailure,
+  isReefOwnershipRejection,
+  ReefTransportClient,
+} from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
 import type { ReefKeys } from "./types.js";
 
@@ -80,7 +87,10 @@ function reefCliAction<TOptions extends { json: boolean }, TArgs extends unknown
   };
 }
 
-async function loadOrCreateKeys(createMissing: boolean): Promise<ReefKeys> {
+async function loadOrCreateKeys(
+  createMissing: boolean,
+  legacyStateDir?: string,
+): Promise<ReefKeys> {
   const runtime = getReefRuntime();
   try {
     return await loadKeys(runtime);
@@ -89,6 +99,7 @@ async function loadOrCreateKeys(createMissing: boolean): Promise<ReefKeys> {
     // corruption or I/O failures would orphan the relay handle and every
     // pinned friendship bound to the old public keys.
     if (createMissing && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      await assertLegacyReefKeysMigrated(legacyStateDir);
       return await generateAndStoreKeys(runtime);
     }
     throw error;
@@ -115,8 +126,10 @@ async function loadConfiguredManager(output: ReefCliOutput): Promise<{
     return await fail(output, "Reef is not configured. Run `openclaw reef register` first.");
   }
   const keys = await loadOrCreateKeys(false);
-  const transport = new ReefTransportClient(config.relayUrl, config.handle, keys);
   const runtime = getReefRuntime();
+  const relayUrl = parseReefRelayUrl(config.relayUrl);
+  assertReefIdentityBinding(runtime, { handle: config.handle, relayUrl });
+  const transport = new ReefTransportClient(relayUrl, config.handle, keys);
   const pairing = createChannelPairingController({
     core: runtime,
     channel: "reef",
@@ -158,6 +171,22 @@ async function writeReefRegistration(candidate: ReefChannelConfig): Promise<void
   });
 }
 
+async function writeReefMigrationStateDir(stateDir: string): Promise<void> {
+  await mutateConfigFile({
+    afterWrite: { mode: "auto" },
+    mutate(draft: OpenClawConfig) {
+      const existing = draft.channels?.reef;
+      draft.channels = {
+        ...draft.channels,
+        reef: {
+          ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
+          stateDir,
+        },
+      };
+    },
+  });
+}
+
 async function runRegister(output: ReefCliOutput, options: RegisterOptions): Promise<void> {
   if (!options.email.includes("@")) {
     return await fail(output, "A valid --email is required.");
@@ -168,21 +197,43 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     return await fail(output, "--guard-provider must be one of: anthropic, openai.");
   }
   const relayUrl = parseReefRelayUrl(options.relay);
-  const legacyStateDir = options.stateDir ? resolveStateDir(options.stateDir) : undefined;
-  const requestedHandle = options.handle?.toLowerCase();
+  const legacyStateDir = options.stateDir ?? currentReefConfig()?.stateDir;
+  const explicitHandle = options.handle?.toLowerCase();
   // One plugin-state identity may bind to one handle and relay. This check
   // survives config deletion and prevents linking peers under reused keys.
   const runtime = getReefRuntime();
   const identity = loadReefIdentityBinding(runtime);
-  if (identity?.handle && (identity.handle !== requestedHandle || identity.relayUrl !== relayUrl)) {
+  if (
+    identity?.handle &&
+    (identity.relayUrl !== relayUrl ||
+      (explicitHandle !== undefined && identity.handle !== explicitHandle))
+  ) {
     return await fail(
       output,
       `This OpenClaw state already holds the Reef identity @${identity.handle} on ${identity.relayUrl}. Re-register the same handle and relay.`,
     );
   }
-  const keys = await loadOrCreateKeys(true);
+  const requestedHandle = explicitHandle ?? identity?.handle;
+  let keys: ReefKeys;
+  try {
+    keys = await loadOrCreateKeys(true, legacyStateDir);
+  } catch (error) {
+    if (
+      options.stateDir &&
+      (error as NodeJS.ErrnoException).code === REEF_LEGACY_KEYS_PENDING_CODE
+    ) {
+      try {
+        await writeReefMigrationStateDir(options.stateDir);
+      } catch (writeError) {
+        throw new Error("Failed to save the Reef legacy state directory for Doctor", {
+          cause: writeError,
+        });
+      }
+    }
+    throw error;
+  }
 
-  const bootstrap = new ReefTransportClient(relayUrl, options.handle ?? "pending", keys);
+  const bootstrap = new ReefTransportClient(relayUrl, requestedHandle ?? "pending", keys);
   // A previously exchanged session is reused from plugin state so retries
   // never need the single-use token again and the credential never appears in
   // command output or automation logs. It is scoped to the relay and email it
@@ -220,7 +271,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   // Validate everything that completion needs BEFORE consuming the single-use
   // token or mutating relay state, so a bad flag cannot burn the credential or
   // claim a handle that a retry then finds taken.
-  const handle = options.handle?.toLowerCase();
+  const handle = requestedHandle;
   if (!handle || !HANDLE_PATTERN.test(handle)) {
     return await fail(output, "A valid --handle is required (lowercase letters, digits, - or _).");
   }
@@ -245,15 +296,32 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     guard,
   };
   ReefChannelConfigSchema.parse(provisional);
+  // Reserve keys to this handle before consuming auth or mutating the relay.
+  // Retries are idempotent; mismatched concurrent registrations fail closed.
+  const reservation = reserveReefIdentityBinding(runtime, { handle, relayUrl });
 
   let resolvedSession = session;
   if (!resolvedSession) {
-    resolvedSession = (await bootstrap.authComplete(token ?? "")).session;
-    saveReefSetupSession(runtime, {
-      session: resolvedSession,
-      relayUrl,
-      email: options.email,
-    });
+    try {
+      resolvedSession = (await bootstrap.authComplete(token ?? "")).session;
+    } catch (error) {
+      if (isDefinitiveReefRegistrationFailure(error)) {
+        releaseReefIdentityReservation(runtime, reservation);
+      } else {
+        finalizeReefIdentityBinding(runtime, reservation);
+      }
+      throw error;
+    }
+    try {
+      saveReefSetupSession(runtime, {
+        session: resolvedSession,
+        relayUrl,
+        email: options.email,
+      });
+    } catch (error) {
+      releaseReefIdentityReservation(runtime, reservation);
+      throw error;
+    }
   }
   const transport = new ReefTransportClient(relayUrl, handle, keys);
   let effectivePolicy = options.policy;
@@ -265,15 +333,33 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     // A device-signed read only succeeds when OUR key owns the handle; treat
     // that as the claim already being done instead of stranding the retry.
     const unavailable = error instanceof Error && error.message.includes("handle_unavailable");
-    const owned =
-      unavailable &&
-      (await transport.listFriends().then(
-        () => true,
-        () => false,
-      ));
+    let owned = false;
+    if (unavailable) {
+      try {
+        await transport.listFriends();
+        owned = true;
+      } catch (verificationError) {
+        if (isReefOwnershipRejection(verificationError)) {
+          releaseReefIdentityReservation(runtime, reservation);
+        } else {
+          // A failed probe proves non-ownership only for the relay's explicit
+          // unknown-handle result. Keep all other outcomes bound to these keys.
+          finalizeReefIdentityBinding(runtime, reservation);
+        }
+        throw verificationError;
+      }
+    }
     if (!owned) {
+      if (isDefinitiveReefRegistrationFailure(error)) {
+        releaseReefIdentityReservation(runtime, reservation);
+      } else {
+        finalizeReefIdentityBinding(runtime, reservation);
+      }
       throw error;
     }
+    // Signed access proves these keys already own the handle. Persist that
+    // invariant before the account-list request, which can fail ambiguously.
+    finalizeReefIdentityBinding(runtime, reservation);
     const { handles } = await transport.listOwnHandles(resolvedSession);
     const existingHandle = handles.find((entry) => entry.handle === handle);
     if (!existingHandle) {
@@ -287,6 +373,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     }
     effectivePolicy = existingHandle.request_policy;
   }
+  finalizeReefIdentityBinding(runtime, reservation);
 
   const candidate = ReefChannelConfigSchema.parse({
     ...provisional,
@@ -301,7 +388,6 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
       `Handle @${handle} is claimed, but writing the local config failed: ${error instanceof Error ? error.message : String(error)}. Fix the local issue and rerun the exact same command — the retry reuses the stored session and recognizes the existing claim.`,
     );
   }
-  saveReefIdentityBinding(runtime, { handle, relayUrl });
   clearReefSetupSession(runtime);
 
   const printed = fingerprint(keys.signing.publicKey, keys.encryption.publicKey);

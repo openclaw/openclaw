@@ -19,6 +19,8 @@ export interface CompletedReplay {
 
 export interface ReplayStore {
   claim(peer: string, id: string, envelopeHash: string): Promise<ReplayClaim>;
+  /** Renews an in-flight claim while slow guard or review work is active. */
+  refresh?(peer: string, id: string): Promise<void>;
   complete(peer: string, id: string, receipt: SignedReceipt, body?: MessageBody): Promise<void>;
   consume(peer: string, id: string): Promise<void>;
   release(peer: string, id: string): Promise<void>;

@@ -1,7 +1,8 @@
 // Matrix plugin module implements credentials read behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { getMatrixRuntime } from "../runtime.js";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";
+import { getOptionalMatrixRuntime } from "../runtime.js";
 
 export { resolveMatrixCredentialsDir, resolveMatrixCredentialsPath } from "../storage-paths.js";
 
@@ -17,6 +18,16 @@ export type MatrixStoredCredentials = {
 export type MatrixStoredCredentialRecord = MatrixStoredCredentials & {
   accountId: string;
 };
+
+export type MatrixCredentialRevocationRecord = {
+  accountId: string;
+  kind: "revoked";
+  revokedAt: string;
+};
+
+export type MatrixCredentialStateRecord =
+  | MatrixStoredCredentialRecord
+  | MatrixCredentialRevocationRecord;
 
 export const MATRIX_CREDENTIALS_NAMESPACE = "credentials";
 export const MATRIX_CREDENTIALS_MAX_ENTRIES = 256;
@@ -57,14 +68,35 @@ export function normalizeMatrixStoredCredentials(
   };
 }
 
+export function isMatrixCredentialRevocation(
+  value: unknown,
+  accountId?: string | null,
+): value is MatrixCredentialRevocationRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const parsed = value as Partial<MatrixCredentialRevocationRecord>;
+  return (
+    parsed.kind === "revoked" &&
+    typeof parsed.revokedAt === "string" &&
+    parsed.revokedAt.length > 0 &&
+    normalizeAccountId(parsed.accountId) === normalizeAccountId(accountId ?? parsed.accountId)
+  );
+}
+
 export function openMatrixCredentialsStore(
   env: NodeJS.ProcessEnv = process.env,
-): PluginStateSyncKeyedStore<MatrixStoredCredentialRecord> {
-  return getMatrixRuntime().state.openSyncKeyedStore<MatrixStoredCredentialRecord>({
+): PluginStateSyncKeyedStore<MatrixCredentialStateRecord> {
+  const runtime = getOptionalMatrixRuntime();
+  const resolvedEnv =
+    env.OPENCLAW_STATE_DIR?.trim() || !runtime
+      ? env
+      : { ...env, OPENCLAW_STATE_DIR: runtime.state.resolveStateDir(env) };
+  return createPluginStateSyncKeyedStore<MatrixCredentialStateRecord>("matrix", {
     namespace: MATRIX_CREDENTIALS_NAMESPACE,
     maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
     overflowPolicy: "reject-new",
-    env,
+    env: resolvedEnv,
   });
 }
 
@@ -86,7 +118,14 @@ export function clearMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): void {
-  openMatrixCredentialsStore(env).delete(matrixCredentialsStoreKey(accountId));
+  const normalizedAccountId = normalizeAccountId(accountId);
+  // Keep a durable revocation marker so doctor cannot resurrect explicitly
+  // cleared credentials from a legacy file left by an interrupted migration.
+  openMatrixCredentialsStore(env).register(matrixCredentialsStoreKey(normalizedAccountId), {
+    accountId: normalizedAccountId,
+    kind: "revoked",
+    revokedAt: new Date().toISOString(),
+  });
 }
 
 export function credentialsMatchConfig(

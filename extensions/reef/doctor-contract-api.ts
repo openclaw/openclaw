@@ -1,22 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveUserPath } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import { verifyChain, type AuditEntry } from "./protocol/index.js";
-import { ReefChannelConfigSchema, normalizeReefTarget } from "./src/config-schema.js";
+import {
+  parseReefRelayUrl,
+  ReefChannelConfigSchema,
+  normalizeReefTarget,
+} from "./src/config-schema.js";
+import { reefAuditStateMigration, reefRuntimeStateMigration } from "./src/doctor-durable-state.js";
+import {
+  legacyReefFileExists,
+  REEF_DURABLE_LEGACY_FILENAMES,
+  resolveLegacyReefStateDir,
+} from "./src/doctor-state-paths.js";
 import { ReefPeerTrustSchema, type ReefPeerTrust } from "./src/friend-types.js";
 import {
-  REEF_AUDIT_HEAD_KEY,
-  REEF_AUDIT_MAX_ENTRIES,
-  REEF_AUDIT_NAMESPACE,
+  REEF_DURABLE_MIGRATION_KEY,
+  REEF_DURABLE_MIGRATION_MAX_ENTRIES,
+  REEF_DURABLE_MIGRATION_NAMESPACE,
   REEF_KEYS_KEY,
   REEF_KEYS_MAX_ENTRIES,
   REEF_KEYS_MIGRATION_KEY,
@@ -30,10 +37,10 @@ import {
   parseReefIdentityBinding,
   parseReefKeys,
   parseReefSetupSession,
-  reefAuditEntryKey,
+  type ReefIdentityMigrationRecord,
+  type ReefDurableMigrationRecord,
   type ReefIdentityBinding,
   type ReefSetupSession,
-  type ReefAuditStateRecord,
 } from "./src/state.js";
 import {
   REEF_TRUST_STORE_MAX_ENTRIES,
@@ -45,7 +52,10 @@ import type { ReefKeys } from "./src/types.js";
 const RETIRED_REEF_CONFIG_KEYS = ["friends", "dmPolicy", "allowFrom"] as const;
 const REEF_CONFIG_IMPORT_NAMESPACE = "peer-state-config-imports";
 const LegacyReefFriendSchema = ReefPeerTrustSchema.omit({ approvedAt: true });
-const REEF_TRANSIENT_LEGACY_FILENAMES = ["replay.jsonl", "reviews.json", "delivered.json"];
+const ReefIdentityConfigSchema = ReefChannelConfigSchema.pick({
+  handle: true,
+  relayUrl: true,
+});
 
 type ReefPeerStateSnapshot = {
   revision: number;
@@ -86,83 +96,30 @@ const REEF_LEGACY_REGISTRATION_SOURCES: ReefLegacyRegistrationSource[] = [
   },
 ];
 
-function resolveLegacyReefStateDir(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-}): string {
-  const reef = params.config.channels?.reef;
-  const configured = isRecord(reef) && typeof reef.stateDir === "string" ? reef.stateDir : null;
-  return configured
-    ? resolveUserPath(configured, params.env)
-    : path.join(params.stateDir, "data", "reef");
-}
+type ConfiguredReefIdentityBinding =
+  | { status: "absent" }
+  | { status: "invalid" }
+  | { status: "valid"; binding: ReefIdentityBinding };
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(filePath)).isFile();
-  } catch {
-    return false;
+function configuredReefIdentityBinding(cfg: OpenClawConfig): ConfiguredReefIdentityBinding {
+  const reef = cfg.channels?.reef;
+  if (!isRecord(reef) || !Object.hasOwn(reef, "handle") || reef.handle === undefined) {
+    return { status: "absent" };
   }
-}
-
-async function readLegacyReefAudit(filePath: string): Promise<AuditEntry[]> {
-  const raw = await fs.readFile(filePath, "utf8");
-  const entries = raw
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as AuditEntry);
-  if (!verifyChain(entries)) {
-    throw new Error("invalid Reef audit chain");
+  const parsed = ReefIdentityConfigSchema.safeParse({
+    handle: reef.handle,
+    relayUrl: reef.relayUrl,
+  });
+  if (!parsed.success || !parsed.data.handle) {
+    return { status: "invalid" };
   }
-  return entries;
-}
-
-function parseStoredAuditHead(value: ReefAuditStateRecord | undefined): {
-  hash: string;
-  seq: number;
-} | null {
-  if (value === undefined) {
-    return null;
-  }
-  if (
-    value.kind !== "head" ||
-    typeof value.hash !== "string" ||
-    !Number.isSafeInteger(value.seq) ||
-    value.seq < 0
-  ) {
-    throw new Error("invalid Reef audit head");
-  }
-  return { hash: value.hash, seq: value.seq };
-}
-
-async function readStoredReefAudit(
-  store: PluginStateKeyedStore<ReefAuditStateRecord>,
-): Promise<AuditEntry[]> {
-  const head = parseStoredAuditHead(await store.lookup(REEF_AUDIT_HEAD_KEY));
-  if (!head) {
-    return [];
-  }
-  const reversed: AuditEntry[] = [];
-  let hash = head.hash;
-  for (let seq = head.seq; seq > 0; seq--) {
-    const record = await store.lookup(reefAuditEntryKey(hash));
-    if (
-      !record ||
-      record.kind !== "entry" ||
-      record.entry.entryHash !== hash ||
-      record.entry.event.seq !== seq
-    ) {
-      throw new Error("invalid Reef audit chain state");
-    }
-    reversed.push(record.entry);
-    hash = record.entry.prevHash;
-  }
-  const entries = reversed.reverse();
-  if (hash !== "" || !verifyChain(entries, { head: head.hash, length: head.seq })) {
-    throw new Error("invalid Reef audit chain state");
-  }
-  return entries;
+  return {
+    status: "valid",
+    binding: {
+      handle: parsed.data.handle,
+      relayUrl: parseReefRelayUrl(parsed.data.relayUrl),
+    },
+  };
 }
 
 function hasRetiredReefPolicyConfig(value: unknown): boolean {
@@ -234,20 +191,37 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "reef-keys-json-to-plugin-state",
     label: "Reef identity keys",
     async detectLegacyState(params) {
-      const filePath = path.join(resolveLegacyReefStateDir(params), "keys.json");
-      const migrationStore = params.context.openPluginStateKeyedStore<{ pending: true }>({
+      const stateDir = resolveLegacyReefStateDir(params);
+      const filePath = path.join(stateDir, "keys.json");
+      const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
         namespace: REEF_KEYS_MIGRATION_NAMESPACE,
         maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
         overflowPolicy: "reject-new",
       });
-      const sourceExists = await fileExists(filePath);
+      const durableMigrationStore =
+        params.context.openPluginStateKeyedStore<ReefDurableMigrationRecord>({
+          namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
+          maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+        });
+      const sourceExists = await legacyReefFileExists(filePath);
       const pending = await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY);
-      return sourceExists || pending
+      const durableSourceExists = (
+        await Promise.all(
+          REEF_DURABLE_LEGACY_FILENAMES.map((filename) =>
+            legacyReefFileExists(path.join(stateDir, filename)),
+          ),
+        )
+      ).some(Boolean);
+      const durablePending = await durableMigrationStore.lookup(REEF_DURABLE_MIGRATION_KEY);
+      return sourceExists || pending || durableSourceExists || durablePending
         ? {
             preview: [
               sourceExists
                 ? "- Reef identity keys -> plugin state (identity)"
-                : "- Verify Reef identity-key migration marker",
+                : pending
+                  ? "- Verify Reef identity-key migration marker"
+                  : "- Prepare Reef durable state migration barrier",
             ],
           }
         : null;
@@ -255,8 +229,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      const filePath = path.join(resolveLegacyReefStateDir(params), "keys.json");
-      const migrationStore = params.context.openPluginStateKeyedStore<{ pending: true }>({
+      const stateDir = resolveLegacyReefStateDir(params);
+      const filePath = path.join(stateDir, "keys.json");
+      const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
         namespace: REEF_KEYS_MIGRATION_NAMESPACE,
         maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
         overflowPolicy: "reject-new",
@@ -266,11 +241,34 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         maxEntries: REEF_KEYS_MAX_ENTRIES,
         overflowPolicy: "reject-new",
       });
-      if (!(await fileExists(filePath))) {
+      const durableMigrationStore =
+        params.context.openPluginStateKeyedStore<ReefDurableMigrationRecord>({
+          namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
+          maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+        });
+      const durableSourceExists = (
+        await Promise.all(
+          REEF_DURABLE_LEGACY_FILENAMES.map((filename) =>
+            legacyReefFileExists(path.join(stateDir, filename)),
+          ),
+        )
+      ).some(Boolean);
+      const durablePending = await durableMigrationStore.lookup(REEF_DURABLE_MIGRATION_KEY);
+      if (durableSourceExists || durablePending) {
+        await durableMigrationStore.register(REEF_DURABLE_MIGRATION_KEY, { pending: true });
+      }
+      if (!(await legacyReefFileExists(filePath))) {
+        const pending = await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY);
+        if (!pending) {
+          return { changes, warnings };
+        }
         try {
           parseReefKeys(await store.lookup(REEF_KEYS_KEY));
-          await migrationStore.delete(REEF_KEYS_MIGRATION_KEY);
-          changes.push("Verified Reef identity keys; cleared completed migration marker");
+          if (!pending?.identityBindingRequired) {
+            await migrationStore.delete(REEF_KEYS_MIGRATION_KEY);
+            changes.push("Verified Reef identity keys; cleared completed migration marker");
+          }
         } catch {
           warnings.push(
             "Reef identity key migration is incomplete and keys.json is missing; left migration blocker in place",
@@ -278,7 +276,18 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         return { changes, warnings };
       }
-      await migrationStore.register(REEF_KEYS_MIGRATION_KEY, { pending: true });
+      const existingMarker = await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY);
+      const configuredBinding = configuredReefIdentityBinding(params.config);
+      const identityBindingRequired =
+        existingMarker?.identityBindingRequired ||
+        (await legacyReefFileExists(
+          path.join(resolveLegacyReefStateDir(params), "identity.json"),
+        )) ||
+        configuredBinding.status !== "absent";
+      await migrationStore.register(REEF_KEYS_MIGRATION_KEY, {
+        pending: true,
+        identityBindingRequired,
+      });
       let keys: ReefKeys;
       try {
         keys = parseReefKeys(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
@@ -325,7 +334,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes,
         warnings,
       });
-      if (warnings.length === warningCount) {
+      if (warnings.length === warningCount && !identityBindingRequired) {
         await migrationStore.delete(REEF_KEYS_MIGRATION_KEY);
       }
       return { changes, warnings };
@@ -336,18 +345,32 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Reef registration state",
     async detectLegacyState(params) {
       const stateDir = resolveLegacyReefStateDir(params);
+      const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
+        namespace: REEF_KEYS_MIGRATION_NAMESPACE,
+        maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
       const files = (
         await Promise.all(
           REEF_LEGACY_REGISTRATION_SOURCES.map(async (source) => ({
             source,
-            exists: await fileExists(path.join(stateDir, source.filename)),
+            exists: await legacyReefFileExists(path.join(stateDir, source.filename)),
           })),
         )
       ).filter((entry) => entry.exists);
-      return files.length > 0
+      const pending = await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY);
+      const configuredBinding = configuredReefIdentityBinding(params.config);
+      const configuredBindingNeedsImport =
+        configuredBinding.status !== "absent" &&
+        (await legacyReefFileExists(path.join(stateDir, "keys.json")));
+      return files.length > 0 || pending?.identityBindingRequired || configuredBindingNeedsImport
         ? {
             preview: [
-              `- Reef registration state -> plugin state (${files.map((entry) => entry.source.filename).join(", ")})`,
+              files.length > 0
+                ? `- Reef registration state -> plugin state (${files.map((entry) => entry.source.filename).join(", ")})`
+                : configuredBindingNeedsImport
+                  ? "- Reef configured identity binding -> plugin state"
+                  : "- Verify Reef identity binding migration marker",
             ],
           }
         : null;
@@ -363,9 +386,34 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         maxEntries: REEF_REGISTRATION_MAX_ENTRIES,
         overflowPolicy: "reject-new",
       });
+      const migrationStore = params.context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
+        namespace: REEF_KEYS_MIGRATION_NAMESPACE,
+        maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      const durableMigrationStore =
+        params.context.openPluginStateKeyedStore<ReefDurableMigrationRecord>({
+          namespace: REEF_DURABLE_MIGRATION_NAMESPACE,
+          maxEntries: REEF_DURABLE_MIGRATION_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+        });
+      const hasRegistrationSource = (
+        await Promise.all(
+          REEF_LEGACY_REGISTRATION_SOURCES.map((source) =>
+            legacyReefFileExists(path.join(stateDir, source.filename)),
+          ),
+        )
+      ).some(Boolean);
+      if (
+        hasRegistrationSource ||
+        (await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY)) ||
+        (await durableMigrationStore.lookup(REEF_DURABLE_MIGRATION_KEY))
+      ) {
+        await durableMigrationStore.register(REEF_DURABLE_MIGRATION_KEY, { pending: true });
+      }
       for (const source of REEF_LEGACY_REGISTRATION_SOURCES) {
         const filePath = path.join(stateDir, source.filename);
-        if (!(await fileExists(filePath))) {
+        if (!(await legacyReefFileExists(filePath))) {
           continue;
         }
         let legacy: ReefIdentityBinding | ReefSetupSession | undefined;
@@ -407,144 +455,75 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
-    },
-  },
-  {
-    id: "reef-audit-jsonl-to-plugin-state",
-    label: "Reef audit trail",
-    async detectLegacyState(params) {
-      const filePath = path.join(resolveLegacyReefStateDir(params), "audit.jsonl");
-      return (await fileExists(filePath))
-        ? { preview: ["- Reef audit trail -> plugin state (audit)"] }
-        : null;
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const filePath = path.join(resolveLegacyReefStateDir(params), "audit.jsonl");
-      let legacy: AuditEntry[];
-      try {
-        legacy = await readLegacyReefAudit(filePath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return { changes, warnings };
-        }
-        warnings.push(`Failed importing Reef audit trail: ${String(error)}; left source in place`);
-        return { changes, warnings };
-      }
-      if (legacy.length + 1 > REEF_AUDIT_MAX_ENTRIES) {
-        warnings.push(
-          `Failed importing Reef audit trail: ${legacy.length} entries exceed plugin-state capacity; left source in place`,
+      const configuredBindingResult = configuredReefIdentityBinding(params.config);
+      const configuredBinding =
+        configuredBindingResult.status === "valid" ? configuredBindingResult.binding : undefined;
+      if (configuredBinding) {
+        const existing = parseReefIdentityBinding(
+          await store.lookup(REEF_REGISTRATION_IDENTITY_KEY),
         );
-        return { changes, warnings };
-      }
-      const store = params.context.openPluginStateKeyedStore<ReefAuditStateRecord>({
-        namespace: REEF_AUDIT_NAMESPACE,
-        maxEntries: REEF_AUDIT_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
-      let canonical: AuditEntry[];
-      try {
-        canonical = await readStoredReefAudit(store);
-      } catch (error) {
-        warnings.push(
-          `Failed reading canonical Reef audit trail: ${String(error)}; left legacy source in place`,
-        );
-        return { changes, warnings };
-      }
-      if (canonical.length > 0 && JSON.stringify(canonical) !== JSON.stringify(legacy)) {
-        warnings.push("Kept existing Reef audit trail; left differing legacy source in place");
-        return { changes, warnings };
-      }
-      if (canonical.length === 0 && legacy.length > 0) {
-        try {
-          for (const entry of legacy) {
-            const key = reefAuditEntryKey(entry.entryHash);
-            const existing = await store.lookup(key);
-            if (existing && JSON.stringify(existing) !== JSON.stringify({ kind: "entry", entry })) {
-              throw new Error(`conflicting audit entry ${entry.entryHash}`);
+        if (existing && JSON.stringify(existing) !== JSON.stringify(configuredBinding)) {
+          warnings.push("Kept existing Reef identity binding; configured handle or relay differs");
+        } else if (!existing) {
+          try {
+            await store.registerIfAbsent(REEF_REGISTRATION_IDENTITY_KEY, configuredBinding);
+            const persisted = parseReefIdentityBinding(
+              await store.lookup(REEF_REGISTRATION_IDENTITY_KEY),
+            );
+            if (JSON.stringify(persisted) !== JSON.stringify(configuredBinding)) {
+              throw new Error("persisted value differs");
             }
-            await store.registerIfAbsent(key, { kind: "entry", entry });
+            changes.push("Migrated Reef identity binding from config -> plugin state");
+          } catch (error) {
+            warnings.push(`Failed importing Reef identity binding from config: ${String(error)}`);
           }
-          const last = legacy.at(-1)!;
-          if (
-            !(await store.registerIfAbsent(REEF_AUDIT_HEAD_KEY, {
-              kind: "head",
-              hash: last.entryHash,
-              seq: last.event.seq,
-            }))
-          ) {
-            throw new Error("audit head appeared during import");
-          }
-        } catch (error) {
-          warnings.push(
-            `Failed importing Reef audit trail: ${String(error)}; left source in place`,
-          );
-          return { changes, warnings };
         }
       }
-      const persisted = await readStoredReefAudit(store);
-      if (JSON.stringify(persisted) !== JSON.stringify(legacy)) {
-        warnings.push("Failed verifying Reef audit trail after import; left source in place");
-        return { changes, warnings };
-      }
-      changes.push(
-        `Migrated ${legacy.length} Reef audit ${legacy.length === 1 ? "entry" : "entries"} -> plugin state`,
-      );
-      await archiveLegacyStateSource({
-        filePath,
-        label: "Reef audit trail",
-        changes,
-        warnings,
-      });
-      return { changes, warnings };
-    },
-  },
-  {
-    id: "reef-transient-files-to-plugin-state",
-    label: "Reef transient runtime state",
-    async detectLegacyState(params) {
-      const stateDir = resolveLegacyReefStateDir(params);
-      const files = (
-        await Promise.all(
-          REEF_TRANSIENT_LEGACY_FILENAMES.map(async (filename) => ({
-            filename,
-            exists: await fileExists(path.join(stateDir, filename)),
-          })),
-        )
-      ).filter((entry) => entry.exists);
-      return files.length > 0
-        ? {
-            preview: [
-              `- Reef transient state: rebuild ${files.map((entry) => entry.filename).join(", ")}`,
-            ],
-          }
-        : null;
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const stateDir = resolveLegacyReefStateDir(params);
-      for (const filename of REEF_TRANSIENT_LEGACY_FILENAMES) {
-        const filePath = path.join(stateDir, filename);
-        if (!(await fileExists(filePath))) {
-          continue;
-        }
+      const pending = await migrationStore.lookup(REEF_KEYS_MIGRATION_KEY);
+      if (pending?.identityBindingRequired) {
+        const keysPath = path.join(stateDir, "keys.json");
+        const identityPath = path.join(stateDir, "identity.json");
         try {
-          await fs.rm(filePath);
-          changes.push(
-            `Removed retired Reef transient state ${filename}; SQLite state rebuilds empty`,
+          parseReefKeys(
+            await params.context
+              .openPluginStateKeyedStore<ReefKeys>({
+                namespace: REEF_KEYS_NAMESPACE,
+                maxEntries: REEF_KEYS_MAX_ENTRIES,
+                overflowPolicy: "reject-new",
+              })
+              .lookup(REEF_KEYS_KEY),
           );
+          const binding = parseReefIdentityBinding(
+            await store.lookup(REEF_REGISTRATION_IDENTITY_KEY),
+          );
+          if (!binding) {
+            throw new Error("canonical identity binding is missing");
+          }
+          if (configuredBindingResult.status === "invalid") {
+            throw new Error("configured handle or relay is invalid");
+          }
+          if (configuredBinding && JSON.stringify(binding) !== JSON.stringify(configuredBinding)) {
+            throw new Error("configured handle or relay differs from canonical identity binding");
+          }
+          if (
+            (await legacyReefFileExists(keysPath)) ||
+            (await legacyReefFileExists(identityPath))
+          ) {
+            throw new Error("legacy identity sources remain");
+          }
+          await migrationStore.delete(REEF_KEYS_MIGRATION_KEY);
+          changes.push("Verified Reef identity keys and binding; cleared migration marker");
         } catch (error) {
           warnings.push(
-            `Failed removing retired Reef transient state ${filePath}: ${String(error)}`,
+            `Reef identity migration is incomplete: ${String(error)}; left migration blocker in place`,
           );
         }
       }
       return { changes, warnings };
     },
   },
+  reefAuditStateMigration,
+  reefRuntimeStateMigration,
   {
     id: "reef-config-trust-to-plugin-state",
     label: "Reef peer trust",

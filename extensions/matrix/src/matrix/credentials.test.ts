@@ -6,6 +6,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasAnyMatrixAuth } from "../../auth-presence.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
+import { openMatrixCredentialsStore } from "./credentials-read.js";
 import {
   clearMatrixCredentials,
   credentialsMatchConfig,
@@ -129,6 +130,38 @@ describe("matrix credentials storage", () => {
     });
   });
 
+  it("does not let delayed background writes undo credential revocation", async () => {
+    await saveMatrixCredentials(
+      {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "secret-token",
+      },
+      {},
+      "default",
+    );
+    clearMatrixCredentials({}, "default");
+
+    await expect(
+      saveBackfilledMatrixDeviceId(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "secret-token",
+          deviceId: "STALE",
+        },
+        {},
+        "default",
+      ),
+    ).resolves.toBe("skipped");
+    await touchMatrixCredentials({}, "default");
+
+    expect(loadMatrixCredentials({}, "default")).toBeNull();
+    expect(openMatrixCredentialsStore({}).lookup("account:default")).toMatchObject({
+      kind: "revoked",
+    });
+  });
+
   it("does not read or remove legacy credential files at runtime", () => {
     const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
     fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
@@ -159,6 +192,10 @@ describe("matrix credentials storage", () => {
     clearMatrixCredentials({}, "ops");
 
     expect(loadMatrixCredentials({}, "ops")).toBeNull();
+    expect(openMatrixCredentialsStore({}).lookup("account:ops")).toMatchObject({
+      kind: "revoked",
+      accountId: "ops",
+    });
     expect(loadMatrixCredentials({}, "default")).not.toBeNull();
   });
 

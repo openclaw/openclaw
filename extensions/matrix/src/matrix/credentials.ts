@@ -1,7 +1,7 @@
 // Matrix plugin module implements credentials behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
-  loadMatrixCredentials,
+  isMatrixCredentialRevocation,
   matrixCredentialsStoreKey,
   normalizeMatrixStoredCredentials,
   openMatrixCredentialsStore,
@@ -55,6 +55,11 @@ export async function saveBackfilledMatrixDeviceId(
   const now = new Date().toISOString();
   let result: "saved" | "skipped" = "saved";
   requireCredentialStoreUpdate(store)(matrixCredentialsStoreKey(normalizedAccountId), (current) => {
+    // A delayed login backfill must not resurrect credentials after logout.
+    if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
+      result = "skipped";
+      return current;
+    }
     const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
     if (
       existing &&
@@ -82,6 +87,10 @@ export async function touchMatrixCredentials(
   const normalizedAccountId = normalizeAccountId(accountId);
   const store = openMatrixCredentialsStore(env);
   requireCredentialStoreUpdate(store)(matrixCredentialsStoreKey(normalizedAccountId), (current) => {
+    // A delayed activity touch must preserve an explicit logout tombstone.
+    if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
+      return current;
+    }
     const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
     return existing ? { ...existing, lastUsedAt: new Date().toISOString() } : undefined;
   });

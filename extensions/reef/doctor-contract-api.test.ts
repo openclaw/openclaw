@@ -18,18 +18,48 @@ import {
   normalizeCompatibilityConfig,
   stateMigrations,
 } from "./doctor-contract-api.js";
-import { base64url, generateIdentity, MemoryAuditStore } from "./protocol/index.js";
+import {
+  base64url,
+  generateIdentity,
+  MemoryAuditStore,
+  type ReviewRequest,
+} from "./protocol/index.js";
 import { ReefChannelConfigSchema } from "./src/config-schema.js";
 import {
   generateAndStoreKeys,
+  loadKeys,
+  openStores,
+  REEF_AUDIT_MIGRATION_KEY,
+  REEF_AUDIT_MIGRATION_MAX_ENTRIES,
+  REEF_AUDIT_MIGRATION_NAMESPACE,
+  REEF_AUDIT_HEAD_MAX_ENTRIES,
+  REEF_AUDIT_HEAD_NAMESPACE,
   REEF_AUDIT_HEAD_KEY,
-  REEF_AUDIT_MAX_ENTRIES,
   REEF_AUDIT_NAMESPACE,
+  REEF_AUDIT_STORE_MAX_ENTRIES,
   REEF_KEYS_KEY,
   REEF_KEYS_MAX_ENTRIES,
+  REEF_KEYS_MIGRATION_KEY,
+  REEF_KEYS_MIGRATION_MAX_ENTRIES,
+  REEF_KEYS_MIGRATION_NAMESPACE,
   REEF_KEYS_NAMESPACE,
+  REEF_DELIVERED_MAX_ENTRIES,
+  REEF_DELIVERED_NAMESPACE,
+  REEF_REPLAY_MAX_ENTRIES,
+  REEF_REPLAY_NAMESPACE,
+  REEF_REGISTRATION_IDENTITY_KEY,
+  REEF_REGISTRATION_MAX_ENTRIES,
+  REEF_REGISTRATION_NAMESPACE,
+  REEF_REVIEWS_MAX_ENTRIES,
+  REEF_REVIEWS_NAMESPACE,
   reefAuditEntryKey,
+  reefReplayStoreKey,
+  type ReefAuditHeadRecord,
   type ReefAuditStateRecord,
+  type ReefIdentityBinding,
+  type ReefIdentityMigrationRecord,
+  type ReefReplayRecord,
+  type ReefReviewRecord,
 } from "./src/state.js";
 import {
   REEF_TRUST_STORE_MAX_ENTRIES,
@@ -108,10 +138,12 @@ describe("Reef doctor contract", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-doctor-"));
+    vi.spyOn(os, "homedir").mockReturnValue(stateDir);
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
@@ -136,7 +168,7 @@ describe("Reef doctor contract", () => {
   });
 
   it("imports identity keys into SQLite before archiving keys.json", async () => {
-    const legacyDir = path.join(stateDir, "data", "reef");
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     const filePath = path.join(legacyDir, "keys.json");
     const keys = reefKeys();
     fs.mkdirSync(legacyDir, { recursive: true });
@@ -170,8 +202,38 @@ describe("Reef doctor contract", () => {
     expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
   });
 
+  it("does not import the default home's Reef identity into an isolated state", async () => {
+    const homeDir = path.join(stateDir, "home");
+    const isolatedStateDir = path.join(stateDir, "isolated");
+    const homeKeysPath = path.join(homeDir, ".openclaw", "data", "reef", "keys.json");
+    fs.mkdirSync(path.dirname(homeKeysPath), { recursive: true });
+    fs.mkdirSync(isolatedStateDir, { recursive: true });
+    fs.writeFileSync(homeKeysPath, JSON.stringify(reefKeys()));
+    vi.mocked(os.homedir).mockReturnValue(homeDir);
+    const isolatedEnv = { ...env, OPENCLAW_STATE_DIR: isolatedStateDir };
+    const migration = migrationById("reef-keys-json-to-plugin-state");
+    const params = {
+      config: {
+        channels: {
+          reef: { stateDir: path.join(homeDir, ".openclaw", "data", "reef") },
+        },
+      },
+      env: isolatedEnv,
+      stateDir: isolatedStateDir,
+      oauthDir: path.join(isolatedStateDir, "oauth"),
+      context: createDoctorContext(isolatedEnv),
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(fs.existsSync(homeKeysPath)).toBe(true);
+  });
+
   it("blocks identity regeneration after a failed keys.json import", async () => {
-    const legacyDir = path.join(stateDir, "data", "reef");
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     const filePath = path.join(legacyDir, "keys.json");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(filePath, "{broken");
@@ -199,8 +261,160 @@ describe("Reef doctor contract", () => {
     );
   });
 
+  it("keeps legacy identity keys blocked until their handle binding is canonical", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const keys = reefKeys();
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, "keys.json"), JSON.stringify(keys));
+    fs.writeFileSync(
+      path.join(legacyDir, "identity.json"),
+      JSON.stringify({ handle: "molty", relayUrl: "https://reefwire.ai" }),
+    );
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    const keysResult = await migrationById("reef-keys-json-to-plugin-state").migrateLegacyState(
+      params,
+    );
+
+    expect(keysResult.warnings).toEqual([]);
+    const migrationStore = context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
+      namespace: REEF_KEYS_MIGRATION_NAMESPACE,
+      maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(migrationStore.lookup(REEF_KEYS_MIGRATION_KEY)).resolves.toEqual({
+      pending: true,
+      identityBindingRequired: true,
+    });
+    await expect(loadKeys(createRuntime(env))).rejects.toThrow(
+      "durable state migration is incomplete",
+    );
+
+    const registrationResult = await migrationById(
+      "reef-registration-json-to-plugin-state",
+    ).migrateLegacyState(params);
+
+    expect(registrationResult.warnings).toEqual([]);
+    expect(registrationResult.changes).toContain(
+      "Verified Reef identity keys and binding; cleared migration marker",
+    );
+    await expect(migrationStore.lookup(REEF_KEYS_MIGRATION_KEY)).resolves.toBeUndefined();
+    await expect(loadKeys(createRuntime(env))).rejects.toThrow(
+      "durable state migration is incomplete",
+    );
+    await migrationById("reef-runtime-files-to-plugin-state").migrateLegacyState(params);
+    await expect(loadKeys(createRuntime(env))).resolves.toEqual(keys);
+  });
+
+  it("binds wizard-created legacy keys when unrelated Reef config is invalid", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const keys = reefKeys();
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, "keys.json"), JSON.stringify(keys));
+    const context = createDoctorContext(env);
+    const params = {
+      config: {
+        channels: {
+          reef: {
+            handle: "molty",
+            relayUrl: "https://reefwire.ai/",
+            email: "not-an-email",
+          },
+        },
+      },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    await expect(
+      migrationById("reef-registration-json-to-plugin-state").detectLegacyState(params),
+    ).resolves.toEqual({
+      preview: ["- Reef configured identity binding -> plugin state"],
+    });
+
+    await migrationById("reef-keys-json-to-plugin-state").migrateLegacyState(params);
+    const migrationStore = context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
+      namespace: REEF_KEYS_MIGRATION_NAMESPACE,
+      maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(migrationStore.lookup(REEF_KEYS_MIGRATION_KEY)).resolves.toEqual({
+      pending: true,
+      identityBindingRequired: true,
+    });
+
+    const registrationResult = await migrationById(
+      "reef-registration-json-to-plugin-state",
+    ).migrateLegacyState(params);
+
+    expect(registrationResult.warnings).toEqual([]);
+    expect(registrationResult.changes).toContain(
+      "Migrated Reef identity binding from config -> plugin state",
+    );
+    const registrationStore = context.openPluginStateKeyedStore<ReefIdentityBinding>({
+      namespace: REEF_REGISTRATION_NAMESPACE,
+      maxEntries: REEF_REGISTRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(registrationStore.lookup(REEF_REGISTRATION_IDENTITY_KEY)).resolves.toEqual({
+      handle: "molty",
+      relayUrl: "https://reefwire.ai",
+    });
+    await expect(migrationStore.lookup(REEF_KEYS_MIGRATION_KEY)).resolves.toBeUndefined();
+  });
+
+  it("keeps identity migration blocked when config conflicts with the imported binding", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, "keys.json"), JSON.stringify(reefKeys()));
+    fs.writeFileSync(
+      path.join(legacyDir, "identity.json"),
+      JSON.stringify({ handle: "canonical", relayUrl: "https://reefwire.ai" }),
+    );
+    const context = createDoctorContext(env);
+    const params = {
+      config: {
+        channels: {
+          reef: { handle: "conflict", relayUrl: "https://reefwire.ai" },
+        },
+      },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    await migrationById("reef-keys-json-to-plugin-state").migrateLegacyState(params);
+    const result = await migrationById("reef-registration-json-to-plugin-state").migrateLegacyState(
+      params,
+    );
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining("configured handle or relay differs"),
+      expect.stringContaining("identity migration is incomplete"),
+    ]);
+    const migrationStore = context.openPluginStateKeyedStore<ReefIdentityMigrationRecord>({
+      namespace: REEF_KEYS_MIGRATION_NAMESPACE,
+      maxEntries: REEF_KEYS_MIGRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(migrationStore.lookup(REEF_KEYS_MIGRATION_KEY)).resolves.toEqual({
+      pending: true,
+      identityBindingRequired: true,
+    });
+  });
+
   it("imports and verifies the append-only audit chain", async () => {
-    const legacyDir = path.join(stateDir, "data", "reef");
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     const filePath = path.join(legacyDir, "audit.jsonl");
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
     await audit.appendEvent("one", { id: 1 }, 10);
@@ -227,23 +441,114 @@ describe("Reef doctor contract", () => {
     ]);
     const store = context.openPluginStateKeyedStore<ReefAuditStateRecord>({
       namespace: REEF_AUDIT_NAMESPACE,
-      maxEntries: REEF_AUDIT_MAX_ENTRIES,
+      maxEntries: REEF_AUDIT_STORE_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     });
-    await expect(store.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toEqual({
+    const headStore = context.openPluginStateKeyedStore<ReefAuditHeadRecord>({
+      namespace: REEF_AUDIT_HEAD_NAMESPACE,
+      maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toEqual({
       kind: "head",
       hash: entries[1]!.entryHash,
       seq: 2,
+      oldestHash: entries[0]!.entryHash,
     });
     await expect(store.lookup(reefAuditEntryKey(entries[0]!.entryHash))).resolves.toEqual({
       kind: "entry",
       entry: entries[0],
+      nextHash: entries[1]!.entryHash,
     });
     expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
   });
 
-  it("imports registration state and rebuilds transient files empty", async () => {
-    const legacyDir = path.join(stateDir, "data", "reef");
+  it("finishes an interrupted migration of an empty audit trail", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const filePath = path.join(legacyDir, "audit.jsonl");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(filePath, "");
+    const migration = migrationById("reef-audit-jsonl-to-plugin-state");
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    const imported = await migration.migrateLegacyState(params);
+    expect(imported.warnings).toEqual([]);
+    expect(fs.existsSync(filePath)).toBe(false);
+
+    const migrationStore = context.openPluginStateKeyedStore<{
+      pending: true;
+      expectedEntries: number;
+    }>({
+      namespace: REEF_AUDIT_MIGRATION_NAMESPACE,
+      maxEntries: REEF_AUDIT_MIGRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await migrationStore.register(REEF_AUDIT_MIGRATION_KEY, {
+      pending: true,
+      expectedEntries: 0,
+    });
+
+    const recovered = await migration.migrateLegacyState(params);
+
+    expect(recovered.warnings).toEqual([]);
+    expect(recovered.changes).toContain(
+      "Verified Reef audit trail; cleared completed migration marker",
+    );
+    await expect(migrationStore.lookup(REEF_AUDIT_MIGRATION_KEY)).resolves.toBeUndefined();
+  });
+
+  it("blocks runtime audit writes until a failed legacy import is repaired", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const filePath = path.join(legacyDir, "audit.jsonl");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(filePath, "{broken\n");
+    const migration = migrationById("reef-audit-jsonl-to-plugin-state");
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    const failed = await migration.migrateLegacyState(params);
+
+    expect(failed.warnings).toEqual([expect.stringContaining("Failed importing Reef audit trail")]);
+    const migrationStore = context.openPluginStateKeyedStore<{ pending: true }>({
+      namespace: REEF_AUDIT_MIGRATION_NAMESPACE,
+      maxEntries: REEF_AUDIT_MIGRATION_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(migrationStore.lookup(REEF_AUDIT_MIGRATION_KEY)).resolves.toEqual({
+      pending: true,
+    });
+    expect(() => openStores(createRuntime(env), reefKeys())).toThrow(
+      "Reef durable state migration is incomplete",
+    );
+
+    const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
+    await audit.appendEvent("repaired", { id: 1 }, 10);
+    const entries = await audit.entries();
+    fs.writeFileSync(filePath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    const repaired = await migration.migrateLegacyState(params);
+
+    expect(repaired.warnings).toEqual([]);
+    await expect(migrationStore.lookup(REEF_AUDIT_MIGRATION_KEY)).resolves.toBeUndefined();
+    await migrationById("reef-runtime-files-to-plugin-state").migrateLegacyState(params);
+    expect(() => openStores(createRuntime(env), reefKeys())).not.toThrow();
+  });
+
+  it("imports registration and durable runtime state before archiving files", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(
       path.join(legacyDir, "identity.json"),
@@ -257,9 +562,32 @@ describe("Reef doctor contract", () => {
         email: "molty@example.com",
       }),
     );
-    for (const filename of ["replay.jsonl", "reviews.json", "delivered.json"]) {
-      fs.writeFileSync(path.join(legacyDir, filename), "legacy");
-    }
+    const replayId = "01JZ0000000000000000000000";
+    const secondReplayId = "01JZ0000000000000000000001";
+    fs.writeFileSync(
+      path.join(legacyDir, "replay.jsonl"),
+      `${JSON.stringify({ op: "claim", peer: "alice", id: replayId, envelopeHash: "a".repeat(64) })}\n${JSON.stringify({ op: "consume", peer: "alice", id: replayId })}\n${JSON.stringify({ op: "claim", peer: "bob", id: secondReplayId, envelopeHash: "d".repeat(64) })}\n`,
+    );
+    const review: ReviewRequest = {
+      id: replayId,
+      from: "alice#1",
+      to: "bob#1",
+      direction: "outbound",
+      bodyHash: "b".repeat(64),
+      approvalDigest: "c".repeat(64),
+      verdict: {
+        decision: "review",
+        category: "ambiguous",
+        reason: "Owner review.",
+        model: "test-model",
+        policyVersion: "v1",
+      },
+    };
+    fs.writeFileSync(
+      path.join(legacyDir, "reviews.json"),
+      JSON.stringify({ [review.approvalDigest]: { review, approved: true } }),
+    );
+    fs.writeFileSync(path.join(legacyDir, "delivered.json"), JSON.stringify([replayId]));
     const context = createDoctorContext(env);
     const params = {
       config: {},
@@ -268,18 +596,30 @@ describe("Reef doctor contract", () => {
       oauthDir: path.join(stateDir, "oauth"),
       context,
     };
+    const partiallyImportedReplay = context.openPluginStateKeyedStore<ReefReplayRecord>({
+      namespace: REEF_REPLAY_NAMESPACE,
+      maxEntries: REEF_REPLAY_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await partiallyImportedReplay.register(reefReplayStoreKey("alice", replayId), {
+      peer: "alice",
+      id: replayId,
+      envelopeHash: "a".repeat(64),
+      state: "consumed",
+    });
 
     const registration = await migrationById(
       "reef-registration-json-to-plugin-state",
     ).migrateLegacyState(params);
-    const transient = await migrationById(
-      "reef-transient-files-to-plugin-state",
+    const runtimeState = await migrationById(
+      "reef-runtime-files-to-plugin-state",
     ).migrateLegacyState(params);
+    await expect(generateAndStoreKeys(createRuntime(env))).rejects.toThrow("has no canonical keys");
 
     expect(registration.warnings).toEqual([]);
     expect(registration.changes).toHaveLength(4);
-    expect(transient.warnings).toEqual([]);
-    expect(transient.changes).toHaveLength(3);
+    expect(runtimeState.warnings).toEqual([]);
+    expect(runtimeState.changes).toHaveLength(7);
     for (const filename of [
       "identity.json",
       "setup-session.json",
@@ -288,7 +628,38 @@ describe("Reef doctor contract", () => {
       "delivered.json",
     ]) {
       expect(fs.existsSync(path.join(legacyDir, filename))).toBe(false);
+      expect(fs.existsSync(path.join(legacyDir, `${filename}.migrated`))).toBe(true);
     }
+    const replayStore = context.openPluginStateKeyedStore<ReefReplayRecord>({
+      namespace: REEF_REPLAY_NAMESPACE,
+      maxEntries: REEF_REPLAY_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(replayStore.lookup(reefReplayStoreKey("alice", replayId))).resolves.toMatchObject({
+      state: "consumed",
+      envelopeHash: "a".repeat(64),
+    });
+    await expect(
+      replayStore.lookup(reefReplayStoreKey("bob", secondReplayId)),
+    ).resolves.toMatchObject({
+      state: "available",
+      envelopeHash: "d".repeat(64),
+    });
+    const reviewStore = context.openPluginStateKeyedStore<ReefReviewRecord>({
+      namespace: REEF_REVIEWS_NAMESPACE,
+      maxEntries: REEF_REVIEWS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(reviewStore.lookup(review.approvalDigest)).resolves.toEqual({
+      review,
+      approved: true,
+    });
+    const deliveredStore = context.openPluginStateKeyedStore<{ id: string }>({
+      namespace: REEF_DELIVERED_NAMESPACE,
+      maxEntries: REEF_DELIVERED_MAX_ENTRIES,
+      overflowPolicy: "evict-oldest",
+    });
+    await expect(deliveredStore.lookup(replayId)).resolves.toEqual({ id: replayId });
   });
 
   it("imports config-backed trust into scoped plugin state without overwriting canonical rows", async () => {

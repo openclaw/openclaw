@@ -17,6 +17,14 @@ export type StoredZaloCredentials = {
   lastUsedAt?: string;
 };
 
+type ZaloCredentialRevocationRecord = {
+  kind: "revoked";
+  profile: string;
+  revokedAt: string;
+};
+
+export type ZaloCredentialStateRecord = StoredZaloCredentials | ZaloCredentialRevocationRecord;
+
 export const ZALOUSER_CREDENTIALS_NAMESPACE = "credentials";
 export const ZALOUSER_CREDENTIALS_MAX_ENTRIES = 256;
 
@@ -76,10 +84,27 @@ export function normalizeStoredZaloCredentials(
   };
 }
 
+export function isZaloCredentialRevocation(
+  value: unknown,
+  profile?: string | null,
+): value is ZaloCredentialRevocationRecord {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const parsed = value as Partial<ZaloCredentialRevocationRecord>;
+  return (
+    parsed.kind === "revoked" &&
+    typeof parsed.revokedAt === "string" &&
+    parsed.revokedAt.length > 0 &&
+    normalizeZalouserCredentialProfile(parsed.profile) ===
+      normalizeZalouserCredentialProfile(profile ?? parsed.profile)
+  );
+}
+
 function openZalouserCredentialsStore(
   env: NodeJS.ProcessEnv = process.env,
-): PluginStateSyncKeyedStore<StoredZaloCredentials> {
-  return getZalouserRuntime().state.openSyncKeyedStore<StoredZaloCredentials>({
+): PluginStateSyncKeyedStore<ZaloCredentialStateRecord> {
+  return getZalouserRuntime().state.openSyncKeyedStore<ZaloCredentialStateRecord>({
     namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
     maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
     overflowPolicy: "reject-new",
@@ -111,9 +136,47 @@ export function saveStoredZaloCredentials(
   });
 }
 
+export function refreshStoredZaloCredentials(
+  profile: string,
+  credentials: Omit<StoredZaloCredentials, "profile">,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const normalizedProfile = normalizeZalouserCredentialProfile(profile);
+  const store = openZalouserCredentialsStore(env);
+  const update = store.update;
+  if (!update) {
+    throw new Error("Zalo credential refresh requires atomic plugin-state updates");
+  }
+  let saved = true;
+  update(zalouserCredentialStoreKey(normalizedProfile), (current) => {
+    // Background refreshes can finish after logout. Preserve the revocation;
+    // only an explicit QR login may replace it with a new authenticated session.
+    if (isZaloCredentialRevocation(current, normalizedProfile)) {
+      saved = false;
+      return current;
+    }
+    return { profile: normalizedProfile, ...credentials };
+  });
+  return saved;
+}
+
 export function clearStoredZaloCredentials(
   profile: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return openZalouserCredentialsStore(env).delete(zalouserCredentialStoreKey(profile));
+  const normalizedProfile = normalizeZalouserCredentialProfile(profile);
+  const store = openZalouserCredentialsStore(env);
+  const hadCredentials =
+    normalizeStoredZaloCredentials(
+      store.lookup(zalouserCredentialStoreKey(normalizedProfile)),
+      normalizedProfile,
+    ) !== null;
+  // Keep a durable revocation marker so doctor cannot resurrect explicitly
+  // cleared credentials from an older profile file.
+  store.register(zalouserCredentialStoreKey(normalizedProfile), {
+    kind: "revoked",
+    profile: normalizedProfile,
+    revokedAt: new Date().toISOString(),
+  });
+  return hadCredentials;
 }

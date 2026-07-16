@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  isZaloCredentialRevocation,
   normalizeStoredZaloCredentials,
   normalizeZalouserCredentialProfile,
   resolveLegacyZalouserCredentialsDir,
@@ -15,6 +16,7 @@ import {
   zalouserCredentialStoreKey,
   ZALOUSER_CREDENTIALS_MAX_ENTRIES,
   ZALOUSER_CREDENTIALS_NAMESPACE,
+  type ZaloCredentialStateRecord,
   type StoredZaloCredentials,
 } from "./src/session-state.js";
 
@@ -77,7 +79,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      const store = params.context.openPluginStateKeyedStore<StoredZaloCredentials>({
+      const store = params.context.openPluginStateKeyedStore<ZaloCredentialStateRecord>({
         namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
         maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
         overflowPolicy: "reject-new",
@@ -104,7 +106,20 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           continue;
         }
         const key = zalouserCredentialStoreKey(source.profile);
-        const existing = normalizeStoredZaloCredentials(await store.lookup(key), source.profile);
+        const stored = await store.lookup(key);
+        if (isZaloCredentialRevocation(stored, source.profile)) {
+          changes.push(
+            `Archived revoked Zalo Personal credential legacy source for profile ${source.profile}`,
+          );
+          await archiveLegacyStateSource({
+            filePath: source.filePath,
+            label: "Zalo Personal credentials",
+            changes,
+            warnings,
+          });
+          continue;
+        }
+        const existing = normalizeStoredZaloCredentials(stored, source.profile);
         if (existing && JSON.stringify(existing) !== JSON.stringify(credentials)) {
           warnings.push(
             `Kept existing Zalo Personal credentials for profile ${source.profile}; left differing legacy source in place`,
