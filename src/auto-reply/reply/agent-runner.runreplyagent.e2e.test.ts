@@ -207,7 +207,8 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   },
 }));
 
-vi.mock("./queue.js", () => ({
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
@@ -290,6 +291,9 @@ function createMinimalRun(params?: {
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     currentInboundEventKind: params?.currentInboundEventKind,
+    originatingChannel: sessionCtx.OriginatingChannel ?? sessionCtx.Provider,
+    originatingTo: sessionCtx.OriginatingTo,
+    originatingChatId: sessionCtx.NativeChannelId ?? sessionCtx.ChatId,
     run: {
       sessionId: "session",
       sessionKey,
@@ -422,6 +426,126 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
+  it("dispatches a declined steer once with its source-turn identity", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const { run, sourceTurnId } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        NativeChannelId: "24680",
+        MessageSid: "steer-declined",
+        SenderId: "sender-42",
+      },
+      runOverrides: {
+        agentId: "main",
+        messageProvider: "discord",
+        senderId: "sender-42",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
+      { cleanedBody: "hello" },
+      expect.objectContaining({
+        runId: sourceTurnId,
+        agentId: "main",
+        sessionKey: "main",
+        sessionId: "session",
+        workspaceDir: "/tmp",
+        modelProviderId: "anthropic",
+        modelId: "claude",
+        trigger: "user",
+        channel: "discord",
+        channelId: "24680",
+        chatId: "24680",
+        senderId: "sender-42",
+      }),
+    );
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+      "session",
+      "hello",
+      expect.objectContaining({ steeringMode: "all" }),
+    );
+  });
+
+  it("returns a claimed steer without disturbing the active run", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "claimed steer" },
+    });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const { run } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "steer-claimed",
+      },
+      runOverrides: { agentId: "main", messageProvider: "discord" },
+    });
+
+    await expect(run()).resolves.toEqual([{ text: "claimed steer" }]);
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(active.phase).toBe("running");
+    expect(active.result).toBeNull();
+    active.complete();
+  });
+
+  it("does not dispatch again when a declined steer falls through to a new turn", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(false);
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { run } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+        MessageSid: "steer-fallback",
+      },
+      runOverrides: { agentId: "main", messageProvider: "discord" },
+    });
+
+    await expect(run()).resolves.toEqual(expect.objectContaining({ text: "model reply" }));
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("carries the prepared user-turn recorder into the embedded queue", async () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const recorder = createUserTurnTranscriptRecorder({
@@ -523,6 +647,11 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("queues a follow-up when transcript-backed steering is unsupported", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
       queued: false,
       sessionId: "session",
@@ -542,7 +671,16 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    const enqueueArgs = mockCallArgs(vi.mocked(enqueueFollowupRun), "enqueue follow-up");
+    const queued = enqueueArgs[1] as FollowupRun;
+    const runFollowup = enqueueArgs[4];
+    if (typeof runFollowup !== "function") {
+      throw new Error("expected queued follow-up runner");
+    }
+    await runFollowup(queued);
+
+    expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(onTurnAdopted).not.toHaveBeenCalled();
   });
 

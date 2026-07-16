@@ -52,7 +52,15 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+  withBeforeAgentReplyObserver,
+} from "../../plugins/before-agent-reply.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -156,7 +164,7 @@ import {
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
-import { readChannelSourceTurnId } from "./source-turn-id.js";
+import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   buildStrandedReplyRetryFollowupRun,
@@ -1326,6 +1334,7 @@ export async function runReplyAgent(params: {
   };
 
   let shouldQueueAfterSteerRejection = false;
+  let beforeAgentReplyDispatchedForSteer = false;
   if (effectiveShouldSteer && isActive) {
     // Steer against the operation that owns THIS session's run slot. A native
     // command continuation whose slot adoption was skipped (#104844) still
@@ -1337,6 +1346,64 @@ export async function runReplyAgent(params: {
         ? providedReplyOperation
         : (registeredReplyOperation ?? providedReplyOperation);
     const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
+    // Channel dispatch normally stamps the route-scoped source id. Internal
+    // callers can derive the same per-message identity from the prepared turn.
+    const steerRunId = expectDefined(
+      restartRecoverySourceTurnId ??
+        buildChannelSourceTurnId({
+          provider:
+            followupRun.originatingChannel ??
+            followupRun.run.messageProvider ??
+            sessionCtx.Provider,
+          accountId:
+            followupRun.originatingAccountId ??
+            followupRun.run.agentAccountId ??
+            sessionCtx.AccountId,
+          conversationId:
+            followupRun.originatingTo ??
+            followupRun.originatingChatId ??
+            sessionKey ??
+            followupRun.run.sessionKey,
+          messageId: followupRun.messageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+        }) ??
+        normalizeOptionalString(opts?.runId),
+      "steered turn id",
+    );
+    const trigger = "user";
+    const hookResult = await runBeforeAgentReplyForTurn({
+      runId: steerRunId,
+      trigger,
+      event: { cleanedBody: followupRun.prompt },
+      context: {
+        runId: steerRunId,
+        agentId: followupRun.run.agentId,
+        sessionKey: sessionKey ?? followupRun.run.sessionKey,
+        sessionId: steerSessionId,
+        workspaceDir: followupRun.run.workspaceDir,
+        modelProviderId: followupRun.run.provider,
+        modelId: followupRun.run.model,
+        trigger,
+        ...buildAgentHookContextChannelFields({
+          sessionKey: sessionKey ?? followupRun.run.sessionKey,
+          messageChannel: followupRun.originatingChannel,
+          messageProvider: followupRun.run.messageProvider,
+          currentChannelId: followupRun.originatingChatId,
+          messageTo: followupRun.originatingTo,
+          senderId: followupRun.run.senderId,
+        }),
+        ...buildAgentHookContextIdentityFields({
+          trigger,
+          senderId: followupRun.run.senderId,
+          chatId: followupRun.originatingChatId,
+          channelContext: followupRun.run.channelContext,
+        }),
+      },
+    });
+    beforeAgentReplyDispatchedForSteer = true;
+    if (hookResult?.handled) {
+      typing.cleanup();
+      return buildHandledBeforeAgentReplyPayloads(hookResult.reply);
+    }
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
@@ -1388,7 +1455,7 @@ export async function runReplyAgent(params: {
     resetTriggered: effectiveResetTriggered,
   });
 
-  const queuedRunFollowupTurn = createFollowupRunner({
+  const baseQueuedRunFollowupTurn = createFollowupRunner({
     opts,
     typing,
     typingMode,
@@ -1400,6 +1467,18 @@ export async function runReplyAgent(params: {
     agentCfgContextTokens,
     toolProgressDetail,
   });
+  // A transcript-rejected steer can become this exact queued turn. Preserve its
+  // earlier hook decision without suppressing hooks for other queued messages.
+  const queuedRunFollowupTurn = (queued: FollowupRun) =>
+    beforeAgentReplyDispatchedForSteer && queued === followupRun
+      ? withBeforeAgentReplyObserver(
+          {
+            beforeDispatch: async () => false,
+            afterDispatch: async (result) => result,
+          },
+          () => baseQueuedRunFollowupTurn(queued),
+        )
+      : baseQueuedRunFollowupTurn(queued);
 
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
@@ -1793,7 +1872,16 @@ export async function runReplyAgent(params: {
     await opts?.onTurnAdopted?.();
     const runOutcome = await withBeforeAgentReplyObserver(
       {
-        beforeDispatch: beginBeforeAgentReply,
+        beforeDispatch: async () => {
+          const shouldDispatch = await beginBeforeAgentReply();
+          if (!shouldDispatch || !beforeAgentReplyDispatchedForSteer) {
+            return shouldDispatch;
+          }
+          // The same source fell through from steering. Advance recovery while
+          // preserving the hook decision made before the attempted injection.
+          await checkpointBeforeAgentReply({ state: "continue" });
+          return false;
+        },
         afterDispatch: async (hookResult) => {
           if (!hookResult?.handled) {
             await checkpointBeforeAgentReply({ state: "continue" });
