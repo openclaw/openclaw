@@ -234,9 +234,12 @@ describe("killProcessTree", () => {
   });
 
   it.each([
-    ["throws", () => {
-      throw new Error("ps ENOENT");
-    }],
+    [
+      "throws",
+      () => {
+        throw new Error("ps ENOENT");
+      },
+    ],
     ["exits non-zero", () => ({ status: 1, stdout: "" })],
     ["returns non-numeric output", () => ({ status: 0, stdout: "not-a-pgid" })],
     ["returns empty output", () => ({ status: 0, stdout: "" })],

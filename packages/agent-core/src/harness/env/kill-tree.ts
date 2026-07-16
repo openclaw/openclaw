@@ -127,7 +127,10 @@ function readProcessGroupIdFromProc(pid: number): number | undefined {
       return undefined;
     }
     // After comm: state, ppid, pgrp. The command name may contain spaces or ')'.
-    const fields = stat.slice(commEnd + 1).trim().split(/\s+/);
+    const fields = stat
+      .slice(commEnd + 1)
+      .trim()
+      .split(/\s+/);
     return parseProcessGroupId(fields[2]);
   } catch {
     return undefined;

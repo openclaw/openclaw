@@ -1,5 +1,5 @@
 import { formatPortDiagnostics } from "../../infra/ports.js";
-import type { GatewayPortHealthSnapshot, GatewayRestartSnapshot } from "./restart-health.js";
+import type { GatewayPortHealthSnapshot, GatewayRestartSnapshot } from "./restart-health.types.js";
 
 function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
   const lines: string[] = [];

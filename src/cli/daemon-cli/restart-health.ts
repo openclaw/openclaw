@@ -17,6 +17,11 @@ import {
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
 import { sleep } from "../../utils.js";
+import type {
+  GatewayPortHealthSnapshot,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
 import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
 import {
   allListenersOwnedByRuntimePid,
@@ -27,6 +32,11 @@ export {
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
 } from "./restart-health-diagnostics.js";
+export type {
+  GatewayPortHealthSnapshot,
+  GatewayRestartSnapshot,
+  GatewayRestartWaitOutcome,
+} from "./restart-health.types.js";
 export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
 
 const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
@@ -37,37 +47,6 @@ export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
 );
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
-
-export type GatewayRestartWaitOutcome =
-  | "healthy"
-  | "plugin-errors"
-  | "channel-errors"
-  | "version-mismatch"
-  | "stale-pids"
-  | "stopped-free"
-  | "timeout";
-
-export type GatewayRestartSnapshot = {
-  runtime: GatewayServiceRuntime;
-  portUsage: PortUsage;
-  healthy: boolean;
-  staleGatewayPids: number[];
-  gatewayVersion?: string | null;
-  activatedPluginErrors?: PluginHealthErrorSummary[];
-  channelProbeErrors?: Array<{ id: string; error: string }>;
-  expectedVersion?: string;
-  versionMismatch?: {
-    expected: string;
-    actual: string | null;
-  };
-  waitOutcome?: GatewayRestartWaitOutcome;
-  elapsedMs?: number;
-};
-
-export type GatewayPortHealthSnapshot = {
-  portUsage: PortUsage;
-  healthy: boolean;
-};
 
 type GatewayReachability = {
   reachable: boolean;
