@@ -187,6 +187,8 @@ export type CronRunDiagnostics = {
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
+  /** True once agent execution begins; retries after this point can replay side effects. */
+  executionStarted?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   summary?: string;
