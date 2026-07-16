@@ -569,6 +569,7 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.6-sol",
           agentRuntime: "codex",
+          api: "openai-chatgpt-responses",
           compat: liveSol?.compat,
         } as never)?.levels,
       ).not.toContainEqual({ id: "ultra" });
@@ -748,6 +749,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         modelId: "gpt-5.6-sol",
         agentRuntime: "codex",
+        api: "openai-chatgpt-responses",
         compat: sol?.compat,
       } as never)?.levels,
     ).not.toContainEqual({ id: "ultra" });
@@ -810,6 +812,7 @@ describe("buildOpenAIProvider", () => {
             provider: "openai",
             modelId,
             agentRuntime: "codex",
+            api: "openai-chatgpt-responses",
             compat: model?.compat,
           } as never)
           ?.levels.map((level) => level.id),
@@ -822,6 +825,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         modelId: "gpt-5.6-luna",
         agentRuntime: "codex",
+        api: "openai-chatgpt-responses",
         compat: luna?.compat,
       } as never)
       ?.levels.map((level) => level.id);
@@ -1708,6 +1712,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai",
       modelId: "gpt-5.6-luna",
       agentRuntime: "codex",
+      api: "openai-responses",
       compat: {
         supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
       },
@@ -1716,6 +1721,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai",
       modelId: "gpt-5.6-sol",
       agentRuntime: "codex",
+      api: "openai-responses",
       compat: {
         supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
       },
@@ -1724,6 +1730,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai",
       modelId: "gpt-5.6-sol",
       agentRuntime: "codex",
+      api: "openai-chatgpt-responses",
       compat: {
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       },
