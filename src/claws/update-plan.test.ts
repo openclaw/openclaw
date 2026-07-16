@@ -1,12 +1,16 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { stableStringify } from "../agents/stable-stringify.js";
+import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers } from "./mcp.js";
@@ -38,7 +42,7 @@ async function fixture() {
     cronJobs: [
       {
         id: "daily",
-        schedule: { cron: "0 9 * * *" },
+        schedule: { cron: "0 9 * * *", timezone: "UTC" },
         session: "isolated",
         message: "Base report",
       },
@@ -54,7 +58,9 @@ async function fixture() {
     version: "1.0.0",
     packageRoot: root,
     manifestPath: join(root, "openclaw.claw.json"),
+    integrityKind: "artifact",
     integrity: "sha256:base",
+    byteLength: 100,
   };
   const env = { OPENCLAW_STATE_DIR: join(root, "state") };
   const addPlan = await buildClawAddPlan({
@@ -67,6 +73,7 @@ async function fixture() {
   }
   let config: OpenClawConfig = {};
   await applyClawAddPlan(addPlan, {
+    consentPlanIntegrity: addPlan.planIntegrity,
     env,
     commitConfig: async (transform) => {
       config = transform(config);
@@ -79,9 +86,11 @@ async function fixture() {
       await installClawMcpServers(plan, {
         ...options,
         setMcpServer: async ({ name, server }) => {
-          config.mcp = { ...config.mcp, servers: { ...config.mcp?.servers, [name]: server } };
-          return { ok: true, path: "config", config, mcpServers: config.mcp.servers! };
+          const servers = { ...config.mcp?.servers, [name]: server as McpServerConfig };
+          config.mcp = { ...config.mcp, servers };
+          return { ok: true, path: "config", config, mcpServers: servers };
         },
+        listMcpServers: async () => ({ ok: true, path: "config", config, mcpServers: {} }),
       }),
     cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
   });
@@ -95,20 +104,27 @@ function targetSource(root: string, version: string, integrity: string): ClawSou
     version,
     packageRoot: root,
     manifestPath: join(root, "openclaw.claw.json"),
+    integrityKind: "artifact",
     integrity,
+    byteLength: 100,
   };
 }
 
 describe("buildClawUpdatePlan", () => {
-  it("reports an unchanged grouped target without mutating state", async () => {
+  it("plans missing package restoration without mutating state", async () => {
     const current = await fixture();
     const beforeConfig = structuredClone(current.config);
+    closeOpenClawStateDatabaseForTest();
+    const databasePath = resolveOpenClawStateSqlitePath(current.env);
+    const beforeBytes = await readFile(databasePath);
+    const beforeStat = await stat(databasePath);
 
     const plan = await buildClawUpdatePlan({
       agentId: "worker",
       targetManifest: current.manifest,
       targetSource: current.source,
       config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: { env: current.env },
       packagePreflight,
     });
@@ -118,11 +134,21 @@ describe("buildClawUpdatePlan", () => {
       stability: "experimental",
       dryRun: true,
       mutationAllowed: false,
+      planIntegrity: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       found: true,
-      summary: { totalActions: 7, unchanged: 7, added: 0, changed: 0, removed: 0 },
+      summary: {
+        totalActions: 7,
+        unchanged: 5,
+        added: 0,
+        changed: 2,
+        removed: 0,
+        released: 0,
+      },
       blockers: [],
     });
     expect(current.config).toEqual(beforeConfig);
+    expect(await readFile(databasePath)).toEqual(beforeBytes);
+    expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
   });
 
   it("resolves an unambiguous installed package name to its final local agent id", async () => {
@@ -133,6 +159,7 @@ describe("buildClawUpdatePlan", () => {
       targetManifest: current.manifest,
       targetSource: current.source,
       config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: { env: current.env },
       packagePreflight,
     });
@@ -152,12 +179,35 @@ describe("buildClawUpdatePlan", () => {
       targetManifest: current.manifest,
       targetSource: current.source,
       config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: { env: current.env },
       packagePreflight,
     });
 
     expect(plan.actions).toContainEqual(
       expect.objectContaining({ kind: "agent", id: "worker", action: "change", blocked: false }),
+    );
+  });
+
+  it("plans workspace restoration when the owned workspace directory is missing", async () => {
+    const current = await fixture();
+    await rm(join(current.root, "workspace-worker"), { recursive: true, force: true });
+
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: current.manifest,
+      targetSource: current.source,
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: { env: current.env },
+      packagePreflight,
+    });
+
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "workspaceFile", id: "SOUL.md", action: "change" }),
+        expect.objectContaining({ kind: "workspaceFile", id: "OLD.md", action: "change" }),
+      ]),
     );
   });
 
@@ -187,13 +237,13 @@ describe("buildClawUpdatePlan", () => {
       cronJobs: [
         {
           id: "daily",
-          schedule: { cron: "0 10 * * *" },
+          schedule: { cron: "0 10 * * *", timezone: "UTC" },
           session: "isolated",
           message: "Updated report",
         },
         {
           id: "weekly",
-          schedule: { cron: "0 9 * * 1" },
+          schedule: { cron: "0 9 * * 1", timezone: "UTC" },
           session: "isolated",
           message: "Weekly report",
         },
@@ -209,6 +259,7 @@ describe("buildClawUpdatePlan", () => {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
       config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: { env: current.env },
       packagePreflight,
     });
@@ -218,6 +269,7 @@ describe("buildClawUpdatePlan", () => {
       added: 4,
       changed: 5,
       removed: 2,
+      released: 0,
       unchanged: 0,
       manual: 0,
       blocked: 0,
@@ -246,6 +298,7 @@ describe("buildClawUpdatePlan", () => {
       targetManifest: current.manifest,
       targetSource: current.source,
       config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: { env: current.env },
       packagePreflight,
     });
@@ -310,6 +363,7 @@ describe("buildClawUpdatePlan", () => {
       targetManifest: parsed.manifest,
       targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
       config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: { env: current.env },
       packagePreflight,
     });
@@ -339,6 +393,281 @@ describe("buildClawUpdatePlan", () => {
     expect(plan.summary.blocked).toBe(3);
   });
 
+  it("blocks incomplete packages and independently owned MCP changes", async () => {
+    const current = await fixture();
+    const database = openOpenClawStateDatabase({ env: current.env }).db;
+    database
+      .prepare(
+        "UPDATE claw_package_refs SET package_status = 'pending' WHERE agent_id = 'worker' AND package_ref = 'triage'",
+      )
+      .run();
+    database
+      .prepare(
+        "UPDATE claw_mcp_server_refs SET ownership = 'independently-owned' WHERE agent_id = 'worker' AND name = 'docs'",
+      )
+      .run();
+    const parsed = parseClawManifest({
+      ...current.manifest,
+      mcpServers: { docs: { command: "uvx", args: ["docs-mcp-v2"] } },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: parsed.manifest,
+      targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: { env: current.env },
+      packagePreflight,
+    });
+
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "package",
+          id: "skill:triage",
+          action: "manual",
+          blocked: true,
+        }),
+        expect.objectContaining({
+          kind: "mcpServer",
+          id: "docs",
+          action: "manual",
+          blocked: true,
+        }),
+      ]),
+    );
+  });
+
+  it("blocks restoring independently owned packages and MCP configuration", async () => {
+    const current = await fixture();
+    const database = openOpenClawStateDatabase({ env: current.env }).db;
+    database
+      .prepare(
+        "UPDATE claw_package_refs SET ownership = 'independently-owned' WHERE agent_id = 'worker' AND package_ref = 'triage'",
+      )
+      .run();
+    database
+      .prepare(
+        "UPDATE claw_mcp_server_refs SET ownership = 'independently-owned' WHERE agent_id = 'worker' AND name = 'docs'",
+      )
+      .run();
+    delete current.config.mcp!.servers!.docs;
+
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: current.manifest,
+      targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: { env: current.env },
+      packagePreflight,
+    });
+
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "package",
+          id: "skill:triage",
+          action: "manual",
+          blocked: true,
+          reason: expect.stringContaining("independently owned"),
+        }),
+        expect.objectContaining({
+          kind: "mcpServer",
+          id: "docs",
+          action: "manual",
+          blocked: true,
+          reason: expect.stringContaining("independently owned"),
+        }),
+      ]),
+    );
+  });
+
+  it("uses update package semantics instead of add-time conflicts", async () => {
+    const current = await fixture();
+    const parsed = parseClawManifest({
+      ...current.manifest,
+      packages: [
+        current.manifest.packages[0],
+        { ...current.manifest.packages[1], version: "2.0.0" },
+        { kind: "plugin", source: "clawhub", ref: "new-plugin", version: "1.0.0" },
+      ],
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const unavailablePreflight = async (pkg: ClawPackage) =>
+      pkg.ref === "obsolete"
+        ? {
+            ok: false as const,
+            code: "plugin_version_conflict",
+            installedVersion: "1.0.0",
+            message: `Installed ${pkg.ref} has the previous owned version.`,
+          }
+        : {
+            ok: false as const,
+            code:
+              pkg.kind === "skill"
+                ? "skill_package_preflight_unavailable"
+                : "plugin_version_conflict",
+            message: `Cannot add ${pkg.ref}.`,
+          };
+
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: parsed.manifest,
+      targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: {
+        env: current.env,
+        packageDeps: {
+          resolvePlugin: async () => ({
+            status: "found",
+            pluginId: "obsolete-runtime",
+            record: { source: "clawhub" },
+            installedVersion: "1.0.0",
+          }),
+        },
+      },
+      packagePreflight: unavailablePreflight,
+    });
+
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "package",
+          id: "skill:triage",
+          action: "manual",
+          blocked: true,
+        }),
+        expect.objectContaining({ kind: "package", id: "plugin:obsolete", action: "change" }),
+        expect.objectContaining({
+          kind: "package",
+          id: "plugin:new-plugin",
+          action: "manual",
+          blocked: true,
+        }),
+      ]),
+    );
+    expect(plan.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "skill_package_preflight_unavailable",
+          path: "$.packages[0]",
+        }),
+        expect.objectContaining({
+          code: "plugin_version_conflict",
+          path: "$.packages[2]",
+        }),
+      ]),
+    );
+  });
+
+  it("blocks changing an MCP declaration shared by another Claw", async () => {
+    const current = await fixture();
+    openOpenClawStateDatabase({ env: current.env })
+      .db.prepare(
+        `INSERT INTO claw_mcp_server_refs (
+           agent_id, name, schema_version, config_digest, ownership, status, error,
+           created_at_ms, updated_at_ms
+         ) SELECT
+           'other-agent', name, schema_version, config_digest, ownership, status, error,
+           created_at_ms, updated_at_ms
+         FROM claw_mcp_server_refs
+         WHERE agent_id = 'worker' AND name = 'docs'`,
+      )
+      .run();
+    const parsed = parseClawManifest({
+      ...current.manifest,
+      mcpServers: { docs: { command: "uvx", args: ["docs-mcp-v2"] } },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: parsed.manifest,
+      targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: { env: current.env },
+      packagePreflight,
+    });
+
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "mcpServer",
+        id: "docs",
+        action: "manual",
+        blocked: true,
+        reason: expect.stringContaining("Another Claw shares"),
+      }),
+    );
+  });
+
+  it("releases shared and independently owned MCP declarations without removing config", async () => {
+    const current = await fixture();
+    const database = openOpenClawStateDatabase({ env: current.env }).db;
+    database
+      .prepare(
+        `INSERT INTO claw_mcp_server_refs (
+           agent_id, name, schema_version, config_digest, ownership, status, error,
+           created_at_ms, updated_at_ms
+         ) SELECT
+           'other-agent', name, schema_version, config_digest, ownership, status, error,
+           created_at_ms, updated_at_ms
+         FROM claw_mcp_server_refs
+         WHERE agent_id = 'worker' AND name = 'docs'`,
+      )
+      .run();
+    current.config.mcp!.servers!.docs = { command: "node", args: ["operator-docs.mjs"] };
+    const parsed = parseClawManifest({ ...current.manifest, mcpServers: {} });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+
+    const shared = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: parsed.manifest,
+      targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: { env: current.env },
+      packagePreflight,
+    });
+    expect(shared.actions).toContainEqual(
+      expect.objectContaining({ kind: "mcpServer", id: "docs", action: "release", blocked: false }),
+    );
+    expect(shared.summary.released).toBe(1);
+
+    database
+      .prepare("DELETE FROM claw_mcp_server_refs WHERE agent_id = 'other-agent' AND name = 'docs'")
+      .run();
+    database
+      .prepare(
+        "UPDATE claw_mcp_server_refs SET ownership = 'independently-owned' WHERE agent_id = 'worker' AND name = 'docs'",
+      )
+      .run();
+    const independent = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: parsed.manifest,
+      targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: { env: current.env },
+      packagePreflight,
+    });
+    expect(independent.actions).toContainEqual(
+      expect.objectContaining({ kind: "mcpServer", id: "docs", action: "release", blocked: false }),
+    );
+  });
+
   it("fails closed for missing agents and mismatched package identity", async () => {
     const current = await fixture();
     const missing = await buildClawUpdatePlan({
@@ -346,6 +675,7 @@ describe("buildClawUpdatePlan", () => {
       targetManifest: current.manifest,
       targetSource: current.source,
       config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: { env: current.env },
       packagePreflight,
     });
@@ -356,11 +686,16 @@ describe("buildClawUpdatePlan", () => {
       targetManifest: current.manifest,
       targetSource: { ...current.source, name: "@other/worker" },
       config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
       stateOptions: { env: current.env },
       packagePreflight,
     });
     expect(mismatch.blockers).toContainEqual(
       expect.objectContaining({ code: "claw_identity_mismatch" }),
+    );
+    const { planIntegrity, ...authenticatedPlan } = mismatch;
+    expect(planIntegrity).toBe(
+      `sha256:${createHash("sha256").update(stableStringify(authenticatedPlan)).digest("hex")}`,
     );
   });
 });
