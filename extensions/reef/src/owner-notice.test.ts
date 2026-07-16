@@ -1,5 +1,6 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { ReefPeerIdentity } from "./friend-types.js";
 import {
   createReefOwnerNoticeHandler,
   processReefInboxEntriesInOrder,
@@ -9,8 +10,14 @@ import {
 } from "./owner-notice.js";
 import type { InboxEntry, ReefDeliveryRejection, ReefRejectionNoticeState } from "./types.js";
 
+const recipient: ReefPeerIdentity = {
+  ed25519PublicKey: "A".repeat(43),
+  x25519PublicKey: "B".repeat(43),
+  keyEpoch: 1,
+};
+
 function rejection(peer: string, id: string, category = "guard_deny"): ReefDeliveryRejection {
-  return { peer, id, category };
+  return { peer, id, recipient, category };
 }
 
 async function consumeNotice(_notice: ReefRejectionNotice): Promise<void> {}

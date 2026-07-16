@@ -1,6 +1,6 @@
 import type { Envelope, GuardAdapter, SignedReceipt } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
-import type { ReefAutonomy } from "./friend-types.js";
+import type { ReefAutonomy, ReefPeerIdentity } from "./friend-types.js";
 
 export interface ReefKeys {
   signing: { publicKey: string; secretKey: string };
@@ -57,6 +57,8 @@ export interface ReefIngressMessage {
 export interface ReefDeliveryRejection {
   id: string;
   peer: string;
+  /** Recipient identity pinned when the rejected envelope was composed. */
+  recipient: ReefPeerIdentity;
   category?: string;
   /** Durable pre-notification reservation recovered after an ambiguous restart. */
   reservedNotice?: ReefRejectionNoticeState;

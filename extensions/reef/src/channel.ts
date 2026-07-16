@@ -332,13 +332,21 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             throw dispatchFailure;
           }
           if (notice.allowResend && resendText.trim()) {
-            await flow.send(notice.peer, resendText, { replyTo: notice.messageId });
+            await flow.send(notice.peer, resendText, {
+              replyTo: notice.messageId,
+              expectedRecipient: notice.recipient,
+            });
           }
         },
         {
           loadState: (peer) => trust.rejectionNoticeState(peer),
           reserve: (rejection, noticeState) =>
-            trust.reserveOutboundRejectionNotice(rejection.peer, rejection.id, noticeState),
+            trust.reserveOutboundRejectionNotice(
+              rejection.peer,
+              rejection.id,
+              rejection.recipient,
+              noticeState,
+            ),
           complete: (rejection, noticeState) => {
             // Persist cooldown before deleting the reservation. A crash between
             // those writes leaves stop-only recovery, never another resend grant.

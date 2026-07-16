@@ -16,6 +16,7 @@ export interface ReefRejectionNotice {
   text: string;
   peer: string;
   messageId: string;
+  recipient: ReefDeliveryRejection["recipient"];
   allowResend: boolean;
 }
 
@@ -341,6 +342,7 @@ export class ReefReceiptNotifier {
         : `Your Reef message to @${rejection.peer} was rejected before delivery (message ${rejection.id}). Stop automatic retries and wait for owner guidance.`,
       peer: rejection.peer,
       messageId: rejection.id,
+      recipient: rejection.recipient,
       allowResend,
     };
   }

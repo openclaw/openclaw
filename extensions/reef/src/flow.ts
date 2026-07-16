@@ -20,6 +20,11 @@ import {
 } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { autonomyBudget } from "./config-schema.js";
+import {
+  matchesReefPeerIdentity,
+  reefPeerIdentity,
+  type ReefPeerIdentity,
+} from "./friend-types.js";
 import { ReviewApprovalStore, writePrivateJson } from "./state.js";
 import { ReefTransportClient } from "./transport.js";
 import type { ReefTrustStore } from "./trust-store.js";
@@ -49,12 +54,18 @@ export class ReefMessageFlow {
   async send(
     peer: string,
     text: string,
-    context: { thread?: string; replyTo?: string } = {},
+    context: { thread?: string; replyTo?: string; expectedRecipient?: ReefPeerIdentity } = {},
   ): Promise<string> {
     const friend = this.options.trust.get(peer);
-    if (!friend || friend.safetyNumberChanged) {
+    if (
+      !friend ||
+      friend.safetyNumberChanged ||
+      (context.expectedRecipient !== undefined &&
+        !matchesReefPeerIdentity(friend, context.expectedRecipient))
+    ) {
       throw new Error(`Reef peer @${peer} is not approved with current keys`);
     }
+    const recipient = reefPeerIdentity(friend);
     const id = this.ulid();
     const body = {
       text,
@@ -75,7 +86,13 @@ export class ReefMessageFlow {
     });
     // Persist the exact peer/id/body binding before the relay can return a
     // receipt. Only a matching durable record may later authorize a resend turn.
-    this.options.trust.recordOutboundDelivery(peer, id, hashMessageBody(body));
+    if (!matchesReefPeerIdentity(this.options.trust.get(peer), recipient)) {
+      throw new Error(`Reef peer @${peer} changed keys while composing the message`);
+    }
+    this.options.trust.recordOutboundDelivery(peer, id, {
+      bodyHash: hashMessageBody(body),
+      recipient,
+    });
     await this.options.transport.sendEnvelope(peer, result.envelope);
     return id;
   }
@@ -106,23 +123,26 @@ export class ReefMessageFlow {
 
   private async processReceipt(entry: InboxEntry): Promise<ReefDeliveryRejection | undefined> {
     const receipt = entry.receipt;
-    const friend = this.options.trust.get(entry.peer);
-    if (!receipt || !friend) {
+    if (!receipt) {
       return undefined;
     }
     const delivery = this.options.trust.outboundDelivery(entry.peer, entry.id);
+    if (!delivery) {
+      return this.quarantineReceipt(entry);
+    }
     try {
-      await confirmDelivery(receipt, friend.ed25519PublicKey, this.options.audit, {
+      await confirmDelivery(receipt, delivery.recipient.ed25519PublicKey, this.options.audit, {
         id: entry.id,
-        ...(delivery ? { bodyHash: delivery.bodyHash } : {}),
-        ...(delivery?.rejection ? { status: "rejected" as const } : {}),
+        bodyHash: delivery.bodyHash,
+        ...(delivery.rejection ? { status: "rejected" as const } : {}),
       });
-      if (!delivery) {
+      if (!matchesReefPeerIdentity(this.options.trust.get(entry.peer), delivery.recipient)) {
+        this.options.trust.discardOutboundDelivery(entry.peer, entry.id, delivery);
         return undefined;
       }
       if (receipt.status === "accepted") {
         if (
-          !this.options.trust.consumeOutboundDelivery(entry.peer, entry.id, receipt.bodyHash) &&
+          !this.options.trust.consumeOutboundDelivery(entry.peer, entry.id, delivery) &&
           this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection
         ) {
           throw new InvalidDeliveryReceiptError();
@@ -133,7 +153,7 @@ export class ReefMessageFlow {
         !this.options.trust.recordOutboundRejection(
           entry.peer,
           entry.id,
-          receipt.bodyHash,
+          delivery,
           receipt.category,
         )
       ) {
@@ -146,6 +166,7 @@ export class ReefMessageFlow {
       return {
         id: receipt.id,
         peer: entry.peer,
+        recipient: delivery.recipient,
         ...(pending.category ? { category: pending.category } : {}),
         ...(pending.notice ? { reservedNotice: pending.notice } : {}),
       };
@@ -153,14 +174,18 @@ export class ReefMessageFlow {
       if (!(error instanceof InvalidDeliveryReceiptError)) {
         throw error;
       }
-      // A peer-protocol violation must not poison the relay cursor. Keep the
-      // outbound binding intact so a later valid receipt can still complete it.
-      await appendAudit(this.options.audit, "invalid_delivery_receipt", {
-        id: entry.id,
-        peer: entry.peer,
-      });
-      return undefined;
+      return this.quarantineReceipt(entry);
     }
+  }
+
+  private async quarantineReceipt(entry: InboxEntry): Promise<undefined> {
+    // A peer-protocol violation must not poison the relay cursor. Keep any
+    // outbound binding intact so a later valid receipt can still complete it.
+    await appendAudit(this.options.audit, "invalid_delivery_receipt", {
+      id: entry.id,
+      peer: entry.peer,
+    });
+    return undefined;
   }
 
   private async processEnvelope(

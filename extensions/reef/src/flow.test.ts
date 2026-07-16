@@ -18,7 +18,12 @@ import {
 } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
-import type { ReefPeerTrust } from "./friend-types.js";
+import {
+  reefPeerIdentity,
+  sameReefPeerIdentity,
+  type ReefPeerIdentity,
+  type ReefPeerTrust,
+} from "./friend-types.js";
 import { processReefInboxEntriesInOrder, ReefReceiptNotifier } from "./owner-notice.js";
 import { ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
@@ -83,6 +88,7 @@ function trust(initial: Record<string, ReefPeerTrust>) {
     string,
     {
       bodyHash: string;
+      recipient: ReefPeerIdentity;
       rejection?: {
         category?: string;
         notice?: ReefRejectionNoticeState;
@@ -96,25 +102,61 @@ function trust(initial: Record<string, ReefPeerTrust>) {
     rejectionNotices,
     store: {
       get: (peer: string) => values.get(peer),
-      recordOutboundDelivery: (peer: string, id: string, bodyHash: string) => {
+      recordOutboundDelivery: (
+        peer: string,
+        id: string,
+        binding: { bodyHash: string; recipient: ReefPeerIdentity },
+      ) => {
         const key = `${peer}:${id}`;
         if (deliveries.has(key)) {
           throw new Error(`duplicate delivery ${id}`);
         }
-        deliveries.set(key, { bodyHash });
+        deliveries.set(key, binding);
       },
       outboundDelivery: (peer: string, id: string) => deliveries.get(`${peer}:${id}`),
-      consumeOutboundDelivery: (peer: string, id: string, bodyHash: string) => {
+      consumeOutboundDelivery: (
+        peer: string,
+        id: string,
+        binding: { bodyHash: string; recipient: ReefPeerIdentity },
+      ) => {
         const key = `${peer}:${id}`;
-        if (deliveries.get(key)?.bodyHash !== bodyHash) {
+        const current = deliveries.get(key);
+        if (
+          current?.bodyHash !== binding.bodyHash ||
+          !sameReefPeerIdentity(current.recipient, binding.recipient) ||
+          current.rejection
+        ) {
           return false;
         }
         return deliveries.delete(key);
       },
-      recordOutboundRejection: (peer: string, id: string, bodyHash: string, category?: string) => {
+      discardOutboundDelivery: (
+        peer: string,
+        id: string,
+        binding: { bodyHash: string; recipient: ReefPeerIdentity },
+      ) => {
         const key = `${peer}:${id}`;
         const current = deliveries.get(key);
-        if (current?.bodyHash !== bodyHash) {
+        if (
+          current?.bodyHash !== binding.bodyHash ||
+          !sameReefPeerIdentity(current.recipient, binding.recipient)
+        ) {
+          return false;
+        }
+        return deliveries.delete(key);
+      },
+      recordOutboundRejection: (
+        peer: string,
+        id: string,
+        binding: { bodyHash: string; recipient: ReefPeerIdentity },
+        category?: string,
+      ) => {
+        const key = `${peer}:${id}`;
+        const current = deliveries.get(key);
+        if (
+          current?.bodyHash !== binding.bodyHash ||
+          !sameReefPeerIdentity(current.recipient, binding.recipient)
+        ) {
           return false;
         }
         if (current.rejection) {
@@ -129,11 +171,12 @@ function trust(initial: Record<string, ReefPeerTrust>) {
       reserveOutboundRejectionNotice: (
         peer: string,
         id: string,
+        recipient: ReefPeerIdentity,
         noticeState: ReefRejectionNoticeState,
       ) => {
         const key = `${peer}:${id}`;
         const current = deliveries.get(key);
-        if (!current?.rejection) {
+        if (!current?.rejection || !sameReefPeerIdentity(current.recipient, recipient)) {
           throw new Error(`missing rejection ${id}`);
         }
         if (current.rejection.notice) {
@@ -555,7 +598,12 @@ describe("ReefMessageFlow delivery receipts", () => {
     const receiptNotifier = new ReefReceiptNotifier(onOwnerNotice, {
       loadState: (peer) => trusted.store.rejectionNoticeState(peer),
       reserve: (rejection, noticeState) =>
-        trusted.store.reserveOutboundRejectionNotice(rejection.peer, rejection.id, noticeState),
+        trusted.store.reserveOutboundRejectionNotice(
+          rejection.peer,
+          rejection.id,
+          rejection.recipient,
+          noticeState,
+        ),
       complete: (rejection, noticeState) => {
         if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
           throw new Error(`missing rejection ${rejection.id}`);
@@ -639,6 +687,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       text: expect.stringMatching(/rejected by the peer's inbound guard.*at most once/),
       peer: "alice",
       messageId: id,
+      recipient: reefPeerIdentity(peerTrust(alice)),
       allowResend: true,
     });
     expect(trusted.deliveries.has(`alice:${id}`)).toBe(false);
@@ -649,13 +698,14 @@ describe("ReefMessageFlow delivery receipts", () => {
     });
     expect(
       (await audit.entries()).filter((item) => item.event.type === "invalid_delivery_receipt"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   });
 
   it("does not surface a signed rejection without matching outbound state", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();
     const trusted = trust({ alice: peerTrust(alice) });
+    const audit = new MemoryAuditStore(new Uint8Array(32).fill(12));
     const flow = new ReefMessageFlow({
       config: config(),
       trust: trusted.store,
@@ -663,7 +713,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(12)),
+      audit,
       replay: new MemoryReplayStore(),
       reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
       onIngress: async () => {},
@@ -684,6 +734,82 @@ describe("ReefMessageFlow delivery receipts", () => {
     await expect(
       flow.processEntries([{ seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 }]),
     ).resolves.toEqual([]);
+    const events = (await audit.entries()).map((entry) => entry.event.type);
+    expect(events).toContain("invalid_delivery_receipt");
+    expect(events).not.toContain("confirm_delivery");
+  });
+
+  it("binds receipts and automatic resends to the send-time recipient identity", async () => {
+    const alice = generateIdentity();
+    const rotatedAlice = generateIdentity();
+    const bob = reefKeys();
+    const originalTrust = peerTrust(alice);
+    const originalRecipient = reefPeerIdentity(originalTrust);
+    const trusted = trust({ alice: originalTrust });
+    const audit = new MemoryAuditStore(new Uint8Array(32).fill(14));
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trusted.store,
+      keys: bob,
+      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+      transport: transport() as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit,
+      replay: new MemoryReplayStore(),
+      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+    const id = await flow.send("alice", "expected body");
+    const bodyHash = sha256Hex(canonicalBytes({ text: "expected body" }));
+    trusted.values.set("alice", peerTrust(rotatedAlice, { keyEpoch: 2 }));
+
+    await expect(
+      flow.send("alice", "automatic retry", {
+        replyTo: id,
+        expectedRecipient: originalRecipient,
+      }),
+    ).rejects.toThrow("not approved with current keys");
+
+    const rotatedReceipt = signReceipt(
+      {
+        id,
+        bodyHash,
+        auditHead: "c".repeat(64),
+        status: "rejected",
+        category: "guard_deny",
+      },
+      rotatedAlice.signing.secretKey,
+    );
+    await expect(
+      flow.processEntries([
+        { seq: 1, peer: "alice", id, kind: "receipt", receipt: rotatedReceipt, ts: 1 },
+      ]),
+    ).resolves.toEqual([]);
+    expect(trusted.deliveries.has(`alice:${id}`)).toBe(true);
+    expect(
+      (await audit.entries()).filter((entry) => entry.event.type === "confirm_delivery"),
+    ).toHaveLength(0);
+
+    const originalReceipt = signReceipt(
+      {
+        id,
+        bodyHash,
+        auditHead: "d".repeat(64),
+        status: "rejected",
+        category: "guard_deny",
+      },
+      alice.signing.secretKey,
+    );
+    await expect(
+      flow.processEntries([
+        { seq: 2, peer: "alice", id, kind: "receipt", receipt: originalReceipt, ts: 1 },
+      ]),
+    ).resolves.toEqual([]);
+    expect(trusted.deliveries.has(`alice:${id}`)).toBe(false);
+    expect(
+      (await audit.entries()).filter((entry) => entry.event.type === "confirm_delivery"),
+    ).toHaveLength(1);
   });
 
   it("quarantines peer-signed receipt conflicts without consuming outbound state", async () => {
@@ -736,7 +862,14 @@ describe("ReefMessageFlow delivery receipts", () => {
       flow.processEntries([
         { seq: 2, peer: "alice", id, kind: "receipt", receipt: rejected, ts: 1 },
       ]),
-    ).resolves.toEqual([{ id, peer: "alice", category: "guard_deny" }]);
+    ).resolves.toEqual([
+      {
+        id,
+        peer: "alice",
+        recipient: reefPeerIdentity(peerTrust(alice)),
+        category: "guard_deny",
+      },
+    ]);
 
     const conflictingAccepted = signReceipt(
       {
