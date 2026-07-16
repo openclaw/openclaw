@@ -967,10 +967,10 @@ describe("gateway.tools config", () => {
 });
 
 describe("gateway.controlPlaneWritesPerMinute", () => {
-  it("accepts a raised control-plane write budget", () => {
+  it.each([1, 600])("accepts the bounded control-plane write budget %i", (value) => {
     const res = validateConfigObject({
       gateway: {
-        controlPlaneWritesPerMinute: 60,
+        controlPlaneWritesPerMinute: value,
       },
     });
     expect(res.ok).toBe(true);

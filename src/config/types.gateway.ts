@@ -601,10 +601,10 @@ export type GatewayConfig = {
   channelMaxRestartsPerHour?: number;
   /**
    * Maximum control-plane write RPCs (config.patch, update.run, …) allowed
-   * per minute for each client identity (device id + IP). Raise this for
-   * trusted automation that performs bursts of writes (e.g. a provisioner
-   * applying many config patches during a fleet roll). Range: 1-600.
-   * Default: 3.
+   * per minute for each client identity (device id + IP). This is a
+   * gateway-global policy, not a per-identity exemption. Raise it only for
+   * trusted automation whose writes need independent lifecycle boundaries.
+   * Range: 1-600. Default: 3.
    */
   controlPlaneWritesPerMinute?: number;
 };

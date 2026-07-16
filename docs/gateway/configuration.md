@@ -612,10 +612,13 @@ subsystem references.
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
 rate-limited per `deviceId+clientIp` — 3 requests per 60 seconds by default,
-tunable via `gateway.controlPlaneWritesPerMinute` (range 1-600; raising it applies to every
-identity on the gateway, so keep the default unless trusted automation needs
-write bursts). Restart
-requests coalesce and then enforce a 30-second cooldown between restart cycles.
+tunable via `gateway.controlPlaneWritesPerMinute` (range 1-600). Raising it
+applies to every identity on the gateway, so keep the default unless trusted
+automation needs write bursts. Prefer one `config.patch` when the writes form
+one atomic config change. Raise the limit only when operations need independent
+hash checks, retries, readiness, or rollback; batching those operations couples
+their failure boundaries. Restart requests coalesce and then enforce a
+30-second cooldown between restart cycles.
 `update.status` is read-only but admin-scoped because the restart sentinel can
 include update step summaries and command output tails.
 </Note>
