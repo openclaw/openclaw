@@ -706,7 +706,9 @@ describe("ci workflow guards", () => {
     const changedFieldsForStep = (matcher: (step: WorkflowStep) => boolean) =>
       readPullRequestEditFields(labelerSteps.find(matcher)?.if);
     expect({
-      pathLabels: changedFieldsForStep((step) => step.uses?.startsWith("actions/labeler@")),
+      pathLabels: changedFieldsForStep(
+        (step) => step.uses?.startsWith("actions/labeler@") === true,
+      ),
       size: changedFieldsForStep((step) => step.name === "Apply PR size label"),
       contributor: changedFieldsForStep(
         (step) => step.name === "Apply maintainer or trusted-contributor label",
