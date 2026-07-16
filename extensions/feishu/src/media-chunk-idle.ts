@@ -34,8 +34,12 @@ function withChunkIdleTimeout<T>(
           let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
           const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutHandle = setTimeout(() => {
-              destroySource(source);
               reject(new FeishuInboundMediaTimeoutError(chunkTimeoutMs));
+              try {
+                destroySource(source);
+              } catch {
+                // Teardown is best-effort; the timeout must remain authoritative.
+              }
             }, chunkTimeoutMs);
           });
           let result: IteratorResult<T>;

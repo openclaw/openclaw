@@ -28,6 +28,30 @@ describe("saveMediaStreamWithIdleTimeout", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("keeps the timeout authoritative when teardown synchronously ends iteration", async () => {
+    let resolveNext: ((result: IteratorResult<Buffer>) => void) | undefined;
+    const stalled = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () =>
+            new Promise<IteratorResult<Buffer>>((resolve) => {
+              resolveNext = resolve;
+            }),
+        };
+      },
+      destroy() {
+        resolveNext?.({ done: true, value: undefined });
+      },
+    };
+
+    await expect(
+      saveMediaStreamWithIdleTimeout(stalled, "image/jpeg", 1024, undefined, 10),
+    ).rejects.toMatchObject({
+      name: "FeishuInboundMediaTimeoutError",
+      chunkTimeoutMs: 10,
+    });
+  });
+
   it("times out a stalled SDK-style HTTP stream and closes its connection", async () => {
     let serverSawClose = false;
     const server = createServer((req, res) => {
