@@ -203,8 +203,13 @@ async function doFetch(): Promise<void> {
       return;
     }
 
+    // fetch resolves after headers; keep idle bounds on the catalog body so a
+    // stalled OpenRouter stream cannot hang past the scan-style sibling fix.
     const bytes = await readResponseWithLimit(response, OPENROUTER_MODELS_RESPONSE_MAX_BYTES, {
+      chunkTimeoutMs: FETCH_TIMEOUT_MS,
       onOverflow: ({ size }) => new Error(`OpenRouter models response too large: ${size} bytes`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`OpenRouter models response stalled after ${chunkTimeoutMs}ms`),
     });
     const data = JSON.parse(bytes.toString("utf8")) as { data?: OpenRouterApiModel[] };
     const models = data.data ?? [];
