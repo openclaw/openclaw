@@ -19,6 +19,7 @@ import {
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
 import type { ReefPeerTrust } from "./friend-types.js";
+import { processReefInboxEntriesInOrder, ReefReceiptNotifier } from "./owner-notice.js";
 import { ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
 import type { ReefTrustStore } from "./trust-store.js";
@@ -441,14 +442,15 @@ describe("ReefMessageFlow outbound", () => {
 });
 
 describe("ReefMessageFlow delivery receipts", () => {
-  it("surfaces one resend notice for a replayed signed guard rejection", async () => {
+  it("surfaces one resend notice even when a later batch receipt is invalid", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();
     const onOwnerNotice = vi.fn(async () => {});
     const relay = transport();
+    const trusted = trust({ alice: peerTrust(alice) });
     const flow = new ReefMessageFlow({
       config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
+      trust: trusted.store,
       keys: bob,
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
@@ -458,8 +460,8 @@ describe("ReefMessageFlow delivery receipts", () => {
       reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
-      onAgentNotice: onOwnerNotice,
     });
+    const receiptNotifier = new ReefReceiptNotifier(trusted.store, onOwnerNotice);
     const id = await flow.send("alice", "ordinary coordination");
     const receipt = signReceipt(
       {
@@ -479,9 +481,38 @@ describe("ReefMessageFlow delivery receipts", () => {
       receipt,
       ts: Math.floor(Date.now() / 1_000),
     };
+    const invalidEntry: InboxEntry = {
+      seq: 2,
+      peer: "alice",
+      id: "01JZ0000000000000000000106",
+      kind: "receipt",
+      receipt: signReceipt(
+        {
+          id: "01JZ0000000000000000000106",
+          bodyHash: "c".repeat(64),
+          auditHead: "d".repeat(64),
+          status: "rejected",
+          category: "guard_deny",
+        },
+        bob.signing.secretKey,
+      ),
+      ts: Math.floor(Date.now() / 1_000),
+    };
 
-    await flow.processEntries([entry]);
-    await flow.processEntries([{ ...entry, seq: 2 }]);
+    await expect(
+      processReefInboxEntriesInOrder({
+        entries: [entry, invalidEntry],
+        notifyVerified: (batch) => receiptNotifier.notifyVerified(batch),
+        processEntries: (batch) => flow.processEntries(batch),
+      }),
+    ).rejects.toThrow("invalid delivery receipt");
+    await expect(
+      processReefInboxEntriesInOrder({
+        entries: [{ ...entry, seq: 3 }, invalidEntry],
+        notifyVerified: (batch) => receiptNotifier.notifyVerified(batch),
+        processEntries: (batch) => flow.processEntries(batch),
+      }),
+    ).rejects.toThrow("invalid delivery receipt");
 
     expect(onOwnerNotice).toHaveBeenCalledOnce();
     expect(onOwnerNotice).toHaveBeenCalledWith({

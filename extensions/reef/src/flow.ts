@@ -17,17 +17,13 @@ import {
 } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { autonomyBudget } from "./config-schema.js";
-import type { ReefOwnerNotice } from "./owner-notice.js";
 import { ReviewApprovalStore, writePrivateJson } from "./state.js";
 import { ReefTransportClient } from "./transport.js";
 import type { ReefTrustStore } from "./trust-store.js";
 import type { InboxEntry, ReefIngressMessage, ReefKeys } from "./types.js";
 
-const MAX_REJECTION_NOTICES = 1_024;
-
 export class ReefMessageFlow {
   private readonly delivered = new Set<string>();
-  private readonly rejectionNotices = new Set<string>();
   private deliveredLoaded = false;
   private readonly ulid = createMonotonicUlidFactory();
 
@@ -44,7 +40,6 @@ export class ReefMessageFlow {
       reviews: ReviewApprovalStore;
       onIngress: (message: ReefIngressMessage) => Promise<void>;
       onOwnerNotice: (text: string) => Promise<void>;
-      onAgentNotice?: (notice: ReefOwnerNotice) => Promise<void>;
     },
   ) {}
 
@@ -91,7 +86,6 @@ export class ReefMessageFlow {
         const friend = this.options.trust.get(entry.peer);
         if (entry.receipt && friend) {
           await confirmDelivery(entry.receipt, friend.ed25519PublicKey, this.options.audit);
-          await this.notifyRejectedDelivery(entry.peer, entry.receipt);
         }
         continue;
       }
@@ -181,40 +175,6 @@ export class ReefMessageFlow {
       }
     }
     this.deliveredLoaded = true;
-  }
-
-  private async notifyRejectedDelivery(peer: string, receipt: NonNullable<InboxEntry["receipt"]>) {
-    if (receipt.status !== "rejected" || this.rejectionNotices.has(receipt.id)) {
-      return;
-    }
-    // Relay reconnects can replay signed receipts. A bounded per-process memory
-    // prevents retry storms while the audit still records every confirmation.
-    this.rejectionNotices.add(receipt.id);
-    if (this.rejectionNotices.size > MAX_REJECTION_NOTICES) {
-      const oldest = this.rejectionNotices.values().next().value;
-      if (oldest !== undefined) {
-        this.rejectionNotices.delete(oldest);
-      }
-    }
-    try {
-      const guardRejected = receipt.category === "guard_deny";
-      const notice: ReefOwnerNotice = {
-        text: guardRejected
-          ? `Your Reef message to @${peer} was rejected by the peer's inbound guard (message ${receipt.id}). Rephrase it once and resend if still appropriate; do not retry unchanged text.`
-          : `Your Reef message to @${peer} was rejected before delivery (message ${receipt.id}).`,
-        peer,
-        contextKey: `reef:delivery-rejected:${receipt.id}`,
-        wakeAgent: true,
-      };
-      if (this.options.onAgentNotice) {
-        await this.options.onAgentNotice(notice);
-      } else {
-        await this.options.onOwnerNotice(notice.text);
-      }
-    } catch (error) {
-      this.rejectionNotices.delete(receipt.id);
-      throw error;
-    }
   }
 
   private requireHandle(): string {

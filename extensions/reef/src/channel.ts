@@ -20,7 +20,11 @@ import {
 import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
-import { createReefOwnerNoticeHandler } from "./owner-notice.js";
+import {
+  createReefOwnerNoticeHandler,
+  processReefInboxEntriesInOrder,
+  ReefReceiptNotifier,
+} from "./owner-notice.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./state.js";
@@ -277,8 +281,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             text,
             contextKey: `reef:${ctx.account.config.handle}`,
           }),
-        onAgentNotice: ownerNotice,
       });
+      const receiptNotifier = new ReefReceiptNotifier(trust, ownerNotice);
       setActiveReef({ flow, friends, reviews });
 
       const reconcile = async () => {
@@ -296,7 +300,12 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       ctx.setStatus({ accountId: "default", running: true, connected: false });
       const inbox = new ReefInboxConnection(
         transport,
-        (entries) => flow.processEntries(entries),
+        (entries) =>
+          processReefInboxEntriesInOrder({
+            entries,
+            notifyVerified: (batch) => receiptNotifier.notifyVerified(batch),
+            processEntries: (batch) => flow.processEntries(batch),
+          }),
         createReefWebSocket,
         (state) => {
           if (ctx.abortSignal.aborted) {

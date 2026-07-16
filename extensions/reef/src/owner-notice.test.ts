@@ -1,6 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createReefOwnerNoticeHandler } from "./owner-notice.js";
+import { createReefOwnerNoticeHandler, processReefInboxEntriesInOrder } from "./owner-notice.js";
+import type { InboxEntry } from "./types.js";
 
 describe("createReefOwnerNoticeHandler", () => {
   it("queues a rejection in the peer session and wakes that agent", async () => {
@@ -61,5 +62,38 @@ describe("createReefOwnerNoticeHandler", () => {
     });
 
     expect(runtime.system.requestHeartbeat).not.toHaveBeenCalled();
+  });
+});
+
+describe("processReefInboxEntriesInOrder", () => {
+  it("processes the full batch before retrying a failed receipt notice", async () => {
+    const order: string[] = [];
+    const message = { id: "message", kind: "message" } as InboxEntry;
+    const receipt = { id: "receipt", kind: "receipt" } as InboxEntry;
+    const later = { id: "later", kind: "message" } as InboxEntry;
+
+    await expect(
+      processReefInboxEntriesInOrder({
+        entries: [message, receipt, later],
+        notifyVerified: async ([entry]) => {
+          order.push(`notice:${entry!.id}`);
+          if (entry === receipt) {
+            throw new Error("notice failed");
+          }
+        },
+        processEntries: async ([entry]) => {
+          order.push(`process:${entry!.id}`);
+        },
+      }),
+    ).rejects.toThrow("notice failed");
+
+    expect(order).toEqual([
+      "notice:message",
+      "process:message",
+      "notice:receipt",
+      "process:receipt",
+      "notice:later",
+      "process:later",
+    ]);
   });
 });
