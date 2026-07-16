@@ -6,6 +6,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { isExperimentalClawsEnabled } from "./experimental.js";
@@ -172,11 +173,12 @@ export async function collectClawStateHealthFindings(
   if (!isExperimentalClawsEnabled(options.env ?? process.env)) {
     return [];
   }
-  const database = openExistingOpenClawStateDatabaseReadOnly(options);
-  if (!database) {
-    return [];
-  }
+  let database: OpenClawStateDatabase | undefined;
   try {
+    database = openExistingOpenClawStateDatabaseReadOnly(options);
+    if (!database) {
+      return [];
+    }
     if (!tableExists(database.db, "claw_installs")) {
       return [];
     }
@@ -218,6 +220,6 @@ export async function collectClawStateHealthFindings(
       }),
     ];
   } finally {
-    database.walMaintenance.close();
+    database?.walMaintenance.close();
   }
 }

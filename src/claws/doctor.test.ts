@@ -131,6 +131,25 @@ describe("collectClawStateHealthFindings", () => {
     await expect(readFile(databasePath)).resolves.toEqual(before);
   });
 
+  it("reports an unreadable state database as a structured finding", async () => {
+    const current = await fixture();
+    const databasePath = resolveOpenClawStateSqlitePath(current.env);
+    await mkdir(dirname(databasePath), { recursive: true });
+    await writeFile(databasePath, "not sqlite", "utf8");
+
+    const findings = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: {},
+      sourceMcpServers: {},
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining("Could not inspect Claw lifecycle state"),
+      }),
+    ]);
+  });
+
   it("does not change existing database bytes, metadata, schema, or journal mode", async () => {
     const current = await installFixture({ withMcp: true, withCron: true });
     closeOpenClawStateDatabaseForTest();
