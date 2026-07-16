@@ -459,6 +459,76 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
+  it("preserves branched oversized history when the header read returns short", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-oversized-short-header",
+      messages: ["x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES)],
+    });
+    fs.appendFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          id: "root",
+          parentId: null,
+          message: { role: "user", content: "active root" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "side-entry",
+          parentId: "root",
+          message: { role: "assistant", content: "side history" },
+        }),
+        JSON.stringify({
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-entry",
+          targetId: "root",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "active-tail",
+          parentId: "root",
+          message: { role: "assistant", content: "active history" },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    const realOpen = fsp.open.bind(fsp);
+    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      return new Proxy(handle, {
+        get(target, prop, receiver) {
+          if (prop === "read") {
+            return (buffer: Buffer, offset: number, length: number, position: number) =>
+              realRead(buffer, offset, position === 0 ? Math.min(length, 16) : length, position);
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+    });
+
+    try {
+      await withCliSessionState(stateDir, async () => {
+        const history = await loadCliSessionHistoryMessages({
+          sessionId: "session-oversized-short-header",
+          sessionFile,
+        });
+        expect(history).toHaveLength(2);
+        expectMessageFields(history[0], { role: "user", content: "active root" });
+        expectMessageFields(history[1], {
+          role: "assistant",
+          content: [{ type: "text", text: "active history" }],
+        });
+      });
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it("uses the opened file size when the transcript shrinks after stat", async () => {
     const stateDir = tempDirs.make("openclaw-cli-state-");
     const sessionFile = createOversizedSessionTranscript(stateDir, "session-oversized-shrink");

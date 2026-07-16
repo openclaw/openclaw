@@ -299,7 +299,7 @@ async function readCliSessionHeaderLine(filePath: string): Promise<string | unde
   const handle = await fsp.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(CLI_SESSION_HISTORY_HEADER_READ_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const bytesRead = await readFileWindowFully(handle, buffer, 0);
     const firstChunk = buffer.subarray(0, bytesRead).toString("utf-8");
     const lineEnd = firstChunk.indexOf("\n");
     if (lineEnd < 0) {
