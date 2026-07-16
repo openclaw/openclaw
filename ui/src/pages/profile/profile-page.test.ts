@@ -157,12 +157,13 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
   expect(request).toHaveBeenCalledTimes(2);
 
   let reconnectPollDelayMs: number | undefined;
-  const reconnectTimerSpy = vi
-    .spyOn(window, "setTimeout")
-    .mockImplementation((_handler, timeout) => {
-      reconnectPollDelayMs = Number(timeout);
-      return 1;
-    });
+  const reconnectTimerSpy = vi.spyOn(window, "setTimeout").mockImplementation(((
+    _handler: TimerHandler,
+    timeout?: number,
+  ) => {
+    reconnectPollDelayMs = Number(timeout);
+    return 1;
+  }) as unknown as typeof window.setTimeout);
   page.costSummary = {
     ...EMPTY_COST_SUMMARY,
     cacheStatus: { status: "refreshing" },
@@ -192,11 +193,14 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
 
   let settlePoll: TimerHandler | null = null;
   let settleDelayMs: number | undefined;
-  const setTimeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation((handler, timeout) => {
+  const setTimeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation(((
+    handler: TimerHandler,
+    timeout?: number,
+  ) => {
     settlePoll = handler;
     settleDelayMs = Number(timeout);
     return 1;
-  });
+  }) as unknown as typeof window.setTimeout);
   page.costSummary = {
     ...EMPTY_COST_SUMMARY,
     cacheStatus: { status: "refreshing" },
