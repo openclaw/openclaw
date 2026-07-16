@@ -150,15 +150,20 @@ preinstall_previous_version() {
   fi
 }
 
-run_official_installer() {
+run_official_installer() (
+  local installer
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' EXIT
+
+  curl -fsSL --connect-timeout 10 --max-time 120 "$INSTALL_URL" -o "$installer" || return $?
   if [[ "$INSTALL_TAG" == "beta" ]]; then
-    curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash
+    OPENCLAW_BETA=1 bash "$installer"
   elif [[ "$INSTALL_TAG" != "latest" ]]; then
-    curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash
+    OPENCLAW_VERSION="$INSTALL_TAG" bash "$installer"
   else
-    curl -fsSL "$INSTALL_URL" | bash
+    bash "$installer"
   fi
-}
+)
 
 verify_installed_version() {
   INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r')"

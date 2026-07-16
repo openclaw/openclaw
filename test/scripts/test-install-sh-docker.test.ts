@@ -59,6 +59,18 @@ function extractNonrootNodePreflight(): string {
   return expectDefined(match[1], "non-root smoke Node preflight capture");
 }
 
+function extractInstallE2eInstallerFunction(): string {
+  const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+  const startMarker = "run_official_installer() (\n";
+  const endMarker = "\n\nverify_installed_version()";
+  const start = script.indexOf(startMarker);
+  const end = script.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end <= start) {
+    throw new Error("install E2E installer function was not found");
+  }
+  return script.slice(start, end);
+}
+
 function runNonrootNodePreflight(
   version: string,
   options: { sqlite?: boolean; sqliteVersion?: string } = {},
@@ -960,6 +972,67 @@ printf 'status=%s\\n' "$status"
 });
 
 describe("install-sh E2E runner", () => {
+  it("does not execute a partial installer after a bounded download fails", () => {
+    const root = tempDirs.make("openclaw-install-e2e-download-");
+    const binDir = join(root, "bin");
+    const curlPath = join(binDir, "curl");
+    const curlArgsPath = join(root, "curl-args.txt");
+    const outputPathCapture = join(root, "curl-output-path.txt");
+    const partialMarker = join(root, "partial-installer-ran");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      curlPath,
+      [
+        "#!/bin/sh",
+        'printf \'%s\\n\' "$*" >"$CURL_ARGS_PATH"',
+        'output=""',
+        'while [ "$#" -gt 0 ]; do',
+        '  if [ "$1" = "-o" ]; then',
+        "    shift",
+        '    output="$1"',
+        "  fi",
+        "  shift",
+        "done",
+        'printf \'touch "%s"\\n\' "$PARTIAL_MARKER" >"$output"',
+        'printf "%s" "$output" >"$OUTPUT_PATH_CAPTURE"',
+        "exit 28",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -u",
+          extractInstallE2eInstallerFunction(),
+          'INSTALL_URL="https://installer.example.test/install.sh"',
+          'INSTALL_TAG="latest"',
+          "run_official_installer",
+        ].join("\n"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CURL_ARGS_PATH: curlArgsPath,
+          OUTPUT_PATH_CAPTURE: outputPathCapture,
+          PARTIAL_MARKER: partialMarker,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(result.status).toBe(28);
+    expect(readFileSync(curlArgsPath, "utf8")).toContain(
+      "-fsSL --connect-timeout 10 --max-time 120 https://installer.example.test/install.sh -o",
+    );
+    expect(existsSync(partialMarker)).toBe(false);
+    expect(existsSync(readFileSync(outputPathCapture, "utf8"))).toBe(false);
+  });
+
   it("normalizes Docker wrapper timing and toggle knobs before forwarding", () => {
     const wrapper = readFileSync(INSTALL_E2E_DOCKER_PATH, "utf8");
 
