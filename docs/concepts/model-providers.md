@@ -368,14 +368,15 @@ Install `@openclaw/moonshot-provider` before onboarding. Add an explicit `models
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
-- Example model: `moonshot/kimi-k2.6`
+- Example model: `moonshot/kimi-k3`
 - CLI: `openclaw onboard --auth-choice moonshot-api-key` or `openclaw onboard --auth-choice moonshot-api-key-cn`
 
-Kimi K2 model IDs:
+Kimi model IDs:
 
 [//]: # "moonshot-kimi-k2-model-refs:start"
 
 - `moonshot/kimi-k2.6`
+- `moonshot/kimi-k3`
 - `moonshot/kimi-k2.7-code`
 - `moonshot/kimi-k2.5`
 - `moonshot/kimi-k2-thinking`
@@ -411,7 +412,8 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 - Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Example model: `kimi/kimi-for-coding`
+- Kimi K3: `kimi/k3` (256K) or `kimi/k3[1m]` (1M, Allegretto and above)
+- Kimi K2.7 Code: `kimi/kimi-for-coding`
 
 ```json5
 {

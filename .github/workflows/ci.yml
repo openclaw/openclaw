@@ -668,7 +668,10 @@ jobs:
               runAndroid
                 ? [
                     // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
-                    { check_name: "android-test-play", task: "test-play" },
+                    {
+                      check_name: "android-test-play",
+                      task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                    },
                     { check_name: "android-test-third-party", task: "test-third-party" },
                     {
                       check_name: "android-build-play",
@@ -2926,6 +2929,11 @@ jobs:
               ./gradlew --no-daemon --build-cache \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
+              ;;
+            test-play-compat)
+              # Frozen targets predate the Wear shared project. Keep their app-owned
+              # Play unit tests without importing current Android modules.
+              ./gradlew --no-daemon --build-cache :app:testPlayDebugUnitTest
               ;;
             test-third-party)
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest

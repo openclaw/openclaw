@@ -278,6 +278,19 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags runtime writes to the retired native hook relay JSON registry", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join("/tmp", "openclaw-native-hook-relays-501", "relay.json"), "{}\n");
+      `,
+      "src/agents/harness/native-hook-relay-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
   it("flags runtime writes to the retired subagent JSON registry", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
