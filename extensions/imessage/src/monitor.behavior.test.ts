@@ -8,7 +8,7 @@ import "./monitor/dm-history.test-support.js";
 import "./monitor/group-allowlist-warnings.test-support.js";
 import "./monitor/inbound-dedupe.test-support.js";
 import "./monitor/inbound-processing.systemPrompt.test-support.js";
-import "./monitor/media-staging.test-support.js";
+import "./monitor/media-staging.test-utils.js";
 import "./monitor/parse-notification.test-support.js";
 import "./monitor/poll-comment.test-support.js";
 import "./monitor/poll-render.test-support.js";
