@@ -257,7 +257,7 @@ run_installer_for_package_spec() {
   local package_spec="$2"
 
   timeout --kill-after=30s "${INSTALL_COMMAND_TIMEOUT}s" \
-    bash -c "curl -fsSL \"\$1\" | bash -s -- --install-method npm --version \"\$2\" --no-prompt --no-onboard" \
+    bash -c "curl -fsSL --connect-timeout 10 --max-time 300 \"\$1\" | bash -s -- --install-method npm --version \"\$2\" --no-prompt --no-onboard" \
     _ "$install_url" "$package_spec"
 }
 
@@ -335,7 +335,7 @@ NODE
   fi
 
   echo "==> Run official installer one-liner"
-  curl -fsSL "$INSTALL_URL" | bash -s -- --no-prompt
+  curl -fsSL --connect-timeout 10 --max-time 300 "$INSTALL_URL" | bash -s -- --no-prompt
 
   echo "==> Verify installed version"
   if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
@@ -599,7 +599,7 @@ run_freshness_smoke() {
     NPM_CONFIG_USERCONFIG="${policy_home}/.npmrc" \
     OPENCLAW_NO_ONBOARD=1 \
     OPENCLAW_NO_PROMPT=1 \
-    bash -c 'curl -fsSL "$1" | bash -s -- --install-method npm --version "$2" --no-prompt --no-onboard' \
+    bash -c 'curl -fsSL --connect-timeout 10 --max-time 300 "$1" | bash -s -- --install-method npm --version "$2" --no-prompt --no-onboard' \
     _ "$INSTALL_URL" "$FRESHNESS_VERSION"
 
   echo "==> Verify installed version"
