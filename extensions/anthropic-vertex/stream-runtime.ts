@@ -141,9 +141,8 @@ export function createAnthropicVertexStreamFn(
   baseURL?: string,
   deps: AnthropicVertexStreamDeps = defaultAnthropicVertexStreamDeps,
 ): StreamFn {
-  // google-auth-library carries these options into file-backed ADC clients,
-  // including the service-account JSON path from #107341. Keep the override
-  // provider-local; a `window.fetch` shim changes unrelated browser detection.
+  // GoogleAuth carries clientOptions into file-backed ADC clients. Keep native
+  // fetch provider-local; a window shim changes browser detection process-wide.
   const googleAuth = new deps.GoogleAuth({
     scopes: [GOOGLE_CLOUD_PLATFORM_SCOPE],
     clientOptions: {
