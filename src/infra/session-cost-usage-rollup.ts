@@ -34,14 +34,12 @@ type SessionUsageLatencyAggregate = {
   centroids: SessionUsageLatencyCentroid[];
   count: number;
   max: number;
-  min: number;
+  min?: number;
   sum: number;
 };
 
 type SessionUsageRollupBucket = {
-  minuteMs: number;
-  firstActivity: number;
-  lastActivity: number;
+  timestampMs: number;
   totals: CostUsageTotals;
   messageCounts: SessionMessageCounts;
   tools: Array<{ name: string; count: number }>;
@@ -79,7 +77,7 @@ function emptyMessageCounts(): SessionMessageCounts {
 }
 
 function createLatencyAggregate(): SessionUsageLatencyAggregate {
-  return { centroids: [], count: 0, max: 0, min: Number.POSITIVE_INFINITY, sum: 0 };
+  return { centroids: [], count: 0, max: 0, sum: 0 };
 }
 
 function compressLatencyCentroids(aggregate: SessionUsageLatencyAggregate): void {
@@ -109,9 +107,10 @@ function compressLatencyCentroids(aggregate: SessionUsageLatencyAggregate): void
 }
 
 function addLatencyValue(aggregate: SessionUsageLatencyAggregate, value: number): void {
+  const wasEmpty = aggregate.count === 0;
   aggregate.count += 1;
   aggregate.sum += value;
-  aggregate.min = Math.min(aggregate.min, value);
+  aggregate.min = wasEmpty ? value : Math.min(aggregate.min ?? value, value);
   aggregate.max = Math.max(aggregate.max, value);
   aggregate.centroids.push({ count: 1, value });
   compressLatencyCentroids(aggregate);
@@ -124,9 +123,11 @@ function mergeLatencyAggregate(
   if (source.count === 0) {
     return;
   }
+  const targetWasEmpty = target.count === 0;
+  const sourceMin = source.min ?? source.max;
   target.count += source.count;
   target.sum += source.sum;
-  target.min = Math.min(target.min, source.min);
+  target.min = targetWasEmpty ? sourceMin : Math.min(target.min ?? target.max, sourceMin);
   target.max = Math.max(target.max, source.max);
   target.centroids.push(
     ...source.centroids.map((centroid) => ({ count: centroid.count, value: centroid.value })),
@@ -222,11 +223,9 @@ function addMessageContribution(
   }
 }
 
-function createBucket(minuteMs: number, timestamp: number): SessionUsageRollupBucket {
+function createBucket(timestampMs: number): SessionUsageRollupBucket {
   return {
-    minuteMs,
-    firstActivity: timestamp,
-    lastActivity: timestamp,
+    timestampMs,
     totals: createEmptyCostUsageTotals(),
     messageCounts: emptyMessageCounts(),
     tools: [],
@@ -256,10 +255,7 @@ export function appendSessionUsageRollupContribution(
     }
     return;
   }
-  const minuteMs = Math.floor(timestamp / 60_000) * 60_000;
-  const bucket = (rollup.buckets[String(minuteMs)] ??= createBucket(minuteMs, timestamp));
-  bucket.firstActivity = Math.min(bucket.firstActivity, timestamp);
-  bucket.lastActivity = Math.max(bucket.lastActivity, timestamp);
+  const bucket = (rollup.buckets[String(timestamp)] ??= createBucket(timestamp));
   addMessageContribution(bucket.messageCounts, contribution);
   for (const toolName of contribution.toolNames) {
     incrementTool(bucket.tools, toolName);
@@ -310,7 +306,7 @@ function computeLatencyStats(
     count: aggregate.count,
     avgMs: aggregate.sum / aggregate.count,
     p95Ms,
-    minMs: aggregate.min,
+    minMs: aggregate.min ?? aggregate.max,
     maxMs: aggregate.max,
   };
 }
@@ -358,14 +354,14 @@ function buildToolUsage(tools: Map<string, number>): SessionToolUsage | undefine
   };
 }
 
-function minuteBucketsInRange(
+function usageBucketsInRange(
   rollup: SessionUsageRollupData,
   startMs: number,
   endMs: number,
 ): SessionUsageRollupBucket[] {
   return Object.values(rollup.buckets)
-    .filter((bucket) => bucket.lastActivity >= startMs && bucket.firstActivity <= endMs)
-    .toSorted((a, b) => a.minuteMs - b.minuteMs);
+    .filter((bucket) => bucket.timestampMs >= startMs && bucket.timestampMs <= endMs)
+    .toSorted((a, b) => a.timestampMs - b.timestampMs);
 }
 
 export function buildSessionCostSummaryFromRollup(params: {
@@ -393,17 +389,15 @@ export function buildSessionCostSummaryFromRollup(params: {
   let lastActivity: number | undefined;
 
   const mergeBucket = (bucket: SessionUsageRollupBucket): void => {
-    const date = new Date(bucket.minuteMs);
+    const date = new Date(bucket.timestampMs);
     const dayKey = params.formatDay(date);
     const quarter = getUtcQuarterHourBucketKey(date);
     firstActivity =
       firstActivity === undefined
-        ? bucket.firstActivity
-        : Math.min(firstActivity, bucket.firstActivity);
+        ? bucket.timestampMs
+        : Math.min(firstActivity, bucket.timestampMs);
     lastActivity =
-      lastActivity === undefined
-        ? bucket.lastActivity
-        : Math.max(lastActivity, bucket.lastActivity);
+      lastActivity === undefined ? bucket.timestampMs : Math.max(lastActivity, bucket.timestampMs);
     activityDates.add(dayKey);
     addCostUsageTotals(totals, bucket.totals);
     addMessageCounts(messageCounts, bucket.messageCounts);
@@ -411,11 +405,7 @@ export function buildSessionCostSummaryFromRollup(params: {
     mergeModels(models, bucket.models);
 
     const daily = dailyUsage.get(dayKey) ?? { tokens: 0, cost: 0 };
-    daily.tokens +=
-      bucket.totals.input +
-      bucket.totals.output +
-      bucket.totals.cacheRead +
-      bucket.totals.cacheWrite;
+    daily.tokens += bucket.totals.totalTokens;
     daily.cost += bucket.totals.totalCost;
     dailyUsage.set(dayKey, daily);
 
@@ -459,8 +449,7 @@ export function buildSessionCostSummaryFromRollup(params: {
         cost: 0,
         count: 0,
       };
-      existing.tokens +=
-        model.totals.input + model.totals.output + model.totals.cacheRead + model.totals.cacheWrite;
+      existing.tokens += model.totals.totalTokens;
       existing.cost += model.totals.totalCost;
       existing.count += model.count;
       dailyModels.set(modelBucketId, existing);
@@ -472,7 +461,7 @@ export function buildSessionCostSummaryFromRollup(params: {
     dailyLatencies.set(dayKey, dailyLatency);
   };
 
-  for (const bucket of minuteBucketsInRange(params.rollup, params.startMs, params.endMs)) {
+  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     mergeBucket(bucket);
   }
   if (params.includeUntimestamped) {
@@ -540,8 +529,8 @@ export function addRollupToCostUsageSummary(params: {
   daily: Map<string, CostUsageTotals>;
   totals: CostUsageTotals;
 }): void {
-  for (const bucket of minuteBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    const dayKey = params.formatDay(new Date(bucket.minuteMs));
+  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
+    const dayKey = params.formatDay(new Date(bucket.timestampMs));
     const daily = params.daily.get(dayKey) ?? createEmptyCostUsageTotals();
     addCostUsageTotals(daily, bucket.totals);
     params.daily.set(dayKey, daily);
@@ -568,8 +557,8 @@ export function cloneSessionUsageRollupData(
           latency: {
             count: bucket.latency.count,
             max: bucket.latency.max,
-            min: bucket.latency.min,
             sum: bucket.latency.sum,
+            ...(bucket.latency.min !== undefined ? { min: bucket.latency.min } : {}),
             centroids: bucket.latency.centroids.map((centroid) => ({
               count: centroid.count,
               value: centroid.value,

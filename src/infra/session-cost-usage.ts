@@ -26,12 +26,13 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import {
-  listSessionEntries,
+  listSessionTranscriptInstances,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEventsSync,
   readTranscriptEventAtSeqSync,
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -106,9 +107,10 @@ export type {
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-const USAGE_COST_ROLLUP_VERSION = 1;
+const USAGE_COST_ROLLUP_VERSION = 2;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
+const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -236,14 +238,27 @@ async function listUsageCountedTranscriptFileStats(
   params?: { minMtimeMs?: number; sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
   const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
   const tasks = entries
     .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
     .map((entry) => async (): Promise<UsageCostTranscriptFile | undefined> => {
       const filePath = path.join(sessionsDir, entry.name);
-      const stats = await fs.promises.stat(filePath).catch(() => null);
-      if (!stats) {
-        return undefined;
+      let stats: fs.Stats;
+      try {
+        stats = await fs.promises.stat(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
       }
       if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
         return undefined;
@@ -264,8 +279,11 @@ async function listUsageCountedTranscriptFileStats(
             device: materializedStats.dev,
             inode: materializedStats.ino,
           };
-        } catch {
-          return undefined;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return undefined;
+          }
+          throw error;
         }
       }
       return {
@@ -277,10 +295,13 @@ async function listUsageCountedTranscriptFileStats(
         inode: stats.ino,
       };
     });
-  const { results } = await runTasksWithConcurrency({
+  const { firstError, hasError, results } = await runTasksWithConcurrency({
     tasks,
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
   });
+  if (hasError) {
+    throw firstError;
+  }
   return results.filter((file): file is UsageCostTranscriptFile => Boolean(file));
 }
 
@@ -293,12 +314,12 @@ function listUsageCountedSqliteTranscriptStats(
     ...(params?.sessionsDir ? { sessionsDir: params.sessionsDir } : {}),
   });
   const files: UsageCostTranscriptFile[] = [];
-  for (const { entry } of listSessionEntries({ storePath })) {
-    const marker = parseSqliteSessionFileMarker(entry.sessionFile);
+  for (const instance of listSessionTranscriptInstances({ agentId, storePath })) {
+    const marker = parseSqliteSessionFileMarker(instance.entry.sessionFile);
     if (!marker) {
       continue;
     }
-    const mtimeMs = asFiniteNumber(entry.updatedAt) ?? 0;
+    const mtimeMs = instance.updatedAtMs;
     if (params?.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
       continue;
     }
@@ -310,7 +331,7 @@ function listUsageCountedSqliteTranscriptStats(
       storePath: marker.storePath,
     });
     files.push({
-      filePath: formatSqliteSessionFileMarker(marker),
+      filePath: formatCanonicalUsageCostSqliteMarker(marker),
       kind: "sqlite",
       mtimeMs,
       sessionId: marker.sessionId,
@@ -320,6 +341,13 @@ function listUsageCountedSqliteTranscriptStats(
     });
   }
   return files;
+}
+
+function formatCanonicalUsageCostSqliteMarker(marker: SqliteSessionFileMarker): string {
+  const storePath =
+    resolveSqliteTargetFromSessionStorePath(marker.storePath, { agentId: marker.agentId }).path ??
+    resolveOpenClawAgentSqlitePath({ agentId: marker.agentId });
+  return formatSqliteSessionFileMarker({ ...marker, storePath });
 }
 
 async function listUsageCountedTranscriptFiles(
@@ -348,18 +376,15 @@ async function resolveUsageCostTranscriptFile(
 ): Promise<UsageCostTranscriptFile | undefined> {
   const marker = parseSqliteSessionFileMarker(sessionFile);
   if (marker) {
-    const entry = listSessionEntries({ storePath: marker.storePath }).find(
-      ({ entry: sessionEntry }) => sessionEntry.sessionId === marker.sessionId,
-    )?.entry;
     const stats = readTranscriptStatsSync({
       agentId: marker.agentId,
       sessionId: marker.sessionId,
       storePath: marker.storePath,
     });
     return {
-      filePath: formatSqliteSessionFileMarker(marker),
+      filePath: formatCanonicalUsageCostSqliteMarker(marker),
       kind: "sqlite",
-      mtimeMs: asFiniteNumber(entry?.updatedAt) ?? 0,
+      mtimeMs: stats.lastMutationAtMs ?? 0,
       sessionId: marker.sessionId,
       size: stats.sizeBytes,
       eventCount: stats.eventCount,
@@ -451,7 +476,8 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
 
   const roleRaw = message.role;
   const role = roleRaw === "user" || roleRaw === "assistant" ? roleRaw : undefined;
-  if (!role) {
+  const isStandaloneToolResult = roleRaw === "tool" || roleRaw === "toolResult";
+  if (!role && !isStandaloneToolResult) {
     return null;
   }
 
@@ -481,8 +507,13 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
     provider,
     model,
     stopReason,
-    toolNames: extractToolCallNames(message),
-    toolResultCounts: countToolResults(message),
+    toolNames: isStandaloneToolResult ? [] : extractToolCallNames(message),
+    toolResultCounts: isStandaloneToolResult
+      ? {
+          total: 1,
+          errors: message.isError === true || message.is_error === true ? 1 : 0,
+        }
+      : countToolResults(message),
   };
 };
 
@@ -1917,12 +1948,20 @@ export async function loadSessionCostSummary(params: {
     return null;
   }
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
-  await refreshCostUsageCacheForAgent({
-    config: params.config,
-    agentId: params.agentId,
-    databasePath,
-    sessionFiles: [sessionFile],
-  });
+  while (
+    (await refreshCostUsageCacheForAgent({
+      config: params.config,
+      agentId: params.agentId,
+      databasePath,
+      sessionFiles: [sessionFile],
+    })) === "busy"
+  ) {
+    // Direct detail callers require the requested session, unlike background
+    // summary refreshes. Wait for the agent-wide writer to release, then retry.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, USAGE_COST_DIRECT_REFRESH_RETRY_MS);
+    });
+  }
   const currentFile = await resolveUsageCostTranscriptFile(sessionFile);
   if (!currentFile) {
     return null;
@@ -1968,9 +2007,7 @@ export async function loadSessionUsageTimeSeries(params: {
     }
   }
 
-  const points: SessionUsageTimePoint[] = [];
-  let cumulativeTokens = 0;
-  let cumulativeCost = 0;
+  const points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
   const resolveCost = createUsageCostResolver(params.config);
 
   await scanUsageFile({
@@ -1988,9 +2025,6 @@ export async function loadSessionUsageTimeSeries(params: {
       );
       const cost = entry.costTotal ?? 0;
 
-      cumulativeTokens += totalTokens;
-      cumulativeCost += cost;
-
       points.push({
         timestamp: ts,
         input,
@@ -1999,14 +2033,20 @@ export async function loadSessionUsageTimeSeries(params: {
         cacheWrite,
         totalTokens,
         cost,
-        cumulativeTokens,
-        cumulativeCost,
       });
     },
   });
 
   // Sort by timestamp
-  const sortedPoints = points.toSorted((a, b) => a.timestamp - b.timestamp);
+  let cumulativeTokens = 0;
+  let cumulativeCost = 0;
+  const sortedPoints: SessionUsageTimePoint[] = points
+    .toSorted((a, b) => a.timestamp - b.timestamp)
+    .map((point) => {
+      cumulativeTokens += point.totalTokens;
+      cumulativeCost += point.cost;
+      return Object.assign(point, { cumulativeTokens, cumulativeCost });
+    });
 
   // Optionally downsample if too many points
   const maxPoints = params.maxPoints ?? 100;
