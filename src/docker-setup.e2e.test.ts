@@ -179,6 +179,9 @@ const prestartContainerEnvFlags = [
   "-e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace",
 ].join(" ");
 
+const noFollowOwnershipRepair = (root: string) =>
+  `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h node:node {} +`;
+
 function createEnv(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
@@ -851,19 +854,15 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
-    expect(log).toContain("chown node:node /home/node/.config");
-    expect(log).toContain(
-      "find /home/node/.openclaw -xdev \\( -type d -o -type f \\) -execdir chown -h node:node {} +",
-    );
-    expect(log).toContain(
-      "find /home/node/.config/openclaw -xdev \\( -type d -o -type f \\) -execdir chown -h node:node {} +",
-    );
+    expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw"));
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
     expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
-    expect(log).toContain(
-      "find /home/node/.openclaw/workspace/.openclaw -xdev \\( -type d -o -type f \\) -execdir chown -h node:node {} +",
-    );
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw/workspace/.openclaw"));
     expect(log).toContain("fi || true");
-    expect(log).not.toContain("-exec chown node:node");
+    expect(log).not.toContain("-type d -o -type f");
+    expect(log).not.toContain("-exec chown");
+    expect(log).not.toContain(" chown node:node");
     expect(log).not.toContain("chown -R node:node /home/node/.openclaw/workspace/.openclaw");
   });
 
@@ -885,9 +884,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(secretDir.startsWith(`${configDir}/`)).toBe(false);
 
     const log = await readDockerLog(activeSandbox);
-    expect(log).toContain(
-      "find /home/node/.config/openclaw -xdev \\( -type d -o -type f \\) -execdir chown -h node:node {} +",
-    );
+    expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
