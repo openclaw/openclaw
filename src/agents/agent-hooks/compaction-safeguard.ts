@@ -287,7 +287,7 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
     turnStart -= 1;
   }
 
-  const tailMessage = sanitizedMessages.at(-1);
+  const tailMessage = messages.at(-1);
   const endsWithTerminalAssistantText =
     tailMessage?.role === "assistant" &&
     Boolean(extractMessageText(tailMessage).trim()) &&

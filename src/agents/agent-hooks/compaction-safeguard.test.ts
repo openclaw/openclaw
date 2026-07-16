@@ -2602,7 +2602,10 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 
-  it("preserves unfinished inter-session work after a tool result", async () => {
+  it.each([
+    { toolName: "read", expectedRoles: ["user", "assistant", "toolResult"] },
+    { toolName: "functions.sessions_send", expectedRoles: ["user", "assistant"] },
+  ])("preserves unfinished inter-session work after a $toolName result", async (scenario) => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("unfinished branch summary");
 
@@ -2633,7 +2636,14 @@ describe("compaction-safeguard double-compaction guard", () => {
           timestamp: new Date(now + 1).toISOString(),
           message: {
             role: "assistant",
-            content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+            content: [
+              {
+                type: "toolCall",
+                id: "call-tool",
+                name: scenario.toolName,
+                arguments: {},
+              },
+            ],
             timestamp: now + 1,
           },
         },
@@ -2644,8 +2654,8 @@ describe("compaction-safeguard double-compaction guard", () => {
           timestamp: new Date(now + 2).toISOString(),
           message: {
             role: "toolResult",
-            toolCallId: "call-read",
-            toolName: "read",
+            toolCallId: "call-tool",
+            toolName: scenario.toolName,
             content: [{ type: "text", text: "partial evidence" }],
             timestamp: now + 2,
           },
@@ -2679,11 +2689,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
     const messages = requireArray(summarizeCall.messages);
-    expect(messages.map((message) => requireRecord(message).role)).toEqual([
-      "user",
-      "assistant",
-      "toolResult",
-    ]);
+    expect(messages.map((message) => requireRecord(message).role)).toEqual(scenario.expectedRoles);
   });
 
   it("keeps source-session sends as inert completed history", async () => {
