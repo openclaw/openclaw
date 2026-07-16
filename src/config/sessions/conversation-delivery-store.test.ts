@@ -8,6 +8,7 @@ import {
   findConversationDeliveryByReplyTarget,
   getConversationDeliveryOperation,
   markConversationDeliveryQueued,
+  markConversationDeliveryRejected,
   markConversationDeliveryReplied,
   markConversationDeliverySent,
   markConversationDeliveryUnknown,
@@ -136,6 +137,32 @@ describe("conversation delivery store", () => {
       expect(unknown.status).toBe("unknown");
       expect(markConversationDeliveryQueued(scope, "operation-3", "queue-late")).toEqual(unknown);
       expect(markConversationDeliverySent(scope, "operation-3", "platform-late")).toEqual(unknown);
+    });
+  });
+
+  it("persists a permanent rejection and never revives its delivery", async () => {
+    await withConversationStore(({ scope, conversationRef }) => {
+      beginConversationDeliveryOperation(scope, {
+        operationId: "operation-rejected",
+        conversationRef,
+        message: "hello",
+      });
+      markConversationDeliveryQueued(scope, "operation-rejected", "queue-rejected");
+
+      const rejected = markConversationDeliveryRejected(
+        scope,
+        "operation-rejected",
+        "atomic message limit",
+      );
+
+      expect(rejected).toMatchObject({
+        status: "rejected",
+        queueId: "queue-rejected",
+        rejectionError: "atomic message limit",
+      });
+      expect(markConversationDeliverySent(scope, "operation-rejected", "platform-late")).toEqual(
+        rejected,
+      );
     });
   });
 

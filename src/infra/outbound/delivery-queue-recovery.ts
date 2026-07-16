@@ -13,6 +13,7 @@ import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
   createRecoveryReplayPacer,
+  findPlatformMessageRejectedError,
   getErrnoCode,
   isProvenDeliveryNotSentError,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
@@ -33,6 +34,7 @@ import {
   completeDurableDelivery,
   failDurableDelivery,
   markDurableDeliveryQueued,
+  rejectDurableDelivery,
   suppressDurableDelivery,
 } from "./delivery-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
@@ -500,6 +502,29 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     opts.onRecovered?.(opts.entry);
     return "recovered";
   }
+  if (operation.status === "rejected") {
+    try {
+      await ackDelivery(opts.entry.id, opts.stateDir);
+    } catch (error) {
+      const errMsg = `failed to ack owner-rejected delivery: ${formatErrorMessage(error)}`;
+      opts.onFailed?.(opts.entry, errMsg);
+      opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
+      return "failed";
+    }
+    emitQueuedAuditTerminals(opts.entry, () =>
+      failedOutboundAuditTerminals({
+        payloadCount: opts.entry.payloads.length,
+        results: [],
+        payloadOutcomes: [],
+        failureStage: "platform_send",
+      }),
+    );
+    opts.onFailed?.(
+      opts.entry,
+      operation.rejectionError ?? "delivery permanently rejected before platform dispatch",
+    );
+    return "failed";
+  }
   if (operation.status === "unknown") {
     const moved = await moveEntryToFailedWithLogging(opts.entry, opts.log, opts.stateDir);
     return moved ? "moved-to-failed" : "failed";
@@ -846,9 +871,14 @@ async function drainQueuedEntry(opts: {
       );
       return "failed";
     }
-    if (isPermanentDeliveryError(errMsg)) {
+    const permanentPlatformRejection = findPlatformMessageRejectedError(err);
+    if (permanentPlatformRejection || isPermanentDeliveryError(errMsg)) {
       try {
-        markDurableDeliveryFailedBestEffort(entry, opts.log);
+        if (permanentPlatformRejection && entry.deliveryCompletion) {
+          rejectDurableDelivery(entry.deliveryCompletion, permanentPlatformRejection.message);
+        } else {
+          markDurableDeliveryFailedBestEffort(entry, opts.log);
+        }
         await moveToFailed(entry.id, opts.stateDir);
         emitQueuedAuditTerminals(entry, () =>
           failedOutboundAuditTerminals({

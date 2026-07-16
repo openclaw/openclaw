@@ -1,6 +1,7 @@
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   markConversationDeliveryQueued,
+  markConversationDeliveryRejected,
   markConversationDeliverySent,
   markConversationDeliverySuppressed,
   markConversationDeliveryUnknown,
@@ -57,6 +58,18 @@ export function suppressDurableDelivery(
   completion: DurableDeliveryCompletion,
 ): ConversationDeliveryRecord {
   return markConversationDeliverySuppressed(scopeForCompletion(completion), completion.operationId);
+}
+
+/** Finalizes a permanent provider rejection that provably preceded platform I/O. */
+export function rejectDurableDelivery(
+  completion: DurableDeliveryCompletion,
+  error: string,
+): ConversationDeliveryRecord {
+  return markConversationDeliveryRejected(
+    scopeForCompletion(completion),
+    completion.operationId,
+    error,
+  );
 }
 
 /** Makes a dead-lettered durable send terminal without allowing a blind replay. */

@@ -1,4 +1,5 @@
 import type { ConversationTurnResult } from "../../packages/gateway-protocol/src/schema/agent.js";
+import { ConversationDeliveryInputError } from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
   type ConversationRecord,
@@ -8,6 +9,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
 import {
+  ConversationDeliveryRejectedError,
   defaultConversationDeliveryDeps,
   sendConversationMessage,
   type ConversationDeliveryDeps,
@@ -100,6 +102,10 @@ function resultForCompletedOperation(params: {
         correlationPersisted: false,
         error: "Delivery was suppressed before a message was sent.",
       };
+    case "rejected":
+      throw new ConversationTurnInputError(
+        operation.rejectionError ?? "Conversation delivery was permanently rejected",
+      );
     case "unknown":
       return {
         ...base,
@@ -183,12 +189,20 @@ export async function runGatewayConversationTurn(
       conversation,
       message: params.message,
     });
-  const begun = deps.beginOperation(scope, {
-    operationId: params.turnId,
-    conversationRef: conversation.conversationRef,
-    message: params.message,
-    preparedMessageId,
-  });
+  let begun: ReturnType<ConversationDeliveryDeps["beginOperation"]>;
+  try {
+    begun = deps.beginOperation(scope, {
+      operationId: params.turnId,
+      conversationRef: conversation.conversationRef,
+      message: params.message,
+      preparedMessageId,
+    });
+  } catch (error) {
+    if (error instanceof ConversationDeliveryInputError) {
+      throw new ConversationTurnInputError(error.message);
+    }
+    throw error;
+  }
   const completed = resultForCompletedOperation({ conversation, operation: begun.record });
   if (completed) {
     return completed;
@@ -256,6 +270,9 @@ export async function runGatewayConversationTurn(
         };
   } catch (error) {
     pending.cancel();
+    if (error instanceof ConversationDeliveryRejectedError) {
+      throw new ConversationTurnInputError(error.message);
+    }
     throw error;
   }
 }

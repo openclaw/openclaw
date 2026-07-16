@@ -1,4 +1,7 @@
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  PlatformMessageNotDispatchedError,
+  PlatformMessageRejectedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
@@ -154,19 +157,26 @@ describe("reefOutboundAdapter", () => {
     ).toThrow("atomic message limit");
   });
 
-  it("rejects oversized final correlated text before the encrypted flow", async () => {
+  it("permanently rejects correlated text enlarged after its initial preflight", async () => {
+    const rawText = "x".repeat(REEF_MAX_PLAINTEXT_BYTES - 256);
+    const preparedMessageId = reefOutboundAdapter.prepareConversationTurnMessageId!({
+      cfg: {},
+      to: "reef:alice",
+      text: rawText,
+    });
     const send = vi.fn(async () => "01JZ0000000000000000000200");
     setActiveReef({ flow: { send }, friends: {}, reviews: {} } as never);
 
-    await expect(
-      reefOutboundAdapter.sendText!({
-        cfg: {},
-        accountId: "default",
-        to: "reef:alice",
-        text: `[prefix] ${"x".repeat(32 * 1024)}`,
-        preparedMessageId: "01JZ0000000000000000000200",
-      } as never),
-    ).rejects.toThrow("atomic message limit");
+    const error = await reefOutboundAdapter.sendText!({
+      cfg: {},
+      accountId: "default",
+      to: "reef:alice",
+      text: `${"p".repeat(512)} ${rawText}`,
+      preparedMessageId,
+    } as never).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformMessageRejectedError);
+    expect(error).toMatchObject({ message: expect.stringContaining("atomic message limit") });
     expect(send).not.toHaveBeenCalled();
   });
 

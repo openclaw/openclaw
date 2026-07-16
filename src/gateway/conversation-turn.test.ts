@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConversationDeliveryRecord } from "../config/sessions/conversation-delivery-store.js";
+import {
+  ConversationDeliveryInputError,
+  type ConversationDeliveryRecord,
+} from "../config/sessions/conversation-delivery-store.js";
+import { PlatformMessageRejectedError } from "../infra/outbound/deliver-types.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import {
   claimPendingConversationTurnReply,
@@ -237,6 +241,98 @@ describe("runGatewayConversationTurn", () => {
       ),
     ).resolves.toMatchObject({ status: "queued", messageId: "reef-outbound-1" });
     expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("returns a durable permanent rejection as invalid input after restart", async () => {
+    const deps = createDeps();
+    deps.operations.set("turn-rejected", {
+      operationId: "turn-rejected",
+      conversationRef: conversation.conversationRef,
+      messageHash: "hello",
+      status: "rejected",
+      preparedMessageId: "reef-outbound-1",
+      queueId: "queue-rejected",
+      rejectionError: "atomic message limit",
+      createdAt: 100,
+      updatedAt: 200,
+    });
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          turnId: "turn-rejected",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).rejects.toMatchObject({
+      name: "ConversationTurnInputError",
+      message: "atomic message limit",
+    });
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
+    expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
+  });
+
+  it("classifies durable operation-id input reuse as invalid input", async () => {
+    const deps = createDeps();
+    deps.beginOperation.mockImplementationOnce(() => {
+      throw new ConversationDeliveryInputError(
+        "Conversation delivery operation was reused with different input: turn-reused",
+      );
+    });
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          turnId: "turn-reused",
+          conversationRef: conversation.conversationRef,
+          message: "different",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).rejects.toMatchObject({
+      name: "ConversationTurnInputError",
+      message: expect.stringContaining("reused with different input"),
+    });
+    expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("classifies a final rendered provider rejection as invalid input", async () => {
+    const deps = createDeps();
+    deps.runMessageAction = vi.fn(async () => {
+      deps.update("turn-rendered-rejected", {
+        status: "rejected",
+        rejectionError: "atomic message limit",
+      });
+      throw new PlatformMessageRejectedError("atomic message limit", {
+        cause: new Error("rendered text is too large"),
+      });
+    }) as never;
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          turnId: "turn-rendered-rejected",
+          conversationRef: conversation.conversationRef,
+          message: "raw text passed preflight",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).rejects.toMatchObject({
+      name: "ConversationTurnInputError",
+      message: "atomic message limit",
+    });
   });
 
   it("rejects unsupported channels before registering or sending", async () => {

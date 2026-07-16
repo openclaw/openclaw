@@ -46,6 +46,13 @@ export type ConversationMessageDeliveryResult = {
   messageId?: string;
 };
 
+export class ConversationDeliveryRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConversationDeliveryRejectedError";
+  }
+}
+
 export function resolveConversationDeliveryStoreScope(
   context: ConversationDeliveryContext,
 ): ConversationDeliveryStoreScope {
@@ -100,6 +107,10 @@ function resultFromExistingOperation(
       };
     case "suppressed":
       return { deliveryStatus: "suppressed", operation };
+    case "rejected":
+      throw new ConversationDeliveryRejectedError(
+        operation.rejectionError ?? "Conversation delivery was permanently rejected",
+      );
     case "unknown":
       return { deliveryStatus: "unknown", operation };
     case "created":

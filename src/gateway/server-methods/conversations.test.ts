@@ -187,9 +187,10 @@ describe("conversations.turn Gateway handler", () => {
       cancelConversationTurn: vi.fn(),
       runConversationTurn,
     })["conversations.turn"]!;
+    const gatewayContext = context();
     const respond = vi.fn<RespondFn>();
 
-    await invoke({ handler, context: context(), respond });
+    await invoke({ handler, context: gatewayContext, respond });
 
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -199,6 +200,19 @@ describe("conversations.turn Gateway handler", () => {
         message: "Channel matrix does not support correlated turns",
       }),
       expect.any(Object),
+    );
+
+    const retryRespond = vi.fn<RespondFn>();
+    await invoke({ handler, context: gatewayContext, respond: retryRespond });
+    expect(runConversationTurn).toHaveBeenCalledOnce();
+    expect(retryRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "Channel matrix does not support correlated turns",
+      }),
+      { cached: true },
     );
   });
 

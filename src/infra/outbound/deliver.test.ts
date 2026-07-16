@@ -39,7 +39,10 @@ import {
 } from "../diagnostic-events.js";
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
-import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import {
+  PlatformMessageNotDispatchedError,
+  PlatformMessageRejectedError,
+} from "./deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
@@ -81,6 +84,7 @@ const queueMocks = vi.hoisted(() => ({
 }));
 const completionMocks = vi.hoisted(() => ({
   completeDurableDelivery: vi.fn(),
+  rejectDurableDelivery: vi.fn(),
   suppressDurableDelivery: vi.fn(),
 }));
 const logMocks = vi.hoisted(() => ({
@@ -126,6 +130,7 @@ vi.mock("./delivery-queue.js", () => ({
 }));
 vi.mock("./delivery-completion.js", () => ({
   completeDurableDelivery: completionMocks.completeDurableDelivery,
+  rejectDurableDelivery: completionMocks.rejectDurableDelivery,
   suppressDurableDelivery: completionMocks.suppressDurableDelivery,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
@@ -348,6 +353,7 @@ describe("deliverOutboundPayloads", () => {
       created: true,
     }));
     completionMocks.completeDurableDelivery.mockClear();
+    completionMocks.rejectDurableDelivery.mockClear();
     completionMocks.suppressDurableDelivery.mockClear();
     queueMocks.ackDelivery.mockClear();
     queueMocks.ackDelivery.mockResolvedValue(undefined);
@@ -2169,6 +2175,73 @@ describe("deliverOutboundPayloads", () => {
       "partial delivery failure (bestEffort)",
     );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("terminally retires a permanent provider rejection before platform dispatch", async () => {
+    const order: string[] = [];
+    const rejection = new PlatformMessageRejectedError("atomic message limit", {
+      cause: new Error("rendered text is too large"),
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(rejection);
+    completionMocks.rejectDurableDelivery.mockImplementationOnce(() => {
+      order.push("reject-owner");
+    });
+    queueMocks.ackDelivery.mockImplementationOnce(async () => {
+      order.push("ack-queue");
+    });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "rendered text" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-rejected",
+        },
+      }),
+    ).rejects.toThrow("atomic message limit");
+
+    expect(order).toEqual(["reject-owner", "ack-queue"]);
+    expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "operation-rejected" }),
+      "atomic message limit",
+    );
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("normalizes an empty permanent rejection reason before durable retirement", async () => {
+    const sendMatrix = vi.fn().mockRejectedValueOnce(
+      new PlatformMessageRejectedError("   ", {
+        cause: new Error("provider rejected the rendered payload"),
+      }),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "rendered text" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-empty-rejection",
+        },
+      }),
+    ).rejects.toThrow("Platform rejected the message before dispatch");
+
+    expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "operation-empty-rejection" }),
+      "Platform rejected the message before dispatch",
+    );
   });
 
   it("preserves queued send evidence when a marked best-effort batch has an ambiguous failure", async () => {

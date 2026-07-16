@@ -62,10 +62,27 @@ export class PlatformMessageNotDispatchedError extends Error {
   }
 }
 
+/**
+ * Provider assertion that the payload is permanently invalid and no
+ * recipient-visible send began. Core terminally retires its durable intent.
+ */
+export class PlatformMessageRejectedError extends PlatformMessageNotDispatchedError {
+  constructor(message: string, options: { cause: unknown }) {
+    super(message.trim() || "Platform rejected the message before dispatch", options);
+    this.name = "PlatformMessageRejectedError";
+  }
+}
+
 export function isPlatformMessageNotDispatchedError(
   error: unknown,
 ): error is PlatformMessageNotDispatchedError {
   return error instanceof PlatformMessageNotDispatchedError;
+}
+
+export function isPlatformMessageRejectedError(
+  error: unknown,
+): error is PlatformMessageRejectedError {
+  return error instanceof PlatformMessageRejectedError;
 }
 
 /** Per-payload delivery status emitted to callers and channel send summaries. */

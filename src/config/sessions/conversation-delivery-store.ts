@@ -15,6 +15,7 @@ export type ConversationDeliveryStatus =
   | "queued"
   | "sent"
   | "suppressed"
+  | "rejected"
   | "unknown"
   | "replied";
 
@@ -26,6 +27,7 @@ export type ConversationDeliveryRecord = {
   preparedMessageId?: string;
   platformMessageId?: string;
   queueId?: string;
+  rejectionError?: string;
   reply?: {
     messageId: string;
     replyToId?: string;
@@ -51,6 +53,7 @@ type ConversationDeliveryRow = {
   platform_message_id: string | null;
   prepared_message_id: string | null;
   queue_id: string | null;
+  rejection_error: string | null;
   reply_message_id: string | null;
   reply_text: string | null;
   reply_thread_id: string | null;
@@ -88,6 +91,7 @@ function normalizeStatus(value: string): ConversationDeliveryStatus {
     case "queued":
     case "sent":
     case "suppressed":
+    case "rejected":
     case "unknown":
     case "replied":
       return value;
@@ -115,10 +119,18 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
     ...(row.prepared_message_id ? { preparedMessageId: row.prepared_message_id } : {}),
     ...(row.platform_message_id ? { platformMessageId: row.platform_message_id } : {}),
     ...(row.queue_id ? { queueId: row.queue_id } : {}),
+    ...(row.rejection_error ? { rejectionError: row.rejection_error } : {}),
     ...(reply ? { reply } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+export class ConversationDeliveryInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConversationDeliveryInputError";
+  }
 }
 
 function selectOperation(
@@ -162,7 +174,7 @@ export function beginConversationDeliveryOperation(
           existing.conversationRef !== params.conversationRef ||
           existing.messageHash !== messageHash
         ) {
-          throw new Error(
+          throw new ConversationDeliveryInputError(
             `Conversation delivery operation was reused with different input: ${operationId}`,
           );
         }
@@ -180,6 +192,7 @@ export function beginConversationDeliveryOperation(
           prepared_message_id: params.preparedMessageId ?? null,
           platform_message_id: null,
           queue_id: null,
+          rejection_error: null,
           reply_message_id: null,
           reply_to_id: null,
           reply_thread_id: null,
@@ -207,6 +220,7 @@ function updateConversationDeliveryOperation(
     status: ConversationDeliveryStatus;
     queueId?: string | null;
     platformMessageId?: string | null;
+    rejectionError?: string | null;
     reply?: ConversationDeliveryRecord["reply"];
     allowedFrom: readonly ConversationDeliveryStatus[];
   },
@@ -231,6 +245,9 @@ function updateConversationDeliveryOperation(
             ...(params.queueId !== undefined ? { queue_id: params.queueId } : {}),
             ...(params.platformMessageId !== undefined
               ? { platform_message_id: params.platformMessageId }
+              : {}),
+            ...(params.rejectionError !== undefined
+              ? { rejection_error: params.rejectionError }
               : {}),
             ...(params.reply
               ? {
@@ -289,6 +306,23 @@ export function markConversationDeliverySuppressed(
   return updateConversationDeliveryOperation(scope, {
     operationId,
     status: "suppressed",
+    allowedFrom: ["created", "queued"],
+  });
+}
+
+export function markConversationDeliveryRejected(
+  scope: ConversationDeliveryStoreScope,
+  operationId: string,
+  rejectionError: string,
+): ConversationDeliveryRecord {
+  const normalizedError = rejectionError.trim();
+  if (!normalizedError) {
+    throw new Error("Conversation delivery rejection error is required");
+  }
+  return updateConversationDeliveryOperation(scope, {
+    operationId,
+    status: "rejected",
+    rejectionError: normalizedError,
     allowedFrom: ["created", "queued"],
   });
 }

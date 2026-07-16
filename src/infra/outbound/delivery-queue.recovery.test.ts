@@ -10,6 +10,7 @@ import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from 
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
+  markConversationDeliveryRejected,
   markConversationDeliverySuppressed,
 } from "../../config/sessions/conversation-delivery-store.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -19,6 +20,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
+  PlatformMessageRejectedError,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
@@ -275,6 +277,69 @@ describe("delivery-queue recovery", () => {
       expect(getConversationDeliveryOperation(scope, "operation-suppressed")?.status).toBe(
         "suppressed",
       );
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
+  it("acks a persisted rejected conversation operation without replaying it", async () => {
+    const storePath = path.join(tmpDir(), "agent-sessions.json");
+    const scope = { agentId: "main", storePath };
+    const conversationRef = buildConversationRef({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "peer-agent",
+    });
+    await upsertSessionEntry(
+      { ...scope, sessionKey: "agent:main:reef:direct:peer-agent" },
+      {
+        sessionId: "reef-session",
+        updatedAt: 100,
+        chatType: "direct",
+        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+        origin: {
+          provider: "reef",
+          accountId: "default",
+          nativeDirectUserId: "peer-agent",
+        },
+      },
+    );
+    beginConversationDeliveryOperation(scope, {
+      operationId: "operation-rejected",
+      conversationRef,
+      message: "hello",
+      preparedMessageId: "reef-prepared",
+    });
+    await enqueueDeliveryOnce(
+      {
+        channel: "reef",
+        to: "reef:peer-agent",
+        queuePolicy: "required",
+        payloads: [{ text: "hello" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-rejected",
+          storePath,
+        },
+      },
+      "operation-rejected",
+      tmpDir(),
+    );
+    markConversationDeliveryRejected(scope, "operation-rejected", "atomic message limit");
+    const deliver = vi.fn();
+
+    try {
+      const { result } = await runRecovery({ deliver });
+
+      expect(result.failed).toBe(1);
+      expect(deliver).not.toHaveBeenCalled();
+      expect(getConversationDeliveryOperation(scope, "operation-rejected")).toMatchObject({
+        status: "rejected",
+        rejectionError: "atomic message limit",
+      });
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     } finally {
       closeOpenClawAgentDatabasesForTest();
@@ -1150,6 +1215,24 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
     expectMockMessageContaining(log.warn, "permanent error");
+  });
+
+  it("moves typed permanent platform rejections to failed without retry backoff", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel", to: "user:abc", payloads: [{ text: "hi" }] },
+      tmpDir(),
+    );
+    const deliver = vi.fn().mockRejectedValue(
+      new PlatformMessageRejectedError("atomic message limit", {
+        cause: new Error("rendered text is too large"),
+      }),
+    );
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ failed: 1, recovered: 0 });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
   });
 
   it("treats Matrix 'User not in room' as a permanent error", async () => {

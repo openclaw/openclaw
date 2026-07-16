@@ -117,10 +117,11 @@ CREATE TABLE IF NOT EXISTS conversation_deliveries (
   operation_id TEXT NOT NULL PRIMARY KEY,
   conversation_id TEXT NOT NULL,
   message_hash TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('created', 'queued', 'sent', 'suppressed', 'unknown', 'replied')),
+  status TEXT NOT NULL CHECK (status IN ('created', 'queued', 'sent', 'suppressed', 'rejected', 'unknown', 'replied')),
   prepared_message_id TEXT,
   platform_message_id TEXT,
   queue_id TEXT,
+  rejection_error TEXT,
   reply_message_id TEXT,
   reply_to_id TEXT,
   reply_thread_id TEXT,
@@ -128,6 +129,10 @@ CREATE TABLE IF NOT EXISTS conversation_deliveries (
   reply_timestamp INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  CHECK (
+    (status = 'rejected' AND rejection_error IS NOT NULL) OR
+    (status != 'rejected' AND rejection_error IS NULL)
+  ),
   FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
 ) STRICT;
 

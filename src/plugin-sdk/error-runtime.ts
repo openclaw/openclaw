@@ -23,5 +23,8 @@ export {
   formatUncaughtError,
   readErrorName,
 } from "../infra/errors.js";
-export { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
+export {
+  PlatformMessageNotDispatchedError,
+  PlatformMessageRejectedError,
+} from "../infra/outbound/deliver-types.js";
 export { isApprovalNotFoundError } from "../infra/approval-errors.ts";

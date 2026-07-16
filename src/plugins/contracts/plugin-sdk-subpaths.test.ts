@@ -1413,6 +1413,7 @@ describe("plugin-sdk subpath exports", () => {
       "formatUncaughtError",
       "isApprovalNotFoundError",
       "PlatformMessageNotDispatchedError",
+      "PlatformMessageRejectedError",
     ]);
 
     expect(channelLifecycleSdk.createDraftStreamLoop).toBe(

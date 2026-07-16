@@ -6,7 +6,10 @@ import type {
   ChannelOutboundAdapter,
   OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  PlatformMessageNotDispatchedError,
+  PlatformMessageRejectedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
 import { normalizeReefTarget } from "./config-schema.js";
 import { prepareReefMessageId } from "./flow.js";
@@ -26,7 +29,8 @@ function assertAtomicReefMessageFits(params: {
       ...(params.replyToId ? { replyTo: params.replyToId } : {}),
     }).length > REEF_MAX_PLAINTEXT_BYTES
   ) {
-    throw new Error("Reef conversation turn exceeds the 32 KiB atomic message limit");
+    const cause = new Error("Reef conversation turn exceeds the 32 KiB atomic message limit");
+    throw new PlatformMessageRejectedError(cause.message, { cause });
   }
 }
 
@@ -112,6 +116,9 @@ async function send(
       },
     });
   } catch (cause) {
+    if (cause instanceof PlatformMessageRejectedError) {
+      throw cause;
+    }
     if (!platformDispatchMarked) {
       throw new PlatformMessageNotDispatchedError(
         cause instanceof Error ? cause.message : String(cause),

@@ -46,7 +46,10 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
+import {
+  findPlatformMessageRejectedError,
+  isProvenDeliveryNotSentError,
+} from "../delivery-recovery.shared.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -71,6 +74,7 @@ import {
 } from "./delivery-commit-hooks.js";
 import {
   completeDurableDelivery,
+  rejectDurableDelivery,
   suppressDurableDelivery,
   type DurableDeliveryCompletion,
 } from "./delivery-completion.js";
@@ -1960,14 +1964,45 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             }),
           );
         } else {
-          const recordFailure = isProvenDeliveryNotSentError(err)
-            ? failDeliveryBeforePlatformSend
-            : failDelivery;
-          await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
-            log.warn(
-              `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-            );
-          });
+          const permanentRejection = findPlatformMessageRejectedError(err);
+          let terminalRejectionHandled = false;
+          if (permanentRejection) {
+            let ownerRejected = false;
+            let queueAcked = false;
+            try {
+              if (params.deliveryCompletion) {
+                rejectDurableDelivery(params.deliveryCompletion, permanentRejection.message);
+                ownerRejected = true;
+              }
+              await ackDelivery(queueId);
+              queueAcked = true;
+            } catch (rejectionError) {
+              log.warn(
+                `failed to finalize permanently rejected delivery ${queueId}: ${formatErrorMessage(rejectionError)}`,
+              );
+            }
+            terminalRejectionHandled = ownerRejected || queueAcked;
+            if (queueAcked) {
+              emitTerminals(() =>
+                failedOutboundAuditTerminals({
+                  payloadCount: params.payloads.length,
+                  results: deliveredResults,
+                  payloadOutcomes: auditPayloadOutcomes ?? [],
+                  failureStage: "platform_send",
+                }),
+              );
+            }
+          }
+          if (!terminalRejectionHandled) {
+            const recordFailure = isProvenDeliveryNotSentError(err)
+              ? failDeliveryBeforePlatformSend
+              : failDelivery;
+            await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+              log.warn(
+                `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+              );
+            });
+          }
         }
       }
     } else {

@@ -39,6 +39,7 @@ export interface ConversationDeliveries {
   platform_message_id: string | null;
   prepared_message_id: string | null;
   queue_id: string | null;
+  rejection_error: string | null;
   reply_message_id: string | null;
   reply_text: string | null;
   reply_thread_id: string | null;
