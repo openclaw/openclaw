@@ -343,8 +343,21 @@ export async function runDashscopeVideoGenerationTask(params: {
   }
 }
 
+function resolveDashscopeVideoDownloadTimeoutMs(
+  timeoutMs: ProviderOperationTimeoutMs | undefined,
+  defaultTimeoutMs: number | undefined,
+): number {
+  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+  if (typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0) {
+    return Math.floor(resolved);
+  }
+  return defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
+}
+
 // Downloads task result URLs into generated video assets. The byte limit comes
 // from OpenClaw media config so provider URLs cannot overfill memory.
+// chunkTimeoutMs is required after headers: fetchWithTimeoutGuarded clears its
+// abort once the response arrives, so a dripping CDN body would hang forever.
 export async function downloadDashscopeGeneratedVideos(params: {
   providerLabel: string;
   urls: string[];
@@ -364,9 +377,7 @@ export async function downloadDashscopeGeneratedVideos(params: {
         const guarded = await fetchWithTimeoutGuarded(
           url,
           { method: "GET" },
-          typeof params.timeoutMs === "function"
-            ? params.timeoutMs()
-            : (params.timeoutMs ?? params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS),
+          resolveDashscopeVideoDownloadTimeoutMs(params.timeoutMs, params.defaultTimeoutMs),
           params.fetchFn,
           {
             ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
@@ -385,12 +396,22 @@ export async function downloadDashscopeGeneratedVideos(params: {
         }
       },
     });
+    // Resolve after headers so a function timeout still sees remaining budget.
+    const downloadTimeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
+      params.timeoutMs,
+      params.defaultTimeoutMs,
+    );
     let buffer: Buffer;
     let mimeType: string;
     try {
       buffer = await readResponseWithLimit(result.response, params.maxBytes, {
+        chunkTimeoutMs: downloadTimeoutMs,
         onOverflow: ({ maxBytes }) =>
           new Error(`${params.providerLabel} generated video download exceeds ${maxBytes} bytes`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(
+            `${params.providerLabel} generated video download stalled: no data received for ${chunkTimeoutMs}ms`,
+          ),
       });
       mimeType = result.response.headers.get("content-type")?.trim() || "video/mp4";
     } finally {
