@@ -9,11 +9,13 @@ const {
   executePreparedCliRunMock,
   loadCliSessionContextEngineMessagesMock,
   loadCliSessionHistoryMessagesMock,
+  resolveCliSessionSqliteTranscriptScopeMock,
   getGlobalHookRunnerMock,
 } = vi.hoisted(() => ({
   executePreparedCliRunMock: vi.fn(),
   loadCliSessionContextEngineMessagesMock: vi.fn(),
   loadCliSessionHistoryMessagesMock: vi.fn(),
+  resolveCliSessionSqliteTranscriptScopeMock: vi.fn(),
   getGlobalHookRunnerMock: vi.fn(() => null),
 }));
 
@@ -28,6 +30,7 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
 vi.mock("./cli-runner/session-history.js", () => ({
   loadCliSessionContextEngineMessages: loadCliSessionContextEngineMessagesMock,
   loadCliSessionHistoryMessages: loadCliSessionHistoryMessagesMock,
+  resolveCliSessionSqliteTranscriptScope: resolveCliSessionSqliteTranscriptScopeMock,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -154,6 +157,8 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     ]);
     loadCliSessionHistoryMessagesMock.mockReset();
     loadCliSessionHistoryMessagesMock.mockResolvedValue([]);
+    resolveCliSessionSqliteTranscriptScopeMock.mockReset();
+    resolveCliSessionSqliteTranscriptScopeMock.mockReturnValue(undefined);
     getGlobalHookRunnerMock.mockReset();
     getGlobalHookRunnerMock.mockReturnValue(null);
     restoreCliRunnerTestDeps();
@@ -261,21 +266,22 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain });
     const context = buildPreparedContext(contextEngine);
     const storePath = "/tmp/openclaw-cli-context-engine-current/sessions.json";
-    context.params.sessionFile = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId: context.params.sessionId,
-      storePath: "/tmp/openclaw-cli-context-engine-old/sessions.json",
-    });
-    context.params.storePath = storePath;
-
-    await runPreparedCliAgent(context);
-
     const sessionTarget = {
       agentId: "main",
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
       storePath,
     };
+    context.params.sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: context.params.sessionId,
+      storePath: "/tmp/openclaw-cli-context-engine-old/sessions.json",
+    });
+    context.params.storePath = storePath;
+    resolveCliSessionSqliteTranscriptScopeMock.mockReturnValue(sessionTarget);
+
+    await runPreparedCliAgent(context);
+
     expect(bootstrap.mock.calls[0]?.[0]).toMatchObject({ sessionTarget });
     expect(afterTurn.mock.calls[0]?.[0]).toMatchObject({ sessionTarget });
     expect(maintain).toHaveBeenCalledTimes(2);
