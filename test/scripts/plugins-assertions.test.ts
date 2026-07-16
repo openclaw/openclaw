@@ -741,6 +741,80 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+  it("rejects oversized upstream bodies without stopping the fixture registry", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-limit-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-length": String(64 * 1024 * 1024 + 1),
+        "content-type": "application/octet-stream",
+      });
+      response.end("oversized");
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("expected upstream registry address");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const stderr = createBoundedChildOutput();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr.append(chunk);
+    });
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const oversized = await requestFixtureRegistry(port, "/oversized-package");
+
+      expect(oversized.statusCode, stderr.text()).toBe(502);
+      expect(oversized.body).toContain(
+        "npm registry upstream response body exceeded 67108864 bytes",
+      );
+
+      const local = await requestFixtureRegistry(port, "/@openclaw%2Fdemo-plugin-npm");
+
+      expect(local.statusCode, stderr.text()).toBe(200);
+      expect(child.exitCode, stderr.text()).toBeNull();
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+      });
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("times out stalled upstream response bodies without stopping the fixture registry", async () => {
     const tempDirs: string[] = [];
     const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-timeout-");
