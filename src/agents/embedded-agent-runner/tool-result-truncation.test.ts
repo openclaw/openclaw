@@ -1,8 +1,10 @@
+import { readFileSync } from "node:fs";
 // Tool-result truncation tests cover live and persisted shrinking of oversized
 // tool outputs while preserving transcript shape and update notifications.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -1747,6 +1749,17 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result).toContain("normal line");
     expect(result).not.toContain("middle content omitted");
     expect(result).toContain("truncated");
+  });
+
+  it("caps aggregate recovery warning dedupe cache with LRU eviction", () => {
+    const src = readFileSync(
+      fileURLToPath(new URL("./tool-result-truncation.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(src).toContain("AGGREGATE_RECOVERY_WARNING_DEDUPE_LIMIT = 1024");
+    expect(src).toContain("aggregateRecoveryWarningOrder");
+    expect(src).toContain("aggregateToolResultRecoveryWarnings.delete(oldest)");
+    expect(src).toContain("aggregateToolResultRecoveryWarnings.has(sessionLogKey)");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
