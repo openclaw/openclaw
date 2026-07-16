@@ -235,6 +235,11 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
+/** Partial failure-alert update; null clears an inherited field override. */
+export type CronFailureAlertPatch = {
+  [K in keyof CronFailureAlert]?: CronFailureAlert[K] | null;
+};
+
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
   | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
@@ -418,6 +423,7 @@ export type CronJobPatch = Partial<
     | "state"
     | "payload"
     | "delivery"
+    | "failureAlert"
     | "declarationKey"
     | "displayName"
     | "owner"
@@ -427,5 +433,6 @@ export type CronJobPatch = Partial<
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
+  failureAlert?: CronFailureAlertPatch | false | null;
   state?: Partial<CronJobState>;
 };
