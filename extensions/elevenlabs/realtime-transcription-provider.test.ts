@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
-import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import {
+  testing,
+  buildElevenLabsRealtimeTranscriptionProvider,
+} from "./realtime-transcription-provider.js";
 
 let cleanup: (() => Promise<void>) | undefined;
 
