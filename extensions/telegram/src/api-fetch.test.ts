@@ -177,6 +177,78 @@ describe("fetchTelegramChatId", () => {
     expect(cancelCount).toBe(1);
   });
 
+  it("cancels non-success getChat response bodies before returning", async () => {
+    const cancel = vi.fn();
+    let observedSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("service unavailable"));
+          },
+          cancel,
+        }),
+        { status: 503 },
+      );
+    });
+
+    const result = await Promise.race([
+      fetchTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 250)),
+    ]);
+
+    expect(result).toBeNull();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("does not wait for a cloned capture branch before returning", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let captureSettled = false;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("service unavailable"));
+            observedSignal?.addEventListener(
+              "abort",
+              () => controller.error(observedSignal?.reason),
+              { once: true },
+            );
+          },
+        }),
+        { status: 503 },
+      );
+      const clone = response.clone();
+      void clone
+        .arrayBuffer()
+        .catch(() => undefined)
+        .finally(() => {
+          captureSettled = true;
+        });
+      return response;
+    });
+
+    const result = await Promise.race([
+      fetchTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 250)),
+    ]);
+
+    expect(result).toBeNull();
+    await vi.waitFor(() => expect(captureSettled).toBe(true));
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it("keeps the getChat timeout active until the response body read settles", async () => {
     vi.useFakeTimers();
     let observedSignal: AbortSignal | undefined;

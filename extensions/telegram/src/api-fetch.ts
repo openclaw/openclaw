@@ -55,8 +55,12 @@ export async function fetchTelegramChatId(params: {
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
   const fetchImpl = params.fetchImpl ?? fetch;
+  const requestAbortController = new AbortController();
+  const requestSignal = params.signal
+    ? AbortSignal.any([params.signal, requestAbortController.signal])
+    : requestAbortController.signal;
   const timeout = buildTimeoutAbortSignal({
-    signal: params.signal,
+    signal: requestSignal,
     timeoutMs: resolveTelegramRequestTimeoutMs("getchat", params.timeoutSeconds),
     operation: "telegram-getchat-lookup",
     url,
@@ -64,6 +68,8 @@ export async function fetchTelegramChatId(params: {
   try {
     const res = await fetchImpl(url, timeout.signal ? { signal: timeout.signal } : undefined);
     if (!res.ok) {
+      requestAbortController.abort(new Error(`Telegram getChat failed with HTTP ${res.status}`));
+      void res.body?.cancel().catch(() => undefined);
       return null;
     }
     let data: TelegramGetChatResponse | null = null;
