@@ -1,4 +1,5 @@
 import type {
+  WorkboardBoardSummary,
   WorkboardCard,
   WorkboardPriority,
   WorkboardStatus,
@@ -7,6 +8,7 @@ import type {
 import type { GatewaySessionRow } from "../../api/types.ts";
 
 export * from "@openclaw/workboard-contract";
+export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
 
 type WorkboardLifecycleState =
   | "unlinked"
@@ -102,6 +104,7 @@ export type WorkboardUiState = {
   mutationReadiness: "ready" | "canonical_reload_required" | "stale_edit_draft";
   error: string | null;
   cards: WorkboardCard[];
+  boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
   tasksByCardId: Map<string, WorkboardTaskSummary>;
   missingTaskIds: Set<string>;
@@ -110,6 +113,7 @@ export type WorkboardUiState = {
   query: string;
   priorityFilter: "all" | WorkboardPriority;
   agentFilter: string;
+  boardFilter: string;
   viewPreset: WorkboardViewPresetId;
   activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;

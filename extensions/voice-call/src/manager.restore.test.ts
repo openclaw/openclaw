@@ -14,7 +14,7 @@ import {
   writeCallsToStore,
 } from "./manager.test-harness.js";
 import { loadActiveCallsFromStore } from "./manager/store.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
+import { setVoiceCallStateRuntime } from "./runtime-state.js";
 
 function installStateRuntime(): void {
   setVoiceCallStateRuntime({
@@ -63,7 +63,6 @@ describe("CallManager verification on restore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    clearVoiceCallStateRuntime();
     resetPluginStateStoreForTests();
   });
 

@@ -14,7 +14,7 @@ const qaChannelMock = vi.hoisted(() => ({
   startAccount: vi.fn(),
 }));
 
-vi.mock("./runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/qa-channel", () => ({
   qaChannelPlugin: {
     config: {
       resolveAccount: qaChannelMock.resolveAccount,
@@ -1155,3 +1155,4 @@ describe("qa-lab server", () => {
     expect(query.rows[0]?.duplicateCount).toBe(2);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

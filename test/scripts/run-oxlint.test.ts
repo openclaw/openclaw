@@ -33,7 +33,7 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
       return;
     }
     await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, 25);
+      setTimeout(resolvePoll, 5);
     });
   }
   throw new Error("condition was not met before timeout");
@@ -510,9 +510,9 @@ describe("run-oxlint", () => {
             "  try { process.kill(pid, 0); return true; } catch { return false; }",
             "};",
             "const waitFor = async (predicate) => {",
-            "  for (let attempt = 0; attempt < 100; attempt += 1) {",
+            "  for (let attempt = 0; attempt < 500; attempt += 1) {",
             "    if (predicate()) return true;",
-            "    await sleep(25);",
+            "    await sleep(5);",
             "  }",
             "  return false;",
             "};",

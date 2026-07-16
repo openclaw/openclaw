@@ -20,6 +20,7 @@ import {
 import {
   expectedIntegrityForUpdate,
   installedPackageNeedsOpenClawPeerLinkRepair,
+  readInstalledPackageManifest,
   readInstalledPackagePeerDependencies,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
@@ -57,6 +58,7 @@ import {
   recordPluginInstall,
   resolveNpmInstallRecordSpec,
 } from "./installs.js";
+import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
@@ -68,8 +70,10 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
+import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { resetPluginSlotsToDefaults } from "./slots.js";
+import { setPluginEnabledInConfig } from "./toggle-config.js";
 
 /** Logger surface used by plugin update flows. */
 type PluginUpdateLogger = {
@@ -175,6 +179,22 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     packageName !== params.pluginId &&
     unscopedPackageName(packageName) === params.pluginId,
   );
+}
+
+async function hasRunnableInstalledNpmPayload(params: {
+  installPath: string;
+  manifest: PackageManifest | undefined;
+}): Promise<boolean> {
+  const extensions = resolvePackageExtensionEntries(params.manifest);
+  if (extensions.status !== "ok") {
+    return false;
+  }
+  const validation = await validatePackageExtensionEntriesForInstall({
+    packageDir: params.installPath,
+    extensions: extensions.entries,
+    manifest: params.manifest ?? {},
+  });
+  return validation.ok;
 }
 
 function formatNpmInstallFailure(params: {
@@ -1268,57 +1288,17 @@ function createPluginUpdateIntegrityDriftHandler(params: {
   };
 }
 
-function removeDisabledPluginIdFromList(
-  list: string[] | undefined,
-  pluginId: string,
-): string[] | undefined {
-  if (!Array.isArray(list) || !list.includes(pluginId)) {
-    return list;
-  }
-  const next = list.filter((id) => id !== pluginId);
-  return next.length > 0 ? next : undefined;
-}
-
-function resetDisabledPluginSlots(
-  slots: NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined,
-  pluginId: string,
-): NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined {
-  if (!slots) {
-    return slots;
-  }
-  let next = slots;
-  if (next.memory === pluginId) {
-    next = {
-      ...next,
-      memory: defaultSlotIdForKey("memory"),
-    };
-  }
-  if (next.contextEngine === pluginId) {
-    next = {
-      ...next,
-      contextEngine: defaultSlotIdForKey("contextEngine"),
-    };
-  }
-  return next;
-}
-
-function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const pluginsConfig = config.plugins ?? {};
-  const existingEntry = pluginsConfig.entries?.[pluginId];
+function disablePluginAfterUpdateFailure(config: OpenClawConfig, pluginId: string): OpenClawConfig {
+  const disabled = setPluginEnabledInConfig(config, pluginId, false, {
+    updateChannelConfig: false,
+  });
+  const pluginsConfig = disabled.plugins ?? {};
   return {
-    ...config,
+    ...disabled,
     plugins: {
       ...pluginsConfig,
-      allow: removeDisabledPluginIdFromList(pluginsConfig.allow, pluginId),
-      deny: removeDisabledPluginIdFromList(pluginsConfig.deny, pluginId),
-      slots: resetDisabledPluginSlots(pluginsConfig.slots, pluginId),
-      entries: {
-        ...pluginsConfig.entries,
-        [pluginId]: {
-          ...existingEntry,
-          enabled: false,
-        },
-      },
+      // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
+      slots: resetPluginSlotsToDefaults(pluginsConfig.slots, pluginId),
     },
   };
 }
@@ -1424,20 +1404,29 @@ export async function updateNpmInstalledPlugins(params: {
   const recordFailure = (
     pluginId: string,
     message: string,
-    channelFallback?: PluginUpdateChannelFallback,
+    options: {
+      channelFallback?: PluginUpdateChannelFallback;
+      code?: string;
+      installedPayloadRunnable?: boolean;
+    } = {},
   ) => {
-    if (params.disableOnFailure && !params.dryRun) {
+    // Metadata failure is advisory only when a runnable payload is still installed.
+    // Missing-payload repair must keep disabling the broken config entry.
+    const preserveInstalledPayload =
+      options.code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE &&
+      options.installedPayloadRunnable === true;
+    if (params.disableOnFailure && !params.dryRun && !preserveInstalledPayload) {
       const disabledMessage =
         `Disabled "${pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
         message;
       logger.warn?.(disabledMessage);
-      next = disablePluginConfigEntry(next, pluginId);
+      next = disablePluginAfterUpdateFailure(next, pluginId);
       changed = true;
       outcomes.push({
         pluginId,
         status: "skipped",
         message: disabledMessage,
-        ...(channelFallback ? { channelFallback } : {}),
+        ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
       });
       return;
     }
@@ -1445,7 +1434,7 @@ export async function updateNpmInstalledPlugins(params: {
       pluginId,
       status: "error",
       message,
-      ...(channelFallback ? { channelFallback } : {}),
+      ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
     });
   };
 
@@ -1648,8 +1637,11 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     let currentVersion: string | undefined;
+    let installedManifest: PackageManifest | undefined;
     try {
-      currentVersion = await readInstalledPackageVersion(installPath);
+      installedManifest = readInstalledPackageManifest(installPath) as PackageManifest | undefined;
+      currentVersion =
+        typeof installedManifest?.version === "string" ? installedManifest.version : undefined;
     } catch (err) {
       recordFailure(
         pluginId,
@@ -1657,6 +1649,24 @@ export async function updateNpmInstalledPlugins(params: {
       );
       continue;
     }
+    // Payload validation is filesystem work needed only to preserve state after metadata failures.
+    // Every failure path below ends this plugin iteration, so the result cannot be reused.
+    const hasRunnableInstalledPayloadForFailure = async (code?: string): Promise<boolean> => {
+      if (
+        code !== PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
+        !params.disableOnFailure ||
+        params.dryRun ||
+        currentVersion === undefined
+      ) {
+        return false;
+      }
+      try {
+        return await hasRunnableInstalledNpmPayload({ installPath, manifest: installedManifest });
+      } catch {
+        // Damaged or unreadable payloads fail closed without aborting the remaining plugin sweep.
+        return false;
+      }
+    };
     const extensionsDir = resolveRecordedExtensionsDir({
       pluginId,
       installPath,
@@ -1752,7 +1762,14 @@ export async function updateNpmInstalledPlugins(params: {
         }
       } else {
         if (!parseRegistryNpmSpec(effectiveSpec!)) {
-          recordFailure(pluginId, `Failed to check ${pluginId}: ${metadataResult.error}`);
+          const code =
+            metadataResult.category === "metadata-env"
+              ? PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
+              : undefined;
+          recordFailure(pluginId, `Failed to check ${pluginId}: ${metadataResult.error}`, {
+            code,
+            installedPayloadRunnable: await hasRunnableInstalledPayloadForFailure(code),
+          });
           continue;
         }
         logger.warn?.(
@@ -1961,6 +1978,7 @@ export async function updateNpmInstalledPlugins(params: {
           );
           continue;
         }
+        const code = "code" in probe && probe.code ? probe.code : undefined;
         recordFailure(
           pluginId,
           record.source === "npm" || usedOfficialNpmFallback
@@ -1997,7 +2015,11 @@ export async function updateNpmInstalledPlugins(params: {
                     phase: "check",
                     error: probe.error,
                   }),
-          npmChannelFallback,
+          {
+            channelFallback: npmChannelFallback,
+            code,
+            installedPayloadRunnable: await hasRunnableInstalledPayloadForFailure(code),
+          },
         );
         continue;
       }
@@ -2264,6 +2286,7 @@ export async function updateNpmInstalledPlugins(params: {
         );
         continue;
       }
+      const code = resultSource === "npm" && result && "code" in result ? result.code : undefined;
       recordFailure(
         pluginId,
         resultSource === "npm"
@@ -2300,7 +2323,11 @@ export async function updateNpmInstalledPlugins(params: {
                   phase: "update",
                   error: result.error,
                 }),
-        npmChannelFallback,
+        {
+          channelFallback: npmChannelFallback,
+          code,
+          installedPayloadRunnable: await hasRunnableInstalledPayloadForFailure(code),
+        },
       );
       continue;
     }
@@ -2740,3 +2767,4 @@ export async function syncPluginsForUpdateChannel(params: {
 
   return { config: next, changed, summary };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -35,7 +35,7 @@ import memoryPlugin, {
   shouldCapture,
   testing,
 } from "./index.js";
-import { createLanceDbRuntimeLoader } from "./lancedb-runtime.js";
+import { createLanceDbRuntimeLoader } from "./lancedb-runtime.test-support.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
@@ -3949,3 +3949,4 @@ describe("lancedb runtime loader", () => {
     expect(importBundled).toHaveBeenCalledTimes(2);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

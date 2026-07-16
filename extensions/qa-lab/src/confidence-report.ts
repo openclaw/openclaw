@@ -1300,3 +1300,4 @@ export async function writeQaConfidenceSelfTestArtifacts(params: {
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   return { reportPath, summaryPath, summary };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

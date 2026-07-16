@@ -21,7 +21,7 @@ import {
   leasePendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
-} from "../../subagent-registry.js";
+} from "../../subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../subagent-registry.types.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
@@ -3768,3 +3768,4 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

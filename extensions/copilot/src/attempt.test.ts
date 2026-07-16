@@ -20,7 +20,9 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
-import type { CopilotToolBridgeInput } from "./tool-bridge.js";
+import type { createCopilotToolBridge } from "./tool-bridge.js";
+
+type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
@@ -322,6 +324,105 @@ describe("runCopilotAttempt", () => {
     expect(result.assistantTexts).toEqual(["done"]);
     expect(result.messagesSnapshot.length).toBe(2);
     expect(getSdkSessionId(result)).toBe("sess-1");
+  });
+
+  it("retains the host terminal error after an unrelated successful tool", async () => {
+    const terminalError = {
+      actionFingerprint: "message:send:room-1",
+      error: "delivery failed",
+      mutatingAction: true,
+      toolName: "message",
+    };
+    let activeError: typeof terminalError | undefined;
+    const observeToolTerminal: NonNullable<AgentHarnessAttemptParams["observeToolTerminal"]> =
+      vi.fn((observation) => {
+        if (observation.outcome === "failure") {
+          activeError = terminalError;
+        }
+        return {
+          ...(activeError ? { lastToolError: activeError } : {}),
+          executionStarted: true,
+          sideEffectEvidence: observation.toolName === "message",
+        };
+      });
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      input.attemptParams?.observeToolTerminal?.({
+        toolCallId: "send-1",
+        toolName: "message",
+        arguments: { action: "send", message: "hello", target: "room-1" },
+        outcome: "failure",
+        failure: { error: "delivery failed" },
+      });
+      input.attemptParams?.observeToolTerminal?.({
+        toolCallId: "heartbeat-1",
+        toolName: "heartbeat_respond",
+        arguments: { summary: "ok" },
+        outcome: "success",
+      });
+      return { sdkTools: [], sourceTools: [] };
+    });
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams({ observeToolTerminal }), {
+      createToolBridge,
+      pool: makeFakePool(sdk),
+    });
+
+    expect(observeToolTerminal).toHaveBeenCalledTimes(2);
+    expect(result.lastToolError).toEqual(terminalError);
+  });
+
+  it("clears the host terminal error after matching tool recovery", async () => {
+    const terminalError = {
+      actionFingerprint: "message:send:room-1",
+      error: "delivery failed",
+      mutatingAction: true,
+      toolName: "message",
+    };
+    let activeError: typeof terminalError | undefined;
+    const observeToolTerminal: NonNullable<AgentHarnessAttemptParams["observeToolTerminal"]> =
+      vi.fn((observation) => {
+        activeError = observation.outcome === "failure" ? terminalError : undefined;
+        return {
+          ...(activeError ? { lastToolError: activeError } : {}),
+          executionStarted: true,
+          sideEffectEvidence: true,
+        };
+      });
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      const args = { action: "send", message: "hello", target: "room-1" };
+      input.attemptParams?.observeToolTerminal?.({
+        toolCallId: "send-1",
+        toolName: "message",
+        arguments: args,
+        outcome: "failure",
+        failure: { error: "delivery failed" },
+      });
+      input.attemptParams?.observeToolTerminal?.({
+        toolCallId: "send-2",
+        toolName: "message",
+        arguments: args,
+        outcome: "success",
+      });
+      return { sdkTools: [], sourceTools: [] };
+    });
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+      },
+    });
+
+    const result = await runCopilotAttempt(makeParams({ observeToolTerminal }), {
+      createToolBridge,
+      pool: makeFakePool(sdk),
+    });
+
+    expect(observeToolTerminal).toHaveBeenCalledTimes(2);
+    expect(result.lastToolError).toBeUndefined();
   });
 
   it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
@@ -3398,19 +3499,19 @@ describe("runCopilotAttempt", () => {
       ]);
     });
 
-    it("keeps a host-scoped Crestodian create-session surface ring-zero", async () => {
+    it("keeps a host-scoped OpenClaw create-session surface ring-zero", async () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
-      const sdkTools = [makeFakeSdkTool("crestodian")];
+      const sdkTools = [makeFakeSdkTool("openclaw")];
       const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
 
-      await runCopilotAttempt(makeParams({ toolsAllow: ["crestodian"] }), {
+      await runCopilotAttempt(makeParams({ toolsAllow: ["openclaw"] }), {
         createToolBridge,
-        isHostScopedToolActive: (toolName) => toolName === "crestodian",
+        isHostScopedToolActive: (toolName) => toolName === "openclaw",
         pool,
       });
 
-      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["crestodian"]);
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["openclaw"]);
     });
 
     it("forwards `[]` to the SDK when the bridge returns no tools (disable / raw / fully filtered)", async () => {
@@ -3481,31 +3582,31 @@ describe("runCopilotAttempt", () => {
       expect(resumeCfg?.availableTools).toEqual(["read", "builtin:ask_user"]);
     });
 
-    it("keeps a host-scoped Crestodian resume-session surface ring-zero", async () => {
+    it("keeps a host-scoped OpenClaw resume-session surface ring-zero", async () => {
       const sdk = makeFakeSdk({
         onResumeSession: (session) => {
           session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
         },
       });
       const pool = makeFakePool(sdk);
-      const sdkTools = [makeFakeSdkTool("crestodian")];
+      const sdkTools = [makeFakeSdkTool("openclaw")];
       const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
 
       await runCopilotAttempt(
         makeParams({
-          initialReplayState: { sdkSessionId: "sess-crestodian" },
-          toolsAllow: ["crestodian"],
+          initialReplayState: { sdkSessionId: "sess-openclaw" },
+          toolsAllow: ["openclaw"],
         } as never),
         {
           createToolBridge,
-          isHostScopedToolActive: (toolName) => toolName === "crestodian",
+          isHostScopedToolActive: (toolName) => toolName === "openclaw",
           pool,
         },
       );
 
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
-      expect(resumeCfg?.availableTools).toEqual(["crestodian"]);
+      expect(resumeCfg?.availableTools).toEqual(["openclaw"]);
     });
 
     it("forwards `[]` to resumeSession when the bridge returns no tools", async () => {
@@ -3628,3 +3729,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
