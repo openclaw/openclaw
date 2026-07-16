@@ -6,14 +6,19 @@ vi.mock("../logger.js", () => ({
   logWarn: logWarnMock,
 }));
 
-import { buildMcpToolSchema, testing } from "./mcp-http.schema.js";
+async function loadSchema() {
+  const { buildMcpToolSchema } = await import("./mcp-http.schema.js");
+  return { buildMcpToolSchema };
+}
 
 describe("buildMcpToolSchema", () => {
   beforeEach(() => {
     logWarnMock.mockClear();
-    testing.resetEmittedSchemaWarningsForTest();
+    vi.resetModules();
   });
-  it("keeps union schema properties named like Object prototype keys", () => {
+
+  it("keeps union schema properties named like Object prototype keys", async () => {
+    const { buildMcpToolSchema } = await loadSchema();
     const [entry] = buildMcpToolSchema([
       {
         name: "proof_tool",
@@ -42,7 +47,8 @@ describe("buildMcpToolSchema", () => {
     expect(inputSchema?.required).toEqual(["toString"]);
   });
 
-  it("serializes union schema properties named __proto__ as own keys", () => {
+  it("serializes union schema properties named __proto__ as own keys", async () => {
+    const { buildMcpToolSchema } = await loadSchema();
     const protoKey = "__proto__";
     const [entry] = buildMcpToolSchema([
       {
@@ -70,7 +76,8 @@ describe("buildMcpToolSchema", () => {
     expect(inputSchema?.required).toEqual([protoKey]);
   });
 
-  it("does not keep inherited prototype names as required schema keys", () => {
+  it("does not keep inherited prototype names as required schema keys", async () => {
+    const { buildMcpToolSchema } = await loadSchema();
     const [entry] = buildMcpToolSchema([
       {
         name: "proof_tool",
@@ -92,7 +99,8 @@ describe("buildMcpToolSchema", () => {
     expect(entry?.inputSchema.required).toEqual([]);
   });
 
-  it("bounds the schema warning cache at 4096 entries and re-warns evicted messages", () => {
+  it("bounds the schema warning cache at 4096 entries and re-warns evicted messages", async () => {
+    const { buildMcpToolSchema } = await loadSchema();
     const makeTool = (index: number) =>
       ({
         name: `tool_${index}`,
