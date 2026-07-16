@@ -948,10 +948,11 @@ async function prepareManualRun(
     if (!isJobDue(job, reservationAt, { forced: mode === "force" })) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
+    const reservationRollbackSnapshot = snapshotStoreForRollback(state);
     job.state.runningAtMs = reservationAt;
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
-    await persist(state);
+    await persistOrRestore(state, reservationRollbackSnapshot);
     const reservationIdentity = reserveQueuedCronRun(state, job.id, reservationAt, {
       preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
     });
@@ -1056,16 +1057,12 @@ async function activatePreparedManualRun(
 
     const startedAt = state.deps.nowMs();
     const previousLastError = job.state.lastError;
+    const activationRollbackSnapshot = snapshotStoreForRollback(state);
     job.state.runningAtMs = startedAt;
     job.state.lastError = undefined;
-    try {
-      await persist(state);
-    } catch (error) {
-      job.state.runningAtMs = prepared.reservationAt;
-      job.state.lastError = previousLastError;
-      await releasePreparedManualReservationWithRetry(state, prepared);
-      throw error;
-    }
+    // A failed write restores the durable reservation; run() owns releasing
+    // that queued claim for every activation failure before it propagates.
+    await persistOrRestore(state, activationRollbackSnapshot);
     updateQueuedCronRunReservationMarker(
       state,
       prepared.jobId,

@@ -1346,10 +1346,11 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
 
       const now = state.deps.nowMs();
+      const reservationRollbackSnapshot = snapshotStoreForRollback(state);
       for (const job of due) {
         job.state.runningAtMs = now;
       }
-      await persist(state);
+      await persistOrRestore(state, reservationRollbackSnapshot);
       const reservedDue = due.map((job) => ({
         id: job.id,
         job,
@@ -1641,15 +1642,10 @@ async function onAdmittedTimer(state: CronServiceState) {
                 }
                 const startedAt = state.deps.nowMs();
                 const previousLastError = job.state.lastError;
+                const activationRollbackSnapshot = snapshotStoreForRollback(state);
                 job.state.runningAtMs = startedAt;
                 job.state.lastError = undefined;
-                try {
-                  await persist(state);
-                } catch (error) {
-                  job.state.runningAtMs = due.reservedAtMs;
-                  job.state.lastError = previousLastError;
-                  throw error;
-                }
+                await persistOrRestore(state, activationRollbackSnapshot);
                 updateQueuedCronRunReservationMarker(
                   state,
                   due.id,
@@ -2098,10 +2094,11 @@ async function planStartupCatchup(
         "cron: running missed jobs after restart",
       );
     }
+    const reservationRollbackSnapshot = snapshotStoreForRollback(state);
     for (const job of startupCandidates) {
       job.state.runningAtMs = now;
     }
-    await persist(state);
+    await persistOrRestore(state, reservationRollbackSnapshot);
 
     return {
       candidates: startupCandidates.map((job) => ({
@@ -2164,15 +2161,10 @@ async function executeStartupCatchupPlan(
           }
           const startedAt = state.deps.nowMs();
           const previousLastError = job.state.lastError;
+          const activationRollbackSnapshot = snapshotStoreForRollback(state);
           job.state.runningAtMs = startedAt;
           job.state.lastError = undefined;
-          try {
-            await persist(state);
-          } catch (error) {
-            job.state.runningAtMs = candidate.reservedAtMs;
-            job.state.lastError = previousLastError;
-            throw error;
-          }
+          await persistOrRestore(state, activationRollbackSnapshot);
           updateQueuedCronRunReservationMarker(
             state,
             candidate.jobId,
