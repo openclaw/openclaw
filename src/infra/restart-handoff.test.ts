@@ -528,7 +528,9 @@ describe("gateway restart handoff", () => {
 
     const results = await Promise.all([first, second]);
     expect(
-      results.map((result) => (result as { status?: string }).status).toSorted(),
+      results
+        .map((result) => (result as { status?: string }).status)
+        .toSorted((a, b) => String(a).localeCompare(String(b))),
     ).toStrictEqual(["accepted", "none"]);
     expect(readHandoffRow(env)).toBeUndefined();
   });

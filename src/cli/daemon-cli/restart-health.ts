@@ -10,11 +10,7 @@ import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
-import {
-  type GatewayLockIdentity,
-  isSameGatewayLockIdentity,
-  readActiveGatewayLockIdentity,
-} from "../../infra/gateway-lock.js";
+import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import {
   classifyPortListener,
   formatPortDiagnostics,
@@ -25,8 +21,9 @@ import {
   hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
-import { killProcessTree } from "../../process/kill-tree.js";
 import { sleep } from "../../utils.js";
+import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
+export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
 
 const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
@@ -666,59 +663,20 @@ export async function waitForGatewayHealthyListener(params: {
 
   let attempt = 0;
   if (previousLockIdentity) {
-    let previousOwnerReleased = false;
-    for (;;) {
-      let currentLockIdentity: GatewayLockIdentity | undefined;
-      try {
-        currentLockIdentity = await readActiveGatewayLockIdentity();
-      } catch {
-        if (params.waitIndefinitelyForPreviousOwner && !previousOwnerReleased) {
-          await sleep(delayMs);
-          continue;
-        }
-        if (attempt >= attempts) {
-          return snapshot;
-        }
-        attempt += 1;
-        await sleep(delayMs);
-        continue;
-      }
-
-      if (!previousOwnerReleased) {
-        if (
-          currentLockIdentity &&
-          isSameGatewayLockIdentity(previousLockIdentity, currentLockIdentity)
-        ) {
-          if (params.waitIndefinitelyForPreviousOwner) {
-            await sleep(delayMs);
-            continue;
-          }
-        } else {
-          previousOwnerReleased = true;
-          if (params.waitIndefinitelyForPreviousOwner) {
-            attempt = 0;
-          }
-        }
-      }
-
-      if (
-        previousOwnerReleased &&
-        currentLockIdentity &&
-        !isSameGatewayLockIdentity(previousLockIdentity, currentLockIdentity)
-      ) {
-        snapshot = await inspectGatewayPortHealth({
-          port: params.port,
-          auth: probeAuth,
-        });
-        break;
-      }
-
-      if (attempt >= attempts) {
-        return snapshot;
-      }
-      attempt += 1;
-      await sleep(delayMs);
+    const replacement = await waitForGatewayLockReplacement({
+      previousLockIdentity,
+      attempts,
+      delayMs,
+      waitIndefinitelyForPreviousOwner: params.waitIndefinitelyForPreviousOwner === true,
+    });
+    if (replacement.status === "timeout") {
+      return snapshot;
     }
+    attempt = replacement.attemptsUsed;
+    snapshot = await inspectGatewayPortHealth({
+      port: params.port,
+      auth: probeAuth,
+    });
   }
 
   if (snapshot.healthy) {
@@ -795,17 +753,4 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
 
 export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
   return renderPortUsageDiagnostics(snapshot);
-}
-
-export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
-  const targets = Array.from(
-    new Set(pids.filter((pid): pid is number => Number.isFinite(pid) && pid > 0)),
-  );
-  for (const pid of targets) {
-    killProcessTree(pid, { graceMs: 300 });
-  }
-  if (targets.length > 0) {
-    await sleep(500);
-  }
-  return targets;
 }

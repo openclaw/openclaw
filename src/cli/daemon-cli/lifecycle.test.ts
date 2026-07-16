@@ -39,7 +39,6 @@ const service = {
 const runServiceStart = vi.fn();
 const runServiceRestart = vi.fn();
 const runServiceStop = vi.fn();
-const runServiceUninstall = vi.fn();
 const waitForGatewayHealthyListener = vi.fn();
 const waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
@@ -196,7 +195,7 @@ vi.mock("./lifecycle-core.js", () => ({
   runServiceRestart,
   runServiceStart,
   runServiceStop,
-  runServiceUninstall,
+  runServiceUninstall: vi.fn(),
 }));
 
 describe("runDaemonRestart health checks", () => {
@@ -209,7 +208,6 @@ describe("runDaemonRestart health checks", () => {
     wait?: string;
   }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean; disable?: boolean }) => Promise<void>;
-  let runDaemonUninstall: (opts?: { json?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   function mockUnmanagedRestart({
@@ -236,8 +234,7 @@ describe("runDaemonRestart health checks", () => {
   }
 
   beforeAll(async () => {
-    ({ runDaemonStart, runDaemonRestart, runDaemonStop, runDaemonUninstall } =
-      await import("./lifecycle.js"));
+    ({ runDaemonStart, runDaemonRestart, runDaemonStop } = await import("./lifecycle.js"));
   });
 
   beforeEach(() => {
@@ -245,7 +242,6 @@ describe("runDaemonRestart health checks", () => {
       "OPENCLAW_CONTAINER_HINT",
       "OPENCLAW_PROFILE",
       "OPENCLAW_STATE_DIR",
-      "OPENCLAW_SUPERVISOR_MODE",
       "OPENCLAW_SYSTEMD_UNIT",
     ]);
     delete process.env.OPENCLAW_CONTAINER_HINT;
@@ -257,7 +253,6 @@ describe("runDaemonRestart health checks", () => {
     runServiceStart.mockReset();
     runServiceRestart.mockReset();
     runServiceStop.mockReset();
-    runServiceUninstall.mockReset();
     waitForGatewayHealthyListener.mockReset();
     waitForGatewayHealthyRestart.mockReset();
     terminateStaleGatewayPids.mockReset();
@@ -314,7 +309,6 @@ describe("runDaemonRestart health checks", () => {
       return true;
     });
     runServiceStop.mockResolvedValue(undefined);
-    runServiceUninstall.mockResolvedValue(undefined);
     waitForGatewayHealthyListener.mockResolvedValue({
       healthy: true,
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
@@ -482,270 +476,6 @@ describe("runDaemonRestart health checks", () => {
 
     expect(callGatewayCli).not.toHaveBeenCalled();
     expect(runServiceRestart).toHaveBeenCalledTimes(1);
-  });
-
-  it("restarts an externally supervised gateway by verified signal without native service access", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    readActiveGatewayLockPort.mockResolvedValue(19_455);
-    readActiveGatewayLockIdentity.mockResolvedValue({
-      pid: 4200,
-      ownerId: "gateway-owner-old",
-      createdAt: "2026-07-16T12:00:00.000Z",
-      port: 19_455,
-    });
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-
-    await expect(runDaemonRestart({ json: true, force: true })).resolves.toBe(true);
-
-    expect(runServiceRestart).not.toHaveBeenCalled();
-    expect(service.readCommand).not.toHaveBeenCalled();
-    expect(findInstalledSystemdGatewayScope).not.toHaveBeenCalled();
-    expect(probeGateway).not.toHaveBeenCalled();
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
-      targetPid: 4200,
-      reason: "gateway.restart",
-      intent: { force: true },
-    });
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
-      port: 19_455,
-      attempts: 120,
-      delayMs: 500,
-      previousLockIdentity: {
-        pid: 4200,
-        ownerId: "gateway-owner-old",
-        createdAt: "2026-07-16T12:00:00.000Z",
-        port: 19_455,
-      },
-      waitIndefinitelyForPreviousOwner: false,
-    });
-  });
-
-  it("preserves external restart wait intent", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-
-    await runDaemonRestart({ json: true, wait: "30s" });
-
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
-      targetPid: 4200,
-      reason: "gateway.restart",
-      intent: { waitMs: 30_000 },
-    });
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
-      port: 18_789,
-      attempts: 180,
-      delayMs: 500,
-      previousLockIdentity: {
-        pid: 4200,
-        ownerId: "gateway-owner-old",
-        createdAt: "2026-07-16T12:00:00.000Z",
-        port: 18_789,
-      },
-      waitIndefinitelyForPreviousOwner: false,
-    });
-  });
-
-  it("uses the in-gateway restart transport for externally supervised Windows gateways", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-
-    await runDaemonRestart({ json: true, wait: "30s" });
-
-    expect(callGatewayCli).toHaveBeenCalledWith({
-      method: "gateway.restart.request",
-      params: {
-        reason: "gateway.restart",
-        target: {
-          pid: 4200,
-          ownerId: "gateway-owner-old",
-          port: 18_789,
-        },
-        restartIntent: { waitMs: 30_000 },
-      },
-      localPortOverride: 18_789,
-      ignoreEnvUrlOverride: true,
-      timeoutMs: 10_000,
-    });
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attempts: 420,
-        previousLockIdentity: expect.objectContaining({ ownerId: "gateway-owner-old" }),
-      }),
-    );
-  });
-
-  it("includes the configured default drain budget in external restart health waits", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-
-    await runDaemonRestart({ json: true });
-
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
-      port: 18_789,
-      attempts: 720,
-      delayMs: 500,
-      previousLockIdentity: {
-        pid: 4200,
-        ownerId: "gateway-owner-old",
-        createdAt: "2026-07-16T12:00:00.000Z",
-        port: 18_789,
-      },
-      waitIndefinitelyForPreviousOwner: false,
-    });
-  });
-
-  it("waits indefinitely when external restart drain timeout is configured as zero", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    loadConfig.mockReturnValue({ gateway: { reload: { deferralTimeoutMs: 0 } } });
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-
-    await runDaemonRestart({ json: true });
-
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
-      port: 18_789,
-      attempts: 120,
-      delayMs: 500,
-      previousLockIdentity: {
-        pid: 4200,
-        ownerId: "gateway-owner-old",
-        createdAt: "2026-07-16T12:00:00.000Z",
-        port: 18_789,
-      },
-      waitIndefinitelyForPreviousOwner: true,
-    });
-  });
-
-  it("refuses an external restart when the lock owner does not match the listener", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    readActiveGatewayLockIdentity.mockResolvedValue({
-      pid: 4300,
-      ownerId: "gateway-owner-other",
-      createdAt: "2026-07-16T12:00:00.000Z",
-      port: 18_789,
-    });
-    const { defaultRuntime } = await import("../../runtime.js");
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-
-    await expectRestartError(runDaemonRestart({ json: true }));
-
-    expect(writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "restart",
-        ok: false,
-        error: expect.stringContaining("gateway lock identity does not match"),
-      }),
-    );
-    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
-  });
-
-  it("clears the restart intent when the verified lock owner changes before delivery", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    readActiveGatewayLockIdentity
-      .mockResolvedValueOnce({
-        pid: 4200,
-        ownerId: "gateway-owner-old",
-        createdAt: "2026-07-16T12:00:00.000Z",
-        port: 18_789,
-      })
-      .mockResolvedValue({
-        pid: 4300,
-        ownerId: "gateway-owner-new",
-        createdAt: "2026-07-16T12:00:01.000Z",
-        port: 18_789,
-      });
-    const { defaultRuntime } = await import("../../runtime.js");
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-
-    await expectRestartError(runDaemonRestart({ json: true }));
-
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.stringContaining("gateway lock owner changed"),
-      }),
-    );
-  });
-
-  it("clears the restart intent when Unix signal delivery fails", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    signalVerifiedGatewayPidSync.mockImplementation(() => {
-      throw new Error("ESRCH");
-    });
-    const { defaultRuntime } = await import("../../runtime.js");
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-
-    await expectRestartError(runDaemonRestart({ json: true }));
-
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
-    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
-    expect(writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.stringContaining("ESRCH"),
-      }),
-    );
-  });
-
-  it("clears the restart intent when post-write lock revalidation fails", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    readActiveGatewayLockIdentity
-      .mockResolvedValueOnce({
-        pid: 4200,
-        ownerId: "gateway-owner-old",
-        createdAt: "2026-07-16T12:00:00.000Z",
-        port: 18_789,
-      })
-      .mockRejectedValueOnce(new Error("lock read failed"));
-    const { defaultRuntime } = await import("../../runtime.js");
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-
-    await expectRestartError(runDaemonRestart({ json: true }));
-
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledTimes(1);
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.stringContaining("lock read failed"),
-      }),
-    );
-  });
-
-  it("keeps safe external restarts on the existing gateway RPC path", async () => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-
-    await runDaemonRestart({ json: true, safe: true });
-
-    expect(callGatewayCli).toHaveBeenCalledTimes(1);
-    expect(runServiceRestart).not.toHaveBeenCalled();
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["start", () => runDaemonStart({ json: true })],
-    ["stop", () => runDaemonStop({ json: true })],
-    ["uninstall", () => runDaemonUninstall({ json: true })],
-  ])("delegates external-supervisor %s without native service access", async (_action, run) => {
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-
-    await expect(run()).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
-
-    expect(runServiceStart).not.toHaveBeenCalled();
-    expect(runServiceStop).not.toHaveBeenCalled();
-    expect(runServiceUninstall).not.toHaveBeenCalled();
-    expect(service.readCommand).not.toHaveBeenCalled();
   });
 
   it("forwards --safe --skip-deferral as skipDeferral: true on the RPC", async () => {
