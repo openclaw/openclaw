@@ -31,9 +31,11 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()): Ign
     if (content === OVERSIZED_IGNORE_FILE) {
       // Fail closed: an oversized ignore file cannot be parsed, so conservatively
       // exclude its whole subtree. Skipping it would drop every exclusion and let
-      // the scan surface files the user asked to hide.
+      // the scan surface files the user asked to hide. Stop here so a later
+      // ignore file in this directory cannot negate the exclusion and reopen a
+      // subtree whose policy could not be parsed.
       ig.add(`${prefix}**`);
-      continue;
+      break;
     }
     if (content === null) {
       continue;

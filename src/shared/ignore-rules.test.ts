@@ -65,6 +65,20 @@ describe("addIgnoreRules", () => {
     expect(result.skills).toEqual([]);
   });
 
+  it("keeps the subtree excluded when a later ignore file negates it", () => {
+    const oversized = "ignored-file\n".repeat(1_000_000); // ~13 MB, over 4 MB cap
+    fs.writeFileSync(path.join(tempDir, ".gitignore"), oversized, "utf-8");
+    // A later .ignore could reopen the subtree if the oversized-file exclusion
+    // were not terminal for this directory.
+    fs.writeFileSync(path.join(tempDir, ".ignore"), "!ignored-file\n!secret.txt\n", "utf-8");
+
+    const ig = ignore();
+    addIgnoreRules(tempDir, tempDir, ig);
+
+    expect(ig.ignores("ignored-file")).toBe(true);
+    expect(ig.ignores("secret.txt")).toBe(true);
+  });
+
   it("follows a symlinked .gitignore to a regular file", () => {
     const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-real-"));
     try {
