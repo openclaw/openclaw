@@ -95,6 +95,17 @@ function actionButton(container: Element, label: string): HTMLButtonElement | nu
   );
 }
 
+function pluginToggle(container: Element): HTMLElement & { checked: boolean } {
+  return expectDefined(
+    container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+  );
+}
+
+function setPluginToggle(toggle: HTMLElement & { checked: boolean }, checked: boolean): void {
+  toggle.checked = checked;
+  toggle.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 function clawHubKey(packageName: string): string {
   return `clawhub:${packageName}`;
 }
@@ -204,7 +215,7 @@ describe("renderPlugins", () => {
     expect(onFilterChange).toHaveBeenCalledWith("issues");
   });
 
-  it("offers enable and remove through direct row actions", () => {
+  it("offers an enable toggle and remove through direct row actions", () => {
     const onSetEnabled = vi.fn();
     const onRequestUninstall = vi.fn();
     const removableKey = pluginRowKey("community-thing");
@@ -222,15 +233,15 @@ describe("renderPlugins", () => {
       createProps({ result: createResult(plugins), onSetEnabled, onRequestUninstall }),
     );
     const row = container.querySelector<HTMLElement>('[data-plugin-id="community-thing"]')!;
-    actionButton(row, "Enable")?.click();
+    setPluginToggle(pluginToggle(row), true);
     expect(onSetEnabled).toHaveBeenCalledWith("community-thing", true, removableKey);
     actionButton(row, "Remove Community Thing")?.click();
     expect(onRequestUninstall).toHaveBeenCalledWith(removableKey);
 
-    // Bundled plugins cannot be removed; the row still offers enable/disable.
+    // Bundled plugins cannot be removed; the row still offers an enable toggle.
     const bundledRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
     expect(actionButton(bundledRow, "Remove")).toBeNull();
-    expect(actionButton(bundledRow, "Enable")).not.toBeNull();
+    expect(pluginToggle(bundledRow).checked).toBe(false);
   });
 
   it("confirms removal before uninstalling", () => {
@@ -281,7 +292,7 @@ describe("renderPlugins", () => {
     expect(detail.closest("openclaw-modal-dialog")?.getAttribute("label")).toBe("Workboard");
     expect(normalizedText(detail.querySelector(".plugins-detail__title"))).toContain("Workboard");
     expect(normalizedText(detail.querySelector(".plugins-detail__meta"))).toContain("workboard");
-    detail.querySelectorAll<HTMLButtonElement>(".plugins-detail__actions button")[0]?.click();
+    setPluginToggle(pluginToggle(detail), true);
     expect(onSetEnabled).toHaveBeenCalledWith("workboard", true, pluginRowKey("workboard"));
     detail.querySelector<HTMLButtonElement>(".plugins-detail__close")?.click();
     expect(onShowDetails).toHaveBeenCalledWith(null);
@@ -480,9 +491,9 @@ describe("renderPlugins", () => {
       container.querySelector<HTMLButtonElement>('[aria-label="Install Lobster"]')?.disabled,
     ).toBe(true);
     const workboardRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
-    const enableItem = actionButton(workboardRow, "Enable");
-    expect(enableItem?.disabled).toBe(true);
-    enableItem?.click();
+    const enableToggle = pluginToggle(workboardRow);
+    expect(enableToggle.hasAttribute("disabled")).toBe(true);
+    setPluginToggle(enableToggle, true);
     expect(onInstall).not.toHaveBeenCalled();
     expect(onSetEnabled).not.toHaveBeenCalled();
   });
@@ -569,7 +580,7 @@ describe("renderPlugins", () => {
     const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`)!;
     expect(normalizedText(row.querySelector(".settings-row__title"))).toBe("Calendar Plus");
     expect(row.querySelector(".plugins-install")).toBeNull();
-    actionButton(row, "Disable")?.click();
+    setPluginToggle(pluginToggle(row), false);
     expect(onSetEnabled).toHaveBeenCalledWith("calendar-runtime", false, clawHubKey(packageName));
   });
 

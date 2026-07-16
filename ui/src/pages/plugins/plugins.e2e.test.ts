@@ -90,7 +90,8 @@ const calendarPlugin = {
 const initialInventory = inventory([workboardDisabled, lobsterPlugin]);
 const installedInventory = inventory([workboardDisabled, lobsterPlugin, calendarPlugin]);
 const finalInventory = inventory([workboardEnabled, lobsterPlugin, calendarPlugin]);
-const uninstalledInventory = inventory([workboardEnabled, lobsterPlugin]);
+const disabledInventory = inventory([workboardDisabled, lobsterPlugin, calendarPlugin]);
+const uninstalledInventory = inventory([workboardDisabled, lobsterPlugin]);
 
 const calendarSearchResponse = {
   results: [
@@ -127,6 +128,12 @@ const installResult = {
 const enableWorkboardResult = {
   ok: true,
   plugin: workboardEnabled,
+  restartRequired: false,
+} satisfies PluginMutationResult;
+
+const disableWorkboardResult = {
+  ok: true,
+  plugin: workboardDisabled,
   restartRequired: false,
 } satisfies PluginMutationResult;
 
@@ -216,6 +223,10 @@ async function clickRowAction(page: Page, rowSelector: string, buttonName: strin
   await page.locator(rowSelector).getByRole("button", { name: buttonName, exact: true }).click();
 }
 
+async function togglePlugin(page: Page, selector: string): Promise<void> {
+  await page.locator(selector).locator("wa-switch.settings-toggle").click();
+}
+
 async function captureScreenshot(page: Page, name: string): Promise<void> {
   if (!updateScreenshots) {
     return;
@@ -267,6 +278,10 @@ function pluginMethodResponses() {
           match: { pluginId: "workboard", enabled: true },
           response: enableWorkboardResult,
         },
+        {
+          match: { pluginId: "workboard", enabled: false },
+          response: disableWorkboardResult,
+        },
       ],
     },
     "plugins.uninstall": {
@@ -300,7 +315,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("browses the catalog, installs from ClawHub, enables Workboard, and refreshes authoritative state", async () => {
+  it("browses the catalog, installs from ClawHub, and toggles Workboard on and off", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -317,14 +332,28 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const workboardCard = page.locator('[data-plugin-id="workboard"]');
       await page.getByRole("heading", { name: /^Tools/u }).waitFor();
       await page.getByRole("heading", { name: /^MCP servers/u }).waitFor();
-      await workboardCard.getByRole("button", { name: "Enable", exact: true }).waitFor();
+      await workboardCard.getByRole("switch", { name: "Enable Workboard", exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          workboardCard
+            .getByRole("switch", { name: "Enable Workboard" })
+            .evaluate((element) => Reflect.get(element, "checked")),
+        )
+        .toBe(false);
       await captureScreenshot(page, "01-installed-desktop.png");
 
-      // Rows open a detail overlay; close it before continuing.
+      // Rows open a detail overlay with the same lifecycle toggle.
       await workboardCard.click();
       const detail = page.locator(".plugins-detail");
       await detail.waitFor({ state: "visible" });
       expect(await detail.textContent()).toContain("Workboard");
+      await expect
+        .poll(() =>
+          detail
+            .getByRole("switch", { name: "Enable Workboard" })
+            .evaluate((element) => Reflect.get(element, "checked")),
+        )
+        .toBe(false);
       await captureScreenshot(page, "02-detail-desktop.png");
       await detail.getByRole("button", { name: "Close" }).click();
       await detail.waitFor({ state: "detached" });
@@ -428,7 +457,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const enableCountBefore = (await gateway.getRequests("plugins.setEnabled")).length;
       await gateway.deferNext("plugins.list");
       await gateway.deferNext("config.get");
-      await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+      await togglePlugin(page, '[data-plugin-id="workboard"]');
 
       const enableRequest = await waitForNextRequest(
         gateway,
@@ -457,7 +486,49 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         .waitFor({ state: "attached" });
       const calendarRow = page.locator('[data-plugin-id="calendar-plus"]');
       await calendarRow.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          workboardCard
+            .getByRole("switch", { name: "Enable Workboard" })
+            .evaluate((element) => Reflect.get(element, "checked")),
+        )
+        .toBe(true);
       await captureScreenshot(page, "05-enabled-installed-desktop.png");
+
+      // Detail uses the same switch and can turn the plugin back off.
+      await workboardCard.click();
+      await detail.waitFor({ state: "visible" });
+      const listCountBeforeDisable = (await gateway.getRequests("plugins.list")).length;
+      const configCountBeforeDisable = (await gateway.getRequests("config.get")).length;
+      const disableCountBefore = (await gateway.getRequests("plugins.setEnabled")).length;
+      await gateway.deferNext("plugins.list");
+      await gateway.deferNext("config.get");
+      await togglePlugin(page, ".plugins-detail");
+
+      const disableRequest = await waitForNextRequest(
+        gateway,
+        "plugins.setEnabled",
+        disableCountBefore,
+      );
+      expect(requestParams(disableRequest)).toEqual({ pluginId: "workboard", enabled: false });
+      await waitForNextRequest(gateway, "plugins.list", listCountBeforeDisable);
+      await waitForNextRequest(gateway, "config.get", configCountBeforeDisable);
+      await gateway.resolveDeferred("plugins.list", disabledInventory);
+      await gateway.resolveDeferred("config.get", configSnapshot(false));
+      await expect.poll(() => workboardCard.getAttribute("aria-busy")).toBe("false");
+      await expect
+        .poll(() =>
+          detail
+            .getByRole("switch", { name: "Enable Workboard" })
+            .evaluate((element) => Reflect.get(element, "checked")),
+        )
+        .toBe(false);
+      await page
+        .locator('[data-plugin-id="workboard"][data-plugin-status="disabled"]')
+        .waitFor({ state: "attached" });
+      await captureScreenshot(page, "06-disabled-detail-desktop.png");
+      await detail.getByRole("button", { name: "Close" }).click();
+      await detail.waitFor({ state: "detached" });
 
       // Removable installs expose a confirm-guarded uninstall behind the trash button.
       await clickRowAction(page, '[data-plugin-id="calendar-plus"]', "Remove Calendar Plus");
@@ -465,8 +536,6 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const listCountBeforeRemove = (await gateway.getRequests("plugins.list")).length;
       const configCountBeforeRemove = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("plugins.list");
-      // Keep the authoritative config refresh on the workboard-enabled snapshot
-      // so the conditional sidebar route assertion below stays meaningful.
       await gateway.deferNext("config.get");
       await calendarRow.getByRole("button", { name: "Remove", exact: true }).click();
       const uninstallRequest = await waitForNextRequest(
@@ -478,7 +547,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await waitForNextRequest(gateway, "plugins.list", listCountBeforeRemove);
       await waitForNextRequest(gateway, "config.get", configCountBeforeRemove);
       await gateway.resolveDeferred("plugins.list", uninstalledInventory);
-      await gateway.resolveDeferred("config.get", configSnapshot(true));
+      await gateway.resolveDeferred("config.get", configSnapshot(false));
       await calendarRow.waitFor({ state: "detached" });
       expect(await page.locator(".plugins-page-notice").textContent()).toContain(
         "Removed calendar-plus",
@@ -500,7 +569,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         )
         .toBeLessThanOrEqual(0);
       await workboardCard.waitFor({ state: "visible" });
-      await captureScreenshot(page, "06-installed-mobile.png");
+      await captureScreenshot(page, "07-installed-mobile.png");
 
       await page.setViewportSize(desktopViewport);
       const settingsSidebar = page.locator(".settings-sidebar");
@@ -516,8 +585,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const workboardMenuItem = sidebar
         .locator("wa-dropdown.sidebar-more-menu")
         .locator('wa-dropdown-item[value="workboard"] a');
-      await workboardMenuItem.waitFor({ state: "visible" });
-      expect(await workboardMenuItem.getAttribute("href")).toBe("/workboard");
+      expect(await workboardMenuItem.count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -540,7 +608,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await workboardCard.waitFor({ state: "visible" });
       expect(await page.getByRole("note").textContent()).toContain("operator.admin");
       expect(
-        await workboardCard.getByRole("button", { name: "Enable", exact: true }).isDisabled(),
+        await workboardCard.getByRole("switch", { name: "Enable Workboard" }).isDisabled(),
       ).toBe(true);
 
       await page.getByRole("tab", { name: /^Discover/u }).click();

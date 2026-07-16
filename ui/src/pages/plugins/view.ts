@@ -15,6 +15,7 @@ import {
   renderSettingsSection,
   renderSettingsSegmented,
   renderSettingsStatus,
+  renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../lib/external-link.ts";
@@ -302,6 +303,10 @@ function stateStatus(plugin: PluginCatalogItem) {
   return renderSettingsStatus({ kind, label: stateLabel(plugin) });
 }
 
+function pluginStatus(plugin: PluginCatalogItem) {
+  return plugin.state === "error" ? stateStatus(plugin) : nothing;
+}
+
 function originLabel(origin: string): string {
   switch (origin) {
     case "bundled":
@@ -399,6 +404,32 @@ function renderToggleButton(
           ? t("pluginsPage.enableAction")
           : t("pluginsPage.disableAction")}
     </button>
+  `;
+}
+
+function renderPluginEnableToggle(
+  plugin: PluginCatalogItem,
+  props: PluginsViewProps,
+  busy: boolean,
+  rowKey: string,
+) {
+  return html`
+    <span
+      title=${props.mutationBlockedReason ?? ""}
+      @click=${(event: Event) => event.stopPropagation()}
+    >
+      ${renderSettingsToggle({
+        checked: plugin.enabled,
+        disabled: !props.canMutate || busy,
+        ariaLabel: t("pluginsPage.enableNamed", { name: plugin.name }),
+        onChange: (enabled) => {
+          if (!props.canMutate || busy) {
+            return;
+          }
+          props.onSetEnabled(plugin.id, enabled, rowKey);
+        },
+      })}
+    </span>
   `;
 }
 
@@ -504,10 +535,7 @@ function renderCatalogActions(
       : html`<span class="plugins-action-note">${t("pluginsPage.unavailable")}</span>`;
   }
   return html`
-    ${renderToggleButton(props, busy, {
-      enabled: plugin.enabled,
-      onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, rowKey),
-    })}
+    ${renderPluginEnableToggle(plugin, props, busy, rowKey)}
     ${plugin.removable
       ? renderRemoveButton(props, busy, plugin.name, () => props.onRequestUninstall(rowKey))
       : nothing}
@@ -573,7 +601,7 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
         ])}
       </div>
       <div class="settings-row__control">
-        ${stateStatus(plugin)} ${renderCatalogActions(plugin, props, busy, key)}
+        ${pluginStatus(plugin)} ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
@@ -778,7 +806,7 @@ function renderCatalogRow(plugin: PluginCatalogItem, props: PluginsViewProps): T
         ${renderMetaLine([plugin.origin ? originLabel(plugin.origin) : nothing])}
       </div>
       <div class="settings-row__control">
-        ${plugin.installed ? stateStatus(plugin) : nothing}
+        ${plugin.installed ? pluginStatus(plugin) : nothing}
         ${renderCatalogActions(plugin, props, busy, key)}
       </div>
       ${plugin.error
@@ -923,7 +951,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
       </div>
       <div class="settings-row__control">
         ${installed
-          ? html`${stateStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
+          ? html`${pluginStatus(installed)}${renderCatalogActions(installed, props, busy, key)}`
           : renderInstallButton(props, busy, key, pkg.displayName, {
               source: "clawhub",
               packageName: pkg.name,
@@ -1075,7 +1103,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
             ${plugin.version
               ? html`<span class="plugins-version">v${plugin.version}</span>`
               : nothing}
-            ${stateStatus(plugin)}
+            ${pluginStatus(plugin)}
           </div>
           <p class="plugins-detail__description">
             ${plugin.description || t("pluginsPage.optionalCapability")}
@@ -1085,21 +1113,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
               ? renderRemoveConfirm(plugin, props, busy, key)
               : html`
                   ${plugin.installed
-                    ? html`
-                        <button
-                          type="button"
-                          class="btn ${plugin.enabled ? "" : "primary"}"
-                          title=${props.mutationBlockedReason ?? ""}
-                          ?disabled=${!props.canMutate || busy}
-                          @click=${() => props.onSetEnabled(plugin.id, !plugin.enabled, key)}
-                        >
-                          ${busy
-                            ? t("pluginsPage.working")
-                            : plugin.enabled
-                              ? t("pluginsPage.disableAction")
-                              : t("pluginsPage.enableAction")}
-                        </button>
-                      `
+                    ? renderPluginEnableToggle(plugin, props, busy, key)
                     : plugin.install
                       ? renderInstallButton(props, busy, key, plugin.name, plugin.install)
                       : nothing}
