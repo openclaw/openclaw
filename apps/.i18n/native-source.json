@@ -31731,7 +31731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 359,
+      "line": 362,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift",
       "source": "Back",
       "surface": "apple",
@@ -36347,7 +36347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 588,
+      "line": 586,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift",
       "source": "z",
       "surface": "apple",
