@@ -1465,8 +1465,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       }
       const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
       return (
-        isGatewayArgv(argv, { allowGatewayBinary: true }) &&
-        parseTcpPortFromArgs(argv) === taskPort
+        isGatewayArgv(argv, { allowGatewayBinary: true }) && parseTcpPortFromArgs(argv) === taskPort
       );
     });
   };
