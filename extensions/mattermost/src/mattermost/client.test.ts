@@ -19,6 +19,7 @@ import {
   normalizeMattermostBaseUrl,
   readMattermostError,
   updateMattermostPost,
+  fetchMattermostMe,
 } from "./client.js";
 
 // ── Helper: mock fetch that captures requests ────────────────────────
@@ -420,6 +421,36 @@ describe("createMattermostClient", () => {
 });
 
 // ── createMattermostPost ─────────────────────────────────────────────
+
+it("times out when a non-JSON success response body stalls after headers", async () => {
+  vi.useFakeTimers();
+  try {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("ok"));
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/plain" } },
+      ),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://mattermost.example",
+      botToken: "tok",
+    });
+    const settled = expect(client.request("/system/ping")).rejects.toThrow(
+      "Mattermost API /system/ping: response stalled after 30000ms",
+    );
+    await vi.advanceTimersByTimeAsync(30_010);
+    await settled;
+    expect(release).toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 describe("createMattermostPost", () => {
   it("sends channel_id and message", async () => {

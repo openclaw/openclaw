@@ -19,6 +19,7 @@ import { z } from "zod";
 
 const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
+const MATTERMOST_RESPONSE_READ_IDLE_TIMEOUT_MS = 30_000;
 // Mattermost REST control-plane JSON (posts, users, channels, file-upload
 // results) stays well under a megabyte; cap successful JSON the same way the
 // shared provider path is capped so an untrusted/self-hosted homeserver cannot
@@ -102,8 +103,11 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
 
 async function readMattermostSuccessText(res: Response, path: string): Promise<string> {
   const bytes = await readResponseWithLimit(res, MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES, {
+    chunkTimeoutMs: MATTERMOST_RESPONSE_READ_IDLE_TIMEOUT_MS,
     onOverflow: ({ maxBytes }) =>
       new Error(`Mattermost API ${path}: text response exceeds ${maxBytes} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Mattermost API ${path}: response stalled after ${chunkTimeoutMs}ms`),
   });
   return new TextDecoder().decode(bytes);
 }
