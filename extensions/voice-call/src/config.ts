@@ -527,6 +527,11 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
+function envValue(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
   const normalized = normalizeWebhookPath(servePath);
   if (normalized.endsWith("/webhook")) {
@@ -795,24 +800,24 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   // Telnyx
   if (resolved.provider === "telnyx") {
     resolved.telnyx = resolved.telnyx ?? {};
-    resolved.telnyx.apiKey = resolved.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
-    resolved.telnyx.connectionId = resolved.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
-    resolved.telnyx.publicKey = resolved.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
+    resolved.telnyx.apiKey = resolved.telnyx.apiKey ?? envValue("TELNYX_API_KEY");
+    resolved.telnyx.connectionId = resolved.telnyx.connectionId ?? envValue("TELNYX_CONNECTION_ID");
+    resolved.telnyx.publicKey = resolved.telnyx.publicKey ?? envValue("TELNYX_PUBLIC_KEY");
   }
 
   // Twilio
   if (resolved.provider === "twilio") {
-    resolved.fromNumber = resolved.fromNumber ?? process.env.TWILIO_FROM_NUMBER;
+    resolved.fromNumber = resolved.fromNumber ?? envValue("TWILIO_FROM_NUMBER");
     resolved.twilio = resolved.twilio ?? {};
-    resolved.twilio.accountSid = resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
-    resolved.twilio.authToken = resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
+    resolved.twilio.accountSid = resolved.twilio.accountSid ?? envValue("TWILIO_ACCOUNT_SID");
+    resolved.twilio.authToken = resolved.twilio.authToken ?? envValue("TWILIO_AUTH_TOKEN");
   }
 
   // Plivo
   if (resolved.provider === "plivo") {
     resolved.plivo = resolved.plivo ?? {};
-    resolved.plivo.authId = resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
-    resolved.plivo.authToken = resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
+    resolved.plivo.authId = resolved.plivo.authId ?? envValue("PLIVO_AUTH_ID");
+    resolved.plivo.authToken = resolved.plivo.authToken ?? envValue("PLIVO_AUTH_TOKEN");
   }
 
   // Tunnel Config
@@ -822,8 +827,8 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   };
   resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
     resolved.tunnel.allowNgrokFreeTierLoopbackBypass ?? false;
-  resolved.tunnel.ngrokAuthToken = resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
-  resolved.tunnel.ngrokDomain = resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+  resolved.tunnel.ngrokAuthToken = resolved.tunnel.ngrokAuthToken ?? envValue("NGROK_AUTHTOKEN");
+  resolved.tunnel.ngrokDomain = resolved.tunnel.ngrokDomain ?? envValue("NGROK_DOMAIN");
 
   // Webhook Security Config
   resolved.webhookSecurity = resolved.webhookSecurity ?? {
