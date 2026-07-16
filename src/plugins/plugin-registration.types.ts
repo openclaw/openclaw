@@ -29,7 +29,7 @@ export type PluginInteractiveRegistration<
 
 export type PluginInteractiveHandlerRegistration = PluginInteractiveRegistration;
 
-type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
+export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
 export type OpenClawPluginGatewayRuntimeScopeSurface = "write-default" | "trusted-operator";
 
@@ -38,7 +38,7 @@ export type OpenClawPluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<boolean | void> | boolean | void;
 
-type OpenClawPluginHttpRouteUpgradeHandler = (
+export type OpenClawPluginHttpRouteUpgradeHandler = (
   req: IncomingMessage,
   socket: Duplex,
   head: Buffer,

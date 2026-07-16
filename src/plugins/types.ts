@@ -228,3 +228,24 @@ export type {
 } from "./plugin-registration.types.js";
 export type { ProviderUsageAuthToken } from "./provider-runtime.types.js";
 export type { WorkerSshIdentityRequest } from "./capability-provider.types.js";
+export type {
+  ImageGenerationProviderPlugin,
+  MusicGenerationProviderPlugin,
+  RealtimeVoiceProviderPlugin,
+  VideoGenerationProviderPlugin,
+} from "./capability-provider.types.js";
+export type {
+  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrar,
+  OpenClawPluginGatewayRuntimeScopeSurface,
+  OpenClawPluginHostedMediaResolver,
+  OpenClawPluginHttpRouteAuth,
+  OpenClawPluginHttpRouteMatch,
+  OpenClawPluginHttpRouteUpgradeHandler,
+  PluginInteractiveHandlerRegistration,
+  PluginRegistrationMode,
+} from "./plugin-registration.types.js";
+export type { PluginHookRegistration } from "./hook-types.js";
+export type { PluginTextTransformRegistration } from "./plugin-api.types.js";
+export type { ProviderDiscoveryOrder } from "./provider-catalog.types.js";
+export type { ProviderPlugin } from "./provider-plugin.types.js";

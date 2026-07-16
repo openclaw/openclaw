@@ -32,3 +32,12 @@ export type OpenClawPluginMcpServerConnectionResolver = {
     ctx: McpServerConnectionResolveContext,
   ) => McpServerConnectionResolved | null | Promise<McpServerConnectionResolved | null>;
 };
+
+/** Registry entry for a plugin MCP server connection resolver. */
+export type PluginMcpServerConnectionResolverRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  resolver: OpenClawPluginMcpServerConnectionResolver;
+  source: string;
+  rootDir?: string;
+};

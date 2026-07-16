@@ -4,7 +4,6 @@ export {
   resolveHookExternalContentSource,
   type HookExternalContentSource,
 } from "./external-content-source.js";
-import { resolveHookExternalContentSource } from "./external-content-source.js";
 
 /**
  * Security utilities for handling untrusted external content.
