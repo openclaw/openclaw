@@ -13,6 +13,10 @@ fun requireOpenClawAndroidVersionProperty(name: String): String =
   openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
     ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
 
+val openClawAndroidWearVersionCode =
+  requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_WEAR_VERSION_CODE").toIntOrNull()
+    ?: error("OPENCLAW_ANDROID_WEAR_VERSION_CODE must be an integer in Config/Version.properties.")
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.ktlint)
@@ -29,7 +33,7 @@ android {
     applicationId = "ai.openclaw.app"
     minSdk = 31
     targetSdk = 36
-    versionCode = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE").toInt()
+    versionCode = openClawAndroidWearVersionCode
     versionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
   }
 
