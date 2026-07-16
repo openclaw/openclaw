@@ -403,6 +403,7 @@ try {
   Write-RestartLog "openclaw restart native ownership helper unavailable source=update error=$($_.Exception.Message)"
 }
 
+# OPENCLAW_RESTART_KILL_POLICY_BEGIN
 function Get-OpenClawListenerSnapshot {
   param([int]$Port)
 
@@ -516,8 +517,6 @@ function Test-OpenClawSameProcess {
 }
 
 function Get-OpenClawListenerKillDecision {
-  # Keep this fail-closed branch order aligned with decideWindowsListenerKill.
-  # This standalone script cannot import package code while an update replaces it.
   param(
     [int]$CandidatePid,
     [string[]]$ExpectedArgv,
@@ -551,9 +550,16 @@ function Get-OpenClawListenerKillDecision {
 }
 
 function Invoke-OpenClawVerifiedListenerKill {
-  param([int]$ProcessId, [int]$Port, [string[]]$ExpectedArgv)
+  param(
+    [int]$ProcessId,
+    [int]$Port,
+    [string[]]$ExpectedArgv,
+    [scriptblock]$ProcessQuery = { param([int]$QueryPid) Get-OpenClawProcessFacts -ProcessId $QueryPid },
+    [scriptblock]$ListenerQuery = { param([int]$QueryPort) Get-OpenClawListenerSnapshot -Port $QueryPort },
+    [scriptblock]$ProcessOpen = { param([int]$QueryPid) [OpenClaw.Restart.NativeMethods]::TryOpenProcess($QueryPid) }
+  )
 
-  $observedProcess = Get-OpenClawProcessFacts -ProcessId $ProcessId
+  $observedProcess = & $ProcessQuery $ProcessId
   if ($null -eq $observedProcess) {
     Write-RestartLog "openclaw restart skipped listener source=update pid=$ProcessId decision=process-unavailable"
     return
@@ -569,14 +575,14 @@ function Invoke-OpenClawVerifiedListenerKill {
 
   $lease = $null
   try {
-    $lease = [OpenClaw.Restart.NativeMethods]::TryOpenProcess($ProcessId)
+    $lease = & $ProcessOpen $ProcessId
     if ($null -eq $lease) {
       Write-RestartLog "openclaw restart skipped listener source=update pid=$ProcessId decision=process-handle-unavailable"
       return
     }
 
-    $recheckedListeners = Get-OpenClawListenerSnapshot -Port $Port
-    $recheckedProcess = Get-OpenClawProcessFacts -ProcessId $ProcessId
+    $recheckedListeners = & $ListenerQuery $Port
+    $recheckedProcess = & $ProcessQuery $ProcessId
     $decisionParams = @{
       CandidatePid = $ProcessId
       ExpectedArgv = $ExpectedArgv
@@ -604,6 +610,7 @@ function Invoke-OpenClawVerifiedListenerKill {
     }
   }
 }
+# OPENCLAW_RESTART_KILL_POLICY_END
 
 function Invoke-OpenClawStartupLauncher {
   param([string]$LauncherPath)
