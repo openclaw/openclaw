@@ -8,11 +8,51 @@ import {
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
-
 type CallPluginToolParams = {
   name: string;
   arguments?: unknown;
 };
+
+/** Lightweight JSON Schema runtime for tool parameter validation. */
+type JsonSchema = Record<string, unknown>;
+
+/**
+ * Validates a tool-call arguments object against its declared JSON Schema.
+ *
+ * TypeBox's Compile.Check is a no-op in the custom 1.3.3 fork, so this step
+ * provides the required-property and additional-properties checks that MCP
+ * clients expect from a declared inputSchema.
+ */
+function validateToolArgs(args: unknown, schema: JsonSchema): string | null {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
+    return "must be a JSON object";
+  }
+  const argsRecord = args as Record<string, unknown>;
+  const properties = schema.properties as Record<string, JsonSchema> | undefined;
+  const required = schema.required as string[] | undefined;
+  const additionalProperties = schema.additionalProperties;
+
+  // Each declared required property must be present in args.
+  if (Array.isArray(required)) {
+    for (const key of required) {
+      if (!(key in argsRecord)) {
+        return `missing required property "${key}"`;
+      }
+    }
+  }
+
+  // When additionalProperties is false, every key in args must appear in
+  // the declared properties list.
+  if (additionalProperties === false && properties) {
+    for (const key of Object.keys(argsRecord)) {
+      if (!(key in properties)) {
+        return `unexpected property "${key}"`;
+      }
+    }
+  }
+
+  return null;
+}
 
 function toMcpContentBlock(block: unknown): unknown {
   if (!isRecord(block)) {
@@ -65,6 +105,17 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
     toolMap.set(tool.name, tool);
   }
 
+  // Pre-resolve JSON Schema for each tool so callTool can validate arguments
+  // against the same inputSchema it advertises in listTools.
+  const schemaForTool = new Map<string, JsonSchema>();
+  for (const tool of wrappedTools) {
+    const resolved = resolveJsonSchemaForTool(tool);
+    const properties = resolved.properties as Record<string, unknown> | undefined;
+    if (Object.keys(properties ?? {}).length > 0 || Array.isArray(resolved.required)) {
+      schemaForTool.set(tool.name, resolved);
+    }
+  }
+
   return {
     listTools: async () => ({
       tools: wrappedTools.map((tool) => ({
@@ -80,6 +131,21 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
           content: [{ type: "text", text: `Unknown tool: ${params.name}` }],
           isError: true,
         };
+      }
+      const schema = schemaForTool.get(params.name);
+      if (schema) {
+        const validationError = validateToolArgs(params.arguments ?? {}, schema);
+        if (validationError) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Invalid arguments for tool "${params.name}": ${validationError}`,
+              },
+            ],
+            isError: true,
+          };
+        }
       }
       try {
         const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {}, signal);

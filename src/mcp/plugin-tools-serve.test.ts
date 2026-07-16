@@ -388,6 +388,37 @@ describe("plugin tools MCP server", () => {
     expect(failed.content).toEqual([{ type: "text", text: "Tool error: boom" }]);
   });
 
+  it("rejects callTool with arguments missing required properties", async () => {
+    const execute = vi.fn();
+    const tool = {
+      name: "memory_recall",
+      description: "Recall stored memory",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+        },
+        required: ["query"],
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "memory_recall",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Invalid arguments for tool"),
+      },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("reports approval requirements without opening plugin approvals on the MCP bridge", async () => {
     let hookCalls = 0;
     const onResolution = vi.fn();
