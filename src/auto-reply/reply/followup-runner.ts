@@ -196,6 +196,12 @@ function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined 
   return value === "turn" || value === "session" ? value : undefined;
 }
 
+function filterStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+}
+
 function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
   const commandOutput = buildCommandOutputFromToolResultEvent(evt);
   if (commandOutput) {

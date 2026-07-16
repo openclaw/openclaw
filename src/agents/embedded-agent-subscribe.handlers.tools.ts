@@ -15,7 +15,7 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-import type { AgentPlanStep } from "../channels/streaming.js";
+import { type AgentPlanStep, normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
@@ -122,20 +122,7 @@ function readUpdatePlanResult(
   if (details?.status !== "updated" || !Array.isArray(details.plan)) {
     return undefined;
   }
-  const steps = details.plan.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return [];
-    }
-    const step = (entry as { step?: unknown }).step;
-    const status = (entry as { status?: unknown }).status;
-    if (
-      typeof step !== "string" ||
-      (status !== "pending" && status !== "in_progress" && status !== "completed")
-    ) {
-      return [];
-    }
-    return [{ step, status }];
-  });
+  const steps = normalizeAgentPlanSteps(details.plan) ?? [];
   const explanation = readStringValue(details.explanation);
   return { ...(explanation ? { explanation } : {}), steps };
 }

@@ -434,10 +434,16 @@ function createPlanUpdateBridge(params: {
   deliver?: GetReplyOptions["onPlanUpdate"];
   startOrder?: AgentEventDeliveryStartOrder;
 }) {
+  const deliver = params.deliver;
   return createAgentEventBridge({
     runId: params.runId,
     suppressed: params.suppressed,
-    deliver: params.deliver,
+    // GetReplyOptions callbacks may return void; the bridge awaits promises.
+    deliver: deliver
+      ? async (payload) => {
+          await deliver(payload);
+        }
+      : undefined,
     startOrder: params.startOrder,
     read: (evt) => {
       if (evt.stream !== "plan") {
