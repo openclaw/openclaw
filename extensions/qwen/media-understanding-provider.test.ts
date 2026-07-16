@@ -2,7 +2,7 @@
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
