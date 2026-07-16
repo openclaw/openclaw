@@ -3156,6 +3156,15 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
+    it("rejects non-delimited text after a bracket path segment", async () => {
+      await expect(
+        runConfigCommand(["config", "set", "agents.list[0]id", '"renamed"']),
+      ).rejects.toThrow("Invalid path (missing separator after bracket): agents.list[0]id");
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("preserves valid bracket path forms", async () => {
       const resolved: OpenClawConfig = {
         agents: { list: [{ id: "main" }, { id: "other" }] },

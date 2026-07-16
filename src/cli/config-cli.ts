@@ -386,7 +386,7 @@ function parsePath(raw: string): PathSegment[] {
   let segmentEmitted = false;
   let i = 0;
   while (i < trimmed.length) {
-    const ch = trimmed[i];
+    const ch = trimmed[i] ?? "";
     if (ch === "\\") {
       const next = trimmed[i + 1];
       if (next) {
@@ -432,6 +432,9 @@ function parsePath(raw: string): PathSegment[] {
       segmentEmitted = true;
       i = close + 1;
       continue;
+    }
+    if (segmentEmitted && current === "" && ch.trim()) {
+      throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
     }
     current += ch;
     i += 1;
