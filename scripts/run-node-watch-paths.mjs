@@ -40,7 +40,7 @@ const ignoredRunNodeRepoPathPatterns = [
   /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
   /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
 ];
-// Asset build hooks write these tracked runtime bundles. They are outputs, not
+// Asset build hooks write these generated runtime bundles. They are outputs, not
 // source inputs; watching them makes the dev build react to its own writes.
 const generatedPluginAssetPaths = new Set([
   "extensions/diffs-language-pack/assets/viewer-runtime.js",

@@ -44,7 +44,7 @@ async function withPluginAssetFixture(run: (rootDir: string) => Promise<void>) {
 }
 
 describe("bundled plugin assets", () => {
-  it("does not rewrite an unchanged Discord SDK bundle", async () => {
+  it("creates a missing Discord SDK bundle without rewriting it when unchanged", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-discord-sdk-"));
     const outputPath = path.join(rootDir, "embedded-app-sdk.mjs");
     const build = vi.fn(async () => ({
@@ -52,7 +52,9 @@ describe("bundled plugin assets", () => {
     }));
 
     try {
-      fs.writeFileSync(outputPath, "export const sdk = true;\n");
+      await expect(buildDiscordActivitySdk({ build, outputPath })).resolves.toBe(true);
+      expect(fs.readFileSync(outputPath, "utf8")).toBe("export const sdk = true;\n");
+
       const initialTime = new Date("2026-07-16T12:00:00.000Z");
       fs.utimesSync(outputPath, initialTime, initialTime);
 

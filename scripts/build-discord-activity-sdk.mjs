@@ -10,7 +10,7 @@ const repoRoot = path.resolve(path.dirname(modulePath), "..");
 const discordDir = path.join(repoRoot, "extensions/discord");
 const outputPath = path.join(repoRoot, "extensions/discord/assets/embedded-app-sdk.mjs");
 
-/** Builds the browser SDK bundle without rewriting an identical tracked asset. */
+/** Builds the browser SDK bundle without rewriting an identical generated asset. */
 export async function buildDiscordActivitySdk(params = {}) {
   const buildImpl = params.build ?? build;
   const targetPath = params.outputPath ?? outputPath;
