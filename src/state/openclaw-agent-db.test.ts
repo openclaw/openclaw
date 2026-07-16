@@ -1710,7 +1710,7 @@ describe("openclaw agent database", () => {
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
-  it("adds exact conversation delivery targets when upgrading the canonical v9 schema", () => {
+  it("adds durable conversation delivery state when upgrading the canonical v10 schema", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(
       stateDir,
@@ -1720,16 +1720,19 @@ describe("openclaw agent database", () => {
       "openclaw-agent.sqlite",
     );
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const v9Schema = fs
-      .readFileSync(new URL("./openclaw-agent-schema.sql", import.meta.url), "utf8")
-      .replace("  delivery_target TEXT NOT NULL,\n", "");
+    const currentSchema = fs.readFileSync(
+      new URL("./openclaw-agent-schema.sql", import.meta.url),
+      "utf8",
+    );
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);
-    db.exec(v9Schema);
+    db.exec(currentSchema);
     db.exec(`
+      DROP TABLE conversation_deliveries;
+      ALTER TABLE conversations DROP COLUMN delivery_target;
       INSERT INTO schema_meta
         (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-      VALUES ('primary', 'agent', 9, 'worker-1', NULL, 1, 1);
+      VALUES ('primary', 'agent', 10, 'worker-1', NULL, 1, 1);
       INSERT INTO sessions
         (session_id, session_key, session_scope, created_at, updated_at, chat_type)
       VALUES ('session-1', 'agent:worker-1:main', 'shared-main', 10, 20, 'direct');
@@ -1742,7 +1745,7 @@ describe("openclaw agent database", () => {
         20,
         'done'
       );
-      PRAGMA user_version = 9;
+      PRAGMA user_version = 10;
     `);
     db.close();
 
@@ -1753,6 +1756,13 @@ describe("openclaw agent database", () => {
     expect(database.db.prepare("SELECT peer_id, delivery_target FROM conversations").get()).toEqual(
       { peer_id: "peer-a", delivery_target: "reef:peer-a" },
     );
+    expect(
+      database.db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'conversation_deliveries'",
+        )
+        .get(),
+    ).toEqual({ name: "conversation_deliveries" });
     expect(() =>
       assertOpenClawAgentDatabaseForMaintenance(database.db, {
         agentId: "worker-1",

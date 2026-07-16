@@ -90,8 +90,8 @@ function migratedConversation(entry: MigratedConversationEntry) {
 
 /** Backfills canonical external addresses once when conversation routing becomes active. */
 export function backfillSessionConversations(db: DatabaseSync): void {
-  // v8 did not retain an exact delivery target. Remove its derived projection
-  // first, then rebuild only addresses recoverable from authoritative sessions.
+  // Earlier schemas did not retain an exact delivery target. Remove their
+  // derived projection, then rebuild only addresses recoverable from sessions.
   db.exec(`
     UPDATE sessions
     SET primary_conversation_id = NULL
@@ -208,7 +208,7 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }
 
-/** Adds the v10 exact delivery target before the conversation backfill writes canonical rows. */
+/** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */
 export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void {
   const columns = readSqliteTableColumns(db, "conversations");
   if (!columns || columns.has("delivery_target")) {
