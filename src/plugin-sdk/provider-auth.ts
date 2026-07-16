@@ -185,12 +185,6 @@ function warnOnceOnRejectedConfigDomain(configured: string): void {
   );
 }
 
-function resetRejectedConfigDomainWarningsForTest(): void {
-  warnedRejectedConfigDomains.clear();
-}
-
-export const testing = { resetRejectedConfigDomainWarningsForTest } as const;
-
 // Provider-internal host resolver (env > explicit caller value > persisted
 // config), always passed through the fail-closed allowlist. Not exported: the
 // provider extension owns its own copy so the SDK surface stays minimal.

@@ -987,8 +987,7 @@ describe("Copilot data-residency domain resolution", () => {
       return { ...actual, logWarn };
     });
 
-    const { testing, resolveCopilotApiToken } = await import("./provider-auth.js");
-    testing.resetRejectedConfigDomainWarningsForTest();
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
 
     const fetchImpl = vi.fn(
       async () =>
