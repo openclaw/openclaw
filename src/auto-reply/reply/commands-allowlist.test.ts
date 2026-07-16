@@ -748,6 +748,23 @@ describe("handleAllowlistCommand", () => {
     });
   });
 
+  it("rejects group-scoped store edits because pairing stores authorize DMs only", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"], configWrites: true } },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist add group --store 789", cfg);
+    params.command.senderIsOwner = true;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Pairing-store allowlist edits apply to DMs only");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
   it("removes default-account entries from scoped and legacy pairing stores", async () => {
     removeChannelAllowFromStoreEntryMock
       .mockResolvedValueOnce({

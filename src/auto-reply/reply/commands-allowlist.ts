@@ -448,6 +448,15 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return disabled;
   }
 
+  if (parsed.scope === "group" && parsed.target === "store") {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Pairing-store allowlist edits apply to DMs only; omit --store for groups.",
+      },
+    };
+  }
+
   const shouldUpdateConfig = parsed.target !== "store";
   // Pairing stores authorize DMs only. Group edits must stay config-scoped or a
   // group-only sender could gain or lose unrelated direct-message access.
