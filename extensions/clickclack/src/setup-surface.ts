@@ -94,11 +94,9 @@ export const clickClackSetupWizard: ChannelSetupWizard = {
           ? process.env.CLICKCLACK_BOT_TOKEN?.trim() || undefined
           : undefined,
       patchAccount: ({ cfg, accountId, mode, patch }) =>
-        applyClickClackCredentialConfig({
-          cfg,
-          accountId,
-          ...(mode === "env" ? { useEnv: true } : { token: patch.token }),
-        }),
+        mode === "env"
+          ? applyClickClackCredentialConfig({ cfg, accountId, useEnv: true })
+          : applyClickClackCredentialConfig({ cfg, accountId, ...patch }),
       useEnv: { clearFields: ["token", "tokenFile"] },
       set: { clearFields: ["tokenFile"] },
     }),
