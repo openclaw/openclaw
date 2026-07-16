@@ -1694,7 +1694,7 @@ async function dispatchReplyFromConfigInner(
     const formatPlanUpdateText = (payload: { explanation?: string; steps?: AgentPlanStep[] }) => {
       const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
       const steps = (payload.steps ?? [])
-        .map((entry) => ({ ...entry, step: entry.step.replace(/\s+/g, " ").trim() }))
+        .map((entry) => ({ step: entry.step.replace(/\s+/g, " ").trim(), status: entry.status }))
         .filter((entry) => entry.step);
       if (steps.length > 0) {
         return formatPlanChecklistLines(steps, {

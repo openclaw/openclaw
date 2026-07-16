@@ -1106,7 +1106,9 @@ export function formatPlanChecklistLines(
     completedSlots > 0
       ? normalizedSteps.filter((entry) => entry.status === "completed").slice(-completedSlots)
       : [];
-  const visibleSteps = [...recentCompleted, ...visiblePending].sort((a, b) => a.index - b.index);
+  const visibleSteps = [...recentCompleted, ...visiblePending].toSorted(
+    (a, b) => a.index - b.index,
+  );
   const completedCount = normalizedSteps.length - pendingSteps.length;
   return [
     compactChannelProgressDraftLine(
