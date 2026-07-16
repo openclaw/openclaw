@@ -40,9 +40,6 @@ export function describeQaProviderLaneMismatches(params: {
   ) {
     mismatches.push(`channel=${scenarioChannel}`);
   }
-  if (provider.kind !== "live") {
-    return mismatches;
-  }
   const selected = splitQaModelRef(params.primaryModel);
   const requiredProvider = normalizeQaConfigString(config.requiredProvider);
   if (requiredProvider && selected?.provider !== requiredProvider) {
