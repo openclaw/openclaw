@@ -1760,7 +1760,8 @@ describe("sendMessageTelegram", () => {
 
   it("preserves word boundaries when rendered markdown exceeds the text limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
-    const markdown = `**${"alpha beta gamma ".repeat(260)}**`;
+    const visibleText = Array.from({ length: 260 }, () => "alpha beta gamma").join(" ");
+    const markdown = `**${visibleText}**`;
 
     await sendMessageTelegram("123", markdown, {
       cfg: TELEGRAM_TEST_CFG,
@@ -1771,6 +1772,7 @@ describe("sendMessageTelegram", () => {
     const visibleChunks = chunks.map((chunk) => telegramHtmlToPlainTextFallback(chunk));
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(visibleChunks.join("")).toBe(visibleText);
     for (let index = 0; index < visibleChunks.length - 1; index += 1) {
       const left = visibleChunks[index] ?? "";
       const right = visibleChunks[index + 1] ?? "";

@@ -36,7 +36,14 @@ function chunkSmsPlainText(text: string, limit: number): string[] {
         : chunk.text,
     measureRendered: (rendered) => rendered.length,
   })
-    .map(({ rendered }) => rendered)
+    // SMS chunks are independent messages, so separator whitespace belongs to
+    // neither internal payload edge even though the shared chunker preserves it.
+    .map(({ rendered }, index, chunks) => {
+      const withoutLeadingSeparator = index === 0 ? rendered : rendered.trimStart();
+      return index === chunks.length - 1
+        ? withoutLeadingSeparator
+        : withoutLeadingSeparator.trimEnd();
+    })
     .filter(Boolean);
 }
 
