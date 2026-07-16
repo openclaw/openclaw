@@ -22315,7 +22315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 256,
+      "line": 262,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Connect a nearby Gateway",
       "surface": "apple",
@@ -22323,7 +22323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 306,
+      "line": 312,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Local",
       "surface": "apple",
@@ -22331,7 +22331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 306,
+      "line": 312,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Secure",
       "surface": "apple",
@@ -22339,7 +22339,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 320,
+      "line": 326,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Discovery",
       "surface": "apple",
@@ -22347,7 +22347,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 321,
+      "line": 327,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -22355,7 +22355,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 322,
+      "line": 328,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Node",
       "surface": "apple",
@@ -22363,7 +22363,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 323,
+      "line": 329,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Operator",
       "surface": "apple",
@@ -22371,7 +22371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 429,
+      "line": 435,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Looking for a Gateway",
       "surface": "apple",
@@ -22379,7 +22379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 431,
+      "line": 437,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Keep your iPhone on the same LAN or tailnet, then start the Gateway on your host machine.",
       "surface": "apple",
@@ -22387,7 +22387,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 438,
+      "line": 444,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Run openclaw gateway --port 18789.",
       "surface": "apple",
@@ -22395,7 +22395,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 439,
+      "line": 445,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Check that Bonjour discovery is enabled.",
       "surface": "apple",
@@ -22403,7 +22403,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 440,
+      "line": 446,
       "path": "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift",
       "source": "Open Settings if you need a manual host.",
       "surface": "apple",

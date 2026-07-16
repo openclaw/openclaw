@@ -30,7 +30,7 @@ struct GatewayQuickSetupSheet: View {
                         hasCandidate: self.bestCandidate != nil,
                         mood: Self.headerMood(
                             connecting: self.connecting,
-                            hasError: self.connectError != nil,
+                            hasError: self.hasVisibleError,
                             hasCandidate: self.bestCandidate != nil))
 
                     if let gatewayProblem = self.appModel.lastGatewayProblem {
@@ -163,6 +163,12 @@ struct GatewayQuickSetupSheet: View {
 
     private var bestCandidate: GatewayDiscoveryModel.DiscoveredGateway? {
         self.gatewayController.preferredDiscoveredGateway()
+    }
+
+    /// The sheet surfaces two error banners — the local connect error and the
+    /// app-level gateway problem — and the mascot mood must match both.
+    private var hasVisibleError: Bool {
+        self.connectError != nil || self.appModel.lastGatewayProblem != nil
     }
 
     static func headerMood(
