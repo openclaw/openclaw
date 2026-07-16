@@ -291,18 +291,27 @@ function appendTruncatedResponseSuffix(text: string): string {
   return `${text.trimEnd()}${TRUNCATED_RESPONSE_SUFFIX}`;
 }
 
-async function readTwilioApiResponseText(response: Response): Promise<string> {
+async function readTwilioApiResponseText(response: Response, timeoutMs: number): Promise<string> {
   const maxBytes = response.ok
     ? TWILIO_API_SUCCESS_BODY_LIMIT_BYTES
     : TWILIO_API_ERROR_BODY_LIMIT_BYTES;
+  const onIdleTimeout = ({ chunkTimeoutMs }: { chunkTimeoutMs: number }) =>
+    new Error(`Twilio SMS API response stalled: no data received for ${chunkTimeoutMs}ms`);
   if (!response.ok) {
-    const prefix = await readResponseTextPrefix(response, maxBytes);
+    const prefix = await readResponseTextPrefix(response, maxBytes, {
+      chunkTimeoutMs: timeoutMs,
+      onIdleTimeout,
+    });
     return prefix.truncated ? appendTruncatedResponseSuffix(prefix.text) : prefix.text;
   }
 
+  // fetchWithSsrFGuard / fetch resolve after headers; keep the request deadline on
+  // the success body so a stalled Twilio stream cannot hang SMS API calls.
   const body = await readResponseWithLimit(response, maxBytes, {
+    chunkTimeoutMs: timeoutMs,
     onOverflow: ({ size, maxBytes: limit }) =>
       new Error(`Twilio SMS API response body too large: ${size} bytes (limit: ${limit} bytes)`),
+    onIdleTimeout,
   });
   return new TextDecoder().decode(body);
 }
@@ -335,12 +344,13 @@ async function requestTwilioApi(params: {
       authorization: basicAuthHeader(params.account),
     },
   } satisfies RequestInit;
+  const timeoutMs = params.timeoutMs ?? TWILIO_API_TIMEOUT_MS;
   if (params.fetchImpl) {
     const response = await params.fetchImpl(params.url, init);
     return {
       ok: response.ok,
       status: response.status,
-      text: await readTwilioApiResponseText(response),
+      text: await readTwilioApiResponseText(response, timeoutMs),
     };
   }
 
@@ -350,13 +360,13 @@ async function requestTwilioApi(params: {
     auditContext: "sms-twilio-api",
     policy: { allowedHostnames: [params.allowedHostname] },
     requireHttps: true,
-    timeoutMs: params.timeoutMs ?? TWILIO_API_TIMEOUT_MS,
+    timeoutMs,
   });
   try {
     return {
       ok: guarded.response.ok,
       status: guarded.response.status,
-      text: await readTwilioApiResponseText(guarded.response),
+      text: await readTwilioApiResponseText(guarded.response, timeoutMs),
     };
   } finally {
     await guarded.release();

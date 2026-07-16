@@ -540,6 +540,38 @@ describe("Twilio SMS helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("times out when a Twilio success response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"sid":'));
+            },
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+        release,
+      });
+
+      const pending = sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+      });
+      const settled = expect(pending).rejects.toThrow(
+        "Twilio SMS API response stalled: no data received for 30000ms",
+      );
+      await vi.advanceTimersByTimeAsync(30_060);
+      await settled;
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("bounds guarded Twilio errors on complete UTF-8 characters and cancels overflow", async () => {
     const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse(`${"x".repeat(8 * 1024 - 2)}😀tail`, {
