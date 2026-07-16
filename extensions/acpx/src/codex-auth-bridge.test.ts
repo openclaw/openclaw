@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
+import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
@@ -151,10 +153,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const installedBinPath = path.join(
       root,
       "node_modules",
-      "@zed-industries",
+      "@agentclientprotocol",
       "codex-acp",
-      "bin",
-      "codex-acp.js",
+      "dist",
+      "index.js",
     );
     process.env.OPENCLAW_AGENT_DIR = agentDir;
 
@@ -219,9 +221,9 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@zed-industries/codex-acp@0.16.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/codex-acp@1.1.4"');
     expect(wrapper).toContain('"--", "codex-acp"');
-    expect(wrapper).not.toContain("@zed-industries/codex-acp@^0.11.1");
+    expect(wrapper).not.toContain("@zed-industries/codex-acp");
   });
 
   it("falls back to the patched Claude ACP package when the local adapter is unavailable", async () => {
@@ -261,8 +263,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain("@zed-industries/codex-acp");
-    expectWrapperToContainPathSuffix(wrapper, ["bin", "codex-acp.js"]);
+    expect(wrapper).toContain("@agentclientprotocol/codex-acp");
+    expectWrapperToContainPathSuffix(wrapper, ["dist", "index.js"]);
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 
@@ -326,14 +328,14 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 
-  it("launches the locally installed Codex ACP bin with isolated CODEX_HOME", async () => {
+  it("launches maintained Codex ACP with isolated CODEX_HOME and model overrides", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
     const installedBinPath = path.join(root, "codex-acp-bin.js");
     await fs.writeFile(
       installedBinPath,
-      "console.log(JSON.stringify({ argv: process.argv.slice(2), codexHome: process.env.CODEX_HOME }));\n",
+      "console.log(JSON.stringify({ argv: process.argv.slice(2), codexConfig: process.env.CODEX_CONFIG, codexHome: process.env.CODEX_HOME }));\n",
       "utf8",
     );
     const pluginConfig = resolveAcpxPluginConfig({
@@ -355,13 +357,36 @@ describe("prepareAcpxCodexAuthConfig", () => {
         "lease-1",
         "--openclaw-gateway-instance-id",
         "gateway-1",
+        OPENCLAW_CODEX_CONFIG_ARG,
+        JSON.stringify({ model_providers: { custom: { wire_api: "responses" } } }),
+        OPENCLAW_CODEX_CONFIG_ARG,
+        JSON.stringify({ model: "gpt-5.6-sol", model_reasoning_effort: "medium" }),
       ],
       {
         cwd: root,
+        env: {
+          ...process.env,
+          CODEX_CONFIG: JSON.stringify({
+            sandbox_mode: "workspace-write",
+            model_providers: { custom: { base_url: "https://example.test/v1" } },
+          }),
+        },
       },
     );
-    const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
+    const launched = JSON.parse(stdout.trim()) as {
+      argv?: unknown;
+      codexConfig?: unknown;
+      codexHome?: unknown;
+    };
     expect(launched.argv).toStrictEqual([]);
+    expect(JSON.parse(String(launched.codexConfig))).toEqual({
+      sandbox_mode: "workspace-write",
+      model_providers: {
+        custom: { base_url: "https://example.test/v1", wire_api: "responses" },
+      },
+      model: "gpt-5.6-sol",
+      model_reasoning_effort: "medium",
+    });
     const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
   });
@@ -639,7 +664,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(isolatedConfig).not.toContain("SkyComputerUseClient");
   });
 
-  it("normalizes an explicitly configured Codex ACP command to the local wrapper", async () => {
+  it("migrates an explicitly configured Zed Codex ACP command to the local wrapper", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
     const stateDir = path.join(root, "state");
@@ -654,7 +679,191 @@ describe("prepareAcpxCodexAuthConfig", () => {
       rawConfig: {
         agents: {
           codex: {
-            command: "npx @zed-industries/codex-acp@0.12.0 -c 'model=\"gpt-5.4\"'",
+            command:
+              'npx @zed-industries/codex-acp@0.12.0 -c=model=\'"gpt-5.4"\' -cmodel_reasoning_effort=\'"high"\' --config=\'mcp_servers."foo.bar"={ command = "node", args = ["server.js"] }\'',
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+
+    const installedBinPath = path.join(root, "codex-acp.js");
+    await fs.writeFile(
+      installedBinPath,
+      "console.log(JSON.stringify({ argv: process.argv.slice(2), codexConfig: process.env.CODEX_CONFIG }));\n",
+      "utf8",
+    );
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
+    expect(resolved.agents.codex).not.toContain("npx @zed-industries/codex-acp@0.12.0");
+    expect(resolved.agents.codex).not.toContain(quoteArg("-c"));
+    expect(resolved.agents.codex).toContain(quoteArg(OPENCLAW_CODEX_CONFIG_ARG));
+    expect(resolved.agents.codex).toContain(
+      quoteArg(
+        JSON.stringify({
+          model: "gpt-5.4",
+          model_reasoning_effort: "high",
+          mcp_servers: { "foo.bar": { command: "node", args: ["server.js"] } },
+        }),
+      ),
+    );
+    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toContain('[mcp_servers."foo.bar"]');
+    expect(isolatedConfig).toContain('command = "node"');
+    expect(isolatedConfig).not.toContain("notify");
+    expect(isolatedConfig).not.toContain("SkyComputerUseClient");
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain("process.argv.slice(2)");
+    expect(wrapper).toContain("CODEX_HOME: codexHome");
+    expect(wrapper).not.toContain(sourceCodexHome);
+
+    const [nodePath, wrapperPath, ...wrapperArgs] = splitCommandParts(resolved.agents.codex ?? "");
+    if (!nodePath || !wrapperPath) {
+      throw new Error("expected generated Codex ACP wrapper command");
+    }
+    const { stdout } = await execFileAsync(
+      nodePath,
+      [
+        wrapperPath,
+        ...wrapperArgs,
+        OPENCLAW_CODEX_CONFIG_ARG,
+        JSON.stringify({ model: "gpt-5.6-sol", model_reasoning_effort: "medium" }),
+      ],
+      { cwd: root },
+    );
+    const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexConfig?: unknown };
+    expect(launched.argv).toStrictEqual([]);
+    expect(JSON.parse(String(launched.codexConfig))).toEqual({
+      model: "gpt-5.6-sol",
+      model_reasoning_effort: "medium",
+      mcp_servers: { "foo.bar": { command: "node", args: ["server.js"] } },
+    });
+  });
+
+  it("forwards maintained Codex ACP config flags without legacy migration", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const installedBinPath = path.join(root, "codex-acp.js");
+    await fs.writeFile(
+      installedBinPath,
+      "console.log(JSON.stringify({ argv: process.argv.slice(2), codexConfig: process.env.CODEX_CONFIG }));\n",
+      "utf8",
+    );
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          codex: {
+            command:
+              "npx @agentclientprotocol/codex-acp@1.1.4 cli -c 'model=\"gpt-5.6-sol\"' --config 'model_reasoning_effort=\"low\"'",
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
+    const commandParts = splitCommandParts(resolved.agents.codex ?? "");
+    expect(commandParts.slice(2)).toStrictEqual([
+      "cli",
+      "-c",
+      'model="gpt-5.6-sol"',
+      "--config",
+      'model_reasoning_effort="low"',
+    ]);
+    expect(commandParts).not.toContain(OPENCLAW_CODEX_CONFIG_ARG);
+
+    const [nodePath, wrapperPath, ...wrapperArgs] = commandParts;
+    if (!nodePath || !wrapperPath) {
+      throw new Error("expected generated Codex ACP wrapper command");
+    }
+    const { stdout } = await execFileAsync(
+      nodePath,
+      [
+        wrapperPath,
+        ...wrapperArgs,
+        OPENCLAW_CODEX_CONFIG_ARG,
+        JSON.stringify({ model: "gpt-5.6-sol", model_reasoning_effort: "medium" }),
+      ],
+      { cwd: root, env: { ...process.env, CODEX_CONFIG: "" } },
+    );
+    const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexConfig?: unknown };
+    expect(launched.argv).toStrictEqual(commandParts.slice(2));
+    expect(JSON.parse(String(launched.codexConfig))).toEqual({
+      model: "gpt-5.6-sol",
+      model_reasoning_effort: "medium",
+    });
+  });
+
+  it("does not carry migrated MCP config across isolated Codex homes or rebuilds", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const legacyStateDir = path.join(root, "legacy-state");
+    const maintainedStateDir = path.join(root, "maintained-state");
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(path.join(sourceCodexHome, "config.toml"), "", "utf8");
+    process.env.CODEX_HOME = sourceCodexHome;
+    const legacyConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          codex: {
+            command:
+              "npx @zed-industries/codex-acp@0.12.0 --config='mcp_servers.legacy={ command = \"node\" }'",
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+    const maintainedConfig = resolveAcpxPluginConfig({ rawConfig: {}, workspaceDir: root });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig: legacyConfig,
+      stateDir: legacyStateDir,
+      resolveInstalledCodexAcpBinPath: async () => undefined,
+    });
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig: maintainedConfig,
+      stateDir: maintainedStateDir,
+      resolveInstalledCodexAcpBinPath: async () => undefined,
+    });
+
+    expect(await fs.readFile(generatedCodexPaths(legacyStateDir).configPath, "utf8")).toContain(
+      "[mcp_servers.legacy]",
+    );
+    expect(
+      await fs.readFile(generatedCodexPaths(maintainedStateDir).configPath, "utf8"),
+    ).not.toContain("mcp_servers");
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig: maintainedConfig,
+      stateDir: legacyStateDir,
+      resolveInstalledCodexAcpBinPath: async () => undefined,
+    });
+    expect(await fs.readFile(generatedCodexPaths(legacyStateDir).configPath, "utf8")).not.toContain(
+      "mcp_servers",
+    );
+  });
+
+  it("migrates config flags from a bare Codex ACP executable", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          codex: {
+            command: "codex-acp -cmodel='\"gpt-5.4\"'",
           },
         },
       },
@@ -668,16 +877,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
-    expect(resolved.agents.codex).not.toContain("npx @zed-industries/codex-acp@0.12.0");
-    expect(resolved.agents.codex).toContain(quoteArg("-c"));
-    expect(resolved.agents.codex).toContain(quoteArg('model="gpt-5.4"'));
-    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
-    expect(isolatedConfig).not.toContain("notify");
-    expect(isolatedConfig).not.toContain("SkyComputerUseClient");
-    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain("process.argv.slice(2)");
-    expect(wrapper).toContain("CODEX_HOME: codexHome");
-    expect(wrapper).not.toContain(sourceCodexHome);
+    expect(resolved.agents.codex).not.toContain(quoteArg("-c"));
+    expect(resolved.agents.codex).toContain(quoteArg(JSON.stringify({ model: "gpt-5.4" })));
   });
 
   it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {
