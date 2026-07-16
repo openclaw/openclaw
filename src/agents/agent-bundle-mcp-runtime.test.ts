@@ -2058,6 +2058,61 @@ process.on("SIGINT", shutdown);`,
     expect(testing.getCachedSessionIds()).not.toContain("session-run-lease");
   });
 
+  it("keeps an active MCP child alive until deferred run retirement completes", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-deferred-run-"));
+    const serverPath = path.join(tempDir, "server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const pidPath = path.join(tempDir, "server.pid");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, pidPath });
+    let materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+
+    try {
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-run-child",
+        sessionKey: "agent:test:session-run-child",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            sessionIdleTtlMs: 0,
+            servers: {
+              child: { command: process.execPath, args: [serverPath] },
+            },
+          },
+        },
+      });
+      materialized = await materializeBundleMcpToolsForRun({ runtime });
+      await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+
+      await retireSessionMcpRuntime({
+        sessionId: "session-run-child",
+        reason: "gateway-session-cleanup",
+        preserveActiveLeases: true,
+      });
+      expect(() => process.kill(pid, 0)).not.toThrow();
+      expect(testing.getCachedSessionIds()).toContain("session-run-child");
+
+      await materialized.dispose();
+      materialized = undefined;
+      await waitForPredicate(
+        () => {
+          try {
+            process.kill(pid, 0);
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        "deferred MCP child process exit",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      expect(testing.getCachedSessionIds()).not.toContain("session-run-child");
+    } finally {
+      await materialized?.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("cancels deferred retirement when a later run reuses the runtime", async () => {
     const manager = testing.createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
     const params = {
