@@ -941,10 +941,21 @@ test("sessions.create rejects succeedsParent combined with fork (#106932)", asyn
 // preserves the legacy parent rollover — succession is not silently dropped (#106932 P1).
 test("sessions.create preserves the legacy rollover when succeedsParent is omitted (#106932)", async () => {
   const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({ entries: { main: { sessionId: "sess-legacy", updatedAt: Date.now() } } });
-  await writeMessageTranscript({ agentId: "main", sessionId: "sess-legacy", sessionKey: "agent:main:main", storePath, content: "before legacy /new" });
+  await writeSessionStore({
+    entries: { main: { sessionId: "sess-legacy", updatedAt: Date.now() } },
+  });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-legacy",
+    sessionKey: "agent:main:main",
+    storePath,
+    content: "before legacy /new",
+  });
   const result = await directSessionReq<{ key: string }>("sessions.create", {
-    key: "tui-legacy", agentId: "main", parentSessionKey: "main", emitCommandHooks: true,
+    key: "tui-legacy",
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
   });
   expect(result.ok).toBe(true);
   expect(result.payload?.key).toBe("agent:main:tui-legacy");
@@ -957,14 +968,28 @@ test("sessions.create preserves the legacy rollover when succeedsParent is omitt
 // created (session_start) but the parent is not ended (#106932).
 test("sessions.create honors succeedsParent:false as an explicit parallel opt-out (#106932)", async () => {
   const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({ entries: { main: { sessionId: "sess-optout", updatedAt: Date.now() } } });
-  await writeMessageTranscript({ agentId: "main", sessionId: "sess-optout", sessionKey: "agent:main:main", storePath, content: "before parallel /new" });
+  await writeSessionStore({
+    entries: { main: { sessionId: "sess-optout", updatedAt: Date.now() } },
+  });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-optout",
+    sessionKey: "agent:main:main",
+    storePath,
+    content: "before parallel /new",
+  });
   const result = await directSessionReq<{ key: string }>("sessions.create", {
-    key: "tui-parallel", agentId: "main", parentSessionKey: "main", emitCommandHooks: true, succeedsParent: false,
+    key: "tui-parallel",
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    succeedsParent: false,
   });
   expect(result.ok).toBe(true);
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  expect(firstHookCall(sessionLifecycleHookMocks.runSessionStart)[0].sessionKey).toBe("agent:main:tui-parallel");
+  expect(firstHookCall(sessionLifecycleHookMocks.runSessionStart)[0].sessionKey).toBe(
+    "agent:main:tui-parallel",
+  );
 });
 
 // succeedsParent rolls the parent over, so an explicit declaration must name a
@@ -972,7 +997,10 @@ test("sessions.create honors succeedsParent:false as an explicit parallel opt-ou
 test("sessions.create rejects succeedsParent without parentSessionKey (#106932)", async () => {
   await createSessionStoreDir();
   const result = await directSessionReq("sessions.create", {
-    key: "tui-noparent", agentId: "main", emitCommandHooks: true, succeedsParent: true,
+    key: "tui-noparent",
+    agentId: "main",
+    emitCommandHooks: true,
+    succeedsParent: true,
   });
   expect(result.ok).toBe(false);
   expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
@@ -983,7 +1011,10 @@ test("sessions.create rejects succeedsParent without parentSessionKey (#106932)"
 test("sessions.create rejects succeedsParent without emitCommandHooks (#106932)", async () => {
   await createSessionStoreDir();
   const result = await directSessionReq("sessions.create", {
-    key: "tui-nohook", agentId: "main", parentSessionKey: "main", succeedsParent: true,
+    key: "tui-nohook",
+    agentId: "main",
+    parentSessionKey: "main",
+    succeedsParent: true,
   });
   expect(result.ok).toBe(false);
   expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });

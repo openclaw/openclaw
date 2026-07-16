@@ -311,19 +311,13 @@ export async function createGatewaySession(params: {
     if (params.parentSessionKey === undefined) {
       return {
         ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "succeedsParent requires parentSessionKey",
-        ),
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires parentSessionKey"),
       };
     }
     if (params.emitCommandHooks !== true) {
       return {
         ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "succeedsParent requires emitCommandHooks",
-        ),
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires emitCommandHooks"),
       };
     }
   }
