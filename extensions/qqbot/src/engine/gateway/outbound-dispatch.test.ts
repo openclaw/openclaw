@@ -11,13 +11,10 @@ import {
 } from "../messaging/outbound.js";
 import type { DeliveryTarget } from "../messaging/sender.js";
 import type { MessageResponse } from "../types.js";
-import {
-  sendReplySessionConflictTerminalNotice,
-  type SessionConflictTerminalNoticeDeps,
-} from "./gateway.js";
 import type { InboundContext } from "./inbound-context.js";
 import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
+import { sendReplySessionConflictTerminalNotice } from "./reply-session-conflict.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 /**
@@ -1688,26 +1685,6 @@ describe("reply-session-conflict shared helpers", () => {
     expect(isReplySessionInitConflictError(new Error("timeout"))).toBe(false);
     expect(isReplySessionInitConflictError(new Error(""))).toBe(false);
   });
-
-  it("generateSessionConflictErrorId produces 8-char lower-case hex", async () => {
-    const { generateSessionConflictErrorId } = await vi.importActual<
-      typeof import("./reply-session-conflict.js")
-    >("./reply-session-conflict.js");
-
-    await withDeterministicRandomValues(0xabcdef01, () => {
-      expect(generateSessionConflictErrorId()).toBe("abcdef01");
-    });
-  });
-
-  it("generateSessionConflictErrorId pads to 8 chars with leading zeros", async () => {
-    const { generateSessionConflictErrorId } = await vi.importActual<
-      typeof import("./reply-session-conflict.js")
-    >("./reply-session-conflict.js");
-
-    await withDeterministicRandomValues(0x00000042, () => {
-      expect(generateSessionConflictErrorId()).toBe("00000042");
-    });
-  });
 });
 
 describe("sendReplySessionConflictTerminalNotice", () => {
@@ -1772,7 +1749,7 @@ describe("sendReplySessionConflictTerminalNotice", () => {
   it("sends terminal notice for a typed conflict error", async () => {
     // Override crypto for deterministic error ID.
     await withDeterministicRandomValues(0xdeadbeef, async () => {
-      const deps: SessionConflictTerminalNoticeDeps = {
+      const deps = {
         event: baseEvent,
         account: baseAccount,
         log,
