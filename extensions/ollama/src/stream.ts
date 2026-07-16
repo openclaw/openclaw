@@ -347,7 +347,12 @@ function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | un
 function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
   return (
     resolveOllamaConfiguredNumCtx(model) ??
-    Math.max(1, Math.floor(model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS))
+    Math.max(
+      1,
+      Math.floor(
+        model.contextTokens ?? model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+      ),
+    )
   );
 }
 

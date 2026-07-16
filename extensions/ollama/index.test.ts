@@ -1701,13 +1701,12 @@ describe("ollama plugin", () => {
 
   it("resolves GLM-5.2 from the cloud fallback catalog", () => {
     const provider = registerOllamaCloudProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "ollama-cloud",
+      modelId: "glm-5.2:cloud",
+    } as never);
 
-    expect(
-      provider.resolveDynamicModel?.({
-        provider: "ollama-cloud",
-        modelId: "glm-5.2:cloud",
-      } as never),
-    ).toEqual(
+    expect(model).toEqual(
       expect.objectContaining({
         provider: "ollama-cloud",
         id: "glm-5.2:cloud",
@@ -1716,6 +1715,7 @@ describe("ollama plugin", () => {
         reasoning: true,
       }),
     );
+    expect(model?.contextTokens).toBeUndefined();
   });
 
   it("does not mint synthetic auth for public IPv4 baseUrl", () => {
@@ -1762,6 +1762,7 @@ describe("ollama plugin", () => {
         id: "qwen3:32b",
         baseUrl: "http://127.0.0.1:11434/v1",
         contextWindow: 202_752,
+        contextTokens: 32_768,
       },
       streamFn: baseStreamFn,
     });
@@ -1771,7 +1772,7 @@ describe("ollama plugin", () => {
     }
     void wrapped({} as never, {} as never, {});
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
-    expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
+    expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(32_768);
   });
 
   it("owns replay policy for OpenAI-compatible and native Ollama routes", () => {

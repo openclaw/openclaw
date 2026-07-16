@@ -9,6 +9,7 @@ import type { CliSessionBinding } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
+import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentOperation } from "./operations.js";
@@ -29,7 +30,6 @@ import {
  * Turns share one persistent session so the conversation has genuine
  * multi-turn memory. Inference setup must succeed before this runner is entered.
  */
-const AGENT_TURN_TIMEOUT_MS = 120_000;
 const SYSTEM_AGENT_MCP_TOOL_NAME = "mcp__openclaw__openclaw";
 
 export type SystemAgentTurnDirective =
@@ -93,6 +93,7 @@ type SystemAgentTurnDeps = SystemAgentVerifiedInferenceDeps & {
   runEmbeddedAgent?: SystemAgentRunEmbeddedAgent;
   runCliAgent?: SystemAgentRunCliAgent;
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  resolveAssistantTimeoutMs?: typeof resolveSystemAgentAssistantTimeoutMs;
 };
 
 type EmbeddedRunResult = {
@@ -313,6 +314,7 @@ async function runSystemAgentTurnWithDeps(
   }
 
   const runId = `openclaw-turn-${randomUUID()}`;
+  const timeoutMs = (deps.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs)(plan);
   const shared = {
     sessionId: params.session.sessionId,
     sessionKey: buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID }),
@@ -322,7 +324,8 @@ async function runSystemAgentTurnWithDeps(
     workspaceDir,
     config: plan.runConfig,
     prompt: params.input,
-    timeoutMs: AGENT_TURN_TIMEOUT_MS,
+    timeoutMs,
+    thinkLevel: "off" as const,
     runId,
     messageChannel: "openclaw",
     messageProvider: "openclaw",

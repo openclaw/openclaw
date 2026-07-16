@@ -1,5 +1,6 @@
 import type { SystemAgentTurnRunner } from "./agent-turn.js";
 import "./agent-turn.js";
+import type { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentVerifiedInferenceDeps } from "./verified-inference.js";
 
 type SystemAgentRunEmbeddedAgent = (
@@ -18,6 +19,7 @@ export type SystemAgentTurnDeps = SystemAgentVerifiedInferenceDeps & {
   runEmbeddedAgent?: SystemAgentRunEmbeddedAgent;
   runCliAgent?: SystemAgentRunCliAgent;
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  resolveAssistantTimeoutMs?: typeof resolveSystemAgentAssistantTimeoutMs;
 };
 
 type SystemAgentTurnTestApi = {

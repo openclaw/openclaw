@@ -222,6 +222,7 @@ describe("runSystemAgentTurn", () => {
         {
           ...authDeps,
           runEmbeddedAgent: runEmbeddedAgent as never,
+          resolveAssistantTimeoutMs: () => 30_000,
           readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
         },
       );
@@ -232,6 +233,8 @@ describe("runSystemAgentTurn", () => {
         authProfileId: "openai:p2",
         authProfileIdSource: "user",
         config: binding.execution.runConfig,
+        thinkLevel: "off",
+        timeoutMs: 30_000,
       }),
     );
 
