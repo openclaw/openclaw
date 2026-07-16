@@ -63,15 +63,49 @@ describe("buildInworldSpeechProvider", () => {
     ).toBe(false);
   });
 
-  it("reports not configured when INWORLD_API_KEY is whitespace only", () => {
+  it("rejects blank API keys across every request entrypoint", async () => {
     vi.stubEnv("INWORLD_API_KEY", "   ");
     const provider = buildInworldSpeechProvider();
+    const listVoices = provider.listVoices;
+    const synthesizeTelephony = provider.synthesizeTelephony;
+    if (!listVoices || !synthesizeTelephony) {
+      throw new Error("expected Inworld voice listing and telephony synthesis");
+    }
+
     expect(
       provider.isConfigured({
-        providerConfig: {},
+        providerConfig: { apiKey: "   " },
         timeoutMs: 30_000,
       }),
     ).toBe(false);
+
+    await expect(
+      listVoices({
+        providerConfig: {},
+        apiKey: "   ",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Inworld API key missing");
+    await expect(
+      provider.synthesize({
+        text: "test",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Inworld API key missing");
+    await expect(
+      synthesizeTelephony({
+        text: "test",
+        cfg: {} as never,
+        providerConfig: {},
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Inworld API key missing");
+
+    expect(listInworldVoicesMock).not.toHaveBeenCalled();
+    expect(inworldTTSMock).not.toHaveBeenCalled();
   });
 
   it("has correct provider metadata", () => {
@@ -290,19 +324,5 @@ describe("buildInworldSpeechProvider", () => {
       outputFormat: "pcm",
       sampleRate: 22_050,
     });
-  });
-
-  it("throws when INWORLD_API_KEY is whitespace only", async () => {
-    vi.stubEnv("INWORLD_API_KEY", "   ");
-    const provider = buildInworldSpeechProvider();
-    await expect(
-      provider.synthesize({
-        text: "test",
-        cfg: {} as never,
-        providerConfig: {},
-        target: "audio-file",
-        timeoutMs: 5_000,
-      }),
-    ).rejects.toThrow("Inworld API key missing");
   });
 });
