@@ -768,16 +768,11 @@ describe("subagent registry persistence", () => {
     });
 
     restartRegistry();
-    await waitForRegistryWork(
-      () =>
-        vi.mocked(callGateway).mock.calls.length > 0 &&
-        vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0,
-    );
+    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    const [request] = vi.mocked(callGateway).mock.calls.at(0) ?? [];
-    expectFields(request, { method: "agent.wait" });
-    expectFields((request as { params?: unknown } | undefined)?.params, { runId });
+    // The dead pre-restart run must not be queried before orphan recovery can
+    // replace it with a fresh turn through the Gateway-owned runtime.
+    expect(callGateway).not.toHaveBeenCalled();
     expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
     expect(
       listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),

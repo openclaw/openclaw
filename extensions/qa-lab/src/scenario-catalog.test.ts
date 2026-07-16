@@ -623,7 +623,7 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("luna-thinking-visibility-switch");
     const config = readQaScenarioExecutionConfig("luna-thinking-visibility-switch") as
       | {
-          requiredProvider?: string;
+          liveProvider?: string;
           requiredModel?: string;
           offDirective?: string;
           maxDirective?: string;
@@ -632,7 +632,7 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/models/luna-thinking-visibility-switch.yaml");
-    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.liveProvider).toBe("openai");
     expect(config?.requiredModel).toBe("gpt-5.6-luna");
     expect(config?.offDirective).toBe("/think off");
     expect(config?.maxDirective).toBe("/think medium");
@@ -937,6 +937,19 @@ describe("qa scenario catalog", () => {
 
     expect(channelBaseline.execution.suiteIsolation).toBe("isolated");
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
+  });
+
+  it("settles subagent completions before reading the SQLite session store", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
+    const flow = JSON.stringify(scenario.execution.flow);
+    const completionWaits = [...flow.matchAll(/expectedChildCompletionMarkers/gu)].map(
+      (match) => match.index,
+    );
+    const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
+
+    expect(completionWaits).toHaveLength(2);
+    expect(storeReads).toHaveLength(2);
+    expect(completionWaits.every((wait, index) => wait < (storeReads[index] ?? -1))).toBe(true);
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

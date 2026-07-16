@@ -3,6 +3,10 @@ import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-ou
 import { consumeExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import {
+  setChannelSourceTurnId,
+  setChannelSourceTurnSameThreadRequired,
+} from "../../auto-reply/reply/source-turn-id.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,7 +16,10 @@ import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  buildRunUserTurnIdempotencyKey,
+  createUserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -25,6 +32,7 @@ import {
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
+import { resolveAgentRestartRecoveryChannelContext } from "./agent-restart-recovery-context.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
 import {
   resolveAbortedAgentStopReason,
@@ -164,7 +172,7 @@ export function startAgentRunExecution(params: {
               input: {
                 text: params.effectiveTranscriptInputText,
                 timestamp: Date.now(),
-                idempotencyKey: `${params.runId}:user`,
+                idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
                 ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
               },
               target: () => {
@@ -253,6 +261,33 @@ export function startAgentRunExecution(params: {
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
 
+      const restartRecoveryChannelContext = resolveAgentRestartRecoveryChannelContext({
+        canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
+        expectedExistingSessionId: params.request.expectedExistingSessionId,
+        resolvedSessionId: params.resolvedSessionId,
+        runId: params.runId,
+        sessionEntry: params.sessionEntry,
+      });
+      const runContext = {
+        messageChannel:
+          restartRecoveryChannelContext?.channel ?? params.delivery.originMessageChannel,
+        accountId:
+          restartRecoveryChannelContext?.requesterAccountId ?? params.delivery.resolvedAccountId,
+        senderId: restartRecoveryChannelContext?.requesterSenderId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        currentChannelId: restartRecoveryChannelContext?.currentChannelId,
+        currentThreadTs:
+          restartRecoveryChannelContext?.currentThreadTs ??
+          (prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined),
+      };
+      setChannelSourceTurnId(runContext, restartRecoveryChannelContext?.sourceTurnId);
+      setChannelSourceTurnSameThreadRequired(
+        runContext,
+        restartRecoveryChannelContext?.sameChannelThreadRequired,
+      );
+
       dispatchAgentRunFromGateway({
         ingressOpts: {
           message,
@@ -270,15 +305,7 @@ export function startAgentRunExecution(params: {
           channel: params.delivery.resolvedChannel,
           accountId: params.delivery.resolvedAccountId,
           threadId: prepared.resolvedThreadId,
-          runContext: {
-            messageChannel: params.delivery.originMessageChannel,
-            accountId: params.delivery.resolvedAccountId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            currentThreadTs:
-              prepared.resolvedThreadId != null ? String(prepared.resolvedThreadId) : undefined,
-          },
+          runContext,
           ...(execApprovalFollowupRuntimeHandoff?.bashElevated
             ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }
             : {}),

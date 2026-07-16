@@ -6468,6 +6468,7 @@ public struct SystemAgentSetupDetectParams: Codable, Sendable {}
 
 public struct SystemAgentSetupDetectResult: Codable, Sendable {
     public let candidates: [[String: AnyCodable]]
+    public let unavailablecandidates: [[String: AnyCodable]]?
     public let manualproviders: [[String: AnyCodable]]
     public let authoptions: [[String: AnyCodable]]?
     public let workspace: String
@@ -6477,6 +6478,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
 
     public init(
         candidates: [[String: AnyCodable]],
+        unavailablecandidates: [[String: AnyCodable]]? = nil,
         manualproviders: [[String: AnyCodable]],
         authoptions: [[String: AnyCodable]]? = nil,
         workspace: String,
@@ -6485,6 +6487,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         setupcomplete: Bool)
     {
         self.candidates = candidates
+        self.unavailablecandidates = unavailablecandidates
         self.manualproviders = manualproviders
         self.authoptions = authoptions
         self.workspace = workspace
@@ -6495,6 +6498,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case candidates
+        case unavailablecandidates = "unavailableCandidates"
         case manualproviders = "manualProviders"
         case authoptions = "authOptions"
         case workspace
@@ -8712,6 +8716,7 @@ public struct ModelChoice: Codable, Sendable {
     public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
+    public let agentruntime: [String: AnyCodable]?
     public let apikeysupported: Bool?
     public let input: [AnyCodable]?
 
@@ -8723,6 +8728,7 @@ public struct ModelChoice: Codable, Sendable {
         available: Bool? = nil,
         contextwindow: Int? = nil,
         reasoning: Bool? = nil,
+        agentruntime: [String: AnyCodable]? = nil,
         apikeysupported: Bool? = nil,
         input: [AnyCodable]? = nil)
     {
@@ -8733,6 +8739,7 @@ public struct ModelChoice: Codable, Sendable {
         self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
+        self.agentruntime = agentruntime
         self.apikeysupported = apikeysupported
         self.input = input
     }
@@ -8745,6 +8752,7 @@ public struct ModelChoice: Codable, Sendable {
         case available
         case contextwindow = "contextWindow"
         case reasoning
+        case agentruntime = "agentRuntime"
         case apikeysupported = "apiKeySupported"
         case input
     }

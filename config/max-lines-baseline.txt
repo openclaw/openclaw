@@ -186,7 +186,6 @@ extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
 extensions/memory-core/src/memory/manager-search.ts
-extensions/memory-core/src/memory/manager-sync-ops.ts
 extensions/memory-core/src/memory/manager.ts
 extensions/memory-core/src/memory/qmd-manager.test.ts
 extensions/memory-core/src/memory/qmd-manager.ts
@@ -497,7 +496,6 @@ src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/native-hook-relay.ts
 src/agents/harness/selection.test.ts
 src/agents/harness/selection.ts
-src/agents/live-cache-regression-runner.ts
 src/agents/main-session-restart-recovery.test.ts
 src/agents/main-session-restart-recovery.ts
 src/agents/model-auth-availability.ts
@@ -876,7 +874,6 @@ src/gateway/server-methods/usage.ts
 src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
-src/gateway/server-plugins.ts
 src/gateway/server-reload-handlers.test.ts
 src/gateway/server-reload-handlers.ts
 src/gateway/server-restart-sentinel.test.ts

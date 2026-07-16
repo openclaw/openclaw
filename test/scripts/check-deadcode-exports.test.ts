@@ -1,7 +1,9 @@
 // Check Deadcode Exports tests cover parsing and hard-zero enforcement.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
+import allExportsKnipConfig from "../../config/knip.all-exports.config.ts";
 import knipConfig from "../../config/knip.config.ts";
+import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
   checkUnusedExports,
   parseKnipCompactUnusedExports,
@@ -15,21 +17,104 @@ describe("check-deadcode-exports", () => {
       "utf8",
     );
     expect(script).toContain('"exports,nsExports,types,nsTypes,enumMembers,namespaceMembers"');
+    expect(script).toContain('"config/knip.config.ts", "--production"');
+    expect(script).toContain('"config/knip.all-exports.config.ts"');
+    expect(script).toContain('"config/knip.scripts-exports.config.ts"');
+    expect(script).toContain(
+      'args: ["--config", "config/knip.scripts-exports.config.ts", "--include-entry-exports"]',
+    );
   });
 
-  it("excludes test support from every Knip issue type", () => {
+  it("excludes test support only from the production scan", () => {
     expect(knipConfig.ignore).toContain("dist/**");
     expect(knipConfig.ignore).toContain("**/test-helpers/**");
     expect(knipConfig.ignore).toContain("**/*.test-utils.ts");
     expect(knipConfig.ignoreFiles).not.toContain("**/test-helpers/**");
     expect(knipConfig.ignoreFiles).toContain("scripts/**");
+    expect(allExportsKnipConfig.ignoreFiles).not.toContain("scripts/**");
     expect(knipConfig.ignoreFiles).toContain("dist/**");
     expect(knipConfig.ignore).not.toContain("**/live-*.ts");
     expect(knipConfig.ignoreFiles).toContain("**/live-*.ts");
+    expect(allExportsKnipConfig.ignore).toEqual([
+      "dist/**",
+      "packages/*/dist/**",
+      "**/.boundary-stubs/**",
+    ]);
+    expect(allExportsKnipConfig.ignoreIssues).toHaveProperty("test/fixtures/ts-topology/basic/**");
+    expect(knipConfig.workspaces["."].project).toContain("scripts/**/*.{js,mjs,cjs,ts,mts,cts}!");
+  });
+
+  it("makes tests in every workspace roots of the full-tree export audit", () => {
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+    );
+    expect(knipConfig.workspaces["."].entry).toEqual(
+      expect.arrayContaining([
+        "config/knip.config.ts!",
+        "config/knip.all-exports.config.ts!",
+        "config/knip.scripts-exports.config.ts!",
+      ]),
+    );
+    expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
+    const rootWorkspace = allExportsKnipConfig.workspaces["."];
+    const extensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
+    const uiWorkspace = allExportsKnipConfig.workspaces.ui;
+    expect(rootWorkspace).toBeDefined();
+    expect(extensionWorkspace).toBeDefined();
+    expect(uiWorkspace).toBeDefined();
+    expect(rootWorkspace!.entry).toEqual(
+      expect.arrayContaining([
+        ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        "test/vitest/vitest*.config.ts!",
+        "test/e2e/qa-lab/runtime/media-talk-gateway.ts!",
+        "test/e2e/qa-lab/runtime/voice-call-gateway.ts!",
+      ]),
+    );
+    expect(extensionWorkspace!.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
+    expect(uiWorkspace!.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
+  });
+
+  it("keeps the script unused-export scan scoped to real executable roots", () => {
+    expect(scriptExportsKnipConfig.workspaces["."].entry).toEqual(
+      expect.arrayContaining([
+        ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        "scripts/check-live-cache.ts!",
+        "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+        "src/plugin-sdk/api-baseline.ts!",
+      ]),
+    );
+    expect(scriptExportsKnipConfig.workspaces["."].entry).not.toContain(
+      "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
+    );
+    expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty("src/**");
+    expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
+      "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
+    );
+    expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
+      "scripts/e2e/secret-provider-integrations.mjs",
+    );
   });
 
   it("tracks production script consumers of plugin exports", () => {
     expect(knipConfig.workspaces["."].entry).toContain("scripts/qa/render-maturity-docs.ts!");
+  });
+
+  it("runs exhaustive dead-code hygiene against production and full-tree configs", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { scripts: Record<string, string> };
+    expect(packageJson.scripts["deadcode:dependencies"]).toBe("pnpm deadcode:full");
+    expect(packageJson.scripts["deadcode:full"]).toContain(
+      "--config config/knip.config.ts --production",
+    );
+    expect(packageJson.scripts["deadcode:full"]).toContain(
+      "--config config/knip.all-exports.config.ts",
+    );
+    expect(packageJson.scripts["deadcode:full"]).toContain("--exclude duplicates");
   });
 
   it("models the jiti virtual agent-sessions SDK entry", () => {
@@ -40,56 +125,74 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.workspaces["."].entry).toContain("src/mcp/openclaw-tools-serve.ts!");
   });
 
-  it.each([
-    "acpx",
-    "amazon-bedrock-mantle",
-    "azure-speech",
-    "cloudflare-ai-gateway",
-    "cohere",
-    "deepgram",
-    "elevenlabs",
-    "featherless",
-    "fireworks",
-    "google",
-    "huggingface",
-    "kilocode",
-    "kimi-coding",
-    "lmstudio",
-    "microsoft",
-    "minimax",
-    "mistral",
-    "moonshot",
-    "nvidia",
-    "pixverse",
-    "qianfan",
-    "qwen",
-    "senseaudio",
-    "tavily",
-    "tencent",
-    "vllm",
-    "xiaomi",
-    "xai",
-  ])("removes the bundled-plugin root catch-all from migrated %s workspace", (pluginId) => {
-    const workspace = (
-      knipConfig.workspaces as Record<string, { readonly entry: readonly string[] }>
-    )[`extensions/${pluginId}`];
-    if (!workspace) {
-      throw new Error(`missing Knip workspace for ${pluginId}`);
+  it("scans every nested bundled-plugin source file without broad entry masking", () => {
+    const extensionWorkspaces = Object.entries(knipConfig.workspaces).filter(([workspace]) =>
+      workspace.startsWith("extensions/"),
+    );
+    expect(extensionWorkspaces.length).toBeGreaterThan(1);
+    for (const [workspace, settings] of extensionWorkspaces) {
+      expect(settings.entry, workspace).not.toContain("*.ts!");
+      expect(settings.project, workspace).toContain("**/*.{js,mjs,ts}!");
+      expect(settings.entry, workspace).toEqual(
+        expect.arrayContaining([
+          "index.ts!",
+          "setup-entry.ts!",
+          "*-api.ts!",
+          "cli-metadata.ts!",
+          "channel-entry.ts!",
+          "provider-discovery.ts!",
+          "{web-search,web-fetch}-provider.ts!",
+        ]),
+      );
     }
-    const entries = workspace.entry;
-    expect(entries).not.toContain("*.ts!");
-    expect(entries).toEqual(
+    expect(knipConfig.workspaces["extensions/*"].project).toContain("**/*.{js,mjs,ts}!");
+    expect(knipConfig.workspaces["extensions/llama-cpp"].project).toContain("**/*.{js,mjs,ts}!");
+    expect(knipConfig.workspaces["extensions/reef"].project).toContain("**/*.{js,mjs,ts}!");
+  });
+
+  it("models non-imported runtime and build entrypoints explicitly", () => {
+    expect(knipConfig.workspaces["."].entry).toEqual(
       expect.arrayContaining([
-        "index.ts!",
-        "setup-entry.ts!",
-        "*-api.ts!",
-        "cli-metadata.ts!",
-        "channel-entry.ts!",
-        "provider-discovery.ts!",
-        "{web-search,web-fetch}-provider.ts!",
+        "src/agents/subagent-registry.runtime.ts!",
+        "src/mcp/plugin-tools-serve.ts!",
+        "src/plugins/build-smoke-entry.ts!",
+        "src/config/doc-baseline.ts!",
+        "src/plugins/runtime-sidecar-paths-baseline.ts!",
+        "tsdown.ai.config.ts!",
       ]),
     );
-    expect(knipConfig.workspaces["extensions/*"].entry).toContain("*.ts!");
+    expect(knipConfig.workspaces["extensions/acpx"].entry).toEqual(
+      expect.arrayContaining([
+        "src/runtime-internals/mcp-command-line.mjs!",
+        "src/runtime-internals/mcp-proxy.mjs!",
+      ]),
+    );
+    expect(knipConfig.workspaces["extensions/canvas"].entry).toEqual(
+      expect.arrayContaining([
+        "src/host/a2ui-app/bootstrap.js!",
+        "src/host/a2ui-app/rolldown.config.mjs!",
+      ]),
+    );
+    expect(knipConfig.workspaces["extensions/diffs"].entry).toContain("src/viewer-client.ts!");
+    expect(knipConfig.workspaces["extensions/matrix"].entry).toContain(
+      "src/plugin-entry.runtime.js!",
+    );
+    expect(knipConfig.workspaces["extensions/mxc"].entry).toContain("src/mxc-spawn-launcher.mjs!");
+    expect(knipConfig.workspaces["extensions/qa-lab"].entry).toContain("src/ci-smoke-plan.ts!");
+  });
+
+  it("models the Browser facades loaded by basename", () => {
+    const workspace = knipConfig.workspaces["extensions/browser"];
+    expect(workspace.entry).toEqual(
+      expect.arrayContaining([
+        "browser-control-auth.ts!",
+        "browser-config.ts!",
+        "browser-doctor.ts!",
+        "browser-host-inspection.ts!",
+        "browser-maintenance.ts!",
+        "browser-profiles.ts!",
+      ]),
+    );
   });
 
   it.each([
@@ -113,8 +216,10 @@ describe("check-deadcode-exports", () => {
   it("parses all compact export sections and expands symbol lists", () => {
     expect(
       parseKnipCompactUnusedExports(`
-Unused exports (2)
+Unused exports (4)
 src/b.ts: beta, alpha
+.agents/skills/example/scripts/main.mjs: run
+config/knip.extra.config.ts: configEntry
 /tmp/outside.ts: noise
 
 Unused exported types (1)
@@ -136,6 +241,8 @@ Unused files (1)
 src/noise.ts: src/noise.ts
 `),
     ).toEqual([
+      ".agents/skills/example/scripts/main.mjs: run",
+      "config/knip.extra.config.ts: configEntry",
       "extensions/example/src/types.ts: ExampleType",
       "packages/example/src/state.ts: Ready",
       "src/b.ts: alpha",

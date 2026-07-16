@@ -165,6 +165,7 @@ type DispatchInboundParams = {
       phase?: string;
       explanation?: string;
       steps?: string[];
+      planSteps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }) => Promise<void> | void;
     onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
     onCommandOutput?: (payload: {
@@ -3203,6 +3204,37 @@ describe("processDiscordMessage draft streaming", () => {
     );
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
+  });
+
+  it("renders plan updates as an immediate Discord checklist", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Implementing the change.",
+        steps: ["Inspect", "Patch", "Test"],
+        planSteps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+          { step: "Test", status: "pending" },
+        ],
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: false } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test",
+    );
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
   });
 
   it("keeps opt-in commentary receipts independent from hidden tool progress", async () => {

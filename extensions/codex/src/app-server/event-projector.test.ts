@@ -207,7 +207,7 @@ function findAgentEvent(
   throw new Error(`Expected agent event ${params.stream}`);
 }
 
-function findPlanEventWithSteps(mock: unknown, steps: string[]) {
+function findPlanEventWithSteps(mock: unknown, steps: Array<{ step: string; status: string }>) {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
   if (!Array.isArray(calls)) {
     throw new Error("Expected onAgentEvent mock calls");
@@ -222,7 +222,7 @@ function findPlanEventWithSteps(mock: unknown, steps: string[]) {
       return data;
     }
   }
-  throw new Error(`Expected plan event ${steps.join(", ")}`);
+  throw new Error(`Expected plan event ${JSON.stringify(steps)}`);
 }
 
 function forCurrentTurn(
@@ -2512,7 +2512,7 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(
       forCurrentTurn("turn/plan/updated", {
         explanation: "next",
-        plan: [{ step: "patch", status: "in_progress" }],
+        plan: [{ step: "patch", status: "inProgress" }],
       }),
     );
     await projector.handleNotification(
@@ -2546,9 +2546,12 @@ describe("CodexAppServerEventProjector", () => {
       isReasoningSnapshot: true,
     });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-    expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
-      "patch (in_progress)",
-    ]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "inspect", status: "pending" }]).steps,
+    ).toEqual([{ step: "inspect", status: "pending" }]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "patch", status: "in_progress" }]).steps,
+    ).toEqual([{ step: "patch", status: "in_progress" }]);
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
     );
@@ -6003,8 +6006,8 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
-      "step one",
-      "step two",
+      { step: "step one", status: "pending" },
+      { step: "step two", status: "pending" },
     ]);
     expect(result.assistantTexts).toEqual(["final answer"]);
     expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");
