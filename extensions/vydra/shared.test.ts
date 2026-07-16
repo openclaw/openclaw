@@ -1,0 +1,115 @@
+// Vydra tests cover shared download timeout plugin behavior.
+import { once } from "node:events";
+import http from "node:http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { afterEach, describe, expect, it } from "vitest";
+import { downloadVydraAsset } from "./shared.js";
+
+describe("downloadVydraAsset", () => {
+  let server: http.Server | undefined;
+  const dripTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  afterEach(async () => {
+    for (const timer of dripTimers) {
+      clearTimeout(timer);
+    }
+    dripTimers.clear();
+    if (!server) {
+      return;
+    }
+    server.closeAllConnections?.();
+    server.close();
+    await once(server, "close").catch(() => undefined);
+    server = undefined;
+  });
+
+  it("bounds a dripping download body with one wall-clock deadline", async () => {
+    const timeoutMs = 250;
+    server = http.createServer((_req, res) => {
+      res.on("error", () => {});
+      res.writeHead(200, {
+        "Content-Type": "image/png",
+        "Transfer-Encoding": "chunked",
+      });
+      // Keep sending bytes so chunk idle alone would never fire.
+      const drip = () => {
+        if (res.writableEnded || res.destroyed) {
+          return;
+        }
+        res.write(Buffer.from([0x00]));
+        const timer = setTimeout(drip, 20);
+        dripTimers.add(timer);
+      };
+      drip();
+    });
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+
+    const startedAt = performance.now();
+    await expect(
+      downloadVydraAsset({
+        url: `http://127.0.0.1:${address.port}/generated/test.png`,
+        kind: "image",
+        timeoutMs,
+        fetchFn: fetch,
+        maxBytes: 1024 * 1024,
+      }),
+    ).rejects.toThrow(`Vydra image download timed out after ${timeoutMs}ms`);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 50);
+    expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
+  });
+
+  it("does not bound a dripping body when only chunk idle timeout is used", async () => {
+    // Negative control: chunkTimeoutMs resets on every drip, so idle alone never fires.
+    server = http.createServer((_req, res) => {
+      res.on("error", () => {});
+      res.writeHead(200, {
+        "Content-Type": "image/png",
+        "Transfer-Encoding": "chunked",
+      });
+      const drip = () => {
+        if (res.writableEnded || res.destroyed) {
+          return;
+        }
+        res.write(Buffer.from([0x00]));
+        const timer = setTimeout(drip, 20);
+        dripTimers.add(timer);
+      };
+      drip();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/`);
+    let settled = false;
+    void readResponseWithLimit(response, 1024 * 1024, {
+      chunkTimeoutMs: 100,
+      onIdleTimeout: ({ chunkTimeoutMs }) => new Error(`idle fired after ${chunkTimeoutMs}ms`),
+    })
+      .then(() => {
+        settled = true;
+      })
+      .catch(() => {
+        settled = true;
+      });
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 400);
+    });
+    expect(settled).toBe(false);
+    // Body reader is locked by readResponseWithLimit; tear down via server close in afterEach.
+  });
+});

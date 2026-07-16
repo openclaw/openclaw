@@ -241,6 +241,9 @@ export async function downloadVydraAsset(params: {
   maxBytes: number;
 }): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
   const timeoutMs = resolveVydraHttpTimeoutMs(params.timeoutMs);
+  // fetchWithTimeout clears its abort after headers land. Keep one wall-clock deadline across
+  // the body read so a slow drip cannot reset chunk idle forever past the download budget.
+  const deadlineMs = Date.now() + timeoutMs;
   const response = await fetchWithTimeout(params.url, { method: "GET" }, timeoutMs, params.fetchFn);
   await assertOkOrThrowHttpError(response, `Vydra ${params.kind} download failed`);
   const mimeType =
@@ -248,10 +251,12 @@ export async function downloadVydraAsset(params: {
     (params.kind === "image" ? "image/png" : params.kind === "audio" ? "audio/mpeg" : "video/mp4");
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
     chunkTimeoutMs: timeoutMs,
+    timeoutMs: Math.max(1, deadlineMs - Date.now()),
     onOverflow: ({ maxBytes }) =>
       new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Vydra ${params.kind} download stalled after ${chunkTimeoutMs}ms`),
+    onTimeout: () => new Error(`Vydra ${params.kind} download timed out after ${timeoutMs}ms`),
   });
   const extension = resolveVydraFileExtension(params.kind, mimeType);
   const fileStem = params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";
