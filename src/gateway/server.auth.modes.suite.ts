@@ -294,10 +294,12 @@ export function registerAuthModesSuite(): void {
       port = await getFreePort();
       server = await startGatewayServer(port);
 
-      const withoutToken = await openTailscaleWs(port);
+      const withoutToken = await openTailscaleWs(port, { origin: tailscaleOrigin });
       const rejected = await connectReq(withoutToken, {
         skipDefaultAuth: true,
-        device: null,
+        client: {
+          ...CONTROL_UI_CLIENT,
+        },
       });
       expect(rejected.ok).toBe(false);
       expect(rejected.error?.message ?? "").toContain("unauthorized");
