@@ -708,6 +708,31 @@ func TestValidateDocChunkTranslationRejectsNestedListMovedToDifferentParentItem(
 	}
 }
 
+func TestValidateDocBodyRejectsListIndentationChangeInsideComponent(t *testing.T) {
+	t.Parallel()
+
+	source := "<Accordion title=\"Gateway options\">\n- `autoApproveCidrs`: optional allowlist.\n- `sshVerify`: enabled by default.\n- `gateway.tools.deny`: extra deny rules.\n</Accordion>\n"
+	translated := "<Accordion title=\"Gateway options\">\n- `autoApproveCidrs`: optionale Zulassungsliste.\n  - `sshVerify`: standardmäßig aktiviert.\n  - `gateway.tools.deny`: zusätzliche Sperrregeln.\n</Accordion>\n"
+
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil {
+		t.Fatal("expected component-nested list indentation change to be rejected")
+	}
+	if !strings.Contains(err.Error(), "list marker structure mismatch") {
+		t.Fatalf("expected list marker structure error, got %v", err)
+	}
+}
+
+func TestExtractMarkdownListMarkerPrefixesIgnoresFencedExamples(t *testing.T) {
+	t.Parallel()
+
+	text := "- Real item\n\n```md\n  - Example nested item\n```\n\n> 1. Quoted item\n"
+	want := []string{"- ", "> 1. "}
+	if got := extractMarkdownListMarkerPrefixes(text); !slices.Equal(got, want) {
+		t.Fatalf("list marker prefixes mismatch\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTranslatedInlineCode(t *testing.T) {
 	t.Parallel()
 
