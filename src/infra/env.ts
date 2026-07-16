@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { createDedupeCache } from "./dedupe.js";
 
 let log: SubsystemLogger | null = null;
 const loadLog = createLazyPromise(
@@ -12,7 +13,7 @@ const loadLog = createLazyPromise(
     ),
   { cacheRejections: true },
 );
-const loggedEnv = new Set<string>();
+const loggedEnv = createDedupeCache({ ttlMs: 0, maxSize: 256 });
 const ENV_NORMALIZATION_KEY_GROUPS = [["ZAI_API_KEY", "Z_AI_API_KEY"]] as const;
 
 async function getLog(): Promise<SubsystemLogger> {
@@ -40,19 +41,23 @@ function formatEnvValue(value: string, redact?: boolean): string {
   return `${truncateUtf16Safe(singleLine, 160)}…`;
 }
 
+/** Resets the module-level accepted-env log cache for tests. */
+export function resetLoggedEnvCacheForTest(): void {
+  loggedEnv.clear();
+}
+
 /** Logs an accepted env option once, with optional redaction for sensitive values. */
 export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
   }
-  if (loggedEnv.has(option.key)) {
+  if (loggedEnv.check(option.key)) {
     return;
   }
   const rawValue = option.value ?? process.env[option.key];
   if (!rawValue || !rawValue.trim()) {
     return;
   }
-  loggedEnv.add(option.key);
   void getLog()
     .then((logger) => {
       logger.info(

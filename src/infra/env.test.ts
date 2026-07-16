@@ -1,7 +1,13 @@
 // Tests infra environment loading and variable normalization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";
+import {
+  isTruthyEnvValue,
+  logAcceptedEnvOption,
+  normalizeEnv,
+  normalizeZaiEnv,
+  resetLoggedEnvCacheForTest,
+} from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -15,6 +21,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 beforeEach(() => {
   loggerMocks.info.mockClear();
+  resetLoggedEnvCacheForTest();
 });
 
 describe("normalizeZaiEnv", () => {
@@ -93,6 +100,46 @@ describe("logAcceptedEnvOption", () => {
     expect(loggerMocks.info).toHaveBeenCalledWith(
       "env: OPENCLAW_TEST_ENV=<redacted> (test option)",
     );
+  });
+
+  it("caps the dedupe cache at 256 entries and re-logs evicted keys", async () => {
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+      },
+      () => {
+        for (let i = 0; i < 257; i++) {
+          logAcceptedEnvOption({
+            key: `OPENCLAW_CACHE_TEST_${i}`,
+            description: "cache cap test",
+            value: `value-${i}`,
+          });
+        }
+      },
+    );
+
+    await vi.waitFor(() => {
+      expect(loggerMocks.info).toHaveBeenCalledTimes(257);
+    });
+
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_CACHE_TEST_0",
+          description: "cache cap test",
+          value: "value-0",
+        });
+      },
+    );
+
+    await vi.waitFor(() => {
+      expect(loggerMocks.info).toHaveBeenCalledTimes(258);
+    });
   });
 
   it("skips blank values and test-mode logging", () => {
