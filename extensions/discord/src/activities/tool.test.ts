@@ -6,6 +6,7 @@ import {
 } from "../component-custom-id.js";
 import { buildDiscordComponentMessage } from "../components.js";
 import type { sendDiscordComponentMessage } from "../send.components.js";
+import { createDiscordSendReceipt } from "../send.receipt.js";
 import { createActivityTestRuntime } from "./test-helpers.test-support.js";
 import { createDiscordWidgetTool } from "./tool.js";
 
@@ -186,7 +187,11 @@ describe("discord_widget", () => {
       await args[2].onDeliveryResult?.({
         messageId: "delivered-message",
         channelId: "987654321",
-        receipt: {},
+        receipt: createDiscordSendReceipt({
+          platformMessageIds: ["delivered-message"],
+          channelId: "987654321",
+          kind: "text",
+        }),
       });
       throw failure;
     }) as unknown as typeof sendDiscordComponentMessage;
