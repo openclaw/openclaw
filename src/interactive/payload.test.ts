@@ -1,5 +1,6 @@
 // Interactive payload tests cover validation of interactive response payloads.
 import { describe, expect, it } from "vitest";
+import type { MessagePresentationAction } from "./payload.js";
 import {
   hasReplyChannelData,
   hasReplyContent,
@@ -356,7 +357,8 @@ describe("interactive payload helpers", () => {
     );
     expect(
       resolveMessagePresentationButtonAction({
-        action: { type: "web-app" },
+        // Boundary input missing both url and widgetId; the union forbids this statically.
+        action: { type: "web-app" } as unknown as MessagePresentationAction,
       }),
     ).toBeUndefined();
     expect(
