@@ -1,8 +1,11 @@
 // Command spec tests cover skill-provided command metadata and filtering.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
-import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
+import {
+  buildWorkspaceSkillCommandSpecs,
+  resetSkillCommandDebugCacheForTest,
+} from "./command-specs.js";
 
 const bundleCommandState = vi.hoisted(() => ({
   entries: [] as Array<{
@@ -14,6 +17,15 @@ const bundleCommandState = vi.hoisted(() => ({
   }>,
 }));
 
+const skillsLoggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  trace: vi.fn(),
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => skillsLoggerMock,
+}));
+
 vi.mock("../../plugins/bundle-commands.js", () => ({
   loadEnabledClaudeBundleCommands: () => bundleCommandState.entries,
 }));
@@ -22,6 +34,12 @@ vi.mock("../loading/workspace.js", () => ({
   filterWorkspaceSkillEntriesWithOptions: (entries: SkillEntry[]) => entries,
   loadVisibleWorkspaceSkillEntries: () => [],
 }));
+
+beforeEach(() => {
+  resetSkillCommandDebugCacheForTest();
+  skillsLoggerMock.debug.mockClear();
+  skillsLoggerMock.trace.mockClear();
+});
 
 afterEach(() => {
   bundleCommandState.entries = [];
@@ -86,5 +104,26 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       description,
       promptTemplate: "Run the bundled command.",
     });
+  });
+
+  it("bounds the skill command debug cache and re-logs evicted keys", () => {
+    const entries = [];
+    for (let index = 0; index < 1025; index += 1) {
+      entries.push({
+        pluginId: "bundle-plugin",
+        rawName: `raw ${index}`,
+        description: "Run the bundled command.",
+        promptTemplate: "Run the bundled command.",
+        sourceFilePath: `/plugins/bundle-plugin/commands/raw-${index}.md`,
+      });
+    }
+
+    bundleCommandState.entries = entries;
+    buildWorkspaceSkillCommandSpecs("/workspace", { entries: [] });
+    expect(skillsLoggerMock.debug).toHaveBeenCalledTimes(1025);
+
+    bundleCommandState.entries = [entries[0]];
+    buildWorkspaceSkillCommandSpecs("/workspace", { entries: [] });
+    expect(skillsLoggerMock.debug).toHaveBeenCalledTimes(1026);
   });
 });
