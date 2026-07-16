@@ -40,8 +40,7 @@ describe("defineTokenCredential", () => {
     resolveAccount: ({ cfg }) => resolveDemoAccount(cfg),
     resolvedValue: (account) => account.token,
     envValue: () => "env-token",
-    patchAccount: ({ cfg, patch, clearFields }) =>
-      patchDemoConfig({ cfg, patch, clearFields }),
+    patchAccount: ({ cfg, patch, clearFields }) => patchDemoConfig({ cfg, patch, clearFields }),
     useEnv: { clearFields: ["token", "tokenFile"] },
     set: { clearFields: ["tokenFile"], value: "resolved" },
   });
@@ -95,9 +94,9 @@ describe("baseUrlTextInput", () => {
     expect(await input.currentValue?.({ cfg, accountId: "default", credentialValues: {} })).toBe(
       "https://old",
     );
-    expect(input.validate?.({ value: "http://bad", cfg, accountId: "default", credentialValues: {} })).toBe(
-      "https required",
-    );
+    expect(
+      input.validate?.({ value: "http://bad", cfg, accountId: "default", credentialValues: {} }),
+    ).toBe("https required");
     expect(
       input.normalizeValue?.({
         value: " https://new/ ",

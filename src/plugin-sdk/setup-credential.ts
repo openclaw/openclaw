@@ -29,7 +29,9 @@ type TokenCredentialParams<TAccount extends ResolvedCredentialAccount> = Omit<
   hasConfiguredValue?: (account: TAccount) => boolean;
   resolvedValue?: (account: TAccount) => string | undefined;
   envValue?: (params: { accountId: string }) => string | undefined;
-  patchAccount?: (params: CredentialPatchParams<TAccount>) => OpenClawConfig | Promise<OpenClawConfig>;
+  patchAccount?: (
+    params: CredentialPatchParams<TAccount>,
+  ) => OpenClawConfig | Promise<OpenClawConfig>;
   set?: {
     clearFields?: string[];
     value?: "input" | "resolved";
