@@ -316,7 +316,7 @@ export function createClackPrompter(): WizardPrompter {
       ),
     progress: (label: string): WizardProgress => {
       const useClawSpinner =
-        Boolean(process.stdout.isTTY) && isRich() && !process.env.CI && !process.env.VITEST;
+        process.stdout.isTTY && isRich() && !process.env.CI && !process.env.VITEST;
       const spin = useClawSpinner
         ? spinner({
             frames: CLAW_SPINNER_FRAMES,
