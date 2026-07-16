@@ -1816,7 +1816,7 @@ describe("legacy migrate audio transcription", () => {
     });
 
     expect(res.changes).toStrictEqual(["Removed audio.transcription (invalid or empty command)."]);
-    expect(res.config?.audio).toBeUndefined();
+    expect(res.config).not.toHaveProperty("audio");
     expect(res.config?.tools?.media?.audio).toBeUndefined();
   });
 
@@ -1831,7 +1831,7 @@ describe("legacy migrate audio transcription", () => {
     });
 
     expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.audio.models."]);
-    expect(res.config?.audio).toBeUndefined();
+    expect(res.config).not.toHaveProperty("audio");
     expect(res.config?.tools?.media?.audio?.models).toEqual([
       {
         type: "cli",
