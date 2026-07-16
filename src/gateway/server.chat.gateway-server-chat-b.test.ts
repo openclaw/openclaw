@@ -957,6 +957,7 @@ describe("gateway server chat", () => {
               id: "gpt-5.5",
               name: "GPT-5.5",
               provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
               contextWindow: 400_000,
               reasoning: false,
               available: true,
