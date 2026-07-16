@@ -270,6 +270,7 @@
       "locale": "uk",
       "source": "Active",
       "translations": [
+        "Активний",
         "Активно",
         "Активні"
       ]
@@ -278,6 +279,7 @@
       "locale": "zh-CN",
       "source": "Active",
       "translations": [
+        "活动",
         "活跃",
         "进行中"
       ]
@@ -297,6 +299,56 @@
       "translations": [
         "آدرس",
         "نشانی"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Agent",
+      "translations": [
+        "Agent",
+        "เอเจนต์"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Agent",
+      "translations": [
+        "Agent",
+        "代理",
+        "智能体"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Agent",
+      "translations": [
+        "Agent",
+        "代理",
+        "代理程式"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Agents",
+      "translations": [
+        "Agenten",
+        "Agents"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Agents",
+      "translations": [
+        "Agenten",
+        "Agents"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Agents",
+      "translations": [
+        "Agents",
+        "เอเจนต์"
       ]
     },
     {
@@ -922,6 +974,7 @@
       "locale": "ar",
       "source": "Chat",
       "translations": [
+        "Chat",
         "الدردشة",
         "دردشة"
       ]
@@ -930,8 +983,121 @@
       "locale": "fa",
       "source": "Chat",
       "translations": [
+        "Chat",
         "چت",
         "گفت‌وگو"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "Discussion"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "चैट"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "Obrolan"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "チャット"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "채팅"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "Czat"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "Чат"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "Chatt"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "แชท"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "Sohbet"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "Чат"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "Trò chuyện"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "聊天"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Chat",
+      "translations": [
+        "Chat",
+        "聊天"
       ]
     },
     {
@@ -940,6 +1106,30 @@
       "translations": [
         "命令",
         "指令"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Configured",
+      "translations": [
+        "مهيأ",
+        "مُهيأ"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Configured",
+      "translations": [
+        "پیکربندی شده",
+        "پیکربندی‌شده"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Configured",
+      "translations": [
+        "構成済み",
+        "設定済み"
       ]
     },
     {
@@ -1047,17 +1237,171 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "متصل"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Verbunden"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Connected",
+      "translations": [
+        "Conectado",
+        "Connected"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "متصل"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Connecté"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "कनेक्टेड"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Terhubung"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Connesso"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "接続済み"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "연결됨"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Verbonden"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Połączono"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Connected",
+      "translations": [
+        "Conectado",
+        "Connected"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Подключено"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Connected",
+      "translations": [
+        "Ansluten",
+        "Connected"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "เชื่อมต่อแล้ว"
+      ]
+    },
+    {
       "locale": "tr",
       "source": "Connected",
       "translations": [
         "Bağlandı",
-        "Bağlı"
+        "Bağlı",
+        "Connected"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Підключено"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "Đã kết nối"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Connected",
+      "translations": [
+        "Connected",
+        "已连接"
       ]
     },
     {
       "locale": "zh-TW",
       "source": "Connected",
       "translations": [
+        "Connected",
         "已連接",
         "已連線"
       ]
@@ -1272,11 +1616,163 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "افتراضي"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Standard"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Predeterminado"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "پیش‌فرض"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Par défaut"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "डिफ़ॉल्ट"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Predefinito"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "デフォルト"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "기본값"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Standaard"
+      ]
+    },
+    {
       "locale": "pl",
       "source": "Default",
       "translations": [
-        "Domyślne",
+        "Default",
         "Domyślnie"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Padrão"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "По умолчанию"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Standard"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "ค่าเริ่มต้น"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Varsayılan"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "За замовчуванням"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "Mặc định"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "默认"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Default",
+      "translations": [
+        "Default",
+        "預設"
       ]
     },
     {
@@ -1443,6 +1939,14 @@
     },
     {
       "locale": "de",
+      "source": "Diagnose",
+      "translations": [
+        "Diagnose",
+        "Diagnostizieren"
+      ]
+    },
+    {
+      "locale": "de",
       "source": "Diagnostics",
       "translations": [
         "Diagnose",
@@ -1586,6 +2090,14 @@
       ]
     },
     {
+      "locale": "de",
+      "source": "Discovery Logs",
+      "translations": [
+        "Discovery Logs",
+        "Erkennungsprotokolle"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Discovery Logs",
       "translations": [
@@ -1626,6 +2138,14 @@
       ]
     },
     {
+      "locale": "ja-JP",
+      "source": "Discovery Logs",
+      "translations": [
+        "Discovery Logs",
+        "検出ログ"
+      ]
+    },
+    {
       "locale": "ko",
       "source": "Discovery Logs",
       "translations": [
@@ -1639,6 +2159,14 @@
       "translations": [
         "Discovery-logboeken",
         "Ontdekkingslogboeken"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Discovery Logs",
+      "translations": [
+        "Discovery Logs",
+        "Dzienniki wykrywania"
       ]
     },
     {
@@ -1687,6 +2215,14 @@
       "translations": [
         "Nhật ký Discovery",
         "Nhật ký khám phá"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Discovery Logs",
+      "translations": [
+        "Discovery Logs",
+        "探索記錄"
       ]
     },
     {
@@ -1767,6 +2303,14 @@
       "translations": [
         "关闭",
         "忽略"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Docs",
+      "translations": [
+        "Docs",
+        "Dokumentation"
       ]
     },
     {
@@ -1861,8 +2405,25 @@
       "locale": "ar",
       "source": "Dreaming",
       "translations": [
+        "Dreaming",
         "الحلم",
         "يحلم"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "Träumen"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "Soñando"
       ]
     },
     {
@@ -1877,6 +2438,7 @@
       "locale": "fr",
       "source": "Dreaming",
       "translations": [
+        "Dreaming",
         "Rêve",
         "Rêverie"
       ]
@@ -1885,10 +2447,18 @@
       "locale": "hi",
       "source": "Dreaming",
       "translations": [
+        "Dreaming",
         "ड्रीमिंग",
         "सपना देख रहा है",
-        "सपने देख रहा है",
         "स्वप्न देख रहा है"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Dreaming",
+      "translations": [
+        "Bermimpi",
+        "Dreaming"
       ]
     },
     {
@@ -1901,30 +2471,79 @@
       ]
     },
     {
+      "locale": "ja-JP",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "ドリーミング"
+      ]
+    },
+    {
       "locale": "ko",
       "source": "Dreaming",
       "translations": [
+        "Dreaming",
         "구상 중",
         "꿈꾸는 중",
         "드리밍"
       ]
     },
     {
+      "locale": "nl",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "Dromen"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "Śnienie"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "Sonhando"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "Dreaming",
       "translations": [
-        "В мечтах",
+        "Dreaming",
         "Сновидение"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "Drömmer"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "กำลังฝัน"
       ]
     },
     {
       "locale": "tr",
       "source": "Dreaming",
       "translations": [
+        "Dreaming",
         "Düş kuruyor",
         "Düşünüyor",
         "Hayal Kuruyor",
-        "Hayal kuruyor",
         "Rüya Görüyor"
       ]
     },
@@ -1932,15 +2551,23 @@
       "locale": "uk",
       "source": "Dreaming",
       "translations": [
-        "Мріяння",
+        "Dreaming",
         "Сновидіння"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Dreaming",
+      "translations": [
+        "Dreaming",
+        "Đang mơ"
       ]
     },
     {
       "locale": "zh-CN",
       "source": "Dreaming",
       "translations": [
-        "做梦中",
+        "Dreaming",
         "梦境",
         "梦境中"
       ]
@@ -1949,7 +2576,7 @@
       "locale": "zh-TW",
       "source": "Dreaming",
       "translations": [
-        "夢境",
+        "Dreaming",
         "正在構想"
       ]
     },
@@ -1991,6 +2618,78 @@
       "translations": [
         "有効にする",
         "有効化"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Enable Talk",
+      "translations": [
+        "تفعيل Talk",
+        "تمكين التحدث"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Enable Talk",
+      "translations": [
+        "Talk を有効にする",
+        "トークを有効化"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Enable Talk",
+      "translations": [
+        "Gesprek inschakelen",
+        "Talk inschakelen"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Enable Talk",
+      "translations": [
+        "Ativar Talk",
+        "Ativar conversa"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Enable Talk",
+      "translations": [
+        "Включить Talk",
+        "Включить разговор"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Enable Talk",
+      "translations": [
+        "Konuşmayı Etkinleştir",
+        "Talk’u etkinleştir"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Enable Talk",
+      "translations": [
+        "Увімкнути Talk",
+        "Увімкнути розмову"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Enable Talk",
+      "translations": [
+        "启用 Talk",
+        "启用对话"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Enable Talk",
+      "translations": [
+        "啟用 Talk",
+        "啟用對話"
       ]
     },
     {
@@ -2138,11 +2837,35 @@
       ]
     },
     {
+      "locale": "de",
+      "source": "Gateway Auth Token",
+      "translations": [
+        "Gateway Auth Token",
+        "Gateway-Auth-Token"
+      ]
+    },
+    {
       "locale": "it",
       "source": "Gateway Auth Token",
       "translations": [
         "Token di autenticazione Gateway",
         "Token di autenticazione del Gateway"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Gateway Auth Token",
+      "translations": [
+        "Gateway Auth Token",
+        "Gateway認証トークン"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Gateway Auth Token",
+      "translations": [
+        "Gateway Auth Token",
+        "Gateway-verificatietoken"
       ]
     },
     {
@@ -2170,6 +2893,14 @@
       ]
     },
     {
+      "locale": "zh-CN",
+      "source": "Gateway Auth Token",
+      "translations": [
+        "Gateway Auth Token",
+        "Gateway 身份验证令牌"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Gateway Default",
       "translations": [
@@ -2191,6 +2922,14 @@
       "translations": [
         "Gateway par défaut",
         "Valeur par défaut du Gateway"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Gateway Default",
+      "translations": [
+        "Gateway Default",
+        "Standaard Gateway"
       ]
     },
     {
@@ -2231,6 +2970,14 @@
       "translations": [
         "Password Gateway",
         "Password del Gateway"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Gateway Password",
+      "translations": [
+        "Gateway Password",
+        "Gatewayパスワード"
       ]
     },
     {
@@ -2387,11 +3134,27 @@
       ]
     },
     {
+      "locale": "pl",
+      "source": "Gateway offline",
+      "translations": [
+        "Gateway jest offline",
+        "Gateway offline"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "Gateway offline",
       "translations": [
         "Gateway не в сети",
         "Gateway офлайн"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Gateway offline",
+      "translations": [
+        "Gateway offline",
+        "Gateway är offline"
       ]
     },
     {
@@ -2564,12 +3327,21 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Host",
+      "translations": [
+        "Host",
+        "होस्ट"
+      ]
+    },
+    {
       "locale": "tr",
       "source": "Host",
       "translations": [
         "Ana Bilgisayar",
         "Ana Makine",
-        "Ana makine"
+        "Ana makine",
+        "Host"
       ]
     },
     {
@@ -2730,6 +3502,22 @@
       "translations": [
         "इंस्टेंस",
         "इंस्टैंसेस"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Instances",
+      "translations": [
+        "Instances",
+        "Instanties"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Instances",
+      "translations": [
+        "Instances",
+        "อินสแตนซ์"
       ]
     },
     {
@@ -2950,22 +3738,6 @@
       ]
     },
     {
-      "locale": "fa",
-      "source": "Listening",
-      "translations": [
-        "در حال گوش دادن",
-        "در حال گوش‌دادن"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Listening",
-      "translations": [
-        "सुन रहा है",
-        "सुना जा रहा है"
-      ]
-    },
-    {
       "locale": "ja-JP",
       "source": "Listening",
       "translations": [
@@ -2982,36 +3754,125 @@
       ]
     },
     {
-      "locale": "pl",
-      "source": "Listening",
-      "translations": [
-        "Nasłuchiwanie",
-        "Słuchanie"
-      ]
-    },
-    {
       "locale": "uk",
       "source": "Listening",
       "translations": [
         "Прослуховування",
-        "Слухання",
-        "Слухаю"
+        "Слухання"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "جارٍ التحميل"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "Wird geladen"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Loading",
+      "translations": [
+        "Cargando",
+        "Loading"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "در حال بارگذاری"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Loading",
+      "translations": [
+        "Chargement",
+        "Loading"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "लोड हो रहा है"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "Memuat"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Loading",
+      "translations": [
+        "Caricamento",
+        "Loading"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "読み込み中"
       ]
     },
     {
       "locale": "ko",
       "source": "Loading",
       "translations": [
+        "Loading",
         "로드 중",
         "불러오는 중"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Loading",
+      "translations": [
+        "Laden",
+        "Loading"
       ]
     },
     {
       "locale": "pl",
       "source": "Loading",
       "translations": [
+        "Loading",
         "Wczytywanie",
         "Ładowanie"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Loading",
+      "translations": [
+        "Carregando",
+        "Loading"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "Загрузка"
       ]
     },
     {
@@ -3019,15 +3880,57 @@
       "source": "Loading",
       "translations": [
         "Laddar",
+        "Loading",
         "Läser in"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "กำลังโหลด"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "Yükleniyor"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "Завантаження"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "Đang tải"
       ]
     },
     {
       "locale": "zh-CN",
       "source": "Loading",
       "translations": [
+        "Loading",
         "加载中",
         "正在加载"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Loading",
+      "translations": [
+        "Loading",
+        "載入中"
       ]
     },
     {
@@ -3364,6 +4267,166 @@
       "translations": [
         "Управление",
         "Управлять"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "الرسالة"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Nachricht"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Message",
+      "translations": [
+        "Mensaje",
+        "Message"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "پیام"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "संदेश"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Pesan"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Messaggio"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "メッセージ"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "메시지"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Message",
+      "translations": [
+        "Bericht",
+        "Message"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Wiadomość"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Message",
+      "translations": [
+        "Mensagem",
+        "Message"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Сообщение"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Message",
+      "translations": [
+        "Meddelande",
+        "Message"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "ข้อความ"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Message",
+      "translations": [
+        "Mesaj",
+        "Message"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Повідомлення"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "Tin nhắn"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "消息"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Message",
+      "translations": [
+        "Message",
+        "訊息"
       ]
     },
     {
@@ -3714,6 +4777,174 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "لا توجد رسائل دردشة بعد"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "Noch keine Chatnachrichten"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "No chat messages yet",
+      "translations": [
+        "Aún no hay mensajes de chat",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "هنوز هیچ پیام گفت‌وگویی وجود ندارد"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "No chat messages yet",
+      "translations": [
+        "Aucun message de chat pour le moment",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "अभी तक कोई चैट संदेश नहीं"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "No chat messages yet",
+      "translations": [
+        "Belum ada pesan chat",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "No chat messages yet",
+      "translations": [
+        "Nessun messaggio di chat",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "チャットメッセージはまだありません"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "아직 채팅 메시지가 없습니다"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "Nog geen chatberichten"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "No chat messages yet",
+      "translations": [
+        "Brak wiadomości na czacie",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "No chat messages yet",
+      "translations": [
+        "Ainda não há mensagens no chat",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "Сообщений в чате пока нет"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "No chat messages yet",
+      "translations": [
+        "Inga chattmeddelanden än",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "ยังไม่มีข้อความแชท"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "No chat messages yet",
+      "translations": [
+        "Henüz sohbet mesajı yok",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "Повідомлень у чаті ще немає"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "No chat messages yet",
+      "translations": [
+        "Chưa có tin nhắn trò chuyện nào",
+        "No chat messages yet"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "暂无聊天消息"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "No chat messages yet",
+      "translations": [
+        "No chat messages yet",
+        "尚無聊天訊息"
+      ]
+    },
+    {
       "locale": "de",
       "source": "No recent sessions",
       "translations": [
@@ -3842,6 +5073,14 @@
       ]
     },
     {
+      "locale": "nl",
+      "source": "Node",
+      "translations": [
+        "Knooppunt",
+        "Node"
+      ]
+    },
+    {
       "locale": "th",
       "source": "Not Now",
       "translations": [
@@ -3930,6 +5169,14 @@
       ]
     },
     {
+      "locale": "ru",
+      "source": "OK",
+      "translations": [
+        "OK",
+        "ОК"
+      ]
+    },
+    {
       "locale": "zh-TW",
       "source": "OK",
       "translations": [
@@ -4012,11 +5259,132 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "غير متصل"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "Sin conexión"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "آفلاین"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Offline",
+      "translations": [
+        "Hors ligne",
+        "Offline"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "ऑफ़लाइन"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Offline",
+      "translations": [
+        "Luring",
+        "Offline"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "オフライン"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "오프라인"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Offline",
+      "translations": [
+        "Off-line",
+        "Offline"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "Offline",
       "translations": [
+        "Offline",
         "Не в сети",
         "Офлайн"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "ออฟไลน์"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "Çevrimdışı"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "Офлайн"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Offline",
+      "translations": [
+        "Ngoại tuyến",
+        "Offline"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "离线"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Offline",
+      "translations": [
+        "Offline",
+        "離線"
       ]
     },
     {
@@ -4076,6 +5444,14 @@
       ]
     },
     {
+      "locale": "pt-BR",
+      "source": "Online",
+      "translations": [
+        "On-line",
+        "Online"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "Online",
       "translations": [
@@ -4089,6 +5465,22 @@
       "translations": [
         "在線上",
         "線上"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Open Gateway Settings",
+      "translations": [
+        "Ouvrir les paramètres de Gateway",
+        "Ouvrir les paramètres du Gateway"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Open Gateway Settings",
+      "translations": [
+        "Mở Cài đặt Gateway",
+        "Mở cài đặt Gateway"
       ]
     },
     {
@@ -4522,14 +5914,6 @@
       ]
     },
     {
-      "locale": "hi",
-      "source": "Paused",
-      "translations": [
-        "रोका गया",
-        "रोके गए"
-      ]
-    },
-    {
       "locale": "ko",
       "source": "Paused",
       "translations": [
@@ -4559,14 +5943,6 @@
       "translations": [
         "Приостановленные",
         "Приостановлено"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Paused",
-      "translations": [
-        "Pausad",
-        "Pausade"
       ]
     },
     {
@@ -4683,11 +6059,19 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Port",
+      "translations": [
+        "Port",
+        "पोर्ट"
+      ]
+    },
+    {
       "locale": "tr",
       "source": "Port",
       "translations": [
         "Bağlantı Noktası",
-        "Bağlantı noktası"
+        "Port"
       ]
     },
     {
@@ -4760,6 +6144,166 @@
       "translations": [
         "Klar",
         "Redo"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "الصوت الفوري"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Realtime Voice",
+      "translations": [
+        "Echtzeitstimme",
+        "Realtime Voice"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "Voz en tiempo real"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "صدای بلادرنگ"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "Voix en temps réel"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "रीयलटाइम वॉइस"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "Suara Realtime"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "Voce in tempo reale"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "リアルタイム音声"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "실시간 음성"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Realtime Voice",
+      "translations": [
+        "Głos w czasie rzeczywistym",
+        "Realtime Voice"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "Voz em tempo real"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "Голос в реальном времени"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "Röst i realtid"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "เสียงแบบเรียลไทม์"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Realtime Voice",
+      "translations": [
+        "Gerçek Zamanlı Ses",
+        "Realtime Voice"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "Голос у реальному часі"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Realtime Voice",
+      "translations": [
+        "Giọng nói thời gian thực",
+        "Realtime Voice"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "实时语音"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Realtime Voice",
+      "translations": [
+        "Realtime Voice",
+        "即時語音"
       ]
     },
     {
@@ -5012,9 +6556,51 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "إعادة المحاولة"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Retry",
+      "translations": [
+        "Erneut versuchen",
+        "Retry"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Retry",
+      "translations": [
+        "Reintentar",
+        "Retry"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "تلاش دوباره",
+        "تلاش مجدد"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "Réessayer"
+      ]
+    },
+    {
       "locale": "hi",
       "source": "Retry",
       "translations": [
+        "Retry",
         "पुनः प्रयास करें",
         "फिर से कोशिश करें"
       ]
@@ -5024,15 +6610,122 @@
       "source": "Retry",
       "translations": [
         "Coba Lagi",
-        "Coba lagi"
+        "Coba lagi",
+        "Retry"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "Riprova"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "再試行"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "다시 시도"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Retry",
+      "translations": [
+        "Opnieuw proberen",
+        "Retry"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Retry",
+      "translations": [
+        "Ponów",
+        "Ponów próbę",
+        "Retry"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "Tentar novamente"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "Повторить"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Retry",
+      "translations": [
+        "Försök igen",
+        "Retry"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "ลองอีกครั้ง"
       ]
     },
     {
       "locale": "tr",
       "source": "Retry",
       "translations": [
+        "Retry",
         "Yeniden Dene",
         "Yeniden dene"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "Повторити"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "Thử lại"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "重试"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Retry",
+      "translations": [
+        "Retry",
+        "重試"
       ]
     },
     {
@@ -5350,6 +7043,14 @@
       ]
     },
     {
+      "locale": "nl",
+      "source": "Scope",
+      "translations": [
+        "Bereik",
+        "Scope"
+      ]
+    },
+    {
       "locale": "uk",
       "source": "Scope",
       "translations": [
@@ -5590,6 +7291,14 @@
       ]
     },
     {
+      "locale": "nl",
+      "source": "Sessions",
+      "translations": [
+        "Sessies",
+        "Sessions"
+      ]
+    },
+    {
       "locale": "uk",
       "source": "Sessions",
       "translations": [
@@ -5655,6 +7364,14 @@
       ]
     },
     {
+      "locale": "de",
+      "source": "Skill Workshop",
+      "translations": [
+        "Skill Workshop",
+        "Skill-Workshop"
+      ]
+    },
+    {
       "locale": "fa",
       "source": "Skill Workshop",
       "translations": [
@@ -5671,11 +7388,27 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Skill Workshop",
+      "translations": [
+        "Skill Workshop",
+        "Skill वर्कशॉप"
+      ]
+    },
+    {
       "locale": "it",
       "source": "Skill Workshop",
       "translations": [
-        "Workshop Skills",
-        "Workshop delle Skills"
+        "Skill Workshop",
+        "Workshop Skills"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Skill Workshop",
+      "translations": [
+        "Skill Workshop",
+        "Skill 워크숍"
       ]
     },
     {
@@ -5692,6 +7425,62 @@
       "translations": [
         "เวิร์กชอป Skill",
         "เวิร์กช็อป Skills"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Skill Workshop",
+      "translations": [
+        "Skill Workshop",
+        "技能工作坊"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Skill Workshop",
+      "translations": [
+        "Skill Workshop",
+        "Skill 工作坊"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Speakerphone",
+      "translations": [
+        "Freisprechen",
+        "Freisprecher"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Speakerphone",
+      "translations": [
+        "Speakerphone",
+        "स्पीकरफ़ोन"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Speakerphone",
+      "translations": [
+        "ลำโพงโทรศัพท์",
+        "สปีกเกอร์โฟน"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Speakerphone",
+      "translations": [
+        "Гучний зв’язок",
+        "Гучномовець"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Speakerphone",
+      "translations": [
+        "免持聽筒",
+        "擴音"
       ]
     },
     {
@@ -5847,19 +7636,19 @@
       ]
     },
     {
-      "locale": "zh-TW",
-      "source": "Speaking…",
-      "translations": [
-        "正在朗讀…",
-        "說話中…"
-      ]
-    },
-    {
       "locale": "hi",
       "source": "Speech recognition",
       "translations": [
         "वाक् पहचान",
         "स्पीच रिकग्निशन"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Start",
+      "translations": [
+        "Start",
+        "Starten"
       ]
     },
     {
@@ -6004,6 +7793,99 @@
       "translations": [
         "Стан",
         "Статус"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Talk",
+      "translations": [
+        "التحدث",
+        "تحدث",
+        "تحدّث"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Talk",
+      "translations": [
+        "صحبت",
+        "گفتگو",
+        "گفت‌وگو"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Talk",
+      "translations": [
+        "トーク",
+        "会話",
+        "話す"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Talk",
+      "translations": [
+        "대화",
+        "대화하기"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Talk",
+      "translations": [
+        "Rozmawiaj",
+        "Rozmowa"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Talk",
+      "translations": [
+        "Conversar",
+        "Falar"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Talk",
+      "translations": [
+        "Говорить",
+        "Разговор"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Talk",
+      "translations": [
+        "Говорити",
+        "Розмова"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Talk",
+      "translations": [
+        "Nói chuyện",
+        "Trò chuyện"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Talk",
+      "translations": [
+        "对话",
+        "通话"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Talk",
+      "translations": [
+        "交談",
+        "對話",
+        "語音對話",
+        "說話"
       ]
     },
     {
@@ -6428,6 +8310,14 @@
       ]
     },
     {
+      "locale": "vi",
+      "source": "Transport",
+      "translations": [
+        "Phương thức truyền tải",
+        "Truyền tải"
+      ]
+    },
+    {
       "locale": "de",
       "source": "Unarchive",
       "translations": [
@@ -6782,6 +8672,30 @@
       ]
     },
     {
+      "locale": "uk",
+      "source": "Voice Mode",
+      "translations": [
+        "Голосовий режим",
+        "Режим голосу"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Voice Wake",
+      "translations": [
+        "Sprachaktivierung",
+        "Voice Wake"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Voice Wake",
+      "translations": [
+        "Voice Wake",
+        "वॉइस वेक"
+      ]
+    },
+    {
       "locale": "id",
       "source": "Voice Wake",
       "translations": [
@@ -6830,6 +8744,182 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "ملاحظة صوتية"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Voice note",
+      "translations": [
+        "Sprachnachricht",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Voice note",
+      "translations": [
+        "Nota de voz",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "یادداشت صوتی"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Voice note",
+      "translations": [
+        "Note vocale",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "वॉइस नोट"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Voice note",
+      "translations": [
+        "Catatan suara",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Voice note",
+      "translations": [
+        "Nota vocale",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "ボイスメモ"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "음성 메모"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Voice note",
+      "translations": [
+        "Spraaknotitie",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Voice note",
+      "translations": [
+        "Notatka głosowa",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Voice note",
+      "translations": [
+        "Nota de voz",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "Голосовое сообщение"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Voice note",
+      "translations": [
+        "Röstmeddelande",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "บันทึกเสียง"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Voice note",
+      "translations": [
+        "Sesli not",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "Голосове повідомлення"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Voice note",
+      "translations": [
+        "Ghi chú thoại",
+        "Voice note"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "语音消息"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Voice note",
+      "translations": [
+        "Voice note",
+        "語音留言"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Wake Words",
+      "translations": [
+        "Aktivierungswörter",
+        "Wake Words"
+      ]
+    },
+    {
       "locale": "fr",
       "source": "Wake Words",
       "translations": [
@@ -6838,11 +8928,43 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Wake Words",
+      "translations": [
+        "Wake Words",
+        "वेक वर्ड्स"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Wake Words",
+      "translations": [
+        "Wake Words",
+        "웨이크 워드"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Wake Words",
+      "translations": [
+        "Wake Words",
+        "Wakewoorden"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "Wake Words",
       "translations": [
         "Ключевые слова пробуждения",
         "Слова активации"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Wake Words",
+      "translations": [
+        "Väckningsord",
+        "Wake Words"
       ]
     },
     {
@@ -6934,11 +9056,51 @@
       ]
     },
     {
+      "locale": "de",
+      "source": "Workboard",
+      "translations": [
+        "Arbeitsboard",
+        "Workboard"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Workboard",
+      "translations": [
+        "Papan Kerja",
+        "Workboard"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Workboard",
+      "translations": [
+        "Bacheca di lavoro",
+        "Workboard"
+      ]
+    },
+    {
       "locale": "ko",
       "source": "Workboard",
       "translations": [
         "워크보드",
         "작업 보드"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Workboard",
+      "translations": [
+        "Werkbord",
+        "Workboard"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Workboard",
+      "translations": [
+        "Workboard",
+        "กระดานงาน"
       ]
     },
     {
@@ -6963,6 +9125,14 @@
       "translations": [
         "activa",
         "activo"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "active",
+      "translations": [
+        "actif",
+        "active"
       ]
     },
     {
@@ -7094,11 +9264,27 @@
       ]
     },
     {
+      "locale": "nl",
+      "source": "live",
+      "translations": [
+        "actief",
+        "live"
+      ]
+    },
+    {
       "locale": "ru",
       "source": "live",
       "translations": [
         "активен",
         "активно"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "live",
+      "translations": [
+        "aktiv",
+        "live"
       ]
     },
     {
@@ -7131,6 +9317,14 @@
       "translations": [
         "关",
         "关闭"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "offline",
+      "translations": [
+        "luring",
+        "offline"
       ]
     },
     {

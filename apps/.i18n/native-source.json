@@ -13035,7 +13035,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 39,
+      "line": 18,
+      "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
+      "source": "OPENCLAW",
+      "surface": "apple",
+      "id": "native.apple.093081590556db7f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 55,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -13043,7 +13051,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 96,
+      "line": 132,
+      "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
+      "source": "LIVE",
+      "surface": "apple",
+      "id": "native.apple.9fd01bdb5a753f3e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 210,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -13051,7 +13067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 97,
+      "line": 211,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -13059,7 +13075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 98,
+      "line": 212,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -13067,15 +13083,63 @@
     },
     {
       "kind": "ui-call",
-      "line": 99,
+      "line": 213,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
       "source": "Action required",
       "surface": "apple",
       "id": "native.apple.c619843217c15317"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 216,
+      "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
+      "source": "Using %@",
+      "surface": "apple",
+      "id": "native.apple.275026f681242715"
+    },
+    {
       "kind": "ui-call",
-      "line": 100,
+      "line": 218,
+      "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
+      "source": "Using a tool",
+      "surface": "apple",
+      "id": "native.apple.360d0d0fc0df9eb2"
+    },
+    {
+      "kind": "ui-call",
+      "line": 220,
+      "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
+      "source": "Listening",
+      "surface": "apple",
+      "id": "native.apple.0d0ee660962ea840"
+    },
+    {
+      "kind": "ui-call",
+      "line": 221,
+      "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
+      "source": "Speaking",
+      "surface": "apple",
+      "id": "native.apple.095ebf1496feb2ad"
+    },
+    {
+      "kind": "ui-call",
+      "line": 222,
+      "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
+      "source": "Voice active",
+      "surface": "apple",
+      "id": "native.apple.63c98d2ca6a5b09c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 223,
+      "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
+      "source": "Paused",
+      "surface": "apple",
+      "id": "native.apple.02470f4b5348f97c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 224,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
       "source": "Connected",
       "surface": "apple",
@@ -13083,7 +13147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 101,
+      "line": 225,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
       "source": "Disconnected",
       "surface": "apple",
@@ -16283,7 +16347,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 133,
+      "line": 147,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unable to Export Transcript",
       "surface": "apple",
@@ -16291,7 +16355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 137,
+      "line": 151,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -16299,7 +16363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 141,
+      "line": 155,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "OpenClaw could not prepare the Markdown file.",
       "surface": "apple",
@@ -16307,7 +16371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 162,
+      "line": 176,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "What would you like to work on?",
       "surface": "apple",
@@ -16315,23 +16379,63 @@
     },
     {
       "kind": "ui-call",
-      "line": 175,
+      "line": 190,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "The session attaches once the gateway is ready.",
       "surface": "apple",
       "id": "native.apple.32179ce0b6d4543f"
     },
     {
-      "kind": "ui-modifier",
-      "line": 292,
+      "kind": "conditional-branch",
+      "line": 278,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Collapsed",
+      "surface": "apple",
+      "id": "native.apple.02611ddddef7295a"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 278,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Expanded",
+      "surface": "apple",
+      "id": "native.apple.1f4911f4a05230b5"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 348,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Opens Settings / Gateway",
       "surface": "apple",
       "id": "native.apple.d19c9577e0fdfea7"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 351,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Hides the gateway status label",
+      "surface": "apple",
+      "id": "native.apple.b59e690104ae3e24"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 352,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Shows the full gateway status label",
+      "surface": "apple",
+      "id": "native.apple.5fcf9d462463dd27"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 371,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Voice off",
+      "surface": "apple",
+      "id": "native.apple.592b1e673e42df50"
+    },
+    {
       "kind": "ui-call",
-      "line": 317,
+      "line": 501,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "New Chat",
       "surface": "apple",
@@ -16339,7 +16443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 330,
+      "line": 514,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "New Chat in Worktree",
       "surface": "apple",
@@ -16347,15 +16451,23 @@
     },
     {
       "kind": "ui-call",
-      "line": 345,
+      "line": 529,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Export Transcript",
       "surface": "apple",
       "id": "native.apple.ced228bb4d20a726"
     },
     {
+      "kind": "ui-call",
+      "line": 542,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Gateway Settings",
+      "surface": "apple",
+      "id": "native.apple.d510e012c91b24ed"
+    },
+    {
       "kind": "ui-modifier",
-      "line": 355,
+      "line": 553,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Chat actions",
       "surface": "apple",
@@ -16363,7 +16475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 424,
+      "line": 647,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connected",
       "surface": "apple",
@@ -16371,7 +16483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 424,
+      "line": 647,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unavailable",
       "surface": "apple",
@@ -16379,7 +16491,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 437,
+      "line": 660,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Message %@...",
       "surface": "apple",
@@ -16387,7 +16499,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 442,
+      "line": 665,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Message %@; sends when connected",
       "surface": "apple",
@@ -16395,7 +16507,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 445,
+      "line": 668,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connect to a gateway",
       "surface": "apple",
@@ -16403,7 +16515,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 543,
+      "line": 757,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Check OpenClaw status",
       "surface": "apple",
@@ -16411,7 +16523,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 544,
+      "line": 758,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Summarize the current OpenClaw status and tell me what needs attention.",
       "surface": "apple",
@@ -16419,7 +16531,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 547,
+      "line": 761,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "What can I control here?",
       "surface": "apple",
@@ -16427,7 +16539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 548,
+      "line": 762,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Show me which phone controls and device capabilities are available right now.",
       "surface": "apple",
@@ -16435,7 +16547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 551,
+      "line": 765,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Help me start voice chat",
       "surface": "apple",
@@ -16443,7 +16555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 552,
+      "line": 766,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Help me start a realtime voice session from this phone.",
       "surface": "apple",
@@ -18163,7 +18275,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 626,
+      "line": 616,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -18171,7 +18283,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 656,
+      "line": 646,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Gateway %@",
       "surface": "apple",
@@ -18179,7 +18291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 663,
+      "line": 653,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Online",
       "surface": "apple",
@@ -18187,7 +18299,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 665,
+      "line": 655,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -18195,7 +18307,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 667,
+      "line": 657,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Attention",
       "surface": "apple",
@@ -18203,7 +18315,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 669,
+      "line": 659,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Offline",
       "surface": "apple",
@@ -18227,7 +18339,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 100,
+      "line": 97,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Agent chat and recent work.",
       "surface": "apple",
@@ -18235,15 +18347,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 103,
-      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
-      "source": "Realtime voice and controls.",
-      "surface": "apple",
-      "id": "native.apple.a30d0a950d0a77aa"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 173,
+      "line": 166,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Overview",
       "surface": "apple",
@@ -18251,7 +18355,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 195,
+      "line": 188,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Instances",
       "surface": "apple",
@@ -18259,7 +18363,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 204,
+      "line": 197,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Files",
       "surface": "apple",
@@ -18267,7 +18371,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 209,
+      "line": 202,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -18275,7 +18379,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 214,
+      "line": 207,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Usage",
       "surface": "apple",
@@ -18283,7 +18387,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 219,
+      "line": 212,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Automations",
       "surface": "apple",
@@ -18291,7 +18395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 284,
+      "line": 277,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Default Agent",
       "surface": "apple",
@@ -18299,7 +18403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 299,
+      "line": 292,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -18307,7 +18411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 307,
+      "line": 300,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Gateway %1$@, %2$@, %3$@",
       "surface": "apple",
@@ -18315,7 +18419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 314,
+      "line": 307,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Gateway %1$@, %2$@",
       "surface": "apple",
@@ -18323,7 +18427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 323,
+      "line": 316,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Online",
       "surface": "apple",
@@ -18331,7 +18435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 324,
+      "line": 317,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -18339,7 +18443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 325,
+      "line": 318,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Attention",
       "surface": "apple",
@@ -18347,7 +18451,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 326,
+      "line": 319,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Offline",
       "surface": "apple",
@@ -19059,7 +19163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 404,
+      "line": 405,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Opening QR scanner...",
       "surface": "apple",
@@ -19067,7 +19171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 410,
+      "line": 411,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "QR loaded. Closing scanner...",
       "surface": "apple",
@@ -19075,7 +19179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 440,
+      "line": 441,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Apple Review demo mode enabled.",
       "surface": "apple",
@@ -19083,7 +19187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 491,
+      "line": 492,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Failed: host required",
       "surface": "apple",
@@ -19091,7 +19195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 499,
+      "line": 500,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Failed: invalid port",
       "surface": "apple",
@@ -19099,7 +19203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 557,
+      "line": 558,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Tailscale is off on this device. Turn it on, then try again.",
       "surface": "apple",
@@ -19107,7 +19211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 934,
+      "line": 935,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -19115,7 +19219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 935,
+      "line": 936,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Apple Watch",
       "surface": "apple",
@@ -19123,7 +19227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 936,
+      "line": 937,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Approvals",
       "surface": "apple",
@@ -19131,7 +19235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 937,
+      "line": 938,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permissions",
       "surface": "apple",
@@ -19139,7 +19243,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 938,
+      "line": 939,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Channels",
       "surface": "apple",
@@ -19147,7 +19251,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 939,
+      "line": 940,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Skills",
       "surface": "apple",
@@ -19155,7 +19259,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 940,
+      "line": 941,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -19163,7 +19267,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 941,
+      "line": 942,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Diagnostics",
       "surface": "apple",
@@ -19171,7 +19275,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 942,
+      "line": 943,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Privacy",
       "surface": "apple",
@@ -19179,7 +19283,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 944,
+      "line": 945,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Licenses",
       "surface": "apple",
@@ -19187,7 +19291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 945,
+      "line": 946,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "About",
       "surface": "apple",
@@ -19195,7 +19299,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 952,
+      "line": 953,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Preparing one-time setup…",
       "surface": "apple",
@@ -19203,7 +19307,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 957,
+      "line": 958,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup sent. Open OpenClaw on the watch to connect.",
       "surface": "apple",
@@ -19211,7 +19315,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 959,
+      "line": 960,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup queued for the watch. Open OpenClaw before the code expires.",
       "surface": "apple",
@@ -19219,7 +19323,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1049,
+      "line": 1050,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "This gateway is on your tailnet. Turn on Tailscale on this device, then tap Connect.",
       "surface": "apple",
@@ -19227,7 +19331,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1056,
+      "line": 1057,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Pairing required. Run /pair approve in your OpenClaw chat, then connect again.",
       "surface": "apple",
@@ -19235,7 +19339,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1059,
+      "line": 1060,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Secure handshake failed. Check Tailscale, then connect again.",
       "surface": "apple",
@@ -19243,7 +19347,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1068,
+      "line": 1069,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connection timed out. Make sure Tailscale is connected, then try again.",
       "surface": "apple",
@@ -19251,7 +19355,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1072,
+      "line": 1073,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connected, but some controls are restricted for nodes. This is expected.",
       "surface": "apple",
@@ -19259,7 +19363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1079,
+      "line": 1080,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup code applied. Connecting...",
       "surface": "apple",
@@ -19267,7 +19371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1080,
+      "line": 1081,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Checking gateway reachability...",
       "surface": "apple",
@@ -19275,7 +19379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1081,
+      "line": 1082,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "QR loaded. Connecting to %@:%@...",
       "surface": "apple",
@@ -19283,7 +19387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1144,
+      "line": 1145,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not loaded",
       "surface": "apple",
@@ -19291,7 +19395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1147,
+      "line": 1148,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Configured",
       "surface": "apple",
@@ -19299,7 +19403,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1148,
+      "line": 1149,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -19307,7 +19411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1155,
+      "line": 1156,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not active",
       "surface": "apple",
@@ -19315,7 +19419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1191,
+      "line": 1192,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Apple Review demo mode",
       "surface": "apple",
@@ -19323,7 +19427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1194,
+      "line": 1195,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connected",
       "surface": "apple",
@@ -19331,7 +19435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1200,
+      "line": 1201,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "offline",
       "surface": "apple",
@@ -19339,7 +19443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1200,
+      "line": 1201,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "online",
       "surface": "apple",
@@ -19347,7 +19451,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1218,
+      "line": 1219,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Live gateway requests are disabled in demo mode.",
       "surface": "apple",
@@ -19355,7 +19459,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1222,
+      "line": 1223,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Foreground approvals still appear while OpenClaw is connected.",
       "surface": "apple",
@@ -19363,7 +19467,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1225,
+      "line": 1226,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway requests will appear here.",
       "surface": "apple",
@@ -19371,7 +19475,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1226,
+      "line": 1227,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connect to the gateway.",
       "surface": "apple",
@@ -19379,7 +19483,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1230,
+      "line": 1231,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Demo mode only",
       "surface": "apple",
@@ -19387,7 +19491,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1237,
+      "line": 1238,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "loaded",
       "surface": "apple",
@@ -19395,7 +19499,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1238,
+      "line": 1239,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "missing",
       "surface": "apple",
@@ -19403,7 +19507,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1247,
+      "line": 1248,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Waiting for gateway",
       "surface": "apple",
@@ -19411,7 +19515,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1264,
+      "line": 1265,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "1 waiting",
       "surface": "apple",
@@ -19419,7 +19523,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1267,
+      "line": 1268,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "%@ waiting",
       "surface": "apple",
@@ -19427,7 +19531,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1278,
+      "line": 1279,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review gateway action",
       "surface": "apple",
@@ -19435,7 +19539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1280,
+      "line": 1281,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Agent: %@",
       "surface": "apple",
@@ -19443,7 +19547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1289,
+      "line": 1290,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Resolving",
       "surface": "apple",
@@ -19451,7 +19555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1290,
+      "line": 1291,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "High",
       "surface": "apple",
@@ -19459,7 +19563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1296,
+      "line": 1297,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permission can be saved",
       "surface": "apple",
@@ -19467,7 +19571,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1297,
+      "line": 1298,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "One-time approval",
       "surface": "apple",
@@ -19475,7 +19579,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1300,
+      "line": 1301,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Medium",
       "surface": "apple",
@@ -19483,7 +19587,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1301,
+      "line": 1302,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review",
       "surface": "apple",
@@ -19491,7 +19595,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1307,
+      "line": 1308,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Talk + Wake",
       "surface": "apple",
@@ -19499,7 +19603,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1308,
+      "line": 1309,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Talk on",
       "surface": "apple",
@@ -19507,7 +19611,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1309,
+      "line": 1310,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Wake on",
       "surface": "apple",
@@ -19515,7 +19619,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1310,
+      "line": 1311,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Off",
       "surface": "apple",
@@ -19523,7 +19627,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1314,
+      "line": 1315,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "demo",
       "surface": "apple",
@@ -19531,7 +19635,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1315,
+      "line": 1316,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "ready",
       "surface": "apple",
@@ -19539,7 +19643,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1316,
+      "line": 1317,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "check",
       "surface": "apple",
@@ -19547,7 +19651,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1317,
+      "line": 1318,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "partial",
       "surface": "apple",
@@ -19555,7 +19659,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1321,
+      "line": 1322,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "pending",
       "surface": "apple",
@@ -19563,7 +19667,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1323,
+      "line": 1324,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "pass",
       "surface": "apple",
@@ -19571,7 +19675,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1334,
+      "line": 1335,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Requesting iOS location permission…",
       "surface": "apple",
@@ -19579,7 +19683,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1400,
+      "line": 1401,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "This build uses OpenClaw's hosted push relay at %@ for notification delivery data.",
       "surface": "apple",
@@ -19587,7 +19691,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1404,
+      "line": 1405,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "This build is not configured to use OpenClaw's hosted push relay.",
       "surface": "apple",
@@ -19595,7 +19699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1409,
+      "line": 1410,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Enabling this sends delivery data through OpenClaw's hosted push relay.",
       "surface": "apple",
@@ -21570,238 +21674,6 @@
       "id": "native.apple.7a5a1b9342f01954"
     },
     {
-      "kind": "ui-modifier",
-      "line": 62,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Enable Talk",
-      "surface": "apple",
-      "id": "native.apple.798c3584ad95f8da"
-    },
-    {
-      "kind": "ui-call",
-      "line": 68,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Not Now",
-      "surface": "apple",
-      "id": "native.apple.c6e171128190d131"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 107,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Talk",
-      "surface": "apple",
-      "id": "native.apple.e4b15aef3c2e3da7"
-    },
-    {
-      "kind": "ui-call",
-      "line": 161,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Conversation",
-      "surface": "apple",
-      "id": "native.apple.ab3381742bdff650"
-    },
-    {
-      "kind": "ui-call",
-      "line": 162,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Agent",
-      "surface": "apple",
-      "id": "native.apple.7af100f6640c6a69"
-    },
-    {
-      "kind": "ui-call",
-      "line": 163,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Session",
-      "surface": "apple",
-      "id": "native.apple.49c4de60117b1a98"
-    },
-    {
-      "kind": "ui-call",
-      "line": 164,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Runtime",
-      "surface": "apple",
-      "id": "native.apple.37c29d2506b955e9"
-    },
-    {
-      "kind": "ui-call",
-      "line": 169,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Voice Mode",
-      "surface": "apple",
-      "id": "native.apple.13e0ad79b141576e"
-    },
-    {
-      "kind": "ui-call",
-      "line": 170,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Configured",
-      "surface": "apple",
-      "id": "native.apple.e8035b71bab833c7"
-    },
-    {
-      "kind": "ui-call",
-      "line": 173,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Active",
-      "surface": "apple",
-      "id": "native.apple.1b2845ec89d20eef"
-    },
-    {
-      "kind": "ui-call",
-      "line": 174,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Transport",
-      "surface": "apple",
-      "id": "native.apple.a82c07df64d13b23"
-    },
-    {
-      "kind": "ui-call",
-      "line": 176,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Last issue",
-      "surface": "apple",
-      "id": "native.apple.384e097278f76954"
-    },
-    {
-      "kind": "ui-call",
-      "line": 178,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Permission",
-      "surface": "apple",
-      "id": "native.apple.a6d8fc7bfd98836f"
-    },
-    {
-      "kind": "ui-call",
-      "line": 179,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Speech language",
-      "surface": "apple",
-      "id": "native.apple.983bdcd5e3f1baa8"
-    },
-    {
-      "kind": "ui-call",
-      "line": 184,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Controls",
-      "surface": "apple",
-      "id": "native.apple.32e7fa2b1798e9c3"
-    },
-    {
-      "kind": "ui-call",
-      "line": 186,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Speakerphone",
-      "surface": "apple",
-      "id": "native.apple.0eb012a5d3d81b32"
-    },
-    {
-      "kind": "ui-call",
-      "line": 191,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Background listening",
-      "surface": "apple",
-      "id": "native.apple.ef8699e2718346da"
-    },
-    {
-      "kind": "ui-call",
-      "line": 197,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Voice & Talk Settings",
-      "surface": "apple",
-      "id": "native.apple.1e6938a09b4fbe77"
-    },
-    {
-      "kind": "ui-call",
-      "line": 225,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Gateway approval is required before this phone can capture voice.",
-      "surface": "apple",
-      "id": "native.apple.c7a591fd5bb6687e"
-    },
-    {
-      "kind": "ui-call",
-      "line": 228,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Voice is disabled in Apple Review demo mode.",
-      "surface": "apple",
-      "id": "native.apple.9d40e75e55ed39eb"
-    },
-    {
-      "kind": "ui-call",
-      "line": 231,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Connect to your gateway to start a voice conversation.",
-      "surface": "apple",
-      "id": "native.apple.3ef69bf916177799"
-    },
-    {
-      "kind": "ui-call",
-      "line": 234,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Open Voice settings after the gateway loads Talk configuration.",
-      "surface": "apple",
-      "id": "native.apple.ed03af7c68841a5d"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 241,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Routes voice to %@.",
-      "surface": "apple",
-      "id": "native.apple.883a251978601b96"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 254,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Not loaded",
-      "surface": "apple",
-      "id": "native.apple.877fb5c1abfaafa1"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 263,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Not active",
-      "surface": "apple",
-      "id": "native.apple.d3ccb092936551fc"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 441,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Open Gateway Settings",
-      "surface": "apple",
-      "id": "native.apple.1620f7cb3deea133"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 441,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Open Voice Settings",
-      "surface": "apple",
-      "id": "native.apple.3fd2706ef0f14fd2"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 442,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Demo Mode Only",
-      "surface": "apple",
-      "id": "native.apple.3cc9cd23a67db077"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 442,
-      "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Waiting for Approval",
-      "surface": "apple",
-      "id": "native.apple.12c9d8231777366c"
-    },
-    {
       "kind": "ui-named-argument",
       "line": 17,
       "path": "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift",
@@ -22603,7 +22475,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 169,
+      "line": 565,
       "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -22611,7 +22483,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 172,
+      "line": 568,
       "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -22619,7 +22491,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 179,
+      "line": 575,
       "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -22627,11 +22499,67 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 182,
+      "line": 578,
       "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
       "source": "Action required",
       "surface": "apple",
       "id": "native.apple.8faaac6dab276c0a"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 596,
+      "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
+      "source": "Listening",
+      "surface": "apple",
+      "id": "native.apple.7205f0822706cb55"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 597,
+      "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
+      "source": "Listening (PTT)",
+      "surface": "apple",
+      "id": "native.apple.8b10cb1dc21e42af"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 598,
+      "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
+      "source": "Listening (Realtime)",
+      "surface": "apple",
+      "id": "native.apple.939c7ec55636c67f"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 602,
+      "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
+      "source": "Speaking…",
+      "surface": "apple",
+      "id": "native.apple.86f203ebb2453d15"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 603,
+      "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
+      "source": "Speaking (System)…",
+      "surface": "apple",
+      "id": "native.apple.1e3ff6b56ae3828d"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 604,
+      "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
+      "source": "Generating voice…",
+      "surface": "apple",
+      "id": "native.apple.37a5fedaefb8ebf3"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 607,
+      "path": "apps/ios/Sources/LiveActivity/LiveActivityManager.swift",
+      "source": "Ready",
+      "surface": "apple",
+      "id": "native.apple.47003f094346c660"
     },
     {
       "kind": "conditional-branch",
@@ -22867,7 +22795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3819,
+      "line": 3964,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -22875,7 +22803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3820,
+      "line": 3965,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -22883,7 +22811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4519,
+      "line": 4680,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -22891,7 +22819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4520,
+      "line": 4681,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -22899,7 +22827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4864,
+      "line": 5025,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -22907,7 +22835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 4864,
+      "line": 5025,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -22915,7 +22843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6006,
+      "line": 6167,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -22923,7 +22851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6205,
+      "line": 6366,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -22931,7 +22859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6205,
+      "line": 6366,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -22939,7 +22867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8490,
+      "line": 8651,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -22947,7 +22875,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8490,
+      "line": 8651,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -22955,7 +22883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8496,
+      "line": 8657,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -22963,7 +22891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8497,
+      "line": 8658,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -22971,7 +22899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 9801,
+      "line": 9962,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -23947,39 +23875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 179,
-      "path": "apps/ios/Sources/RootTabs.swift",
-      "source": "Talk",
-      "surface": "apple",
-      "id": "native.apple.f2ea327bfea8b8e3"
-    },
-    {
-      "kind": "ui-call",
-      "line": 192,
-      "path": "apps/ios/Sources/RootTabs.swift",
-      "source": "Control",
-      "surface": "apple",
-      "id": "native.apple.bda6cfa988e49a75"
-    },
-    {
-      "kind": "ui-call",
-      "line": 201,
-      "path": "apps/ios/Sources/RootTabs.swift",
-      "source": "Agent",
-      "surface": "apple",
-      "id": "native.apple.3c80f5351055a5f3"
-    },
-    {
-      "kind": "ui-call",
-      "line": 214,
-      "path": "apps/ios/Sources/RootTabs.swift",
-      "source": "Settings",
-      "surface": "apple",
-      "id": "native.apple.22d107db5b905ef4"
-    },
-    {
-      "kind": "ui-call",
-      "line": 313,
+      "line": 253,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -23987,7 +23883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 345,
+      "line": 285,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw %@",
       "surface": "apple",
@@ -23995,7 +23891,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 352,
+      "line": 292,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Online",
       "surface": "apple",
@@ -24003,7 +23899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 354,
+      "line": 294,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -24011,7 +23907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 356,
+      "line": 296,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Needs attention",
       "surface": "apple",
@@ -24019,7 +23915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 358,
+      "line": 298,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Offline",
       "surface": "apple",
@@ -24027,7 +23923,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 437,
+      "line": 377,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Chat",
       "surface": "apple",
@@ -24035,7 +23931,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 450,
+      "line": 384,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Overview",
       "surface": "apple",
@@ -24043,7 +23939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 474,
+      "line": 408,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Agents",
       "surface": "apple",
@@ -24051,7 +23947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 481,
+      "line": 415,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Instances",
       "surface": "apple",
@@ -24059,7 +23955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 492,
+      "line": 426,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Files",
       "surface": "apple",
@@ -24067,7 +23963,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 499,
+      "line": 433,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -24075,7 +23971,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 506,
+      "line": 440,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Usage",
       "surface": "apple",
@@ -24083,7 +23979,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 513,
+      "line": 447,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Automations",
       "surface": "apple",
@@ -24091,7 +23987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 625,
+      "line": 559,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Show Sidebar",
       "surface": "apple",
@@ -24099,7 +23995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 636,
+      "line": 570,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Back to %@",
       "surface": "apple",
@@ -24107,7 +24003,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 661,
+      "line": 595,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -24115,7 +24011,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 788,
+      "line": 722,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -24123,7 +24019,39 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1042,
+      "line": 930,
+      "path": "apps/ios/Sources/RootTabs.swift",
+      "source": "Chat, voice active",
+      "surface": "apple",
+      "id": "native.apple.a1db6ce0aed1d18e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 940,
+      "path": "apps/ios/Sources/RootTabs.swift",
+      "source": "Control",
+      "surface": "apple",
+      "id": "native.apple.bda6cfa988e49a75"
+    },
+    {
+      "kind": "ui-call",
+      "line": 949,
+      "path": "apps/ios/Sources/RootTabs.swift",
+      "source": "Agent",
+      "surface": "apple",
+      "id": "native.apple.3c80f5351055a5f3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 962,
+      "path": "apps/ios/Sources/RootTabs.swift",
+      "source": "Settings",
+      "surface": "apple",
+      "id": "native.apple.22d107db5b905ef4"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1040,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -24131,7 +24059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1042,
+      "line": 1040,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -24139,7 +24067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1078,
+      "line": 1076,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -24147,7 +24075,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1078,
+      "line": 1076,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -24155,7 +24083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1078,
+      "line": 1076,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Routed on this phone",
       "surface": "apple",
@@ -24163,7 +24091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 64,
+      "line": 62,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Chat",
       "surface": "apple",
@@ -24171,15 +24099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 65,
-      "path": "apps/ios/Sources/RootTabsNavigation.swift",
-      "source": "Talk",
-      "surface": "apple",
-      "id": "native.apple.febca7528af94342"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 66,
+      "line": 63,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Overview",
       "surface": "apple",
@@ -24187,7 +24107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 67,
+      "line": 64,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Activity",
       "surface": "apple",
@@ -24195,7 +24115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 68,
+      "line": 65,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Agents",
       "surface": "apple",
@@ -24203,7 +24123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 69,
+      "line": 66,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Workboard",
       "surface": "apple",
@@ -24211,7 +24131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 70,
+      "line": 67,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Skill Workshop",
       "surface": "apple",
@@ -24219,7 +24139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 71,
+      "line": 68,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Instances",
       "surface": "apple",
@@ -24227,7 +24147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 72,
+      "line": 69,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Sessions",
       "surface": "apple",
@@ -24235,7 +24155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 73,
+      "line": 70,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Files",
       "surface": "apple",
@@ -24243,7 +24163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 74,
+      "line": 71,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -24251,7 +24171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 75,
+      "line": 72,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Usage",
       "surface": "apple",
@@ -24259,7 +24179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 76,
+      "line": 73,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Automations",
       "surface": "apple",
@@ -24267,7 +24187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 77,
+      "line": 74,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Terminal",
       "surface": "apple",
@@ -24275,7 +24195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 78,
+      "line": 75,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Docs",
       "surface": "apple",
@@ -24283,7 +24203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 79,
+      "line": 76,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Settings",
       "surface": "apple",
@@ -24291,7 +24211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 80,
+      "line": 77,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Settings / Gateway",
       "surface": "apple",
@@ -24299,7 +24219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 86,
+      "line": 83,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Connection",
       "surface": "apple",
@@ -24771,7 +24691,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 581,
+      "line": 591,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway relay ready",
       "surface": "apple",
@@ -24779,7 +24699,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 583,
+      "line": 593,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime Voice, Gateway relay ready",
       "surface": "apple",
@@ -24787,7 +24707,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 585,
+      "line": 595,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening starts from this phone",
       "surface": "apple",
@@ -24795,7 +24715,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 825,
+      "line": 835,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Off",
       "surface": "apple",
@@ -24803,7 +24723,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 828,
+      "line": 838,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Not active",
       "surface": "apple",
@@ -24811,7 +24731,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1005,
+      "line": 1024,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Requesting permissions…",
       "surface": "apple",
@@ -24819,23 +24739,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1013,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Microphone permission denied",
-      "surface": "apple",
-      "id": "native.apple.a1910b5c2e008b6c"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 1022,
-      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
-      "source": "Speech recognition",
-      "surface": "apple",
-      "id": "native.apple.6a48b93f46ea3b08"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 1058,
+      "line": 1053,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Start failed: %@",
       "surface": "apple",
@@ -24843,7 +24747,23 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1373,
+      "line": 1309,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Microphone permission denied",
+      "surface": "apple",
+      "id": "native.apple.a1910b5c2e008b6c"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 1319,
+      "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
+      "source": "Speech recognition",
+      "surface": "apple",
+      "id": "native.apple.6a48b93f46ea3b08"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 1450,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Offline",
       "surface": "apple",
@@ -24851,7 +24771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1572,
+      "line": 1649,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speech error: %@",
       "surface": "apple",
@@ -24859,7 +24779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1881,
+      "line": 1964,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway not connected",
       "surface": "apple",
@@ -24867,7 +24787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1925,
+      "line": 2008,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Aborted",
       "surface": "apple",
@@ -24875,7 +24795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1925,
+      "line": 2008,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Chat error",
       "surface": "apple",
@@ -24883,7 +24803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1953,
+      "line": 2036,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Talk failed: %@",
       "surface": "apple",
@@ -24891,7 +24811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2057,
+      "line": 2140,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "No reply",
       "surface": "apple",
@@ -24899,7 +24819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2149,
+      "line": 2232,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Paused",
       "surface": "apple",
@@ -24907,7 +24827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2559,
+      "line": 2644,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Generating voice…",
       "surface": "apple",
@@ -24915,7 +24835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2697,
+      "line": 2782,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speak failed: %@",
       "surface": "apple",
@@ -24923,7 +24843,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 2796,
+      "line": 2881,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking (System)…",
       "surface": "apple",
@@ -24931,7 +24851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3669,
+      "line": 3762,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "iOS System Voice",
       "surface": "apple",
@@ -24939,7 +24859,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3671,
+      "line": 3764,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime Voice",
       "surface": "apple",
@@ -24947,7 +24867,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3675,
+      "line": 3768,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway Default",
       "surface": "apple",
@@ -24955,7 +24875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3734,
+      "line": 3827,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (Realtime)",
       "surface": "apple",
@@ -24963,7 +24883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3736,
+      "line": 3829,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -24971,7 +24891,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3738,
+      "line": 3831,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Thinking…",
       "surface": "apple",
@@ -24979,7 +24899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3740,
+      "line": 3833,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Asking OpenClaw",
       "surface": "apple",
@@ -24987,7 +24907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3742,
+      "line": 3835,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Still asking OpenClaw",
       "surface": "apple",
@@ -24995,7 +24915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3744,
+      "line": 3837,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Updating OpenClaw",
       "surface": "apple",
@@ -25003,7 +24923,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3746,
+      "line": 3839,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking",
       "surface": "apple",
@@ -25011,7 +24931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3748,
+      "line": 3841,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speaking…",
       "surface": "apple",
@@ -25019,7 +24939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3750,
+      "line": 3843,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -25027,7 +24947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3752,
+      "line": 3845,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Connecting realtime…",
       "surface": "apple",
@@ -25035,7 +24955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3754,
+      "line": 3847,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Waiting for realtime…",
       "surface": "apple",
@@ -25043,7 +24963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3756,
+      "line": 3849,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
@@ -25051,7 +24971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3758,
+      "line": 3851,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Reconnecting",
       "surface": "apple",
@@ -25059,7 +24979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3760,
+      "line": 3853,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -25067,7 +24987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3762,
+      "line": 3855,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime failed before connecting",
       "surface": "apple",
@@ -25075,7 +24995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3764,
+      "line": 3857,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime disconnected",
       "surface": "apple",
@@ -25083,7 +25003,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3766,
+      "line": 3859,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "OpenClaw unavailable",
       "surface": "apple",
@@ -25091,7 +25011,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3806,
+      "line": 3899,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "iOS Speech + TTS",
       "surface": "apple",
@@ -25099,7 +25019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3808,
+      "line": 3901,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
@@ -25107,7 +25027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 3812,
+      "line": 3905,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "iOS Speech fallback",
       "surface": "apple",
@@ -25115,7 +25035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4073,
+      "line": 4166,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway Relay",
       "surface": "apple",
@@ -25123,7 +25043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4075,
+      "line": 4168,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
@@ -25131,7 +25051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4076,
+      "line": 4169,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -25139,7 +25059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4137,
+      "line": 4230,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Gateway permission required",
       "surface": "apple",
@@ -25147,7 +25067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4159,
+      "line": 4252,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Not loaded",
       "surface": "apple",
@@ -25155,7 +25075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4177,
+      "line": 4270,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Approval requested",
       "surface": "apple",
@@ -25163,7 +25083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4603,
+      "line": 4700,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Realtime unavailable",
       "surface": "apple",
@@ -25171,107 +25091,11 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 4625,
+      "line": 4722,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening (PTT)",
       "surface": "apple",
       "id": "native.apple.2970f0510ac6b396"
-    },
-    {
-      "kind": "ui-call",
-      "line": 65,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Request ID",
-      "surface": "apple",
-      "id": "native.apple.0189269b6a863dc2"
-    },
-    {
-      "kind": "ui-call",
-      "line": 76,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Sending...",
-      "surface": "apple",
-      "id": "native.apple.f9d69f27f9d7f4de"
-    },
-    {
-      "kind": "ui-call",
-      "line": 92,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Retry",
-      "surface": "apple",
-      "id": "native.apple.0c5336129f70faed"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 138,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Sending approval request",
-      "surface": "apple",
-      "id": "native.apple.7b23f0a89d3ad411"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 140,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Approval sent",
-      "surface": "apple",
-      "id": "native.apple.55db7317a2542e51"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 142,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Could not request approval",
-      "surface": "apple",
-      "id": "native.apple.06330f62ab254a0e"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 144,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Enable Talk",
-      "surface": "apple",
-      "id": "native.apple.6580d3d1cdda682d"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 151,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Sending a new pairing request to your gateway...",
-      "surface": "apple",
-      "id": "native.apple.abbfc1ba85a230b4"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 153,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Approve this request on your gateway. Talk will start automatically when approval lands.",
-      "surface": "apple",
-      "id": "native.apple.2880deb53ea2fd86"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 155,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from this device to the voice provider.",
-      "surface": "apple",
-      "id": "native.apple.80faa829f543c03c"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 161,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Request Again",
-      "surface": "apple",
-      "id": "native.apple.88b0a2e2986fcebf"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 161,
-      "path": "apps/ios/Sources/Voice/TalkPermissionPromptView.swift",
-      "source": "Send Approval Request",
-      "surface": "apple",
-      "id": "native.apple.5a3faae3472b4b86"
     },
     {
       "kind": "conditional-branch",
@@ -35323,7 +35147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 235,
+      "line": 395,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Context %@%% used",
       "surface": "apple",
@@ -35331,7 +35155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 250,
+      "line": 410,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -35339,7 +35163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 277,
+      "line": 437,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Pinned",
       "surface": "apple",
@@ -35347,7 +35171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 285,
+      "line": 445,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Recent",
       "surface": "apple",
@@ -35355,7 +35179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 293,
+      "line": 453,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Models",
       "surface": "apple",
@@ -35363,7 +35187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 299,
+      "line": 459,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Model",
       "surface": "apple",
@@ -35371,7 +35195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 325,
+      "line": 485,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Pin model",
       "surface": "apple",
@@ -35379,7 +35203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 325,
+      "line": 485,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Unpin model",
       "surface": "apple",
@@ -35387,7 +35211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 339,
+      "line": 499,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Session",
       "surface": "apple",
@@ -35395,7 +35219,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 394,
+      "line": 555,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Add Image",
       "surface": "apple",
@@ -35403,23 +35227,15 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 395,
+      "line": 556,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Attachments",
       "surface": "apple",
       "id": "native.apple.1963dfa3285cb715"
     },
     {
-      "kind": "ui-call",
-      "line": 422,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
-      "source": "Voice note",
-      "surface": "apple",
-      "id": "native.apple.f8dda832ed76441d"
-    },
-    {
       "kind": "conditional-branch",
-      "line": 575,
+      "line": 709,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Talk",
       "surface": "apple",
@@ -35427,7 +35243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 621,
+      "line": 778,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Start realtime chat",
       "surface": "apple",
@@ -35435,7 +35251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 621,
+      "line": 778,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop realtime chat",
       "surface": "apple",
@@ -35443,7 +35259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 654,
+      "line": 811,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Start",
       "surface": "apple",
@@ -35451,7 +35267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 654,
+      "line": 811,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop",
       "surface": "apple",
@@ -35459,7 +35275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 771,
+      "line": 928,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Loading commands",
       "surface": "apple",
@@ -35467,7 +35283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 780,
+      "line": 937,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Commands unavailable",
       "surface": "apple",
@@ -35475,7 +35291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 789,
+      "line": 946,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Retry",
       "surface": "apple",
@@ -35483,7 +35299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 798,
+      "line": 955,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "No matching commands",
       "surface": "apple",
@@ -35491,7 +35307,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1012,
+      "line": 1169,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop response",
       "surface": "apple",
@@ -35499,7 +35315,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1037,
+      "line": 1194,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Send message",
       "surface": "apple",
@@ -35507,7 +35323,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1051,
+      "line": 1208,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -35515,7 +35331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1185,
+      "line": 1333,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -35523,7 +35339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1185,
+      "line": 1333,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Gateway connected",
       "surface": "apple",
@@ -35531,7 +35347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1194,
+      "line": 1342,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Message…",
       "surface": "apple",
@@ -35923,7 +35739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 444,
+      "line": 448,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Retry Send",
       "surface": "apple",
@@ -35931,7 +35747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 458,
+      "line": 462,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Delete",
       "surface": "apple",
@@ -35939,7 +35755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 489,
+      "line": 493,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Stop Listening",
       "surface": "apple",
@@ -35947,7 +35763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 492,
+      "line": 496,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Listen",
       "surface": "apple",
@@ -35955,7 +35771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 539,
+      "line": 543,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Copy Message",
       "surface": "apple",
@@ -35963,7 +35779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 598,
+      "line": 602,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Jump to latest",
       "surface": "apple",
@@ -35971,7 +35787,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 609,
+      "line": 613,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Jump to latest reply",
       "surface": "apple",
@@ -35979,7 +35795,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 629,
+      "line": 633,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -35987,7 +35803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1055,
+      "line": 1059,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Loading chat",
       "surface": "apple",
@@ -35995,7 +35811,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1135,
+      "line": 1139,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Dismiss",
       "surface": "apple",
@@ -36003,7 +35819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 27,
+      "line": 103,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift",
       "source": "Could not attach voice note: %@",
       "surface": "apple",
@@ -36011,7 +35827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 33,
+      "line": 109,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift",
       "source": "Voice note exceeds the 5 MB attachment limit",
       "surface": "apple",
@@ -36019,7 +35835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 79,
+      "line": 171,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift",
       "source": "Only image attachments are supported right now",
       "surface": "apple",
@@ -36027,7 +35843,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 90,
+      "line": 183,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift",
       "source": "Could not process %1$@: %2$@",
       "surface": "apple",
@@ -36035,7 +35851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 98,
+      "line": 194,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift",
       "source": "Attachment %@ exceeds 5 MB limit after resizing",
       "surface": "apple",
@@ -36043,7 +35859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 105,
+      "line": 201,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift",
       "source": "\\(baseName).jpg",
       "surface": "apple",
@@ -36051,7 +35867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 43,
+      "line": 62,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "\\(invocation) ",
       "surface": "apple",
@@ -36059,7 +35875,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 293,
+      "line": 318,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "See attached.",
       "surface": "apple",
@@ -36067,7 +35883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 671,
+      "line": 696,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "delivery unconfirmed",
       "surface": "apple",
@@ -36075,7 +35891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 671,
+      "line": 696,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "queued after route change",
       "surface": "apple",
@@ -36083,7 +35899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1203,
+      "line": 1147,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "surface": "apple",
@@ -36091,7 +35907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1259,
+      "line": 1203,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",
@@ -36347,6 +36163,94 @@
     },
     {
       "kind": "ui-call",
+      "line": 70,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Voice note",
+      "surface": "apple",
+      "id": "native.apple.fa10740f9e272e83"
+    },
+    {
+      "kind": "ui-call",
+      "line": 120,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Photo Library",
+      "surface": "apple",
+      "id": "native.apple.e4de5afc37981d6c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 132,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Camera",
+      "surface": "apple",
+      "id": "native.apple.37c19a66626b21fa"
+    },
+    {
+      "kind": "ui-call",
+      "line": 145,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Choose Image File",
+      "surface": "apple",
+      "id": "native.apple.333682684163ba6b"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 156,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Add attachment",
+      "surface": "apple",
+      "id": "native.apple.534246792690968d"
+    },
+    {
+      "kind": "ui-call",
+      "line": 281,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Record Voice Note",
+      "surface": "apple",
+      "id": "native.apple.e33210feaa3da016"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 328,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Dictate message",
+      "surface": "apple",
+      "id": "native.apple.00f0e15858e38d19"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 329,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Listening",
+      "surface": "apple",
+      "id": "native.apple.96f20175f61a2b29"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 329,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Not listening",
+      "surface": "apple",
+      "id": "native.apple.eaa9047db6cfb67e"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 331,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Finish dictation",
+      "surface": "apple",
+      "id": "native.apple.4185df7a940f09ef"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 331,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift",
+      "source": "Transcribe speech into the message",
+      "surface": "apple",
+      "id": "native.apple.5a0793d2827b9399"
+    },
+    {
+      "kind": "ui-call",
       "line": 588,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift",
       "source": "z",
@@ -36371,7 +36275,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 63,
+      "line": 64,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/VoiceNoteComposerViews.swift",
       "source": "Recording",
       "surface": "apple",
@@ -36379,7 +36283,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 78,
+      "line": 79,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/VoiceNoteComposerViews.swift",
       "source": "Cancel voice note",
       "surface": "apple",
@@ -36387,7 +36291,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 87,
+      "line": 88,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/VoiceNoteComposerViews.swift",
       "source": "Finish voice note",
       "surface": "apple",
