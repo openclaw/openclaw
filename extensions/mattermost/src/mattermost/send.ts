@@ -20,11 +20,13 @@ import {
   createMattermostDirectChannelWithRetry,
   createMattermostPost,
   fetchMattermostChannelByName,
+  fetchMattermostPost,
   fetchMattermostMe,
   fetchMattermostUserByUsername,
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
+  type MattermostClient,
   type MattermostUser,
   type CreateDmChannelRetryOptions,
 } from "./client.js";
@@ -52,6 +54,8 @@ type MattermostSendOpts = {
   /** Fail the send if media cannot be loaded/uploaded instead of posting text-only. */
   requireMediaUpload?: boolean;
   replyToId?: string;
+  /** Mattermost thread root id. Preferred over replyToId when both are present. */
+  threadId?: string;
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
   attachmentText?: string;
@@ -143,6 +147,37 @@ function normalizeMessage(text: string, mediaUrl?: string): string {
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
+}
+
+function normalizeMattermostPostId(value: string | null | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && /^[a-z0-9]{26}$/i.test(normalized) ? normalized : undefined;
+}
+
+async function resolveMattermostRootPostId(params: {
+  client: MattermostClient;
+  channelId: string;
+  threadId?: string | null;
+  replyToId?: string | null;
+}): Promise<string | undefined> {
+  const candidates = [params.threadId, params.replyToId]
+    .map((value) => normalizeMattermostPostId(value))
+    .filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    try {
+      const post = await fetchMattermostPost(params.client, candidate);
+      if (post.channel_id && post.channel_id !== params.channelId) {
+        continue;
+      }
+      return normalizeMattermostPostId(post.root_id) ?? normalizeMattermostPostId(post.id);
+    } catch {
+      // A stale or inaccessible candidate should not block sending; fall back
+      // to the next candidate, then to the original normalized id below.
+    }
+  }
+
+  return candidates[0];
 }
 async function resolveBotUser(
   baseUrl: string,
@@ -471,7 +506,12 @@ export async function sendMessageMattermost(
   const post = await createMattermostPost(client, {
     channelId,
     message,
-    rootId: opts.replyToId,
+    rootId: await resolveMattermostRootPostId({
+      client,
+      channelId,
+      threadId: opts.threadId,
+      replyToId: opts.replyToId,
+    }),
     fileIds,
     props,
   });

@@ -453,9 +453,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     // the current child post, so prefer threadId unless the caller supplied the
     // Mattermost-specific replyToId root directly.
     const replyToId =
-      normalizeOptionalString(params.replyToId) ??
-      normalizeOptionalString(params.threadId) ??
-      normalizeOptionalString(params.replyTo);
+      normalizeOptionalString(params.replyToId) ?? normalizeOptionalString(params.replyTo);
+    const threadId = normalizeOptionalString(params.threadId);
     const resolvedAccountId = accountId || undefined;
 
     const attachmentMedia = collectMattermostAttachmentMedia(params);
@@ -477,6 +476,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: resolvedAccountId,
       replyToId,
+      threadId,
       buttons: buttons.length > 0 ? buttons : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl: attachmentMedia.mediaUrls[0],
@@ -503,7 +503,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       details: {
         toolSend: {
           to: `channel:${result.channelId}`,
-          ...(replyToId ? { threadId: replyToId } : {}),
+          ...((threadId ?? replyToId) ? { threadId: threadId ?? replyToId } : {}),
         },
       },
     };
@@ -692,7 +692,8 @@ const mattermostOutbound: ChannelOutboundAdapter = {
         mediaReadFile: ctx.mediaReadFile ?? ctx.mediaAccess?.readFile,
         ...(ctx.mediaAccess?.workspaceDir ? { workspaceDir: ctx.mediaAccess.workspaceDir } : {}),
         requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
-        replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
+        replyToId: ctx.replyToId ?? undefined,
+        threadId: ctx.threadId != null ? String(ctx.threadId) : undefined,
         buttons,
       });
       return attachChannelToResult("mattermost", result);
@@ -719,7 +720,8 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       ).sendMessageMattermost(to, text, {
         cfg,
         accountId: accountId ?? undefined,
-        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+        replyToId: replyToId ?? undefined,
+        threadId: threadId != null ? String(threadId) : undefined,
       }),
     sendMedia: async ({
       cfg,
@@ -743,7 +745,8 @@ const mattermostOutbound: ChannelOutboundAdapter = {
         mediaReadFile: mediaReadFile ?? mediaAccess?.readFile,
         ...(mediaAccess?.workspaceDir ? { workspaceDir: mediaAccess.workspaceDir } : {}),
         requireMediaUpload: requiresMattermostMediaUpload(mediaUrl) ? true : undefined,
-        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+        replyToId: replyToId ?? undefined,
+        threadId: threadId != null ? String(threadId) : undefined,
       }),
   }),
 };
