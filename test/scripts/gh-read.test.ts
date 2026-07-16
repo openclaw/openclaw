@@ -1,5 +1,8 @@
 // Gh Read tests cover gh read script behavior.
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReadPermissions,
@@ -7,6 +10,7 @@ import {
   normalizeRepo,
   parsePermissionKeys,
   parseRepoArg,
+  readGitHubAppPrivateKey,
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
   resolveGitHubFetchTimeoutMs,
@@ -76,6 +80,30 @@ describe("gh-read helpers", () => {
       "contents",
       "issues",
     ]);
+  });
+
+  it("bounds GitHub App private key files", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-gh-read-key-"));
+    const privateKeyPath = path.join(tempDir, "app.pem");
+    try {
+      writeFileSync(privateKeyPath, "x".repeat(64 * 1024));
+      expect(readGitHubAppPrivateKey(privateKeyPath)).toHaveLength(64 * 1024);
+
+      writeFileSync(privateKeyPath, "x".repeat(64 * 1024 + 1));
+      let readError: unknown;
+      try {
+        readGitHubAppPrivateKey(privateKeyPath);
+      } catch (error) {
+        readError = error;
+      }
+      expect(readError).toMatchObject({
+        name: "FsSafeError",
+        code: "too-large",
+        message: `GitHub App private key file at ${privateKeyPath} exceeds 65536 bytes.`,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
