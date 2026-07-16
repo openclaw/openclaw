@@ -355,12 +355,19 @@ export async function startDebugProxyServer(params: {
       );
       return;
     }
-    const upstreamSocket = net.connect({
-      host: hostname,
-      port,
-      timeout: DEBUG_PROXY_CONNECT_TIMEOUT_MS,
+    const upstreamSocket = net.connect(port, hostname, () => {
+      // The deadline only protects opening the upstream socket. CONNECT tunnels
+      // are intentionally long-lived and must not inherit an idle timeout.
+      upstreamSocket.setTimeout(0);
+      upstreamSocket.off("timeout", onUpstreamConnectTimeout);
+      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length > 0) {
+        upstreamSocket.write(head);
+      }
+      clientSocket.pipe(upstreamSocket);
+      upstreamSocket.pipe(clientSocket);
     });
-    const onUpstreamConnectTimeout = () => {
+    function onUpstreamConnectTimeout() {
       const message = `CONNECT upstream timed out after ${DEBUG_PROXY_CONNECT_TIMEOUT_MS}ms`;
       recordProxyEvent({
         protocol: "connect",
@@ -376,20 +383,8 @@ export async function startDebugProxyServer(params: {
         `HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(GATEWAY_TIMEOUT_BODY)}\r\n\r\n${GATEWAY_TIMEOUT_BODY}`,
         () => clientSocket.destroy(),
       );
-    };
-    upstreamSocket.once("timeout", onUpstreamConnectTimeout);
-    upstreamSocket.once("connect", () => {
-      // The deadline only protects opening the upstream socket. CONNECT tunnels
-      // are intentionally long-lived and must not inherit an idle timeout.
-      upstreamSocket.setTimeout(0);
-      upstreamSocket.off("timeout", onUpstreamConnectTimeout);
-      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length > 0) {
-        upstreamSocket.write(head);
-      }
-      clientSocket.pipe(upstreamSocket);
-      upstreamSocket.pipe(clientSocket);
-    });
+    }
+    upstreamSocket.setTimeout(DEBUG_PROXY_CONNECT_TIMEOUT_MS, onUpstreamConnectTimeout);
     clientSocket.on("error", (error) => {
       recordProxyEvent({
         protocol: "connect",

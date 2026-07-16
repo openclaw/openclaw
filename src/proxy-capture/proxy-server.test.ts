@@ -5,7 +5,7 @@ import {
   createServer as createHttpServer,
   type IncomingMessage,
 } from "node:http";
-import net, { Socket, type AddressInfo, type NetConnectOpts } from "node:net";
+import net, { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -337,33 +337,35 @@ describe("startDebugProxyServer", () => {
   it("returns 504 when a CONNECT upstream opening attempt times out", async () => {
     const settings = await makeSettings();
     const stalledUpstream = new Socket();
-    let resolveConnectCalled!: (options: NetConnectOpts) => void;
-    const connectCalled = new Promise<NetConnectOpts>((resolve) => {
+    const setOpeningTimeout = vi.spyOn(stalledUpstream, "setTimeout");
+    let resolveConnectCalled!: (target: { hostname: string; port: number }) => void;
+    const connectCalled = new Promise<{ hostname: string; port: number }>((resolve) => {
       resolveConnectCalled = resolve;
     });
-    vi.spyOn(net, "connect").mockImplementation(((options: NetConnectOpts) => {
-      resolveConnectCalled(options);
+    vi.spyOn(net, "connect").mockImplementation(((port: number, hostname: string) => {
+      resolveConnectCalled({ hostname, port });
       return stalledUpstream;
     }) as typeof net.connect);
     const proxy = await startDebugProxyServer({ settings });
     let client: Socket | undefined;
 
     try {
-      client = await openConnectClient(proxy.proxyUrl, "unreachable.example:443");
+      const connectedClient = await openConnectClient(proxy.proxyUrl, "unreachable.example:443");
+      client = connectedClient;
       let response = "";
-      client.setEncoding("utf8");
-      client.on("data", (chunk) => {
-        response += chunk;
+      connectedClient.setEncoding("utf8");
+      connectedClient.on("data", (chunk) => {
+        response += chunk.toString();
       });
       const clientClosed = new Promise<void>((resolve) => {
-        client.once("close", resolve);
+        connectedClient.once("close", resolve);
       });
 
       await expect(connectCalled).resolves.toMatchObject({
-        host: "unreachable.example",
+        hostname: "unreachable.example",
         port: 443,
-        timeout: 30_000,
       });
+      expect(setOpeningTimeout).toHaveBeenCalledWith(30_000, expect.any(Function));
       stalledUpstream.emit("timeout");
       await clientClosed;
 
@@ -393,8 +395,13 @@ describe("startDebugProxyServer", () => {
     const connectCalled = new Promise<void>((resolve) => {
       resolveConnectCalled = resolve;
     });
-    vi.spyOn(net, "connect").mockImplementation((() => {
+    vi.spyOn(net, "connect").mockImplementation(((
+      _port: number,
+      _hostname: string,
+      onConnect: () => void,
+    ) => {
       resolveConnectCalled();
+      upstream.once("connect", onConnect);
       return upstream;
     }) as typeof net.connect);
     const proxy = await startDebugProxyServer({ settings });
