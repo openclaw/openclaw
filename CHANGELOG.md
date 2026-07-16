@@ -41,7 +41,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Restart sentinel diagnostics:** report SQLite read/write and legacy-file cleanup failures while preserving best-effort restart recovery behavior. (#106385) Thanks @zenglingbiao and @wendy-chsy.
 - **Discord gateway metadata deadline:** carry the existing lookup deadline through DNS and proxy preflight, request headers, and response bodies so stalled gateway startup aborts cleanly. (#104580) Thanks @hugenshen.
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
@@ -84,6 +83,7 @@ Docs: https://docs.openclaw.ai
 - **macOS remote node readiness:** take the main-session key from the node hello snapshot instead of opening an operator connection during node admission, preventing remote tunnel recovery from leaving Computer Use and node exec stuck in lifecycle transition.
 - **Claude CLI context budgets:** honor Anthropic model and per-agent `contextTokens` limits by passing the effective limit to Claude Code's native auto-compactor and persisting the same prepared budget in OpenClaw session state. Fixes #80933. (#93198) Thanks @mushuiyu886.
 - **Transcript read failures:** propagate permission and I/O failures from streaming JSONL session reads instead of treating unreadable transcripts as empty. (#106412) Thanks @zenglingbiao.
+- **Restart sentinel diagnostics:** report SQLite read/write and legacy-file cleanup failures while preserving best-effort restart recovery behavior. (#106385) Thanks @zenglingbiao and @wendy-chsy.
 - **Native app connection and relay reliability:** keep Android disconnects stopped across Activity recreation, fail remote camera commands without opening permission prompts, refresh mobile node registration after capability changes, surface iOS onboarding connection failures, cancel stale Talk owners on session switches, reject invalid Watch acknowledgments, preserve Watch events received during startup, and prevent older agent overview requests from replacing newer gateway state.
 - **Gateway source watch:** hand the configured port off from the installed service before starting the tmux watcher, preserve failed panes for attach/capture, and keep explicit alternate-port watches side by side with the managed Gateway.
 - **Claude CLI max-turn diagnostics:** preserve terminal max-turn results with OpenClaw and Claude session context, warn when tool actions may already have run, and stop unsafe auth-profile or model replay for potentially side-effecting turns. (#94130) Thanks @zhangguiping-xydt.
