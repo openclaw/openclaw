@@ -2368,6 +2368,32 @@ describe("config cli", () => {
       expect(resolveOptions).toBeTypeOf("object");
     });
 
+    it("emits the resolved config path in config patch JSON", async () => {
+      const home = path.join(os.tmpdir(), "openclaw-home-token-config-patch");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      const snapshot = buildSnapshot({ resolved, config: resolved });
+      snapshot.path = configPath;
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+      vi.stubEnv("OPENCLAW_HOME", home);
+
+      const patch = writeTempJson5File("openclaw-config-patch-resolved-path", {
+        gateway: { port: 18790 },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", patch, "--dry-run", "--json"]);
+      } finally {
+        fs.rmSync(patch, { force: true });
+        vi.unstubAllEnvs();
+      }
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as { configPath: string };
+      expect(payload.configPath).toBe(configPath);
+      expect(path.isAbsolute(payload.configPath)).toBe(true);
+      expect(payload.configPath).not.toContain("$OPENCLAW_HOME");
+      expect(payload.configPath).not.toContain("~");
+    });
+
     it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
       const pluginId = "secret-provider-proof";
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
@@ -3853,15 +3879,26 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("handles config file path with home directory", async () => {
+    it("prints a resolved config file path under OPENCLAW_HOME", async () => {
+      const home = path.join(os.tmpdir(), "openclaw-home-token-config-file");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
       const snapshot = buildSnapshot({ resolved, config: resolved });
-      snapshot.path = "/home/user/.openclaw/openclaw.json";
+      snapshot.path = configPath;
       mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+      vi.stubEnv("OPENCLAW_HOME", home);
 
-      await runConfigCommand(["config", "file"]);
+      try {
+        await runConfigCommand(["config", "file"]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
 
-      expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
+      const output = String(lastMockArg(mockLog));
+      expect(output).toBe(configPath);
+      expect(path.isAbsolute(output)).toBe(true);
+      expect(output).not.toContain("$OPENCLAW_HOME");
+      expect(output).not.toContain("~");
     });
   });
 });

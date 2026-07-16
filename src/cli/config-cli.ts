@@ -2250,7 +2250,7 @@ async function runConfigOperations(params: {
     const dryRunResult: ConfigSetDryRunResult = {
       ok: dedupedErrors.length === 0,
       operations: operations.length,
-      configPath: shortenHomePath(snapshot.path),
+      configPath: snapshot.path,
       inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
         schema:
@@ -2522,7 +2522,7 @@ export async function runConfigUnset(opts: {
         throw new ConfigSetDryRunValidationError({
           ok: false,
           operations: 1,
-          configPath: shortenHomePath(snapshot.path),
+          configPath: snapshot.path,
           inputModes: ["unset"],
           checks: {
             schema: false,
@@ -2576,7 +2576,7 @@ async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const snapshot = await readConfigFileSnapshot();
-    runtime.log(shortenHomePath(snapshot.path));
+    runtime.log(snapshot.path);
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
