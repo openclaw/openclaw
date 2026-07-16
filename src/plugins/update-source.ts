@@ -93,20 +93,6 @@ export type PluginUpdateIntegrityDriftParams = {
   dryRun: boolean;
 };
 
-export type PluginChannelSyncSummary = {
-  switchedToBundled: string[];
-  switchedToClawHub: string[];
-  switchedToNpm: string[];
-  warnings: string[];
-  errors: string[];
-};
-
-export type PluginChannelSyncResult = {
-  config: OpenClawConfig;
-  changed: boolean;
-  summary: PluginChannelSyncSummary;
-};
-
 export type UpdatablePluginInstallRecord = PluginInstallRecord & {
   source: "npm" | "marketplace" | "clawhub" | "git";
 };
