@@ -1,19 +1,12 @@
 // Telegram tests cover bounded Darwin claim-owner identity lookup.
-import childProcess from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    default: {
-      ...actual.default,
-      execFileSync: vi.fn(),
-    },
-  };
-});
+const execFileSyncMock = vi.hoisted(() => vi.fn());
 
-const execFileSyncMock = vi.mocked(childProcess.execFileSync);
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execFileSync: execFileSyncMock,
+}));
 
 async function importClaimOwnerAsDarwin() {
   vi.resetModules();
@@ -23,6 +16,7 @@ async function importClaimOwnerAsDarwin() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  execFileSyncMock.mockReset();
 });
 
 describe("Telegram ingress claim owner", () => {
@@ -34,7 +28,7 @@ describe("Telegram ingress claim owner", () => {
     expect(execFileSyncMock).toHaveBeenCalledWith(
       "/bin/ps",
       ["-o", "lstart=", "-p", String(process.pid)],
-      expect.objectContaining({ timeout: 1_000 }),
+      expect.objectContaining({ killSignal: "SIGKILL", timeout: 1_000 }),
     );
     expect(TELEGRAM_SPOOLED_UPDATE_PROCESS_ID.split(":")[1]).toBe(
       String(Date.UTC(2026, 6, 6, 12, 34, 56) / 1000),

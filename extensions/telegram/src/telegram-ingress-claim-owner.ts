@@ -1,5 +1,5 @@
 // Telegram plugin module implements telegram ingress claim-owner identity.
-import childProcess from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import type { ChannelIngressQueueCorruptClaim } from "openclaw/plugin-sdk/channel-outbound";
@@ -29,14 +29,13 @@ function readProcessStartTime(pid: number): number | null {
   if (process.platform === "darwin") {
     try {
       // This runs during module initialization, so a stuck ps must not block Telegram startup.
-      const startedAt = childProcess
-        .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
-          encoding: "utf8",
-          env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: TELEGRAM_PROCESS_START_TIME_LOOKUP_TIMEOUT_MS,
-        })
-        .trim();
+      const startedAt = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+        encoding: "utf8",
+        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: TELEGRAM_PROCESS_START_TIME_LOOKUP_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      }).trim();
       const startedAtMs = Date.parse(`${startedAt} UTC`);
       return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
     } catch {
