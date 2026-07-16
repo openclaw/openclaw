@@ -21,6 +21,7 @@ const loginShellEnvProbeCache = new Map<
   string,
   { ok: true; entries: Array<[string, string]> } | { ok: false; error: string }
 >();
+const LOGIN_SHELL_ENV_CACHE_LIMIT = 64;
 const execCacheIds = new WeakMap<object, number>();
 
 function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -198,10 +199,18 @@ function probeLoginShellEnv(params: {
   try {
     const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
     const shellEnv = parseShellEnv(stdout);
+    if (loginShellEnvProbeCache.size >= LOGIN_SHELL_ENV_CACHE_LIMIT) {
+      const oldest = loginShellEnvProbeCache.keys().next().value;
+      if (oldest !== undefined) loginShellEnvProbeCache.delete(oldest);
+    }
     loginShellEnvProbeCache.set(cacheKey, { ok: true, entries: [...shellEnv.entries()] });
     return { ok: true, shellEnv };
   } catch (err) {
     const result = { ok: false as const, error: formatErrorMessage(err) };
+    if (loginShellEnvProbeCache.size >= LOGIN_SHELL_ENV_CACHE_LIMIT) {
+      const oldest = loginShellEnvProbeCache.keys().next().value;
+      if (oldest !== undefined) loginShellEnvProbeCache.delete(oldest);
+    }
     loginShellEnvProbeCache.set(cacheKey, result);
     return result;
   }
