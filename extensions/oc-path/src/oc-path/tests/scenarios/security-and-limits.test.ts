@@ -102,6 +102,15 @@ describe("path-string and traversal caps", () => {
     expect(() => formatOcPath({ file: multibyteFile })).toThrow(`length: ${pathBytes}`);
   });
 
+  it("accepts multibyte paths exactly at MAX_PATH_LENGTH bytes", () => {
+    const multibyteFile = `${"界".repeat(1363)}ab`;
+    const exactPath = `oc://${multibyteFile}`;
+
+    expect(Buffer.byteLength(exactPath, "utf8")).toBe(PATH_LENGTH_LIMIT);
+    expect(parseOcPath(exactPath)).toEqual({ file: multibyteFile });
+    expect(formatOcPath({ file: multibyteFile })).toBe(exactPath);
+  });
+
   it("keeps overlong parse input UTF-16 safe", () => {
     const prefix = `oc://${"a".repeat(74)}`;
     expectUtf16SafeLimitError(
