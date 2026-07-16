@@ -28,7 +28,8 @@ const MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV = "OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS";
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
-const DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS = 2_000;
+const DISCORD_GATEWAY_READY_RETRY_BACKOFF_INITIAL_MS = 2_000;
+const DISCORD_GATEWAY_READY_RETRY_BACKOFF_MAX_MS = 30_000;
 const DISCORD_GATEWAY_STARTUP_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 const DISCORD_GATEWAY_STARTUP_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
@@ -173,6 +174,15 @@ async function restartGatewayAfterReadyTimeout(params: {
   if (!params.abortSignal?.aborted) {
     params.gateway.connect(false);
   }
+}
+
+/** Exponential backoff for gateway READY retries: 2s→4s→8s→16s→30s cap. */
+function getGatewayReconnectDelayMs(attempt: number): number {
+  const cappedAttempt = Math.min(Math.max(0, attempt - 1), 4);
+  return Math.min(
+    DISCORD_GATEWAY_READY_RETRY_BACKOFF_INITIAL_MS * 2 ** cappedAttempt,
+    DISCORD_GATEWAY_READY_RETRY_BACKOFF_MAX_MS,
+  );
 }
 
 function parseGatewayCloseCode(message: string): number | undefined {
@@ -399,8 +409,9 @@ async function waitForGatewayReady(params: {
     if (params.abortSignal?.aborted) {
       return;
     }
+    const delayMs = getGatewayReconnectDelayMs(attempt);
     await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS);
+      const timeout = setTimeout(resolve, delayMs);
       timeout.unref?.();
     });
   }
