@@ -93,6 +93,12 @@ explicitly use a connected emulator.
 
 - Play build: `openclaw-<version>-play-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
+- Wear OS build: `openclaw-<version>-wear-release.aab`
+
+The Wear archive uses the same release signing identity as the phone artifacts, validates the release APK manifest
+against package `ai.openclaw.app`, the shared `versionName`, and the independent Wear `versionCode`, then verifies the
+AAB signature. The archive is ready for Android-owner-controlled Wear publication; the existing Play upload lane
+continues to upload only the phone Play AAB until that product and track decision is made.
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
 
@@ -119,6 +125,7 @@ commit="$(git -C ../.. rev-parse HEAD)"
 built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundlePlayRelease
 ./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :app:bundleThirdPartyRelease
+./gradlew -PopenclawBuildCommit="$commit" -PopenclawBuildTimestamp="$built_at" :wear:bundleRelease
 ```
 
 ## Kotlin Lint + Format

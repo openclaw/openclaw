@@ -18,17 +18,23 @@ import {
 } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAndroidVersion, syncAndroidVersioning } from "../../../scripts/lib/android-version.ts";
+import {
+  canonicalAndroidWearVersionCode,
+  resolveAndroidVersion,
+  syncAndroidVersioning,
+} from "../../../scripts/lib/android-version.ts";
 
 type ReleaseArtifact = {
-  flavorName: "play" | "third-party";
+  releaseName: "play" | "third-party" | "wear";
   kind: "aab" | "apk";
-  gradleTask: string;
+  gradleTasks: string[];
+  metadataApkPath?: string;
   sourcePath: string;
+  versionCode: number;
 };
 
 type CliOptions = {
-  artifact: "all" | ReleaseArtifact["flavorName"];
+  artifact: "all" | ReleaseArtifact["releaseName"];
   dryRun: boolean;
   verifyApk?: string;
 };
@@ -165,8 +171,8 @@ function parseArgs(argv: string[]): CliOptions {
     switch (arg) {
       case "--artifact": {
         const value = argv[index + 1];
-        if (value !== "all" && value !== "play" && value !== "third-party") {
-          throw new Error("--artifact must be one of: all, play, third-party");
+        if (value !== "all" && value !== "play" && value !== "third-party" && value !== "wear") {
+          throw new Error("--artifact must be one of: all, play, third-party, wear");
         }
         artifact = value;
         index += 1;
@@ -189,9 +195,9 @@ function parseArgs(argv: string[]): CliOptions {
       case "--help": {
         console.log(
           [
-            "Usage: bun apps/android/scripts/build-release-artifacts.ts [--artifact all|play|third-party] [--dry-run] [--verify-apk PATH]",
+            "Usage: bun apps/android/scripts/build-release-artifacts.ts [--artifact all|play|third-party|wear] [--dry-run] [--verify-apk PATH]",
             "",
-            "Builds the signed Play AAB and third-party APK from apps/android/version.json.",
+            "Builds signed Phone and Wear release artifacts from apps/android/version.json.",
           ].join("\n"),
         );
         process.exit(0);
@@ -220,12 +226,16 @@ function pinnedApkCertificateSha256(): string {
   return fingerprint;
 }
 
-function releaseArtifacts(versionName: string): ReleaseArtifact[] {
+function releaseArtifacts(
+  versionName: string,
+  phoneVersionCode: number,
+  wearVersionCode: number,
+): ReleaseArtifact[] {
   return [
     {
-      flavorName: "play",
+      releaseName: "play",
       kind: "aab",
-      gradleTask: ":app:bundlePlayRelease",
+      gradleTasks: [":app:bundlePlayRelease"],
       sourcePath: join(
         androidDir,
         "app",
@@ -235,11 +245,12 @@ function releaseArtifacts(versionName: string): ReleaseArtifact[] {
         "playRelease",
         "app-play-release.aab",
       ),
+      versionCode: phoneVersionCode,
     },
     {
-      flavorName: "third-party",
+      releaseName: "third-party",
       kind: "apk",
-      gradleTask: ":app:assembleThirdPartyRelease",
+      gradleTasks: [":app:assembleThirdPartyRelease"],
       sourcePath: join(
         androidDir,
         "app",
@@ -250,6 +261,31 @@ function releaseArtifacts(versionName: string): ReleaseArtifact[] {
         "release",
         `openclaw-${versionName}-thirdParty-release.apk`,
       ),
+      versionCode: phoneVersionCode,
+    },
+    {
+      releaseName: "wear",
+      kind: "aab",
+      gradleTasks: [":wear:bundleRelease", ":wear:assembleRelease"],
+      metadataApkPath: join(
+        androidDir,
+        "wear",
+        "build",
+        "outputs",
+        "apk",
+        "release",
+        "OpenClaw-WearOS-release.apk",
+      ),
+      sourcePath: join(
+        androidDir,
+        "wear",
+        "build",
+        "outputs",
+        "bundle",
+        "release",
+        "wear-release.aab",
+      ),
+      versionCode: wearVersionCode,
     },
   ];
 }
@@ -265,8 +301,27 @@ function writeSha256File(path: string): string {
   return hash;
 }
 
+export function isVerifiedJarSignatureOutput(output: string): boolean {
+  return /^jar verified\.$/mu.test(output) && !/^jar is unsigned\./mu.test(output);
+}
+
 function verifyAabSignature(path: string): void {
-  execFileSync("jarsigner", ["-verify", path], { stdio: "ignore" });
+  let output: string;
+  try {
+    output = execFileSync(
+      "jarsigner",
+      ["-J-Duser.language=en", "-J-Duser.country=US", "-verify", "-verbose", "-certs", path],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } catch {
+    throw new Error(`jarsigner verification failed for ${path}`);
+  }
+  if (!isVerifiedJarSignatureOutput(output)) {
+    throw new Error(`AAB is not signed by a verified JAR signer: ${path}`);
+  }
 }
 
 function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
@@ -279,12 +334,13 @@ function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
     return null;
   }
 
-  const candidates = readdirSync(buildToolsDir)
+  const executableName = process.platform === "win32" ? "apksigner.bat" : "apksigner";
+  return (
+    readdirSync(buildToolsDir)
     .toSorted((left, right) => right.localeCompare(left))
-    .map((version) => join(buildToolsDir, version, "apksigner"))
-    .filter((candidate) => existsSync(candidate));
-
-  return candidates[0] ?? null;
+      .map((version) => join(buildToolsDir, version, executableName))
+      .find((candidate) => existsSync(candidate)) ?? null
+  );
 }
 
 function resolveApkSigner(): string {
@@ -295,8 +351,9 @@ function resolveApkSigner(): string {
     return sdkApkSigner;
   }
 
+  const executableName = process.platform === "win32" ? "apksigner.bat" : "apksigner";
   for (const pathDir of (process.env.PATH ?? "").split(delimiter)) {
-    const candidate = join(pathDir, "apksigner");
+    const candidate = join(pathDir, executableName);
     try {
       accessSync(candidate, constants.X_OK);
       return candidate;
@@ -308,12 +365,59 @@ function resolveApkSigner(): string {
   throw new Error("Missing apksigner. Install Android SDK build-tools or put apksigner on PATH.");
 }
 
+function resolveApkAnalyzerFromSdk(sdkRoot: string | undefined): string | null {
+  if (!sdkRoot) {
+    return null;
+  }
+
+  const commandLineToolsDir = join(sdkRoot, "cmdline-tools");
+  if (!existsSync(commandLineToolsDir)) {
+    return null;
+  }
+
+  const executableName = process.platform === "win32" ? "apkanalyzer.bat" : "apkanalyzer";
+  return (
+    readdirSync(commandLineToolsDir)
+    .toSorted((left, right) => {
+      if (left === "latest") {
+        return -1;
+      }
+      if (right === "latest") {
+        return 1;
+      }
+      return right.localeCompare(left);
+    })
+      .map((version) => join(commandLineToolsDir, version, "bin", executableName))
+      .find((candidate) => existsSync(candidate)) ?? null
+  );
+}
+
+function resolveApkAnalyzer(): string {
+  const sdkApkAnalyzer =
+    resolveApkAnalyzerFromSdk(process.env.ANDROID_HOME) ??
+    resolveApkAnalyzerFromSdk(process.env.ANDROID_SDK_ROOT);
+  if (sdkApkAnalyzer) {
+    return sdkApkAnalyzer;
+  }
+
+  const executableName = process.platform === "win32" ? "apkanalyzer.bat" : "apkanalyzer";
+  for (const pathDir of (process.env.PATH ?? "").split(delimiter)) {
+    const candidate = join(pathDir, executableName);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error("Missing apkanalyzer. Install Android SDK command-line tools or put it on PATH.");
+}
+
 function verifyApkSignature(path: string, expectedCertificateSha256: string): void {
   const apkSigner = resolveApkSigner();
   let output: string;
   try {
     output = execFileSync(apkSigner, ["verify", "--print-certs", path], {
       encoding: "utf8",
+      shell: process.platform === "win32",
       stdio: ["ignore", "pipe", "inherit"],
     });
   } catch {
@@ -340,6 +444,43 @@ function verifyApkSignature(path: string, expectedCertificateSha256: string): vo
   }
 }
 
+function readApkManifestValue(path: string, verb: string): string {
+  const apkAnalyzer = resolveApkAnalyzer();
+  try {
+    return execFileSync(apkAnalyzer, ["manifest", verb, path], {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+      stdio: ["ignore", "pipe", "inherit"],
+    }).trim();
+  } catch {
+    throw new Error(`apkanalyzer manifest ${verb} failed for ${path}`);
+  }
+}
+
+function verifyApkManifest(
+  path: string,
+  expected: { applicationId: string; versionCode: number; versionName: string },
+): void {
+  const actualApplicationId = readApkManifestValue(path, "application-id");
+  const actualVersionName = readApkManifestValue(path, "version-name");
+  const actualVersionCode = readApkManifestValue(path, "version-code");
+  if (actualApplicationId !== expected.applicationId) {
+    throw new Error(
+      `APK application ID mismatch for ${path}: expected ${expected.applicationId}, got ${actualApplicationId}`,
+    );
+  }
+  if (actualVersionName !== expected.versionName) {
+    throw new Error(
+      `APK versionName mismatch for ${path}: expected ${expected.versionName}, got ${actualVersionName}`,
+    );
+  }
+  if (actualVersionCode !== expected.versionCode.toString()) {
+    throw new Error(
+      `APK versionCode mismatch for ${path}: expected ${expected.versionCode}, got ${actualVersionCode}`,
+    );
+  }
+}
+
 function copyArtifact(sourcePath: string, destinationPath: string): void {
   if (!existsSync(sourcePath)) {
     throw new Error(`Signed release artifact missing at ${sourcePath}`);
@@ -352,11 +493,24 @@ function verifyArtifactSignature(
   artifact: ReleaseArtifact,
   outputPath: string,
   expectedCertificateSha256: string,
+  versionName: string,
 ): void {
   if (artifact.kind === "aab") {
     verifyAabSignature(outputPath);
   } else {
     verifyApkSignature(outputPath, expectedCertificateSha256);
+  }
+
+  const metadataApkPath = artifact.metadataApkPath ?? (artifact.kind === "apk" ? outputPath : null);
+  if (metadataApkPath) {
+    if (metadataApkPath !== outputPath) {
+      verifyApkSignature(metadataApkPath, expectedCertificateSha256);
+    }
+    verifyApkManifest(metadataApkPath, {
+      applicationId: "ai.openclaw.app",
+      versionCode: artifact.versionCode,
+      versionName,
+    });
   }
 }
 
@@ -371,18 +525,27 @@ function main() {
 
   syncAndroidVersioning({ mode: "check", rootDir });
   const version = resolveAndroidVersion(rootDir);
-  const buildMetadata = resolveAndroidBuildMetadata();
-  const artifacts = releaseArtifacts(version.canonicalVersion).filter(
-    (artifact) => options.artifact === "all" || artifact.flavorName === options.artifact,
+  const wearVersionCode = canonicalAndroidWearVersionCode(
+    version.versionCode,
+    version.canonicalVersion,
   );
+  const buildMetadata = resolveAndroidBuildMetadata();
+  const artifacts = releaseArtifacts(
+    version.canonicalVersion,
+    version.versionCode,
+    wearVersionCode,
+  ).filter((artifact) => options.artifact === "all" || artifact.releaseName === options.artifact);
 
   console.log(`Android versionName: ${version.canonicalVersion}`);
   console.log(`Android versionCode: ${version.versionCode}`);
+  console.log(`Android Wear versionCode: ${wearVersionCode}`);
   console.log(`Android build commit: ${buildMetadata.commit}`);
   console.log(`Android build timestamp: ${buildMetadata.timestamp}`);
   for (const artifact of artifacts) {
-    console.log(`Release artifact: ${artifact.flavorName} ${artifact.kind}`);
-    console.log(`Gradle task: ${artifact.gradleTask}`);
+    console.log(`Release artifact: ${artifact.releaseName} ${artifact.kind}`);
+    for (const gradleTask of artifact.gradleTasks) {
+      console.log(`Gradle task: ${gradleTask}`);
+    }
   }
 
   if (options.dryRun) {
@@ -396,7 +559,7 @@ function main() {
     "./gradlew",
     [
       ...androidBuildMetadataGradleArgs(buildMetadata),
-      ...artifacts.map((artifact) => artifact.gradleTask),
+      ...artifacts.flatMap((artifact) => artifact.gradleTasks),
     ],
     {
       cwd: androidDir,
@@ -407,15 +570,20 @@ function main() {
   for (const artifact of artifacts) {
     const outputPath = join(
       releaseOutputDir,
-      `openclaw-${version.canonicalVersion}-${artifact.flavorName}-release.${artifact.kind}`,
+      `openclaw-${version.canonicalVersion}-${artifact.releaseName}-release.${artifact.kind}`,
     );
 
     copyArtifact(artifact.sourcePath, outputPath);
-    verifyArtifactSignature(artifact, outputPath, expectedCertificateSha256);
+    verifyArtifactSignature(
+      artifact,
+      outputPath,
+      expectedCertificateSha256,
+      version.canonicalVersion,
+    );
     const hash = writeSha256File(outputPath);
 
-    console.log(`Signed ${artifact.kind.toUpperCase()} (${artifact.flavorName}): ${outputPath}`);
-    console.log(`SHA-256 (${artifact.flavorName}): ${hash}`);
+    console.log(`Signed ${artifact.kind.toUpperCase()} (${artifact.releaseName}): ${outputPath}`);
+    console.log(`SHA-256 (${artifact.releaseName}): ${hash}`);
   }
 }
 

@@ -14,6 +14,21 @@ fun requireOpenClawAndroidVersionProperty(name: String): String =
   openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
     ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
 
+val androidStoreFile = providers.gradleProperty("OPENCLAW_ANDROID_STORE_FILE").orNull?.takeIf { it.isNotBlank() }
+val androidStorePassword = providers.gradleProperty("OPENCLAW_ANDROID_STORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
+val androidKeyAlias = providers.gradleProperty("OPENCLAW_ANDROID_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
+val androidKeyPassword = providers.gradleProperty("OPENCLAW_ANDROID_KEY_PASSWORD").orNull?.takeIf { it.isNotBlank() }
+val resolvedAndroidStoreFile =
+  androidStoreFile?.let { storeFilePath ->
+    if (storeFilePath.startsWith("~/")) {
+      "${System.getProperty("user.home")}/${storeFilePath.removePrefix("~/")}"
+    } else {
+      storeFilePath
+    }
+  }
+val hasAndroidReleaseSigning =
+  listOf(resolvedAndroidStoreFile, androidStorePassword, androidKeyAlias, androidKeyPassword).all { it != null }
+
 val openClawAndroidWearVersionCode =
   requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_WEAR_VERSION_CODE").toIntOrNull()
     ?: error("OPENCLAW_ANDROID_WEAR_VERSION_CODE must be an integer in Config/Version.properties.")
@@ -29,6 +44,18 @@ android {
   namespace = "ai.openclaw.wear"
   compileSdk = 37
 
+  // Phone and Wear must use the same signing identity for Wear Data Layer delivery.
+  signingConfigs {
+    if (hasAndroidReleaseSigning) {
+      create("release") {
+        storeFile = project.file(checkNotNull(resolvedAndroidStoreFile))
+        storePassword = checkNotNull(androidStorePassword)
+        keyAlias = checkNotNull(androidKeyAlias)
+        keyPassword = checkNotNull(androidKeyPassword)
+      }
+    }
+  }
+
   defaultConfig {
     // Wear Data Layer traffic is scoped to matching package names and signatures.
     applicationId = "ai.openclaw.app"
@@ -40,6 +67,9 @@ android {
 
   buildTypes {
     release {
+      if (hasAndroidReleaseSigning) {
+        signingConfig = signingConfigs.getByName("release")
+      }
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -72,7 +102,7 @@ androidComponents {
     variant.outputs
       .filterIsInstance<VariantOutputImpl>()
       .forEach { output ->
-        output.outputFileName = "OpenClaw-WatchOS-${variant.buildType}.apk"
+        output.outputFileName = "OpenClaw-WearOS-${variant.buildType}.apk"
       }
   }
 }

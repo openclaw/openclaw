@@ -57,7 +57,7 @@ Recommended workflow:
 4. Run `MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull` to materialize encrypted Android signing assets from `apps-signing`.
 5. Run `pnpm android:release:preflight` to validate Play auth, signing, synced versioning, and release notes.
 6. Run `pnpm android:screenshots` to refresh raw Google Play screenshots with the script-managed no-cutout emulator.
-7. Run `pnpm android:release:archive` to produce the signed Play AAB and third-party APK.
+7. Run `pnpm android:release:archive` to produce the signed Play AAB, third-party APK, and Wear OS AAB.
 8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to the configured Google Play track.
 9. For a regular final or correction OpenClaw release, let `OpenClaw Release Publish` dispatch the protected `Android Release` workflow. It builds the signed third-party APK from the exact tag and attaches the verified APK, checksum manifest, and GitHub provenance before the release draft can publish. Before tagging a correction with its own package version, increment the pinned `versionCode`; the workflow verifies it is higher than the preceding final or correction APK. A same-commit fallback correction reuses the base release's verified APK and adds provenance for the correction tag.
 10. Complete production rollout manually in Google Play Console when needed.
@@ -69,6 +69,11 @@ Google Play API mutation commands, or Play Console mutation commands. Fix the
 failing release-lane step, then rerun `pnpm android:release:upload`.
 
 The third-party flavor is archived as a signed APK for non-Play distribution. The Play release lane never uploads it. Official GitHub distribution is owned only by `.github/workflows/android-release.yml`, which publishes regular final and correction tags through the protected `android-release` environment as `OpenClaw-Android.apk`.
+
+The Wear OS AAB is archived with the same signing identity as the phone app and its independent
+`OPENCLAW_ANDROID_WEAR_VERSION_CODE`. The release helper also builds a signed Wear release APK solely to validate the
+package, `versionName`, Wear `versionCode`, and pinned certificate before accepting the AAB. Automatic Play upload
+remains phone-only until the Android owner approves the Wear product and track rollout.
 
 ## Release SHA tracking
 

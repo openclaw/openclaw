@@ -5,6 +5,7 @@ import { afterEach } from "vitest";
 import { describe, expect, it } from "vitest";
 import {
   androidBuildMetadataGradleArgs,
+  isVerifiedJarSignatureOutput,
   resolveAndroidBuildMetadata,
   verifyAndroidReleaseSource,
 } from "../../apps/android/scripts/build-release-artifacts.ts";
@@ -31,14 +32,19 @@ function fakeApkSigner(certificateSha256: string, signerCount = 1) {
   const tempRoot = tempRoots.make("openclaw-apksigner-");
   const buildToolsDir = path.join(tempRoot, "build-tools", "36.0.0");
   fs.mkdirSync(buildToolsDir, { recursive: true });
-  const apkSignerPath = path.join(buildToolsDir, "apksigner");
+  const apkSignerPath = path.join(
+    buildToolsDir,
+    process.platform === "win32" ? "apksigner.bat" : "apksigner",
+  );
   const signerLines = Array.from(
     { length: signerCount },
     (_, index) => `Signer #${index + 1} certificate SHA-256 digest: ${certificateSha256}`,
   );
   fs.writeFileSync(
     apkSignerPath,
-    `#!/bin/sh\nprintf '%s\\n' ${signerLines.map((line) => `'${line}'`).join(" ")}\n`,
+    process.platform === "win32"
+      ? `@echo off\r\n${signerLines.map((line) => `echo ${line}`).join("\r\n")}\r\n`
+      : `#!/bin/sh\nprintf '%s\\n' ${signerLines.map((line) => `'${line}'`).join(" ")}\n`,
   );
   fs.chmodSync(apkSignerPath, 0o755);
   const apkPath = path.join(tempRoot, "OpenClaw-Android.apk");
@@ -155,11 +161,36 @@ describe("Android release artifacts", () => {
     expect(result.stdout).not.toContain("Release artifact: play aab");
   });
 
+  it("wires the signed Wear bundle and release APK metadata validation", () => {
+    const result = run(["--artifact", "wear", "--dry-run"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Android Wear versionCode: 260702011");
+    expect(result.stdout).toContain("Release artifact: wear aab");
+    expect(result.stdout).toContain("Gradle task: :wear:bundleRelease");
+    expect(result.stdout).toContain("Gradle task: :wear:assembleRelease");
+    expect(result.stdout).not.toContain("Release artifact: play aab");
+    expect(result.stdout).not.toContain("Release artifact: third-party apk");
+  });
+
+  it("distinguishes a verified signed AAB from jarsigner's unsigned success output", () => {
+    expect(
+      isVerifiedJarSignatureOutput(
+        "s = signature was verified\nm = entry is listed in manifest\njar verified.\n",
+      ),
+    ).toBe(true);
+    expect(
+      isVerifiedJarSignatureOutput(
+        "This jar contains unsigned entries which have not been integrity-checked.\njar is unsigned.\n",
+      ),
+    ).toBe(false);
+  });
+
   it("rejects unknown artifact selectors", () => {
     const result = run(["--artifact", "debug", "--dry-run"]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("--artifact must be one of: all, play, third-party");
+    expect(result.stderr).toContain("--artifact must be one of: all, play, third-party, wear");
   });
 
   it("accepts the pinned standalone APK signing certificate", () => {

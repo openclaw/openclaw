@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OpenClaw WatchOS</string>
+    <string name="app_name">OpenClaw Wear OS</string>
     <string name="chat">Chat</string>
     <string name="agents">Agents</string>
     <string name="sessions">Sessions</string>

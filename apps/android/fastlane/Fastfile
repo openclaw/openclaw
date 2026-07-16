@@ -291,7 +291,7 @@ end
 
 def validate_android_release_signing!
   Dir.chdir(android_root) do
-    sh(shell_join(["./gradlew", ":app:bundlePlayRelease", "--dry-run"]))
+    sh(shell_join(["./gradlew", ":app:bundlePlayRelease", ":wear:bundleRelease", "--dry-run"]))
   end
 end
 
