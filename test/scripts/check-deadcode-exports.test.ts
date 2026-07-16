@@ -1,4 +1,5 @@
 // Check Deadcode Exports tests cover parsing and hard-zero enforcement.
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import knipConfig from "../../config/knip.config.ts";
 import {
@@ -8,6 +9,14 @@ import {
 } from "../../scripts/check-deadcode-exports.mjs";
 
 describe("check-deadcode-exports", () => {
+  it("requests every unused-export issue class from Knip", () => {
+    const script = fs.readFileSync(
+      new URL("../../scripts/check-deadcode-exports.mjs", import.meta.url),
+      "utf8",
+    );
+    expect(script).toContain('"exports,nsExports,types,nsTypes,enumMembers,namespaceMembers"');
+  });
+
   it("excludes test support from every Knip issue type", () => {
     expect(knipConfig.ignore).toContain("dist/**");
     expect(knipConfig.ignore).toContain("**/test-helpers/**");
@@ -31,6 +40,76 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.workspaces["."].entry).toContain("src/mcp/openclaw-tools-serve.ts!");
   });
 
+  it.each([
+    "acpx",
+    "amazon-bedrock-mantle",
+    "azure-speech",
+    "cloudflare-ai-gateway",
+    "cohere",
+    "deepgram",
+    "elevenlabs",
+    "featherless",
+    "fireworks",
+    "google",
+    "huggingface",
+    "kilocode",
+    "kimi-coding",
+    "lmstudio",
+    "microsoft",
+    "minimax",
+    "mistral",
+    "moonshot",
+    "nvidia",
+    "pixverse",
+    "qianfan",
+    "qwen",
+    "senseaudio",
+    "tavily",
+    "tencent",
+    "vllm",
+    "xiaomi",
+    "xai",
+  ])("removes the bundled-plugin root catch-all from migrated %s workspace", (pluginId) => {
+    const workspace = (
+      knipConfig.workspaces as Record<string, { readonly entry: readonly string[] }>
+    )[`extensions/${pluginId}`];
+    if (!workspace) {
+      throw new Error(`missing Knip workspace for ${pluginId}`);
+    }
+    const entries = workspace.entry;
+    expect(entries).not.toContain("*.ts!");
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        "index.ts!",
+        "setup-entry.ts!",
+        "*-api.ts!",
+        "cli-metadata.ts!",
+        "channel-entry.ts!",
+        "provider-discovery.ts!",
+        "{web-search,web-fetch}-provider.ts!",
+      ]),
+    );
+    expect(knipConfig.workspaces["extensions/*"].entry).toContain("*.ts!");
+  });
+
+  it.each([
+    "packages/agent-core",
+    "packages/markdown-core",
+    "packages/media-core",
+    "packages/acp-core",
+    "packages/terminal-core",
+  ] as const)("mirrors the published entry map for %s", (workspace) => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(new URL(`../../${workspace}/package.json`, import.meta.url), "utf8"),
+    ) as { exports: Record<string, unknown> };
+    const expected = Object.keys(packageJson.exports)
+      .map((subpath) =>
+        subpath === "." ? "src/index.ts!" : `src/${subpath.slice("./".length)}.ts!`,
+      )
+      .toSorted();
+    expect([...knipConfig.workspaces[workspace].entry].toSorted()).toEqual(expected);
+  });
+
   it("parses all compact export sections and expands symbol lists", () => {
     expect(
       parseKnipCompactUnusedExports(`
@@ -44,6 +123,15 @@ extensions/example/src/types.ts: ExampleType
 Unused exported enum members (1)
 packages/example/src/state.ts: Ready
 
+Exports in used namespace (1)
+src/namespace.ts: runtimeHelper
+
+Exported types in used namespace (1)
+src/namespace.ts: RuntimeType
+
+Unused exported namespace members (1)
+src/protocol.ts: Result (v2)
+
 Unused files (1)
 src/noise.ts: src/noise.ts
 `),
@@ -52,6 +140,9 @@ src/noise.ts: src/noise.ts
       "packages/example/src/state.ts: Ready",
       "src/b.ts: alpha",
       "src/b.ts: beta",
+      "src/namespace.ts: runtimeHelper",
+      "src/namespace.ts: RuntimeType",
+      "src/protocol.ts: Result (v2)",
     ]);
   });
 

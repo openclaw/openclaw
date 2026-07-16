@@ -6,12 +6,13 @@ scenario:
     primary:
       - channels.message-actions
   execution:
+    profiles: { "matrix:all": 23, "matrix:transport": 22 }
     kind: flow
     channel: matrix
     timeoutMs: 8000
     retryCount: 0
+    driver: live
     config:
-      requiredChannelDriver: live
       matrixRequireCanary: true
 
 flow:

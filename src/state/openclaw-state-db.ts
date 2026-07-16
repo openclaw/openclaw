@@ -1256,16 +1256,17 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
     .prepare(
       `SELECT queue_name, id, entry_json
          FROM delivery_queue_entries
-        WHERE retry_count = 0
-           OR last_attempt_at IS NULL
-           OR last_error IS NULL
-           OR recovery_state IS NULL
-           OR platform_send_started_at IS NULL
-           OR entry_kind IS NULL
-           OR session_key IS NULL
-           OR channel IS NULL
-           OR target IS NULL
-           OR account_id IS NULL`,
+        WHERE status <> 'completed'
+          AND (retry_count = 0
+            OR last_attempt_at IS NULL
+            OR last_error IS NULL
+            OR recovery_state IS NULL
+            OR platform_send_started_at IS NULL
+            OR entry_kind IS NULL
+            OR session_key IS NULL
+            OR channel IS NULL
+            OR target IS NULL
+            OR account_id IS NULL)`,
     )
     .all() as Array<{ queue_name: string; id: string; entry_json: string }>;
   if (rows.length === 0) {
@@ -1322,6 +1323,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 // The caller owns the state.schema.ensure transaction so every probe, DDL
 // change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
   ensureColumn(db, "device_pairing_paired", "approved_via TEXT");
   ensureColumn(db, "device_pairing_paired", "operator_label TEXT");
