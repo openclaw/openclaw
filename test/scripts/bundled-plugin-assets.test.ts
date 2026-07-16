@@ -1,8 +1,7 @@
 // Bundled Plugin Assets tests cover bundled plugin assets script behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mjs";
 import {
   parseBundledPluginAssetArgs,
@@ -12,64 +11,59 @@ import {
   isBuildRelevantRunNodePath,
   isRestartRelevantRunNodePath,
 } from "../../scripts/run-node-watch-paths.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function withPluginAssetFixture(run: (rootDir: string) => Promise<void>) {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-assets-"));
-  try {
-    fs.mkdirSync(path.join(rootDir, "extensions", "canvas"), { recursive: true });
-    fs.writeFileSync(
-      path.join(rootDir, "extensions", "canvas", "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/canvas-plugin",
-          openclaw: {
-            assetScripts: {
-              build: "node scripts/bundle-a2ui.mjs",
-              copy: "node scripts/copy-a2ui.mjs",
-            },
+  const rootDir = tempDirs.make("openclaw-plugin-assets-");
+  fs.mkdirSync(path.join(rootDir, "extensions", "canvas"), { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "extensions", "canvas", "package.json"),
+    JSON.stringify(
+      {
+        name: "@openclaw/canvas-plugin",
+        openclaw: {
+          assetScripts: {
+            build: "node scripts/bundle-a2ui.mjs",
+            copy: "node scripts/copy-a2ui.mjs",
           },
         },
-        null,
-        2,
-      ),
-    );
-    fs.writeFileSync(
-      path.join(rootDir, "extensions", "canvas", "openclaw.plugin.json"),
-      JSON.stringify({ id: "canvas" }, null, 2),
-    );
-    await run(rootDir);
-  } finally {
-    fs.rmSync(rootDir, { force: true, recursive: true });
-  }
+      },
+      null,
+      2,
+    ),
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "extensions", "canvas", "openclaw.plugin.json"),
+    JSON.stringify({ id: "canvas" }, null, 2),
+  );
+  await run(rootDir);
 }
 
 describe("bundled plugin assets", () => {
   it("creates a missing Discord SDK bundle without rewriting it when unchanged", async () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-discord-sdk-"));
+    const rootDir = tempDirs.make("openclaw-discord-sdk-");
     const outputPath = path.join(rootDir, "embedded-app-sdk.mjs");
     const build = vi.fn(async () => ({
       outputFiles: [{ text: "export const sdk = true;\n" }],
     }));
 
-    try {
-      await expect(buildDiscordActivitySdk({ build, outputPath })).resolves.toBe(true);
-      expect(fs.readFileSync(outputPath, "utf8")).toBe("export const sdk = true;\n");
+    await expect(buildDiscordActivitySdk({ build, outputPath })).resolves.toBe(true);
+    expect(fs.readFileSync(outputPath, "utf8")).toBe("export const sdk = true;\n");
 
-      const initialTime = new Date("2026-07-16T12:00:00.000Z");
-      fs.utimesSync(outputPath, initialTime, initialTime);
+    const initialTime = new Date("2026-07-16T12:00:00.000Z");
+    fs.utimesSync(outputPath, initialTime, initialTime);
 
-      await expect(buildDiscordActivitySdk({ build, outputPath })).resolves.toBe(false);
-      expect(fs.statSync(outputPath).mtimeMs).toBe(initialTime.getTime());
-      expect(build).toHaveBeenCalledWith(
-        expect.objectContaining({
-          absWorkingDir: path.join(process.cwd(), "extensions/discord"),
-          outfile: outputPath,
-          write: false,
-        }),
-      );
-    } finally {
-      fs.rmSync(rootDir, { force: true, recursive: true });
-    }
+    await expect(buildDiscordActivitySdk({ build, outputPath })).resolves.toBe(false);
+    expect(fs.statSync(outputPath).mtimeMs).toBe(initialTime.getTime());
+    expect(build).toHaveBeenCalledWith(
+      expect.objectContaining({
+        absWorkingDir: path.join(process.cwd(), "extensions/discord"),
+        outfile: outputPath,
+        write: false,
+      }),
+    );
   });
 
   it("discovers the Discord Embedded App SDK build hook", async () => {
