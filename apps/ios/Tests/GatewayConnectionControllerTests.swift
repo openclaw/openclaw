@@ -500,7 +500,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(appModel.gatewayPairingRequestId == nil)
     }
 
-    @Test @MainActor func `same target reconnect preserves focused chat and target switch clears it`() throws {
+    @Test @MainActor func `stable gateway owner preserves focused chat across route changes`() throws {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
         let currentConfig = Self.makeGatewayConnectConfig()
@@ -508,10 +508,13 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         appModel.applyGatewayConnectConfig(currentConfig)
         appModel.focusChatSession(focusedSessionKey)
 
-        appModel.applyGatewayConnectConfig(currentConfig, forceReconnect: true)
+        let replacementURL = try #require(URL(string: "wss://127.0.0.1:2"))
+        let refreshedRoute = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: currentConfig.stableID)
+        appModel.applyGatewayConnectConfig(refreshedRoute, forceReconnect: true)
         #expect(appModel.chatSessionKey == focusedSessionKey)
 
-        let replacementURL = try #require(URL(string: "wss://replacement.example.com:443"))
         let replacementConfig = Self.makeGatewayConnectConfig(
             url: replacementURL,
             stableID: "manual|replacement.example.com|443")
