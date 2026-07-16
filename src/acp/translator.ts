@@ -1334,6 +1334,7 @@ export class AcpGatewayAgent implements Agent {
             ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
             runId: pending.idempotencyKey,
             record: true,
+            waitForDelivery: false,
             update: {
               sessionUpdate: "agent_message_chunk",
               content: { type: "text", text: interruptionMessage },

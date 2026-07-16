@@ -133,14 +133,25 @@ export class AcpTranslatorSessionUpdates {
     runId?: string;
     update: SessionUpdate;
     record?: boolean;
+    waitForDelivery?: boolean;
   }): Promise<void> {
     if (this.stopped) {
       return;
     }
-    await this.options.connection.sessionUpdate({
+    const delivery = this.options.connection.sessionUpdate({
       sessionId: params.sessionId,
       update: params.update,
     });
+    if (params.waitForDelivery === false) {
+      // Disconnect recovery must durably record the notice even when the client has stopped reading.
+      void delivery.catch((err: unknown) => {
+        this.options.log(
+          `ACP session update delivery failed for ${params.sessionId}: ${String(err)}`,
+        );
+      });
+    } else {
+      await delivery;
+    }
     if (params.record && params.sessionKey) {
       await this.recordLedgerUpdate({
         sessionId: params.sessionId,

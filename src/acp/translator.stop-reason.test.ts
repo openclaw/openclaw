@@ -3,6 +3,7 @@ import type { PromptRequest } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import { createInMemoryAcpEventLedger } from "./event-ledger.js";
 import { AcpGatewayAgent } from "./translator.js";
 import {
   createChatEvent,
@@ -227,6 +228,105 @@ describe("acp translator stop reason mapping", () => {
         },
       });
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records the disconnect interruption without waiting for blocked ACP delivery", async () => {
+    vi.useFakeTimers();
+    let releaseDelivery: (() => void) | undefined;
+    let releaseRecord: (() => void) | undefined;
+    try {
+      const connection = createAcpConnection();
+      const deliveryBlocked = new Promise<void>((resolve) => {
+        releaseDelivery = resolve;
+      });
+      const sessionUpdate = vi.fn(() => deliveryBlocked);
+      connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
+      const sessionId = "session-1";
+      const eventLedger = createInMemoryAcpEventLedger();
+      await eventLedger.startSession({
+        sessionId,
+        sessionKey: "agent:main:main",
+        cwd: "/tmp",
+        complete: true,
+      });
+      const recordUpdate = eventLedger.recordUpdate.bind(eventLedger);
+      let interruptionRecordStarted = false;
+      eventLedger.recordUpdate = vi.fn(async (params) => {
+        if (params.update.sessionUpdate === "agent_message_chunk") {
+          interruptionRecordStarted = true;
+          await new Promise<void>((resolve) => {
+            releaseRecord = resolve;
+          });
+        }
+        await recordUpdate(params);
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return {};
+        }
+        if (method === "agent.wait") {
+          throw new Error("gateway closed (1006): connection lost");
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const sessionStore = createInMemorySessionStore();
+      sessionStore.createSession({
+        sessionId,
+        sessionKey: "agent:main:main",
+        cwd: "/tmp",
+      });
+      const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+        eventLedger,
+        sessionStore,
+      });
+      const promptPromise = promptAgent(agent, sessionId);
+      void promptPromise.catch(() => {});
+
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("chat.send", expect.any(Object), { timeoutMs: null });
+      });
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await vi.waitFor(() => {
+        expect(sessionUpdate).toHaveBeenCalledTimes(1);
+        expect(interruptionRecordStarted).toBe(true);
+      });
+      await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
+        "pending",
+      );
+
+      releaseRecord?.();
+      await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
+
+      const replayConnection = createAcpConnection();
+      const replayAgent = new AcpGatewayAgent(replayConnection, createAcpGateway(request), {
+        eventLedger,
+        sessionStore: createInMemorySessionStore(),
+      });
+      await replayAgent.loadSession({
+        sessionId,
+        cwd: "/tmp",
+        mcpServers: [],
+        _meta: {},
+      } as never);
+
+      expect(replayConnection["__sessionUpdateMock"]).toHaveBeenCalledWith({
+        sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: "Gateway disconnected after accepting your message. Its final outcome is unknown. Do not resend it automatically.",
+          },
+        },
+      });
+    } finally {
+      releaseRecord?.();
+      releaseDelivery?.();
       vi.useRealTimers();
     }
   });
