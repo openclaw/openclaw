@@ -94,14 +94,16 @@ describe("terminal panel readiness", () => {
       expect(panel.renderRoot.querySelector(".tp-connecting")?.textContent).toContain(
         "Connecting to session",
       );
+      expect(panel.renderRoot.querySelector(".tp-tab")?.classList.contains("is-connecting")).toBe(
+        true,
+      );
     });
-    expect(panel.renderRoot.querySelector(".tp-tab")?.classList.contains("is-connecting")).toBe(
-      true,
-    );
 
     open.resolve(terminalOpenResult("session-1"));
-    await vi.waitFor(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
-    expect(panel.renderRoot.querySelector(".tp-tab")?.classList.contains("is-live")).toBe(true);
+    await vi.waitFor(() => {
+      expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull();
+      expect(panel.renderRoot.querySelector(".tp-tab")?.classList.contains("is-live")).toBe(true);
+    });
   });
 
   it("persists a catalog tab after its first output arrives", async () => {

@@ -1149,10 +1149,6 @@
       "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-runner-runtime.js"
     },
-    "./plugin-sdk/qa-live-transport-scenarios": {
-      "types": "./dist/plugin-sdk/qa-live-transport-scenarios.d.ts",
-      "default": "./dist/plugin-sdk/qa-live-transport-scenarios.js"
-    },
     "./plugin-sdk/memory-core": {
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
@@ -1591,7 +1587,6 @@
     "crabbox:warmup": "node scripts/crabbox-wrapper.mjs warmup",
     "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
     "deadcode:exports": "node scripts/check-deadcode-exports.mjs",
-    "deadcode:exports:update": "node scripts/check-deadcode-exports.mjs --update",
     "deadcode:knip": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
     "deadcode:report": "pnpm deadcode:knip; pnpm deadcode:exports",
     "deadcode:unused-files": "node scripts/check-deadcode-unused-files.mjs",

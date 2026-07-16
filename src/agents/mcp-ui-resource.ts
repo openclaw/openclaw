@@ -362,10 +362,15 @@ export function buildMcpAppCanvasPayload(view: {
   };
 }
 
-export const testing = {
+const testing = {
   clearViewStore() {
     for (const [viewId, view] of getViewStore()) {
       deleteView(viewId, view);
     }
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mcpUiResourceTestApi")] =
+    testing;
+}

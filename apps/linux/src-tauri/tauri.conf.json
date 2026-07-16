@@ -31,6 +31,8 @@
           "windows": ["main"],
           "permissions": [
             "allow-bootstrap",
+            "allow-connect-discovered-gateway",
+            "allow-discover-gateways",
             "allow-gateway-action",
             "allow-install-cli",
             "core:event:allow-listen",

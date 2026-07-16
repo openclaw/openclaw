@@ -23,10 +23,7 @@ import {
   collectDisabledCodexPluginRouteIssues,
   enableCodexPluginForRequiredRoutes,
 } from "./codex-route-config-scan.js";
-import {
-  maybeRepairCodexSessionRoutes,
-  repairCodexSessionStoreRoutes,
-} from "./codex-route-session-repair.js";
+import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 import type {
   CodexRouteHit,
   DisabledCodexPluginRouteHit,
@@ -339,8 +336,4 @@ export function maybeRepairCodexRoutes(params: {
   };
 }
 
-export {
-  collectDisabledCodexPluginRouteIssues,
-  maybeRepairCodexSessionRoutes,
-  repairCodexSessionStoreRoutes,
-};
+export { collectDisabledCodexPluginRouteIssues, maybeRepairCodexSessionRoutes };
