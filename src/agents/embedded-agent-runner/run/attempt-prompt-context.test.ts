@@ -6,6 +6,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
+  promptPressureKeys: new Set<string>(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
   truncateOversizedToolResultsInMessages: vi.fn(),
@@ -18,6 +19,17 @@ vi.mock("../logger.js", () => ({
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
+  toolResultWarningDedupe: {
+    promptPressure: {
+      check: (key: string) => {
+        if (hoisted.promptPressureKeys.has(key)) {
+          return true;
+        }
+        hoisted.promptPressureKeys.add(key);
+        return false;
+      },
+    },
+  },
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
@@ -101,6 +113,7 @@ function createInput(options?: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hoisted.promptPressureKeys.clear();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
     truncatedCount: 0,
