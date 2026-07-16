@@ -63,10 +63,9 @@ export function formatSkillExperienceReviewTranscript(messages: readonly unknown
   if (full.length <= EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS) {
     return full;
   }
-  const first = rendered[0] ? truncateUtf16Safe(rendered[0], 6_000) : "";
+  const first = truncateUtf16Safe(rendered[0] ?? "", 6_000);
   const tailBudget = EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS - first.length - 80;
-  const tailStart = Math.max(0, full.length - tailBudget);
-  return `${first}\n\n[older trajectory omitted]\n\n${sliceUtf16Safe(full, tailStart)}`;
+  return `${first}\n\n[older trajectory omitted]\n\n${sliceUtf16Safe(full, -tailBudget)}`;
 }
 
 export function buildSkillExperienceReviewPrompt(

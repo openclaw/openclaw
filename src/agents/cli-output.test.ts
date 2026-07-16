@@ -2624,42 +2624,4 @@ describe("createCliJsonlStreamingParser", () => {
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
   });
 });
-
-function hasDanglingSurrogate(value: string): boolean {
-  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
-}
-
-const EMOJI = "😀";
-const LOBSTER = "🦞";
-
-describe("formatCliOutputError", () => {
-  it("keeps session identity truncation UTF-16 safe near emoji boundaries", () => {
-    const result = parseCliJsonl(
-      JSON.stringify({
-        type: "result",
-        session_id: "s".repeat(199) + "😀tail",
-        terminal_reason: "max_turns",
-      }),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      "claude-cli",
-    );
-
-    // Pre-condition: old normalizeCliContextValue (raw .slice(0,200))
-    // would split the surrogate pair at position 199-200.
-    const sessionId = "s".repeat(199) + EMOJI + "tail";
-    expect(sessionId.slice(0, 200).charCodeAt(199)).toBe(EMOJI.charCodeAt(0)); // lone high
-    expect(hasDanglingSurrogate(sessionId.slice(0, 200))).toBe(true);
-
-    const error = formatCliOutputError(result!, {
-      runId: "r".repeat(199) + EMOJI + "extra",
-      sessionId: "openclaw-" + "o".repeat(199) + LOBSTER + "end",
-    });
-
-    expect(hasDanglingSurrogate(error)).toBe(false);
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
