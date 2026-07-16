@@ -2510,7 +2510,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     const { result } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
-      apiKey: "key",
+      apiKey: "dummy",
     });
 
     const compaction = expectCompactionResult(result);
@@ -2593,7 +2593,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
-      apiKey: "key",
+      apiKey: "dummy",
     });
 
     const compaction = expectCompactionResult(result);
@@ -2673,7 +2673,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     const { result } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
-      apiKey: "key",
+      apiKey: "dummy",
     });
 
     const compaction = expectCompactionResult(result);
