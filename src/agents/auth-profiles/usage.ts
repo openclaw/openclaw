@@ -1150,6 +1150,8 @@ export async function clearAuthProfileCooldown(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, profileId, agentDir } = params;
+  // Persistence uses the fresh target-local store loaded by the locked updater.
+  // `store` only receives the committed usage snapshot for the caller's runtime view.
   const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
