@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PondGatewayRpc } from "../../scripts/e2e/lib/pond-gateway-rpc.mjs";
 
 const CONNECTING = 0;
@@ -11,6 +11,7 @@ class FakeWebSocket extends EventEmitter {
   sent: Array<{ id: string; method: string }> = [];
   terminated = false;
   sendError: Error | undefined;
+  respondToConnect = true;
 
   open(): void {
     this.readyState = OPEN;
@@ -21,7 +22,7 @@ class FakeWebSocket extends EventEmitter {
     const frame = JSON.parse(payload) as { id: string; method: string };
     this.sent.push(frame);
     callback(this.sendError);
-    if (frame.method === "connect" && !this.sendError) {
+    if (frame.method === "connect" && !this.sendError && this.respondToConnect) {
       queueMicrotask(() => {
         this.emit("message", JSON.stringify({ type: "res", id: frame.id, ok: true }));
       });
@@ -43,7 +44,7 @@ class FakeWebSocket extends EventEmitter {
 function createRpc(socket: FakeWebSocket, openTimeoutMs = 100) {
   return new PondGatewayRpc({
     url: "ws://127.0.0.1:18789",
-    token: "test-token",
+    token: String(),
     scopes: ["operator.read"],
     openTimeoutMs,
     webSocketFactory: () => socket,
@@ -69,6 +70,24 @@ describe("Pond gateway RPC", () => {
     }
 
     expect(socket.terminated).toBe(true);
+  });
+
+  it("closes the websocket when the gateway connect RPC stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeWebSocket();
+      socket.respondToConnect = false;
+      const rpc = createRpc(socket);
+      const connecting = rpc.connect();
+      const rejected = expect(connecting).rejects.toThrow("Gateway RPC timeout: connect");
+      socket.open();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(socket.readyState).toBe(CLOSED);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects pending RPCs when an open websocket emits an error", async () => {

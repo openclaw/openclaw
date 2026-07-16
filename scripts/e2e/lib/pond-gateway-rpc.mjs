@@ -38,21 +38,32 @@ export class PondGatewayRpc {
       this.rejectPending(new Error(`Gateway socket closed${formatCloseReason(code, reason)}`));
     });
 
-    await waitForWebSocketOpen(this.ws, this.openTimeoutMs, `Gateway connect timeout: ${this.url}`);
-    await this.request("connect", {
-      minProtocol: 1,
-      maxProtocol: 99,
-      client: {
-        id: "gateway-client",
-        displayName: "Pond proof verifier",
-        version: "0.0.0",
-        platform: process.platform,
-        mode: "backend",
-      },
-      auth: { token: this.token },
-      role: "operator",
-      scopes: this.scopes,
-    });
+    try {
+      await waitForWebSocketOpen(
+        this.ws,
+        this.openTimeoutMs,
+        `Gateway connect timeout: ${this.url}`,
+      );
+      await this.request("connect", {
+        minProtocol: 1,
+        maxProtocol: 99,
+        client: {
+          id: "gateway-client",
+          displayName: "Pond proof verifier",
+          version: "0.0.0",
+          platform: process.platform,
+          mode: "backend",
+        },
+        auth: { token: this.token },
+        role: "operator",
+        scopes: this.scopes,
+      });
+    } catch (error) {
+      // Callers only receive the client after connect succeeds, so failed setup
+      // must close its socket here or the E2E process can remain alive.
+      this.close();
+      throw error;
+    }
   }
 
   rejectPending(error) {
