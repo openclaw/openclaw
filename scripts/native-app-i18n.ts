@@ -152,8 +152,9 @@ const ANDROID_STRING_FUNCTION =
 const ANDROID_WHEN_BRANCH_START = /(?:[^\n{}]+|\belse)\s*->\s*/gu;
 const ANDROID_RESOURCE_STRINGS = /<string\b([^>]*)>([\s\S]*?)<\/string>/gu;
 const ANDROID_RESOURCE_NAME = /\bname\s*=\s*"([^"]+)"/u;
+const ANDROID_RESOURCE_TRANSLATABLE_FALSE = /\btranslatable\s*=\s*"false"/u;
 const ANDROID_RESOURCE_COLLECTIONS =
-  /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
+  /<(?:string-array|plurals)\b([^>]*)>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
 const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
 const APPLE_NAMED_LITERALS =
   /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:"""([\s\S]*?)"""|"((?:\\.|[^"\\])*)")/gu;
@@ -1037,7 +1038,11 @@ export function extractNativeI18nCandidates(
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
     for (const match of source.matchAll(ANDROID_RESOURCE_STRINGS)) {
-      const resourceName = match[1]?.match(ANDROID_RESOURCE_NAME)?.[1];
+      const attributes = match[1] ?? "";
+      if (ANDROID_RESOURCE_TRANSLATABLE_FALSE.test(attributes)) {
+        continue;
+      }
+      const resourceName = attributes.match(ANDROID_RESOURCE_NAME)?.[1];
       if (resourceName?.startsWith("native_")) {
         continue;
       }
@@ -1053,7 +1058,11 @@ export function extractNativeI18nCandidates(
       }
     }
     for (const collection of source.matchAll(ANDROID_RESOURCE_COLLECTIONS)) {
-      const body = collection[1];
+      const attributes = collection[1] ?? "";
+      if (ANDROID_RESOURCE_TRANSLATABLE_FALSE.test(attributes)) {
+        continue;
+      }
+      const body = collection[2];
       if (!body) {
         continue;
       }

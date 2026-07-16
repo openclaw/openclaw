@@ -23,8 +23,6 @@ vi.mock("./dm-command-decision.js", () => ({
   handleDiscordDmCommandDecision: handleDiscordDmCommandDecisionMock,
 }));
 import {
-  ensureConfiguredBindingRouteReady,
-  resolveConfiguredBindingRoute,
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -40,7 +38,6 @@ import {
   type DiscordMessageEvent,
 } from "./message-handler.preflight.test-helpers.js";
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
 vi.mock("openclaw/plugin-sdk/media-runtime", { spy: true });
 let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
@@ -2192,6 +2189,7 @@ describe("preflightDiscordMessage", () => {
   });
 
   it("drops guild message without mention when channel has configuredBinding and requireMention: true", async () => {
+    const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
     const channelId = "ch-binding-1";
     const bindingRoute = {
       bindingResolution: {
@@ -2204,8 +2202,12 @@ describe("preflightDiscordMessage", () => {
       boundSessionKey: "agent:main:acp:binding:discord:default:abc",
       boundAgentId: "main",
     };
-    const routeSpy = vi.mocked(resolveConfiguredBindingRoute).mockReturnValue(bindingRoute);
-    const ensureSpy = vi.mocked(ensureConfiguredBindingRouteReady).mockResolvedValue({ ok: true });
+    const routeSpy = vi
+      .spyOn(conversationRuntime, "resolveConfiguredBindingRoute")
+      .mockReturnValue(bindingRoute);
+    const ensureSpy = vi
+      .spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady")
+      .mockResolvedValue({ ok: true });
 
     try {
       const result = await runGuildPreflight({
@@ -2230,6 +2232,7 @@ describe("preflightDiscordMessage", () => {
   });
 
   it("allows guild message with mention when channel has configuredBinding and requireMention: true", async () => {
+    const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
     const channelId = "ch-binding-2";
     const bindingRoute = {
       bindingResolution: {
@@ -2242,8 +2245,12 @@ describe("preflightDiscordMessage", () => {
       boundSessionKey: "agent:main:acp:binding:discord:default:def",
       boundAgentId: "main",
     };
-    const routeSpy = vi.mocked(resolveConfiguredBindingRoute).mockReturnValue(bindingRoute);
-    const ensureSpy = vi.mocked(ensureConfiguredBindingRouteReady).mockResolvedValue({ ok: true });
+    const routeSpy = vi
+      .spyOn(conversationRuntime, "resolveConfiguredBindingRoute")
+      .mockReturnValue(bindingRoute);
+    const ensureSpy = vi
+      .spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady")
+      .mockResolvedValue({ ok: true });
 
     try {
       const result = await runGuildPreflight({

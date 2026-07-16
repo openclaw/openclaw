@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
@@ -258,12 +259,16 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      void processZaloReplayGuardedUpdate({
-        target,
-        update,
-        processUpdate,
-        nowMs,
-      }).catch((err: unknown) => {
+      // Reserve the detached task before the HTTP admission is released;
+      // otherwise later queue work inherits a released admission root.
+      void runDetachedWebhookWork(() =>
+        processZaloReplayGuardedUpdate({
+          target,
+          update,
+          processUpdate,
+          nowMs,
+        }),
+      ).catch((err: unknown) => {
         target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
       });
 
