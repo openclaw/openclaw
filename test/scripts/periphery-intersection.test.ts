@@ -108,6 +108,17 @@ describe("shared OpenClawKit Periphery workflow", () => {
     expect(macosUpload?.with?.name).toContain("shared-periphery-macos-");
   });
 
+  it("installs XcodeGen through the pinned repository installer", () => {
+    const install = workflow.jobs?.["scan-ios"]?.steps?.find(
+      (step) => step.name === "Install iOS scan tooling",
+    );
+
+    expect(install?.run).toContain("brew install periphery");
+    expect(install?.run).not.toContain("brew install xcodegen");
+    expect(install?.run).toContain('./scripts/install-xcodegen.sh "$swift_tools_dir"');
+    expect(install?.run).toContain('"$swift_tools_dir/xcodegen" --version');
+  });
+
   it("retains the generated protocol contract and leaves findings for the intersection", () => {
     for (const jobName of ["scan-ios", "scan-macos"]) {
       const scan = workflow.jobs?.[jobName]?.steps?.find((step) => step.name === "Scan shared kit");
