@@ -41,7 +41,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Discord Activities packaged SDK:** resolve the embedded SDK from the loaded Discord plugin root in built distributions and retry transient asset-read failures instead of caching a rejected read until gateway restart.
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
 - **LINE reply-token media kinds:** honor video and audio metadata on inbound replies, share the canonical media builder with proactive sends, and fail visibly instead of recording empty media-only deliveries. (#106515) Thanks @edenfunf.
