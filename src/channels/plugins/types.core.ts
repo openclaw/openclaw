@@ -140,6 +140,9 @@ export type ChannelSetupInput = {
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
   workspace?: string;
+  defaultTo?: string;
+  allowFrom?: string[];
+  agentActivity?: boolean;
 };
 
 export type ChannelStatusIssue = {

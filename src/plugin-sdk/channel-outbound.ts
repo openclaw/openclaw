@@ -101,8 +101,14 @@ export type {
   StreamingMode,
   TextChunkMode,
 } from "../channels/streaming.js";
-export { createChannelProgressDraftCompositor } from "../channels/progress-draft-compositor.js";
-export type { ChannelProgressDraftCompositorLine } from "../channels/progress-draft-compositor.js";
+export {
+  createChannelProgressDraftCompositor,
+  createChannelProgressReceiptTracker,
+} from "../channels/progress-draft-compositor.js";
+export type {
+  ChannelProgressDraftCompositorLine,
+  ChannelProgressDraftCompositorSnapshot,
+} from "../channels/progress-draft-compositor.js";
 export {
   createChannelMessageAdapterFromOutbound,
   createDurableInboundReceiveJournalFromQueue,

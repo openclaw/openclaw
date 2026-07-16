@@ -254,8 +254,26 @@ CREATE TABLE IF NOT EXISTS session_transcript_index_state (
   indexed_seq INTEGER NOT NULL,
   leaf_event_id TEXT,
   needs_rebuild INTEGER NOT NULL DEFAULT 0,
+  active_event_count INTEGER NOT NULL DEFAULT 0,
+  active_message_count INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS session_transcript_active_events (
+  session_id TEXT NOT NULL,
+  active_position INTEGER NOT NULL CHECK (active_position >= 0),
+  event_seq INTEGER NOT NULL,
+  message_position INTEGER CHECK (message_position IS NULL OR message_position >= 0),
+  PRIMARY KEY (session_id, active_position),
+  FOREIGN KEY (session_id, event_seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_event_seq
+  ON session_transcript_active_events(session_id, event_seq);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_messages
+  ON session_transcript_active_events(session_id, message_position)
+  WHERE message_position IS NOT NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,

@@ -3,7 +3,6 @@
  * Implementation stays in plugin-sdk/tts-runtime so provider surfaces share one contract.
  */
 export {
-  buildTtsSystemPromptHint,
   getLastTtsAttempt,
   getResolvedSpeechProviderConfig,
   getTtsMaxLength,

@@ -886,7 +886,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes Control UI i18n tooling changes through keyless catalog verification", () => {
-    const result = detectChangedLanes(["scripts/control-ui-i18n.ts"]);
+    const result = detectChangedLanes(["scripts/control-ui-i18n-resolve-conflicts.ts"]);
     const plan = createChangedCheckPlan(result);
 
     expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);

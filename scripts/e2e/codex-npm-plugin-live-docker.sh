@@ -47,7 +47,15 @@ if [[ -z "$SESSION_STORE_CONTRACT" ]]; then
     SESSION_STORE_CONTRACT="legacy-json"
   fi
 fi
-BINDING_STORE_CONTRACT="${OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT:-plugin-kv}"
+BINDING_STORE_CONTRACT="${OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT:-}"
+if [[ -z "$BINDING_STORE_CONTRACT" ]]; then
+  if [[ -f "$CANDIDATE_ROOT/extensions/codex/src/app-server/session-binding-meta.ts" ]]; then
+    BINDING_STORE_CONTRACT="plugin-kv"
+  else
+    # Frozen targets before the binding-store migration persist a session sidecar.
+    BINDING_STORE_CONTRACT="legacy-sidecar"
+  fi
+fi
 run_log=""
 
 cleanup() {
