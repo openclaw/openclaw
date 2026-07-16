@@ -72,7 +72,7 @@ import {
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { resetPluginSlotsToDefaults } from "./slots.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 
 /** Logger surface used by plugin update flows. */
@@ -1288,29 +1288,6 @@ function createPluginUpdateIntegrityDriftHandler(params: {
   };
 }
 
-function resetDisabledPluginSlots(
-  slots: NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined,
-  pluginId: string,
-): NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined {
-  if (!slots) {
-    return slots;
-  }
-  let next = slots;
-  if (next.memory === pluginId) {
-    next = {
-      ...next,
-      memory: defaultSlotIdForKey("memory"),
-    };
-  }
-  if (next.contextEngine === pluginId) {
-    next = {
-      ...next,
-      contextEngine: defaultSlotIdForKey("contextEngine"),
-    };
-  }
-  return next;
-}
-
 function disablePluginAfterUpdateFailure(config: OpenClawConfig, pluginId: string): OpenClawConfig {
   const disabled = setPluginEnabledInConfig(config, pluginId, false, {
     updateChannelConfig: false,
@@ -1321,7 +1298,7 @@ function disablePluginAfterUpdateFailure(config: OpenClawConfig, pluginId: strin
     plugins: {
       ...pluginsConfig,
       // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
-      slots: resetDisabledPluginSlots(pluginsConfig.slots, pluginId),
+      slots: resetPluginSlotsToDefaults(pluginsConfig.slots, pluginId),
     },
   };
 }
