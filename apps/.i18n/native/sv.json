@@ -1206,7 +1206,7 @@
     {
       "id": "native.android.82ab699f88638b8a",
       "source": "Canvas",
-      "translated": "Arbetsyta"
+      "translated": "Canvas"
     },
     {
       "id": "native.android.d5938abf7b7a7ee9",
@@ -6081,7 +6081,7 @@
     {
       "id": "native.android.7c6f9feb2c16785f",
       "source": "Skill Workshop",
-      "translated": "Skill-workshop"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.android.21c19709950c3f39",
@@ -6091,7 +6091,7 @@
     {
       "id": "native.android.a68e07b919a2a0d1",
       "source": "Gateway offline",
-      "translated": "Gateway är offline"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.android.f4baaca21d1b59d8",
@@ -6436,7 +6436,7 @@
     {
       "id": "native.android.58e92f6f7ee9a870",
       "source": "Loading",
-      "translated": "Läser in"
+      "translated": "Loading"
     },
     {
       "id": "native.android.c27608d140fad1ba",
@@ -6446,7 +6446,7 @@
     {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
-      "translated": "Granska"
+      "translated": "Review"
     },
     {
       "id": "native.android.559e047666ce63f8",
@@ -7491,7 +7491,7 @@
     {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
-      "translated": "Gateway är offline"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.android.36ed01582459bc10",
@@ -8986,7 +8986,7 @@
     {
       "id": "native.apple.66facc5ade07c85d",
       "source": "Dreaming",
-      "translated": "Drömmer"
+      "translated": "Dreaming"
     },
     {
       "id": "native.apple.7d9b95f78347a27a",
@@ -9531,7 +9531,7 @@
     {
       "id": "native.apple.49160020f0318366",
       "source": "Default",
-      "translated": "Standard"
+      "translated": "Default"
     },
     {
       "id": "native.apple.5fbed24f057edea8",
@@ -9586,7 +9586,7 @@
     {
       "id": "native.apple.0938c66b5382e9b5",
       "source": "Gateway offline",
-      "translated": "Gateway är offline"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.apple.9c45abb65d0ba8f3",
@@ -10541,7 +10541,7 @@
     {
       "id": "native.apple.9161ca3c61de6cc7",
       "source": "Gateway offline",
-      "translated": "Gateway är offline"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.apple.28c97cf23665ee01",
@@ -10746,7 +10746,7 @@
     {
       "id": "native.apple.18b4b1d1291e8402",
       "source": "Loading",
-      "translated": "Läser in"
+      "translated": "Loading"
     },
     {
       "id": "native.apple.f7b3242d69bc344b",
@@ -10806,7 +10806,7 @@
     {
       "id": "native.apple.9094f48f7ebd28c5",
       "source": "Chat",
-      "translated": "Chatt"
+      "translated": "Chat"
     },
     {
       "id": "native.apple.fb6493b448a3f62a",
@@ -10846,7 +10846,7 @@
     {
       "id": "native.apple.9da8bb9b1b8aa353",
       "source": "Skill Workshop",
-      "translated": "Skill-workshop"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.apple.e3bcf286b266f54c",
@@ -11746,7 +11746,7 @@
     {
       "id": "native.apple.59c349b1b581354f",
       "source": "Gateway offline",
-      "translated": "Gateway är offline"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.apple.6308264d116d5be6",
@@ -11896,7 +11896,7 @@
     {
       "id": "native.apple.dead8a77b18317b0",
       "source": "live",
-      "translated": "aktiv"
+      "translated": "live"
     },
     {
       "id": "native.apple.cd36ec3e11954837",
@@ -12146,7 +12146,7 @@
     {
       "id": "native.apple.3ba1d988ea9c9a21",
       "source": "Connected",
-      "translated": "Ansluten"
+      "translated": "Connected"
     },
     {
       "id": "native.apple.053cca424822977a",
@@ -14431,7 +14431,7 @@
     {
       "id": "native.apple.7f671f0202cb1d9b",
       "source": "Retry",
-      "translated": "Försök igen"
+      "translated": "Retry"
     },
     {
       "id": "native.apple.e71e20089bcc4cfb",
@@ -15086,7 +15086,7 @@
     {
       "id": "native.apple.2492086244fda7c6",
       "source": "Skill Workshop",
-      "translated": "Skill-workshop"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.apple.7482f18faae25219",
@@ -15286,7 +15286,7 @@
     {
       "id": "native.apple.c1314556e24659d1",
       "source": "Wake Words",
-      "translated": "Väckningsord"
+      "translated": "Wake Words"
     },
     {
       "id": "native.apple.4ebb39f445d7dbff",
@@ -15396,7 +15396,7 @@
     {
       "id": "native.apple.f2be0b00a9d003fe",
       "source": "Realtime Voice",
-      "translated": "Röst i realtid"
+      "translated": "Realtime Voice"
     },
     {
       "id": "native.apple.571d17c55ce80675",
@@ -15961,7 +15961,7 @@
     {
       "id": "native.apple.07188ebdca3fbba5",
       "source": "No chat messages yet",
-      "translated": "Inga chattmeddelanden än"
+      "translated": "No chat messages yet"
     },
     {
       "id": "native.apple.d0697a13b9cff264",
@@ -16951,7 +16951,7 @@
     {
       "id": "native.apple.533965afb8350ace",
       "source": "Degraded",
-      "translated": "Försämrad"
+      "translated": "Degraded"
     },
     {
       "id": "native.apple.90dacdcac6e6bd80",
@@ -19266,7 +19266,7 @@
     {
       "id": "native.apple.3cef985bef918988",
       "source": "Main",
-      "translated": "Huvudagent"
+      "translated": "Main"
     },
     {
       "id": "native.apple.5eca63e1a931e290",
@@ -20236,7 +20236,7 @@
     {
       "id": "native.apple.6b29ec65de666dab",
       "source": "Operator",
-      "translated": "Operatör"
+      "translated": "Operator"
     },
     {
       "id": "native.apple.7a62dc7bc8d3fab9",
@@ -21071,7 +21071,7 @@
     {
       "id": "native.apple.84c069138aa2c31d",
       "source": "Reading the Gateway skill catalog.",
-      "translated": "Läser katalogen med Gateway-Skills."
+      "translated": "Reading the Gateway skill catalog."
     },
     {
       "id": "native.apple.ddac24dd3c4ad758",
@@ -21796,7 +21796,7 @@
     {
       "id": "native.apple.a8fb74eafee3d446",
       "source": "Unavailable",
-      "translated": "Inte tillgänglig"
+      "translated": "Unavailable"
     },
     {
       "id": "native.apple.5135e9bec6346f0d",
@@ -22161,7 +22161,7 @@
     {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
-      "translated": "Bild"
+      "translated": "Image"
     },
     {
       "id": "native.apple.14da4c958ae30949",
@@ -22186,7 +22186,7 @@
     {
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
-      "translated": "Röstmeddelande"
+      "translated": "Voice note"
     },
     {
       "id": "native.apple.aff6385b0a8dd0ac",
@@ -22331,12 +22331,12 @@
     {
       "id": "native.apple.9add620a81268972",
       "source": "Attachment",
-      "translated": "Bilaga"
+      "translated": "Attachment"
     },
     {
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
-      "translated": "Meddelande"
+      "translated": "Message"
     },
     {
       "id": "native.apple.5824df4efbf6c977",

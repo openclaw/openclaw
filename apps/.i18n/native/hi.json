@@ -6436,7 +6436,7 @@
     {
       "id": "native.android.58e92f6f7ee9a870",
       "source": "Loading",
-      "translated": "लोड हो रहा है"
+      "translated": "Loading"
     },
     {
       "id": "native.android.c27608d140fad1ba",
@@ -6446,7 +6446,7 @@
     {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
-      "translated": "समीक्षा करें"
+      "translated": "Review"
     },
     {
       "id": "native.android.559e047666ce63f8",
@@ -8041,7 +8041,7 @@
     {
       "id": "native.android.a3c395b04ae7a621",
       "source": "OpenClaw Node",
-      "translated": "OpenClaw नोड"
+      "translated": "OpenClaw Node"
     },
     {
       "id": "native.android.cd32b06480d9bb69",
@@ -8986,7 +8986,7 @@
     {
       "id": "native.apple.66facc5ade07c85d",
       "source": "Dreaming",
-      "translated": "सपने देख रहा है"
+      "translated": "Dreaming"
     },
     {
       "id": "native.apple.7d9b95f78347a27a",
@@ -9531,7 +9531,7 @@
     {
       "id": "native.apple.49160020f0318366",
       "source": "Default",
-      "translated": "डिफ़ॉल्ट"
+      "translated": "Default"
     },
     {
       "id": "native.apple.5fbed24f057edea8",
@@ -10416,7 +10416,7 @@
     {
       "id": "native.apple.036b0faa4e17f39c",
       "source": "Fork",
-      "translated": "फ़ोर्क करें"
+      "translated": "Fork"
     },
     {
       "id": "native.apple.35e23b306162f6ad",
@@ -10746,7 +10746,7 @@
     {
       "id": "native.apple.18b4b1d1291e8402",
       "source": "Loading",
-      "translated": "लोड हो रहा है"
+      "translated": "Loading"
     },
     {
       "id": "native.apple.f7b3242d69bc344b",
@@ -10806,7 +10806,7 @@
     {
       "id": "native.apple.9094f48f7ebd28c5",
       "source": "Chat",
-      "translated": "चैट"
+      "translated": "Chat"
     },
     {
       "id": "native.apple.fb6493b448a3f62a",
@@ -10816,7 +10816,7 @@
     {
       "id": "native.apple.c61170392d1aa557",
       "source": "Offline",
-      "translated": "ऑफ़लाइन"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.225dcb2dfdcaa76f",
@@ -10846,7 +10846,7 @@
     {
       "id": "native.apple.9da8bb9b1b8aa353",
       "source": "Skill Workshop",
-      "translated": "Skill वर्कशॉप"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.apple.e3bcf286b266f54c",
@@ -12146,7 +12146,7 @@
     {
       "id": "native.apple.3ba1d988ea9c9a21",
       "source": "Connected",
-      "translated": "कनेक्टेड"
+      "translated": "Connected"
     },
     {
       "id": "native.apple.053cca424822977a",
@@ -12701,7 +12701,7 @@
     {
       "id": "native.apple.b962116ff5bf1905",
       "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — MIT लाइसेंस।"
+      "translated": "© 2026 OpenClaw Foundation — MIT License."
     },
     {
       "id": "native.apple.106434d1305d153b",
@@ -12811,12 +12811,12 @@
     {
       "id": "native.apple.c3d6c69cdb46769e",
       "source": "Host",
-      "translated": "होस्ट"
+      "translated": "Host"
     },
     {
       "id": "native.apple.600f8f373f177a74",
       "source": "Port",
-      "translated": "पोर्ट"
+      "translated": "Port"
     },
     {
       "id": "native.apple.74dd3ea86bc67545",
@@ -12866,7 +12866,7 @@
     {
       "id": "native.apple.5869824f66e222ed",
       "source": "Voice Wake",
-      "translated": "वॉइस वेक"
+      "translated": "Voice Wake"
     },
     {
       "id": "native.apple.88a997009842ffa0",
@@ -12881,7 +12881,7 @@
     {
       "id": "native.apple.518cef9408771a92",
       "source": "Speakerphone",
-      "translated": "स्पीकरफ़ोन"
+      "translated": "Speakerphone"
     },
     {
       "id": "native.apple.1604352fea16d495",
@@ -14431,7 +14431,7 @@
     {
       "id": "native.apple.7f671f0202cb1d9b",
       "source": "Retry",
-      "translated": "पुनः प्रयास करें"
+      "translated": "Retry"
     },
     {
       "id": "native.apple.e71e20089bcc4cfb",
@@ -14771,12 +14771,12 @@
     {
       "id": "native.apple.826c84d7090d253c",
       "source": "Host",
-      "translated": "होस्ट"
+      "translated": "Host"
     },
     {
       "id": "native.apple.9e9de5d188e3c693",
       "source": "Port",
-      "translated": "पोर्ट"
+      "translated": "Port"
     },
     {
       "id": "native.apple.b1fdf88fe407cf7b",
@@ -15286,7 +15286,7 @@
     {
       "id": "native.apple.c1314556e24659d1",
       "source": "Wake Words",
-      "translated": "वेक वर्ड्स"
+      "translated": "Wake Words"
     },
     {
       "id": "native.apple.4ebb39f445d7dbff",
@@ -15396,7 +15396,7 @@
     {
       "id": "native.apple.f2be0b00a9d003fe",
       "source": "Realtime Voice",
-      "translated": "रीयलटाइम वॉइस"
+      "translated": "Realtime Voice"
     },
     {
       "id": "native.apple.571d17c55ce80675",
@@ -15961,7 +15961,7 @@
     {
       "id": "native.apple.07188ebdca3fbba5",
       "source": "No chat messages yet",
-      "translated": "अभी तक कोई चैट संदेश नहीं"
+      "translated": "No chat messages yet"
     },
     {
       "id": "native.apple.d0697a13b9cff264",
@@ -16636,7 +16636,7 @@
     {
       "id": "native.apple.a6ce39368a3dcba9",
       "source": "Docs",
-      "translated": "दस्तावेज़"
+      "translated": "Docs"
     },
     {
       "id": "native.apple.953dd3deb91be186",
@@ -16666,7 +16666,7 @@
     {
       "id": "native.apple.4ec07761308f7f50",
       "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — MIT लाइसेंस।"
+      "translated": "© 2026 OpenClaw Foundation — MIT License."
     },
     {
       "id": "native.apple.37661ff1af405580",
@@ -16951,7 +16951,7 @@
     {
       "id": "native.apple.533965afb8350ace",
       "source": "Degraded",
-      "translated": "कमज़ोर"
+      "translated": "Degraded"
     },
     {
       "id": "native.apple.90dacdcac6e6bd80",
@@ -18511,7 +18511,7 @@
     {
       "id": "native.apple.c8c53e5345460948",
       "source": "Quit",
-      "translated": "छोड़ें"
+      "translated": "Quit"
     },
     {
       "id": "native.apple.64e197a4a8b384ef",
@@ -18711,7 +18711,7 @@
     {
       "id": "native.apple.a04182cfc2292a90",
       "source": "Transport",
-      "translated": "ट्रांसपोर्ट"
+      "translated": "Transport"
     },
     {
       "id": "native.apple.0b3bf35360212894",
@@ -18731,7 +18731,7 @@
     {
       "id": "native.apple.655c71a562ce5ecb",
       "source": "SSH target",
-      "translated": "SSH लक्ष्य"
+      "translated": "SSH target"
     },
     {
       "id": "native.apple.feced5a9b26f7437",
@@ -19161,7 +19161,7 @@
     {
       "id": "native.apple.1df24a30d7963640",
       "source": "Debug",
-      "translated": "डीबग"
+      "translated": "Debug"
     },
     {
       "id": "native.apple.24b2a8b6549236c4",
@@ -19906,7 +19906,7 @@
     {
       "id": "native.apple.0ef039b18340a2e1",
       "source": "Project root",
-      "translated": "प्रोजेक्ट रूट"
+      "translated": "Project root"
     },
     {
       "id": "native.apple.dca75ab0dd73f0a4",
@@ -19951,12 +19951,12 @@
     {
       "id": "native.apple.1907a86a6cc2165b",
       "source": "Gateway token",
-      "translated": "Gateway टोकन"
+      "translated": "Gateway token"
     },
     {
       "id": "native.apple.014d9fcbd97f6c48",
       "source": "remote gateway auth token (gateway.remote.token)",
-      "translated": "रिमोट gateway auth टोकन (gateway.remote.token)"
+      "translated": "remote gateway auth token (gateway.remote.token)"
     },
     {
       "id": "native.apple.cc14b91d20cc33ba",
@@ -20236,7 +20236,7 @@
     {
       "id": "native.apple.6b29ec65de666dab",
       "source": "Operator",
-      "translated": "ऑपरेटर"
+      "translated": "Operator"
     },
     {
       "id": "native.apple.7a62dc7bc8d3fab9",
@@ -20391,7 +20391,7 @@
     {
       "id": "native.apple.bc935384479c2f48",
       "source": "Notifications",
-      "translated": "सूचनाएँ"
+      "translated": "Notifications"
     },
     {
       "id": "native.apple.922a8b5e049ef146",
@@ -20406,7 +20406,7 @@
     {
       "id": "native.apple.5ec94fe5a6864de7",
       "source": "Microphone",
-      "translated": "माइक्रोफ़ोन"
+      "translated": "Microphone"
     },
     {
       "id": "native.apple.b27a5cb9cffe05f0",
@@ -20416,12 +20416,12 @@
     {
       "id": "native.apple.3639c706ed77975c",
       "source": "Camera",
-      "translated": "कैमरा"
+      "translated": "Camera"
     },
     {
       "id": "native.apple.fee0f3732a447f35",
       "source": "Location",
-      "translated": "स्थान"
+      "translated": "Location"
     },
     {
       "id": "native.apple.4a4c10ca63e99590",
@@ -20821,7 +20821,7 @@
     {
       "id": "native.apple.919c478455279274",
       "source": "Direct",
-      "translated": "सीधा"
+      "translated": "Direct"
     },
     {
       "id": "native.apple.d90d9456fbd96681",
@@ -20986,7 +20986,7 @@
     {
       "id": "native.apple.033d7a0753f0844a",
       "source": "Config",
-      "translated": "कॉन्फ़िग"
+      "translated": "Config"
     },
     {
       "id": "native.apple.149b9ff742e6ff4f",
@@ -21071,7 +21071,7 @@
     {
       "id": "native.apple.84c069138aa2c31d",
       "source": "Reading the Gateway skill catalog.",
-      "translated": "Gateway की Skills कैटलॉग पढ़ी जा रही है।"
+      "translated": "Reading the Gateway skill catalog."
     },
     {
       "id": "native.apple.ddac24dd3c4ad758",
@@ -21236,7 +21236,7 @@
     {
       "id": "native.apple.5bea2c67b8d4ccf9",
       "source": "Bundled",
-      "translated": "बंडल किया गया"
+      "translated": "Bundled"
     },
     {
       "id": "native.apple.4b27b3be5f3f1f66",
@@ -21261,7 +21261,7 @@
     {
       "id": "native.apple.9df0af709d3b38bf",
       "source": "Exec Approvals",
-      "translated": "Exec अनुमोदन"
+      "translated": "Exec Approvals"
     },
     {
       "id": "native.apple.e5198b803f0b5c9f",
@@ -21296,12 +21296,12 @@
     {
       "id": "native.apple.4c894d7779471cda",
       "source": "Scope",
-      "translated": "दायरा"
+      "translated": "Scope"
     },
     {
       "id": "native.apple.4c1463daa4dfc183",
       "source": "Policy",
-      "translated": "नीति"
+      "translated": "Policy"
     },
     {
       "id": "native.apple.2d5b07fb998add6d",
@@ -21406,7 +21406,7 @@
     {
       "id": "native.apple.c93bc33b48fd43a0",
       "source": "Allowlist",
-      "translated": "अनुमति सूची"
+      "translated": "Allowlist"
     },
     {
       "id": "native.apple.61954e6ed7118ddb",
@@ -21796,7 +21796,7 @@
     {
       "id": "native.apple.a8fb74eafee3d446",
       "source": "Unavailable",
-      "translated": "अनुपलब्ध"
+      "translated": "Unavailable"
     },
     {
       "id": "native.apple.5135e9bec6346f0d",
@@ -22161,7 +22161,7 @@
     {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
-      "translated": "इमेज"
+      "translated": "Image"
     },
     {
       "id": "native.apple.14da4c958ae30949",
@@ -22186,7 +22186,7 @@
     {
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
-      "translated": "वॉइस नोट"
+      "translated": "Voice note"
     },
     {
       "id": "native.apple.aff6385b0a8dd0ac",
@@ -22331,12 +22331,12 @@
     {
       "id": "native.apple.9add620a81268972",
       "source": "Attachment",
-      "translated": "अटैचमेंट"
+      "translated": "Attachment"
     },
     {
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
-      "translated": "संदेश"
+      "translated": "Message"
     },
     {
       "id": "native.apple.5824df4efbf6c977",

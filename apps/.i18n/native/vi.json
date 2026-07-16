@@ -1206,7 +1206,7 @@
     {
       "id": "native.android.82ab699f88638b8a",
       "source": "Canvas",
-      "translated": "Bảng vẽ"
+      "translated": "Canvas"
     },
     {
       "id": "native.android.d5938abf7b7a7ee9",
@@ -4351,7 +4351,7 @@
     {
       "id": "native.android.2d1dd1a2e9dae8e9",
       "source": "Camera",
-      "translated": "Máy ảnh"
+      "translated": "Camera"
     },
     {
       "id": "native.android.3104a266665b9e19",
@@ -4666,7 +4666,7 @@
     {
       "id": "native.android.ce47022dd4d431fe",
       "source": "Token",
-      "translated": "Mã thông báo"
+      "translated": "Token"
     },
     {
       "id": "native.android.1ac555d95edfac77",
@@ -6436,7 +6436,7 @@
     {
       "id": "native.android.58e92f6f7ee9a870",
       "source": "Loading",
-      "translated": "Đang tải"
+      "translated": "Loading"
     },
     {
       "id": "native.android.c27608d140fad1ba",
@@ -6446,7 +6446,7 @@
     {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
-      "translated": "Xem xét"
+      "translated": "Review"
     },
     {
       "id": "native.android.559e047666ce63f8",
@@ -6621,7 +6621,7 @@
     {
       "id": "native.android.3e0f25545a6ccfb4",
       "source": "Terminal",
-      "translated": "Dòng lệnh"
+      "translated": "Terminal"
     },
     {
       "id": "native.android.a196c4c819426137",
@@ -8236,7 +8236,7 @@
     {
       "id": "native.apple.23834d0ff7589921",
       "source": "Camera",
-      "translated": "Máy ảnh"
+      "translated": "Camera"
     },
     {
       "id": "native.apple.9c73bf4bd647d298",
@@ -8986,7 +8986,7 @@
     {
       "id": "native.apple.66facc5ade07c85d",
       "source": "Dreaming",
-      "translated": "Đang mơ"
+      "translated": "Dreaming"
     },
     {
       "id": "native.apple.7d9b95f78347a27a",
@@ -9531,7 +9531,7 @@
     {
       "id": "native.apple.49160020f0318366",
       "source": "Default",
-      "translated": "Mặc định"
+      "translated": "Default"
     },
     {
       "id": "native.apple.5fbed24f057edea8",
@@ -9976,7 +9976,7 @@
     {
       "id": "native.apple.29d82bdb73f5a551",
       "source": "Skill",
-      "translated": "Kỹ năng"
+      "translated": "Skill"
     },
     {
       "id": "native.apple.8869a6b2fde070b8",
@@ -10746,7 +10746,7 @@
     {
       "id": "native.apple.18b4b1d1291e8402",
       "source": "Loading",
-      "translated": "Đang tải"
+      "translated": "Loading"
     },
     {
       "id": "native.apple.f7b3242d69bc344b",
@@ -10806,7 +10806,7 @@
     {
       "id": "native.apple.9094f48f7ebd28c5",
       "source": "Chat",
-      "translated": "Trò chuyện"
+      "translated": "Chat"
     },
     {
       "id": "native.apple.fb6493b448a3f62a",
@@ -10816,7 +10816,7 @@
     {
       "id": "native.apple.c61170392d1aa557",
       "source": "Offline",
-      "translated": "Ngoại tuyến"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.225dcb2dfdcaa76f",
@@ -12146,7 +12146,7 @@
     {
       "id": "native.apple.3ba1d988ea9c9a21",
       "source": "Connected",
-      "translated": "Đã kết nối"
+      "translated": "Connected"
     },
     {
       "id": "native.apple.053cca424822977a",
@@ -12581,7 +12581,7 @@
     {
       "id": "native.apple.8486e210bfe6a446",
       "source": "Camera",
-      "translated": "Máy ảnh"
+      "translated": "Camera"
     },
     {
       "id": "native.apple.1826e2be7765ee28",
@@ -14431,7 +14431,7 @@
     {
       "id": "native.apple.7f671f0202cb1d9b",
       "source": "Retry",
-      "translated": "Thử lại"
+      "translated": "Retry"
     },
     {
       "id": "native.apple.e71e20089bcc4cfb",
@@ -14846,7 +14846,7 @@
     {
       "id": "native.apple.d290a46515add091",
       "source": "Camera",
-      "translated": "Máy ảnh"
+      "translated": "Camera"
     },
     {
       "id": "native.apple.0eeedbc8aaafcd2c",
@@ -15121,7 +15121,7 @@
     {
       "id": "native.apple.b3b5114b91a8db8f",
       "source": "Terminal",
-      "translated": "Dòng lệnh"
+      "translated": "Terminal"
     },
     {
       "id": "native.apple.584dfce592c64899",
@@ -15301,7 +15301,7 @@
     {
       "id": "native.apple.8ba33bf5712e3af2",
       "source": "Terminal",
-      "translated": "Dòng lệnh"
+      "translated": "Terminal"
     },
     {
       "id": "native.apple.2f67b32536f24e9d",
@@ -15396,7 +15396,7 @@
     {
       "id": "native.apple.f2be0b00a9d003fe",
       "source": "Realtime Voice",
-      "translated": "Giọng nói thời gian thực"
+      "translated": "Realtime Voice"
     },
     {
       "id": "native.apple.571d17c55ce80675",
@@ -15961,7 +15961,7 @@
     {
       "id": "native.apple.07188ebdca3fbba5",
       "source": "No chat messages yet",
-      "translated": "Chưa có tin nhắn trò chuyện nào"
+      "translated": "No chat messages yet"
     },
     {
       "id": "native.apple.d0697a13b9cff264",
@@ -16941,7 +16941,7 @@
     {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
-      "translated": "Máy ảnh"
+      "translated": "Camera"
     },
     {
       "id": "native.apple.40d3846b9b907a73",
@@ -16951,7 +16951,7 @@
     {
       "id": "native.apple.533965afb8350ace",
       "source": "Degraded",
-      "translated": "Suy giảm"
+      "translated": "Degraded"
     },
     {
       "id": "native.apple.90dacdcac6e6bd80",
@@ -20236,7 +20236,7 @@
     {
       "id": "native.apple.6b29ec65de666dab",
       "source": "Operator",
-      "translated": "Người vận hành"
+      "translated": "Operator"
     },
     {
       "id": "native.apple.7a62dc7bc8d3fab9",
@@ -20416,7 +20416,7 @@
     {
       "id": "native.apple.3639c706ed77975c",
       "source": "Camera",
-      "translated": "Máy ảnh"
+      "translated": "Camera"
     },
     {
       "id": "native.apple.fee0f3732a447f35",
@@ -21071,7 +21071,7 @@
     {
       "id": "native.apple.84c069138aa2c31d",
       "source": "Reading the Gateway skill catalog.",
-      "translated": "Đang đọc danh mục Skills của Gateway."
+      "translated": "Reading the Gateway skill catalog."
     },
     {
       "id": "native.apple.ddac24dd3c4ad758",
@@ -21796,7 +21796,7 @@
     {
       "id": "native.apple.a8fb74eafee3d446",
       "source": "Unavailable",
-      "translated": "Không khả dụng"
+      "translated": "Unavailable"
     },
     {
       "id": "native.apple.5135e9bec6346f0d",
@@ -22161,7 +22161,7 @@
     {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
-      "translated": "Hình ảnh"
+      "translated": "Image"
     },
     {
       "id": "native.apple.14da4c958ae30949",
@@ -22186,7 +22186,7 @@
     {
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
-      "translated": "Ghi chú thoại"
+      "translated": "Voice note"
     },
     {
       "id": "native.apple.aff6385b0a8dd0ac",
@@ -22331,12 +22331,12 @@
     {
       "id": "native.apple.9add620a81268972",
       "source": "Attachment",
-      "translated": "Tệp đính kèm"
+      "translated": "Attachment"
     },
     {
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
-      "translated": "Tin nhắn"
+      "translated": "Message"
     },
     {
       "id": "native.apple.5824df4efbf6c977",

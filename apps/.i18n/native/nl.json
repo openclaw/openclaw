@@ -5501,7 +5501,7 @@
     {
       "id": "native.android.84393969369585aa",
       "source": "Nodes",
-      "translated": "Knooppunten"
+      "translated": "Nodes"
     },
     {
       "id": "native.android.c6943c0abb7897a6",
@@ -5651,7 +5651,7 @@
     {
       "id": "native.android.9967a8ab22348475",
       "source": "Agents",
-      "translated": "Agenten"
+      "translated": "Agents"
     },
     {
       "id": "native.android.7b1f86aeacad732c",
@@ -6021,7 +6021,7 @@
     {
       "id": "native.android.46363d9a775b4f46",
       "source": "${minutes}m",
-      "translated": "${minutes} min."
+      "translated": "${minutes}m"
     },
     {
       "id": "native.android.4d91d1f25b481ad7",
@@ -6031,7 +6031,7 @@
     {
       "id": "native.android.0c07416f9575a1e1",
       "source": "${days}d",
-      "translated": "${days} d."
+      "translated": "${days}d"
     },
     {
       "id": "native.android.22d755834386db07",
@@ -6436,7 +6436,7 @@
     {
       "id": "native.android.58e92f6f7ee9a870",
       "source": "Loading",
-      "translated": "Laden"
+      "translated": "Loading"
     },
     {
       "id": "native.android.c27608d140fad1ba",
@@ -6446,7 +6446,7 @@
     {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
-      "translated": "Beoordelen"
+      "translated": "Review"
     },
     {
       "id": "native.android.559e047666ce63f8",
@@ -8986,7 +8986,7 @@
     {
       "id": "native.apple.66facc5ade07c85d",
       "source": "Dreaming",
-      "translated": "Dromen"
+      "translated": "Dreaming"
     },
     {
       "id": "native.apple.7d9b95f78347a27a",
@@ -9241,7 +9241,7 @@
     {
       "id": "native.apple.880e2ddd260c7c2e",
       "source": "Agents",
-      "translated": "Agenten"
+      "translated": "Agents"
     },
     {
       "id": "native.apple.cddd5f7fef6839af",
@@ -9531,7 +9531,7 @@
     {
       "id": "native.apple.49160020f0318366",
       "source": "Default",
-      "translated": "Standaard"
+      "translated": "Default"
     },
     {
       "id": "native.apple.5fbed24f057edea8",
@@ -10526,7 +10526,7 @@
     {
       "id": "native.apple.e0c68adcc22af34a",
       "source": "Agents",
-      "translated": "Agenten"
+      "translated": "Agents"
     },
     {
       "id": "native.apple.a3bde8045fe9224a",
@@ -10746,7 +10746,7 @@
     {
       "id": "native.apple.18b4b1d1291e8402",
       "source": "Loading",
-      "translated": "Laden"
+      "translated": "Loading"
     },
     {
       "id": "native.apple.f7b3242d69bc344b",
@@ -10846,7 +10846,7 @@
     {
       "id": "native.apple.9da8bb9b1b8aa353",
       "source": "Skill Workshop",
-      "translated": "Skill-workshop"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.apple.e3bcf286b266f54c",
@@ -11066,7 +11066,7 @@
     {
       "id": "native.apple.6d5fff8d127eeb0a",
       "source": "Scope",
-      "translated": "Bereik"
+      "translated": "Scope"
     },
     {
       "id": "native.apple.f3ab09d2ffba5d9b",
@@ -11896,7 +11896,7 @@
     {
       "id": "native.apple.dead8a77b18317b0",
       "source": "live",
-      "translated": "actief"
+      "translated": "live"
     },
     {
       "id": "native.apple.cd36ec3e11954837",
@@ -12146,7 +12146,7 @@
     {
       "id": "native.apple.3ba1d988ea9c9a21",
       "source": "Connected",
-      "translated": "Verbonden"
+      "translated": "Connected"
     },
     {
       "id": "native.apple.053cca424822977a",
@@ -13616,7 +13616,7 @@
     {
       "id": "native.apple.40e78558a531ba3a",
       "source": "Node",
-      "translated": "Knooppunt"
+      "translated": "Node"
     },
     {
       "id": "native.apple.b3914073e8a72a9a",
@@ -14431,7 +14431,7 @@
     {
       "id": "native.apple.7f671f0202cb1d9b",
       "source": "Retry",
-      "translated": "Opnieuw proberen"
+      "translated": "Retry"
     },
     {
       "id": "native.apple.e71e20089bcc4cfb",
@@ -14786,7 +14786,7 @@
     {
       "id": "native.apple.600ba39ce56ddd62",
       "source": "Gateway Auth Token",
-      "translated": "Gateway-verificatietoken"
+      "translated": "Gateway Auth Token"
     },
     {
       "id": "native.apple.a5943eaea2db1d6d",
@@ -14966,7 +14966,7 @@
     {
       "id": "native.apple.11f98fe0650d52f5",
       "source": "Agents",
-      "translated": "Agenten"
+      "translated": "Agents"
     },
     {
       "id": "native.apple.47426e84372bc0a5",
@@ -15076,27 +15076,27 @@
     {
       "id": "native.apple.dea6129f5908f494",
       "source": "Agents",
-      "translated": "Agenten"
+      "translated": "Agents"
     },
     {
       "id": "native.apple.1b9a298ab6e87f5f",
       "source": "Workboard",
-      "translated": "Werkbord"
+      "translated": "Workboard"
     },
     {
       "id": "native.apple.2492086244fda7c6",
       "source": "Skill Workshop",
-      "translated": "Skill-workshop"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.apple.7482f18faae25219",
       "source": "Instances",
-      "translated": "Instanties"
+      "translated": "Instances"
     },
     {
       "id": "native.apple.3579cf2750470a22",
       "source": "Sessions",
-      "translated": "Sessies"
+      "translated": "Sessions"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -15286,7 +15286,7 @@
     {
       "id": "native.apple.c1314556e24659d1",
       "source": "Wake Words",
-      "translated": "Wakewoorden"
+      "translated": "Wake Words"
     },
     {
       "id": "native.apple.4ebb39f445d7dbff",
@@ -15406,7 +15406,7 @@
     {
       "id": "native.apple.8b95eb816538a735",
       "source": "Gateway Default",
-      "translated": "Standaard Gateway"
+      "translated": "Gateway Default"
     },
     {
       "id": "native.apple.12f6c5d01ca2cc0e",
@@ -15961,7 +15961,7 @@
     {
       "id": "native.apple.07188ebdca3fbba5",
       "source": "No chat messages yet",
-      "translated": "Nog geen chatberichten"
+      "translated": "No chat messages yet"
     },
     {
       "id": "native.apple.d0697a13b9cff264",
@@ -16951,7 +16951,7 @@
     {
       "id": "native.apple.533965afb8350ace",
       "source": "Degraded",
-      "translated": "Verminderd"
+      "translated": "Degraded"
     },
     {
       "id": "native.apple.90dacdcac6e6bd80",
@@ -20251,7 +20251,7 @@
     {
       "id": "native.apple.7ed2af81aa7647fb",
       "source": "Node",
-      "translated": "Knooppunt"
+      "translated": "Node"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",
@@ -20966,7 +20966,7 @@
     {
       "id": "native.apple.bf08d706c71f2d9b",
       "source": "Cron Jobs",
-      "translated": "Cron-taken"
+      "translated": "Cron Jobs"
     },
     {
       "id": "native.apple.bf80bdb5a3dda276",
@@ -20986,7 +20986,7 @@
     {
       "id": "native.apple.033d7a0753f0844a",
       "source": "Config",
-      "translated": "Configuratie"
+      "translated": "Config"
     },
     {
       "id": "native.apple.149b9ff742e6ff4f",
@@ -21071,7 +21071,7 @@
     {
       "id": "native.apple.84c069138aa2c31d",
       "source": "Reading the Gateway skill catalog.",
-      "translated": "De Gateway-skillcatalogus lezen."
+      "translated": "Reading the Gateway skill catalog."
     },
     {
       "id": "native.apple.ddac24dd3c4ad758",
@@ -21406,7 +21406,7 @@
     {
       "id": "native.apple.c93bc33b48fd43a0",
       "source": "Allowlist",
-      "translated": "Toegestane lijst"
+      "translated": "Allowlist"
     },
     {
       "id": "native.apple.61954e6ed7118ddb",
@@ -21796,7 +21796,7 @@
     {
       "id": "native.apple.a8fb74eafee3d446",
       "source": "Unavailable",
-      "translated": "Niet beschikbaar"
+      "translated": "Unavailable"
     },
     {
       "id": "native.apple.5135e9bec6346f0d",
@@ -22161,7 +22161,7 @@
     {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
-      "translated": "Afbeelding"
+      "translated": "Image"
     },
     {
       "id": "native.apple.14da4c958ae30949",
@@ -22186,7 +22186,7 @@
     {
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
-      "translated": "Spraaknotitie"
+      "translated": "Voice note"
     },
     {
       "id": "native.apple.aff6385b0a8dd0ac",
@@ -22331,12 +22331,12 @@
     {
       "id": "native.apple.9add620a81268972",
       "source": "Attachment",
-      "translated": "Bijlage"
+      "translated": "Attachment"
     },
     {
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
-      "translated": "Bericht"
+      "translated": "Message"
     },
     {
       "id": "native.apple.5824df4efbf6c977",

@@ -4576,7 +4576,7 @@
     {
       "id": "native.android.4dd409fe93b28258",
       "source": "Diagnose",
-      "translated": "Diagnostizieren"
+      "translated": "Diagnose"
     },
     {
       "id": "native.android.3901b9fb63225af4",
@@ -6436,7 +6436,7 @@
     {
       "id": "native.android.58e92f6f7ee9a870",
       "source": "Loading",
-      "translated": "Wird geladen"
+      "translated": "Loading"
     },
     {
       "id": "native.android.c27608d140fad1ba",
@@ -6446,7 +6446,7 @@
     {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
-      "translated": "Überprüfen"
+      "translated": "Review"
     },
     {
       "id": "native.android.559e047666ce63f8",
@@ -8986,7 +8986,7 @@
     {
       "id": "native.apple.66facc5ade07c85d",
       "source": "Dreaming",
-      "translated": "Träumen"
+      "translated": "Dreaming"
     },
     {
       "id": "native.apple.7d9b95f78347a27a",
@@ -9241,7 +9241,7 @@
     {
       "id": "native.apple.880e2ddd260c7c2e",
       "source": "Agents",
-      "translated": "Agenten"
+      "translated": "Agents"
     },
     {
       "id": "native.apple.cddd5f7fef6839af",
@@ -9531,7 +9531,7 @@
     {
       "id": "native.apple.49160020f0318366",
       "source": "Default",
-      "translated": "Standard"
+      "translated": "Default"
     },
     {
       "id": "native.apple.5fbed24f057edea8",
@@ -10416,7 +10416,7 @@
     {
       "id": "native.apple.036b0faa4e17f39c",
       "source": "Fork",
-      "translated": "Abzweigen"
+      "translated": "Fork"
     },
     {
       "id": "native.apple.35e23b306162f6ad",
@@ -10526,7 +10526,7 @@
     {
       "id": "native.apple.e0c68adcc22af34a",
       "source": "Agents",
-      "translated": "Agenten"
+      "translated": "Agents"
     },
     {
       "id": "native.apple.a3bde8045fe9224a",
@@ -10746,7 +10746,7 @@
     {
       "id": "native.apple.18b4b1d1291e8402",
       "source": "Loading",
-      "translated": "Wird geladen"
+      "translated": "Loading"
     },
     {
       "id": "native.apple.f7b3242d69bc344b",
@@ -10846,7 +10846,7 @@
     {
       "id": "native.apple.9da8bb9b1b8aa353",
       "source": "Skill Workshop",
-      "translated": "Skill-Workshop"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.apple.e3bcf286b266f54c",
@@ -11056,7 +11056,7 @@
     {
       "id": "native.apple.f12f3fcc4fa6b04b",
       "source": "Workboard",
-      "translated": "Arbeitsboard"
+      "translated": "Workboard"
     },
     {
       "id": "native.apple.57baf3d2a463af6d",
@@ -11616,7 +11616,7 @@
     {
       "id": "native.apple.4333e9ef3a21e90e",
       "source": "Start",
-      "translated": "Starten"
+      "translated": "Start"
     },
     {
       "id": "native.apple.19108f0f755e083d",
@@ -12146,7 +12146,7 @@
     {
       "id": "native.apple.3ba1d988ea9c9a21",
       "source": "Connected",
-      "translated": "Verbunden"
+      "translated": "Connected"
     },
     {
       "id": "native.apple.053cca424822977a",
@@ -12651,7 +12651,7 @@
     {
       "id": "native.apple.1dc0c6ff4da2deca",
       "source": "Diagnose",
-      "translated": "Diagnostizieren"
+      "translated": "Diagnose"
     },
     {
       "id": "native.apple.af22fba4150f2c1d",
@@ -12686,7 +12686,7 @@
     {
       "id": "native.apple.7d10fb0ea5b704fa",
       "source": "Docs",
-      "translated": "Dokumentation"
+      "translated": "Docs"
     },
     {
       "id": "native.apple.e501402343d42f4d",
@@ -12701,7 +12701,7 @@
     {
       "id": "native.apple.b962116ff5bf1905",
       "source": "© 2026 OpenClaw Foundation — MIT License.",
-      "translated": "© 2026 OpenClaw Foundation — MIT-Lizenz."
+      "translated": "© 2026 OpenClaw Foundation — MIT License."
     },
     {
       "id": "native.apple.106434d1305d153b",
@@ -12846,7 +12846,7 @@
     {
       "id": "native.apple.cf932b2ca61d1e6b",
       "source": "Gateway Auth Token",
-      "translated": "Gateway-Auth-Token"
+      "translated": "Gateway Auth Token"
     },
     {
       "id": "native.apple.92a1a902541660c4",
@@ -12866,7 +12866,7 @@
     {
       "id": "native.apple.5869824f66e222ed",
       "source": "Voice Wake",
-      "translated": "Sprachaktivierung"
+      "translated": "Voice Wake"
     },
     {
       "id": "native.apple.88a997009842ffa0",
@@ -13741,7 +13741,7 @@
     {
       "id": "native.apple.c80ead1ebfcfd78c",
       "source": "Discovery Logs",
-      "translated": "Erkennungsprotokolle"
+      "translated": "Discovery Logs"
     },
     {
       "id": "native.apple.f21a8e304b607dc8",
@@ -14431,7 +14431,7 @@
     {
       "id": "native.apple.7f671f0202cb1d9b",
       "source": "Retry",
-      "translated": "Erneut versuchen"
+      "translated": "Retry"
     },
     {
       "id": "native.apple.e71e20089bcc4cfb",
@@ -15076,7 +15076,7 @@
     {
       "id": "native.apple.dea6129f5908f494",
       "source": "Agents",
-      "translated": "Agenten"
+      "translated": "Agents"
     },
     {
       "id": "native.apple.1b9a298ab6e87f5f",
@@ -15286,7 +15286,7 @@
     {
       "id": "native.apple.c1314556e24659d1",
       "source": "Wake Words",
-      "translated": "Aktivierungswörter"
+      "translated": "Wake Words"
     },
     {
       "id": "native.apple.4ebb39f445d7dbff",
@@ -15396,7 +15396,7 @@
     {
       "id": "native.apple.f2be0b00a9d003fe",
       "source": "Realtime Voice",
-      "translated": "Echtzeitstimme"
+      "translated": "Realtime Voice"
     },
     {
       "id": "native.apple.571d17c55ce80675",
@@ -15961,7 +15961,7 @@
     {
       "id": "native.apple.07188ebdca3fbba5",
       "source": "No chat messages yet",
-      "translated": "Noch keine Chatnachrichten"
+      "translated": "No chat messages yet"
     },
     {
       "id": "native.apple.d0697a13b9cff264",
@@ -16951,7 +16951,7 @@
     {
       "id": "native.apple.533965afb8350ace",
       "source": "Degraded",
-      "translated": "Beeinträchtigt"
+      "translated": "Degraded"
     },
     {
       "id": "native.apple.90dacdcac6e6bd80",
@@ -17391,7 +17391,7 @@
     {
       "id": "native.apple.7bcc0a63bfc663e3",
       "source": "now",
-      "translated": "jetzt"
+      "translated": "now"
     },
     {
       "id": "native.apple.0f943be2a3559a24",
@@ -18256,7 +18256,7 @@
     {
       "id": "native.apple.3bed795cded1caa6",
       "source": "Allowlist",
-      "translated": "Zulassungsliste"
+      "translated": "Allowlist"
     },
     {
       "id": "native.apple.aec1bd885ac9d40b",
@@ -19266,7 +19266,7 @@
     {
       "id": "native.apple.3cef985bef918988",
       "source": "Main",
-      "translated": "Hauptagent"
+      "translated": "Main"
     },
     {
       "id": "native.apple.5eca63e1a931e290",
@@ -19896,7 +19896,7 @@
     {
       "id": "native.apple.ecf41ca39add6b84",
       "source": "Identity file",
-      "translated": "Identitätsdatei"
+      "translated": "Identity file"
     },
     {
       "id": "native.apple.ef96d6a2a48a4c54",
@@ -20946,7 +20946,7 @@
     {
       "id": "native.apple.f5f4ff67674093ec",
       "source": "Voice & Talk",
-      "translated": "Sprache & Sprechen"
+      "translated": "Voice & Talk"
     },
     {
       "id": "native.apple.59bed721dff1a25f",
@@ -21071,7 +21071,7 @@
     {
       "id": "native.apple.84c069138aa2c31d",
       "source": "Reading the Gateway skill catalog.",
-      "translated": "Der Skill-Katalog des Gateways wird gelesen."
+      "translated": "Reading the Gateway skill catalog."
     },
     {
       "id": "native.apple.ddac24dd3c4ad758",
@@ -21141,7 +21141,7 @@
     {
       "id": "native.apple.595947c1bbbfda3f",
       "source": "Extra",
-      "translated": "Zusätzlich"
+      "translated": "Extra"
     },
     {
       "id": "native.apple.50ba37dad6e4dde7",
@@ -21641,7 +21641,7 @@
     {
       "id": "native.apple.91d77e9c8fd7cf64",
       "source": "Voice & Talk",
-      "translated": "Sprache & Sprechen"
+      "translated": "Voice & Talk"
     },
     {
       "id": "native.apple.91fe621c927f977e",
@@ -21796,7 +21796,7 @@
     {
       "id": "native.apple.a8fb74eafee3d446",
       "source": "Unavailable",
-      "translated": "Nicht verfügbar"
+      "translated": "Unavailable"
     },
     {
       "id": "native.apple.5135e9bec6346f0d",
@@ -22161,7 +22161,7 @@
     {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
-      "translated": "Bild"
+      "translated": "Image"
     },
     {
       "id": "native.apple.14da4c958ae30949",
@@ -22186,7 +22186,7 @@
     {
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
-      "translated": "Sprachnachricht"
+      "translated": "Voice note"
     },
     {
       "id": "native.apple.aff6385b0a8dd0ac",
@@ -22331,12 +22331,12 @@
     {
       "id": "native.apple.9add620a81268972",
       "source": "Attachment",
-      "translated": "Anhang"
+      "translated": "Attachment"
     },
     {
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
-      "translated": "Nachricht"
+      "translated": "Message"
     },
     {
       "id": "native.apple.5824df4efbf6c977",

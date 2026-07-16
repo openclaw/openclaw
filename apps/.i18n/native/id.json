@@ -626,7 +626,7 @@
     {
       "id": "native.android.c65b61de70a063e7",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.android.7cd603c40e57e819",
@@ -1221,7 +1221,7 @@
     {
       "id": "native.android.c4abd4ecd607865f",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.android.27c3e59e49776d1a",
@@ -1531,7 +1531,7 @@
     {
       "id": "native.android.7e5d256de226152e",
       "source": "${minutes}m",
-      "translated": "${minutes} mnt"
+      "translated": "${minutes}m"
     },
     {
       "id": "native.android.c584c22ed959206f",
@@ -2201,7 +2201,7 @@
     {
       "id": "native.android.cac027a1232254cd",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.android.81dd1b93e212709e",
@@ -2311,7 +2311,7 @@
     {
       "id": "native.android.cd3cb6251f3f2829",
       "source": "Chat",
-      "translated": "Obrolan"
+      "translated": "Chat"
     },
     {
       "id": "native.android.b6ca712c36059f82",
@@ -2476,7 +2476,7 @@
     {
       "id": "native.android.a6785924afa501a6",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.android.0bbe0d733b1328fd",
@@ -3411,7 +3411,7 @@
     {
       "id": "native.android.bffaa0de604a6248",
       "source": "Gateway offline",
-      "translated": "Gateway luring"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.android.0d44d2bfd3bb7b01",
@@ -4511,7 +4511,7 @@
     {
       "id": "native.android.326c79e18db465ce",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.android.c0cbf2ed1fc50e4c",
@@ -5056,7 +5056,7 @@
     {
       "id": "native.android.1b766c420c546466",
       "source": "Payload",
-      "translated": "Muatan"
+      "translated": "Payload"
     },
     {
       "id": "native.android.58282aefb6124579",
@@ -5551,7 +5551,7 @@
     {
       "id": "native.android.c093a2297a02405a",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.android.6b13be9783f8dfd3",
@@ -6091,7 +6091,7 @@
     {
       "id": "native.android.a68e07b919a2a0d1",
       "source": "Gateway offline",
-      "translated": "Gateway luring"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.android.f4baaca21d1b59d8",
@@ -6436,7 +6436,7 @@
     {
       "id": "native.android.58e92f6f7ee9a870",
       "source": "Loading",
-      "translated": "Memuat"
+      "translated": "Loading"
     },
     {
       "id": "native.android.c27608d140fad1ba",
@@ -6446,7 +6446,7 @@
     {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
-      "translated": "Tinjau"
+      "translated": "Review"
     },
     {
       "id": "native.android.559e047666ce63f8",
@@ -7466,7 +7466,7 @@
     {
       "id": "native.android.2cb3ec7379426dfe",
       "source": "Default",
-      "translated": "Bawaan"
+      "translated": "Default"
     },
     {
       "id": "native.android.f8d0f6ba7608abc3",
@@ -7491,7 +7491,7 @@
     {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
-      "translated": "Gateway luring"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.android.36ed01582459bc10",
@@ -8986,7 +8986,7 @@
     {
       "id": "native.apple.66facc5ade07c85d",
       "source": "Dreaming",
-      "translated": "Bermimpi"
+      "translated": "Dreaming"
     },
     {
       "id": "native.apple.7d9b95f78347a27a",
@@ -9256,7 +9256,7 @@
     {
       "id": "native.apple.0518f671585ef32f",
       "source": "offline",
-      "translated": "luring"
+      "translated": "offline"
     },
     {
       "id": "native.apple.9a1211ec7db72f53",
@@ -9531,7 +9531,7 @@
     {
       "id": "native.apple.49160020f0318366",
       "source": "Default",
-      "translated": "Bawaan"
+      "translated": "Default"
     },
     {
       "id": "native.apple.5fbed24f057edea8",
@@ -9586,7 +9586,7 @@
     {
       "id": "native.apple.0938c66b5382e9b5",
       "source": "Gateway offline",
-      "translated": "Gateway luring"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.apple.9c45abb65d0ba8f3",
@@ -9826,7 +9826,7 @@
     {
       "id": "native.apple.7ffc45b47d1de053",
       "source": "offline",
-      "translated": "luring"
+      "translated": "offline"
     },
     {
       "id": "native.apple.7a572cb05a006b2d",
@@ -10541,7 +10541,7 @@
     {
       "id": "native.apple.9161ca3c61de6cc7",
       "source": "Gateway offline",
-      "translated": "Gateway luring"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.apple.28c97cf23665ee01",
@@ -10576,7 +10576,7 @@
     {
       "id": "native.apple.89989b6d557090e8",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.a90a3aac6e2a6da8",
@@ -10746,7 +10746,7 @@
     {
       "id": "native.apple.18b4b1d1291e8402",
       "source": "Loading",
-      "translated": "Memuat"
+      "translated": "Loading"
     },
     {
       "id": "native.apple.f7b3242d69bc344b",
@@ -10806,7 +10806,7 @@
     {
       "id": "native.apple.9094f48f7ebd28c5",
       "source": "Chat",
-      "translated": "Obrolan"
+      "translated": "Chat"
     },
     {
       "id": "native.apple.fb6493b448a3f62a",
@@ -10816,7 +10816,7 @@
     {
       "id": "native.apple.c61170392d1aa557",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.225dcb2dfdcaa76f",
@@ -10846,7 +10846,7 @@
     {
       "id": "native.apple.9da8bb9b1b8aa353",
       "source": "Skill Workshop",
-      "translated": "Lokakarya Skill"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.apple.e3bcf286b266f54c",
@@ -11451,7 +11451,7 @@
     {
       "id": "native.apple.1fc3cbd16076f75f",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.a2d8e7b4dba29764",
@@ -11536,7 +11536,7 @@
     {
       "id": "native.apple.1c931bcd1cd20334",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.65602c216b89032d",
@@ -11566,7 +11566,7 @@
     {
       "id": "native.apple.0dd123b0c6cbc53b",
       "source": "offline",
-      "translated": "luring"
+      "translated": "offline"
     },
     {
       "id": "native.apple.1e46f9b8b25855cf",
@@ -11741,12 +11741,12 @@
     {
       "id": "native.apple.042fad5f44e4a00c",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.59c349b1b581354f",
       "source": "Gateway offline",
-      "translated": "Gateway luring"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.apple.6308264d116d5be6",
@@ -12146,12 +12146,12 @@
     {
       "id": "native.apple.3ba1d988ea9c9a21",
       "source": "Connected",
-      "translated": "Terhubung"
+      "translated": "Connected"
     },
     {
       "id": "native.apple.053cca424822977a",
       "source": "offline",
-      "translated": "luring"
+      "translated": "offline"
     },
     {
       "id": "native.apple.917e129304ec763f",
@@ -12736,7 +12736,7 @@
     {
       "id": "native.apple.6ace5e6f09ec98c7",
       "source": "Default",
-      "translated": "Bawaan"
+      "translated": "Default"
     },
     {
       "id": "native.apple.3de045f17ea3c6d0",
@@ -13241,7 +13241,7 @@
     {
       "id": "native.apple.06c8a70b3321dd77",
       "source": "offline",
-      "translated": "luring"
+      "translated": "offline"
     },
     {
       "id": "native.apple.bbf921f4a20e6d64",
@@ -13331,7 +13331,7 @@
     {
       "id": "native.apple.85d609abe4548150",
       "source": "Gateway offline",
-      "translated": "Gateway luring"
+      "translated": "Gateway offline"
     },
     {
       "id": "native.apple.37ce41bbd2c854dd",
@@ -14276,7 +14276,7 @@
     {
       "id": "native.apple.ae33908b61c6d70b",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.4a98b3a346be2662",
@@ -14431,7 +14431,7 @@
     {
       "id": "native.apple.7f671f0202cb1d9b",
       "source": "Retry",
-      "translated": "Coba lagi"
+      "translated": "Retry"
     },
     {
       "id": "native.apple.e71e20089bcc4cfb",
@@ -14951,7 +14951,7 @@
     {
       "id": "native.apple.7da053dd774cb201",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.a4256b2ab523ee60",
@@ -15061,7 +15061,7 @@
     {
       "id": "native.apple.a29418bbb3169404",
       "source": "Chat",
-      "translated": "Obrolan"
+      "translated": "Chat"
     },
     {
       "id": "native.apple.e26bbe303d8a9544",
@@ -15081,12 +15081,12 @@
     {
       "id": "native.apple.1b9a298ab6e87f5f",
       "source": "Workboard",
-      "translated": "Papan Kerja"
+      "translated": "Workboard"
     },
     {
       "id": "native.apple.2492086244fda7c6",
       "source": "Skill Workshop",
-      "translated": "Lokakarya Skill"
+      "translated": "Skill Workshop"
     },
     {
       "id": "native.apple.7482f18faae25219",
@@ -15396,7 +15396,7 @@
     {
       "id": "native.apple.f2be0b00a9d003fe",
       "source": "Realtime Voice",
-      "translated": "Suara Realtime"
+      "translated": "Realtime Voice"
     },
     {
       "id": "native.apple.571d17c55ce80675",
@@ -15481,7 +15481,7 @@
     {
       "id": "native.apple.c09f4e3bbef8177a",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.d91efa5ed033446a",
@@ -15961,7 +15961,7 @@
     {
       "id": "native.apple.07188ebdca3fbba5",
       "source": "No chat messages yet",
-      "translated": "Belum ada pesan chat"
+      "translated": "No chat messages yet"
     },
     {
       "id": "native.apple.d0697a13b9cff264",
@@ -16281,7 +16281,7 @@
     {
       "id": "native.apple.f748dad8f2ce22ae",
       "source": "Offline",
-      "translated": "Luring"
+      "translated": "Offline"
     },
     {
       "id": "native.apple.088f07637cc141c9",
@@ -16466,7 +16466,7 @@
     {
       "id": "native.apple.a974845eb4fcc692",
       "source": "Chat",
-      "translated": "Obrolan"
+      "translated": "Chat"
     },
     {
       "id": "native.apple.381840bafc83d21d",
@@ -16951,7 +16951,7 @@
     {
       "id": "native.apple.533965afb8350ace",
       "source": "Degraded",
-      "translated": "Terdegradasi"
+      "translated": "Degraded"
     },
     {
       "id": "native.apple.90dacdcac6e6bd80",
@@ -17026,7 +17026,7 @@
     {
       "id": "native.apple.f74dfc887ee4f936",
       "source": "Logout",
-      "translated": "Keluar"
+      "translated": "Logout"
     },
     {
       "id": "native.apple.c6587031bbc3e4e0",
@@ -17771,7 +17771,7 @@
     {
       "id": "native.apple.07c987127cde7927",
       "source": "Payload",
-      "translated": "Muatan"
+      "translated": "Payload"
     },
     {
       "id": "native.apple.a687603203fec348",
@@ -18181,7 +18181,7 @@
     {
       "id": "native.apple.5a465c703604e054",
       "source": "Chat",
-      "translated": "Obrolan"
+      "translated": "Chat"
     },
     {
       "id": "native.apple.39cdf5187168b1a0",
@@ -18726,7 +18726,7 @@
     {
       "id": "native.apple.c58937e43a5b4591",
       "source": "Direct (ws/wss)",
-      "translated": "Langsung (ws/wss)"
+      "translated": "Direct (ws/wss)"
     },
     {
       "id": "native.apple.655c71a562ce5ecb",
@@ -21071,7 +21071,7 @@
     {
       "id": "native.apple.84c069138aa2c31d",
       "source": "Reading the Gateway skill catalog.",
-      "translated": "Membaca katalog Skills Gateway."
+      "translated": "Reading the Gateway skill catalog."
     },
     {
       "id": "native.apple.ddac24dd3c4ad758",
@@ -21251,7 +21251,7 @@
     {
       "id": "native.apple.ce77d7e393a4b860",
       "source": "Chat",
-      "translated": "Obrolan"
+      "translated": "Chat"
     },
     {
       "id": "native.apple.61bddd6a136b5e8b",
@@ -21406,7 +21406,7 @@
     {
       "id": "native.apple.c93bc33b48fd43a0",
       "source": "Allowlist",
-      "translated": "Daftar izinkan"
+      "translated": "Allowlist"
     },
     {
       "id": "native.apple.61954e6ed7118ddb",
@@ -21796,7 +21796,7 @@
     {
       "id": "native.apple.a8fb74eafee3d446",
       "source": "Unavailable",
-      "translated": "Tidak tersedia"
+      "translated": "Unavailable"
     },
     {
       "id": "native.apple.5135e9bec6346f0d",
@@ -22161,7 +22161,7 @@
     {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
-      "translated": "Gambar"
+      "translated": "Image"
     },
     {
       "id": "native.apple.14da4c958ae30949",
@@ -22186,7 +22186,7 @@
     {
       "id": "native.apple.3c8c3679fd99c074",
       "source": "Voice note",
-      "translated": "Catatan suara"
+      "translated": "Voice note"
     },
     {
       "id": "native.apple.aff6385b0a8dd0ac",
@@ -22331,12 +22331,12 @@
     {
       "id": "native.apple.9add620a81268972",
       "source": "Attachment",
-      "translated": "Lampiran"
+      "translated": "Attachment"
     },
     {
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
-      "translated": "Pesan"
+      "translated": "Message"
     },
     {
       "id": "native.apple.5824df4efbf6c977",
