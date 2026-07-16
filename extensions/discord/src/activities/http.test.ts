@@ -105,7 +105,10 @@ async function createWidget(
     accountId: params?.accountId ?? "default",
     createdAt,
   });
-  await runtime.store.markWidgetDelivered(widgetId, createdAt);
+  await runtime.store.markWidgetDelivered(
+    widgetId,
+    String(1_000_000_000_000_000_000n + BigInt(createdAt)),
+  );
   return widgetId;
 }
 

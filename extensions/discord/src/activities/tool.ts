@@ -154,7 +154,7 @@ function createDiscordWidgetToolVariant(
         deliveredResult = deliveryResult;
         deliveryRecord ??= deps.runtime.store.markWidgetDelivered(
           widgetId,
-          (deps.now ?? Date.now)(),
+          deliveryResult.messageId,
         );
         try {
           await deliveryRecord;

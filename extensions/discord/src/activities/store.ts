@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DISCORD_EPOCH_MS = 1_420_070_400_000;
 const WIDGET_TTL_MS = 7 * DAY_MS;
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const DOC_TOKEN_TTL_MS = 60 * 1000;
@@ -12,7 +13,7 @@ type DiscordActivityWidget = {
   channelId: string;
   accountId: string;
   createdAt: number;
-  deliveredAt?: number | null;
+  deliveredMessageId?: string | null;
 };
 
 type DiscordActivitySession = {
@@ -76,7 +77,6 @@ export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): Disco
 
 export class DiscordActivityStore {
   private lastWidgetCreatedAt = 0;
-  private lastWidgetDeliveredAt = 0;
 
   constructor(private readonly stores: DiscordActivityStores) {}
 
@@ -84,15 +84,16 @@ export class DiscordActivityStore {
     const id = randomBytes(16).toString("base64url");
     const createdAt = Math.max(value.createdAt, this.lastWidgetCreatedAt + 1);
     this.lastWidgetCreatedAt = createdAt;
-    await this.stores.widgets.register(id, { ...value, createdAt, deliveredAt: null });
+    await this.stores.widgets.register(id, { ...value, createdAt, deliveredMessageId: null });
     return id;
   }
 
-  async markWidgetDelivered(id: string, deliveredAt: number): Promise<void> {
-    const orderedDeliveredAt = Math.max(deliveredAt, this.lastWidgetDeliveredAt + 1);
-    this.lastWidgetDeliveredAt = orderedDeliveredAt;
+  async markWidgetDelivered(id: string, messageId: string): Promise<void> {
+    if (!/^\d+$/u.test(messageId)) {
+      throw new Error("Discord Activity delivery returned an invalid message ID");
+    }
     const updated = await this.stores.widgets.update(id, (widget) =>
-      widget ? { ...widget, deliveredAt: orderedDeliveredAt } : undefined,
+      widget ? { ...widget, deliveredMessageId: messageId } : undefined,
     );
     if (!updated) {
       throw new Error("Discord Activity widget disappeared before delivery was recorded");
@@ -107,7 +108,7 @@ export class DiscordActivityStore {
     return await this.stores.widgets.lookup(id);
   }
 
-  async latestDeliveredWidgetForChannel(
+  async latestPostedWidgetForChannel(
     accountId: string,
     channelId: string,
   ): Promise<{
@@ -115,19 +116,21 @@ export class DiscordActivityStore {
     widget: DiscordActivityWidget;
   } | null> {
     const entries = await this.stores.widgets.entries();
-    let match: { entry: (typeof entries)[number]; deliveredAt: number } | undefined;
+    let match: { entry: (typeof entries)[number]; deliveryOrder: bigint } | undefined;
     for (const entry of entries) {
       if (entry.value.accountId !== accountId || entry.value.channelId !== channelId) {
         continue;
       }
-      // Pre-tracking records have no marker and were only retained after a successful send.
-      // New pending records use null so they cannot replace the newest visible button.
-      const deliveredAt = entry.value.deliveredAt ?? entry.value.createdAt;
-      if (entry.value.deliveredAt === null) {
+      // Discord snowflakes preserve canonical message order even when API responses arrive out of
+      // order. Pre-tracking records fall back to their creation time; null marks a pending send.
+      if (entry.value.deliveredMessageId === null) {
         continue;
       }
-      if (!match || deliveredAt > match.deliveredAt) {
-        match = { entry, deliveredAt };
+      const deliveryOrder = entry.value.deliveredMessageId
+        ? BigInt(entry.value.deliveredMessageId)
+        : BigInt(Math.max(0, Math.trunc(entry.value.createdAt - DISCORD_EPOCH_MS))) << 22n;
+      if (!match || deliveryOrder > match.deliveryOrder) {
+        match = { entry, deliveryOrder };
       }
     }
     return match ? { id: match.entry.key, widget: match.entry.value } : null;

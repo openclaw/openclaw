@@ -281,7 +281,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     } else {
       // Some Discord clients omit the launch custom ID. Prefer the most recently delivered channel
       // widget while keeping older widgets addressable through buttons that preserve custom IDs.
-      resolved = await deps.runtime.store.latestDeliveredWidgetForChannel(
+      resolved = await deps.runtime.store.latestPostedWidgetForChannel(
         session.accountId,
         channelId,
       );

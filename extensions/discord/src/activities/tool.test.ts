@@ -45,7 +45,7 @@ describe("discord_widget", () => {
   it("stores a wrapped widget and posts its launch button", async () => {
     const runtime = createActivityTestRuntime();
     const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
-      messageId: "message-1",
+      messageId: "1000000000000000001",
       channelId: "987654321",
       receipt: {},
     }));
@@ -65,14 +65,14 @@ describe("discord_widget", () => {
     const details = result.details as { widgetId: string; messageId: string };
     const stored = await runtime.store.lookupWidget(details.widgetId);
 
-    expect(details.messageId).toBe("message-1");
+    expect(details.messageId).toBe("1000000000000000001");
     expect(details.widgetId).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(stored).toMatchObject({
       title: "Status",
       channelId: "987654321",
       accountId: "default",
       createdAt: 7,
-      deliveredAt: 7,
+      deliveredMessageId: "1000000000000000001",
     });
     expect(stored?.html).toContain("<!doctype html>");
     expect(stored?.html).toContain("<button");
@@ -108,7 +108,7 @@ describe("discord_widget", () => {
   it("resolves a provider-prefixed forum thread target", async () => {
     const runtime = createActivityTestRuntime();
     const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
-      messageId: "message-1",
+      messageId: "1000000000000000001",
       channelId: "987654321",
       receipt: {},
     }));
@@ -143,7 +143,7 @@ describe("discord_widget", () => {
     const document = "<!doctype html><html><body>full</body></html>";
     const runtime = createActivityTestRuntime();
     const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
-      messageId: "message-1",
+      messageId: "1000000000000000001",
       channelId: "987654321",
       receipt: {},
     }));
@@ -178,7 +178,7 @@ describe("discord_widget", () => {
       accountId: "default",
       createdAt: 1,
     });
-    await runtime.store.markWidgetDelivered(existingId, 1);
+    await runtime.store.markWidgetDelivered(existingId, "1000000000000000000");
     const failure = new Error("send failed");
     const send = vi.fn(async () => {
       throw failure;
@@ -192,11 +192,11 @@ describe("discord_widget", () => {
       tool.execute("failed-send", { html: "<p>temporary</p>", title: "Temporary" }),
     ).rejects.toBe(failure);
     await expect(
-      runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
+      runtime.store.latestPostedWidgetForChannel("default", "987654321"),
     ).resolves.toMatchObject({ id: existingId, widget: { title: "Existing" } });
   });
 
-  it("orders missing-ID fallback by successful delivery", async () => {
+  it("orders missing-ID fallback by Discord message snowflake", async () => {
     const runtime = createActivityTestRuntime();
     type SendResult = Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
     const sendResult = (messageId: string): SendResult => ({
@@ -230,18 +230,18 @@ describe("discord_widget", () => {
     const second = tool.execute("second", { html: "<p>second</p>", title: "Second" });
     await vi.waitFor(() => expect(pending.has("Second")).toBe(true));
 
-    pending.get("Second")?.(sendResult("second"));
+    pending.get("Second")?.(sendResult("1000000000000000002"));
     const secondDetails = (await second).details as { widgetId: string };
     await expect(
-      runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
+      runtime.store.latestPostedWidgetForChannel("default", "987654321"),
     ).resolves.toMatchObject({ id: secondDetails.widgetId, widget: { title: "Second" } });
-    pending.get("First")?.(sendResult("first"));
+    pending.get("First")?.(sendResult("1000000000000000001"));
     const firstDetails = (await first).details as { widgetId: string };
 
     expect(firstDetails.widgetId).not.toBe(secondDetails.widgetId);
     await expect(
-      runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
-    ).resolves.toMatchObject({ id: firstDetails.widgetId, widget: { title: "First" } });
+      runtime.store.latestPostedWidgetForChannel("default", "987654321"),
+    ).resolves.toMatchObject({ id: secondDetails.widgetId, widget: { title: "Second" } });
   });
 
   it("keeps a widget when component bookkeeping fails after delivery", async () => {
@@ -249,10 +249,10 @@ describe("discord_widget", () => {
     const failure = new Error("registry failed");
     const send = vi.fn(async (...args: Parameters<typeof sendDiscordComponentMessage>) => {
       await args[2].onDeliveryResult?.({
-        messageId: "delivered-message",
+        messageId: "1000000000000000001",
         channelId: "987654321",
         receipt: createDiscordSendReceipt({
-          platformMessageIds: ["delivered-message"],
+          platformMessageIds: ["1000000000000000001"],
           channelId: "987654321",
           kind: "text",
         }),
@@ -270,13 +270,13 @@ describe("discord_widget", () => {
     });
     const details = result.details as { widgetId: string; messageId: string };
 
-    expect(details.messageId).toBe("delivered-message");
+    expect(details.messageId).toBe("1000000000000000001");
     await expect(runtime.store.lookupWidget(details.widgetId)).resolves.toMatchObject({
       title: "Delivered",
-      deliveredAt: expect.any(Number),
+      deliveredMessageId: "1000000000000000001",
     });
     await expect(
-      runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
+      runtime.store.latestPostedWidgetForChannel("default", "987654321"),
     ).resolves.toMatchObject({ id: details.widgetId });
   });
 
@@ -287,7 +287,7 @@ describe("discord_widget", () => {
       new Error("state unavailable"),
     );
     const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
-      messageId: "delivered-message",
+      messageId: "1000000000000000001",
       channelId: "987654321",
       receipt: {},
     }));
@@ -312,7 +312,7 @@ describe("discord_widget", () => {
     const widgetId = await widgetIdPromise;
     await expect(runtime.store.lookupWidget(widgetId)).resolves.toMatchObject({
       title: "Delivered",
-      deliveredAt: null,
+      deliveredMessageId: null,
     });
   });
 
@@ -353,7 +353,7 @@ describe("show_widget", () => {
   it("maps widget_code to the Discord Activity document", async () => {
     const runtime = createActivityTestRuntime();
     const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
-      messageId: "message-1",
+      messageId: "1000000000000000001",
       channelId: "987654321",
       receipt: {},
     }));
