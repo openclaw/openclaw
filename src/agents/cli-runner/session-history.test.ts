@@ -457,13 +457,12 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("keeps bounded tails parseable when the transcript shrinks after stat", async () => {
+  it("uses the opened file size when the transcript shrinks after stat", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const sessionFile = createOversizedSessionTranscript(stateDir, "session-oversized-shrink");
     const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    // Report a stale, larger size for the session file so the bounded
-    // positional read hits EOF early, as when the CLI compacts the transcript
-    // between the size probe and the read.
+    // Report a stale size whose bounded-read offset is beyond the real EOF,
+    // as when the CLI compacts the transcript between the path stat and open.
     const realFspStat = fsp.stat;
     const statSpy = vi.spyOn(fsp, "stat").mockImplementation(async (target, ...rest) => {
       if (String(target).endsWith("session-oversized-shrink.jsonl")) {
@@ -472,7 +471,9 @@ describe("loadCliSessionHistoryMessages", () => {
         // reported size past EOF; spreading a Stats instance would drop both.
         return new Proxy(stats, {
           get: (obj, prop, receiver) =>
-            prop === "size" ? obj.size + 4096 : Reflect.get(obj, prop, receiver),
+            prop === "size"
+              ? obj.size + MAX_CLI_SESSION_HISTORY_FILE_BYTES + 4096
+              : Reflect.get(obj, prop, receiver),
         });
       }
       return realFspStat(target as Parameters<typeof realFspStat>[0], ...rest);
