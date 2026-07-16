@@ -496,7 +496,6 @@ src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/native-hook-relay.ts
 src/agents/harness/selection.test.ts
 src/agents/harness/selection.ts
-src/agents/live-cache-regression-runner.ts
 src/agents/main-session-restart-recovery.test.ts
 src/agents/main-session-restart-recovery.ts
 src/agents/model-auth-availability.ts
@@ -950,7 +949,6 @@ src/infra/outbound/message-action-runner.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
 src/infra/package-update-steps.ts
-src/infra/push-apns.ts
 src/infra/restart-stale-pids.test.ts
 src/infra/restart.ts
 src/infra/run-node.test.ts

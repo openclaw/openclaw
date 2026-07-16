@@ -880,6 +880,7 @@ export class DiscordVoiceManager {
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       entry,
+      getHumanParticipantCount: () => this.membership.countHumanParticipants(entry, this.botUserId),
       mode: voiceMode,
       runAgentTurn: ({ context, message, toolsAllow, userId }) =>
         this.runDiscordRealtimeAgentTurn({ context, entry, message, toolsAllow, userId }),

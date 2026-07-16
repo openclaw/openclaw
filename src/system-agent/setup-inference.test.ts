@@ -101,7 +101,7 @@ vi.mock("../commands/onboard-inference.js", async (importActual) => {
         kind: "codex-cli",
         modelRef: "openai/gpt-5.5",
         label: "Codex",
-        detail: "installed, not logged in",
+        detail: "installed, not logged in — run `codex login`, then check again",
         credentials: false,
       },
     ]),

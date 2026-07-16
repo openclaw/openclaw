@@ -16,6 +16,7 @@ import {
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -743,6 +744,71 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
   });
 
+  it("uses wrapped execution-boundary evidence when terminal events omit it", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-aborted-before-execution";
+    recordToolExecutionTracked(toolCallId, "run-test");
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        result: { details: { status: "error", error: "tool timed out" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("prefers wrapped execution-boundary evidence over a terminal event default", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-cancelled-before-body";
+    recordToolExecutionTracked(toolCallId, "run-test");
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        executionStarted: true,
+        result: { details: { status: "error", error: "cancelled before tool body" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
   it("keeps a policy-blocked cron mutation replay-safe", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-cron-blocked";
@@ -1026,6 +1092,56 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toMatchObject({
       toolName: "exec",
       middlewareError: true,
+    });
+  });
+
+  it("preserves an unresolved mutation across a later read failure", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "write",
+        toolCallId: "tool-write-failed",
+        args: { path: "/tmp/demo.txt", content: "updated" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "write",
+        toolCallId: "tool-write-failed",
+        isError: true,
+        result: { error: "permission denied" },
+      } as never,
+    );
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tool-read-failed",
+        args: { path: "/tmp/missing.txt" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "read",
+        toolCallId: "tool-read-failed",
+        isError: true,
+        result: { error: "file not found" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "write",
+      error: "permission denied",
+      mutatingAction: true,
     });
   });
 

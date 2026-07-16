@@ -766,6 +766,28 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
 
+      const modelSelect = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      await modelSelect.click();
+      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-select")).toBe("true");
+      const thinkingSlider = page.locator(
+        '.new-session-page__composer [data-chat-thinking-slider="true"]',
+      );
+      await expect
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toBe("off,minimal,low,medium,high");
+      await expect
+        .poll(() => page.locator(".new-session-page__composer [data-chat-speed-toggle]").count())
+        .toBe(0);
+      await thinkingSlider.press("End");
+      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await captureUiProof(page, "01-cloud-thinking-level.png");
+      await modelSelect.click();
+      await expect
+        .poll(() => modelSelect.evaluate((element) => element.closest("details")?.open ?? false))
+        .toBe(false);
+
       // Picking a Gateway repo keeps the cloud selection: that folder is what
       // the managed worktree checks out and dispatch syncs to the worker.
       await page.locator("#new-session-folder-trigger").click();
@@ -819,6 +841,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         worktree: true,
         worktreeBaseRef: "main",
         cwd: TARGET_REPO,
+        thinkingLevel: "high",
       });
       expect(create.params).not.toHaveProperty("attachments");
       await gateway.waitForRequest("sessions.dispatch");

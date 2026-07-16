@@ -197,6 +197,22 @@ describe("WorkboardStore", () => {
       expect(rawDb.prepare("PRAGMA journal_mode").get()).toMatchObject({
         journal_mode: "wal",
       });
+      expect(
+        rawDb
+          .prepare(
+            `SELECT name FROM pragma_table_list
+             WHERE schema = 'main'
+               AND type = 'table'
+               AND name NOT LIKE 'sqlite_%'
+               AND strict <> 1`,
+          )
+          .all(),
+      ).toEqual([]);
+      expect(() =>
+        rawDb
+          .prepare("INSERT INTO workboard_attachment_blobs (attachment_id, content) VALUES (?, ?)")
+          .run("wrong-type", "text-not-blob"),
+      ).toThrow();
       rawDb.close();
 
       const reopenedStores = createWorkboardSqliteStores({ dbPath });
@@ -234,6 +250,70 @@ describe("WorkboardStore", () => {
         subscriptions: [expect.objectContaining({ id: subscription.id })],
       });
       reopenedStores.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates a version 2 workboard table to STRICT without losing rows", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-strict-migration-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const initialized = createWorkboardSqliteStores({ dbPath });
+    initialized.close();
+    const legacy = new DatabaseSync(dbPath);
+    try {
+      legacy.exec(`
+        INSERT INTO workboard_boards (
+          id, name, description, icon, color, default_workspace_json, orchestration_json,
+          created_at, updated_at, archived_at
+        ) VALUES ('legacy', 'Legacy board', NULL, NULL, NULL, NULL, NULL, 1, 2, NULL);
+        ALTER TABLE workboard_boards RENAME TO workboard_boards_strict;
+        CREATE TABLE workboard_boards (
+          id TEXT PRIMARY KEY,
+          name TEXT,
+          description TEXT,
+          icon TEXT,
+          color TEXT,
+          default_workspace_json TEXT,
+          orchestration_json TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          archived_at INTEGER
+        );
+        INSERT INTO workboard_boards SELECT * FROM workboard_boards_strict;
+        DROP TABLE workboard_boards_strict;
+        DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
+        INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
+        VALUES ('schema-2', 1);
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    try {
+      const migratedStores = createWorkboardSqliteStores({ dbPath });
+      try {
+        await expect(migratedStores.boards.lookup("legacy")).resolves.toMatchObject({
+          board: { id: "legacy", name: "Legacy board" },
+        });
+      } finally {
+        migratedStores.close();
+      }
+      const migrated = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          migrated
+            .prepare("SELECT strict FROM pragma_table_list WHERE name = 'workboard_boards'")
+            .get(),
+        ).toEqual({ strict: 1 });
+        expect(
+          migrated
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+            .get(),
+        ).toEqual({ found: 1 });
+      } finally {
+        migrated.close();
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

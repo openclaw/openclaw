@@ -59,7 +59,11 @@ import type {
   ReplySessionBinding,
 } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import {
+  hasInboundAudio,
+  hasInboundMedia,
+  hasInboundMediaForUnderstanding,
+} from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -168,6 +172,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
+  processingMode?: "audio-only";
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
     return undefined;
@@ -182,6 +187,11 @@ async function applyMediaUnderstandingIfNeeded(params: {
     );
     return undefined;
   }
+}
+
+function hasExplicitAudioUnderstandingConfig(cfg: OpenClawConfig): boolean {
+  const audio = cfg.tools?.media?.audio;
+  return audio !== undefined && audio.enabled !== false;
 }
 
 function withExtractedFileImages(
@@ -434,9 +444,13 @@ export async function getReplyFromConfig(
   const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
 
   if (mediaUnderstandingRequested) {
-    // A durable native-harness lock owns attachment and link interpretation. The
-    // harness receives raw inputs, so unrelated utility models stay outside the turn.
-    if (!utilityModelSelectionLocked) {
+    const shouldApplyLockedAudio =
+      utilityModelSelectionLocked &&
+      hasInboundAudio(finalized) &&
+      hasExplicitAudioUnderstandingConfig(cfg);
+    // Native harnesses own image, video, and file interpretation. They cannot
+    // transcribe audio, so an explicitly configured STT pipeline still runs alone.
+    if (!utilityModelSelectionLocked || shouldApplyLockedAudio) {
       const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
         applyMediaUnderstandingIfNeeded({
           ctx: finalized,
@@ -445,6 +459,7 @@ export async function getReplyFromConfig(
           agentDir,
           workspaceDir,
           activeModel: { provider, model },
+          ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
         }),
       );
       if (mediaResult?.extractedFileImages.length) {

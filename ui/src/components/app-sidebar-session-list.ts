@@ -19,6 +19,7 @@ import {
   limitSidebarSessionRows,
   SIDEBAR_SESSION_PAGE_SIZE,
   SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
+  sidebarSessionMetaId,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -37,6 +38,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ? session.subtitle
         : undefined;
     const meta = display?.meta ?? session.meta;
+    const metaId = meta ? sidebarSessionMetaId(session.key) : undefined;
+    const title = display?.title ?? [label, meta].filter(Boolean).join(" · ");
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
@@ -52,6 +55,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       <div
         class=${rowClass}
         data-session-key=${session.key}
+        role="listitem"
         draggable="true"
         @dragstart=${(event: DragEvent) => {
           if (event.dataTransfer) {
@@ -74,9 +78,17 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           href=${session.href}
           class="sidebar-recent-session__link"
           draggable="false"
-          title=${display?.title ?? `${session.label} · ${session.key}`}
+          title=${title}
+          aria-current=${session.visuallyActive ? "page" : nothing}
+          aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            ${subtitle
+              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
+              : nothing}
+          </span>
           ${session.hasActiveRun
             ? html`<span
                 class="session-run-spinner sidebar-recent-session__state"
@@ -91,16 +103,10 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                   aria-label=${t("sessionsView.unread")}
                 ></span>`
               : nothing}
-          <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
-            ${subtitle
-              ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
-              : nothing}
-          </span>
           ${renderSessionRowBadges(session)}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">${meta}</span>
+          <span class="session-row-trail" id=${metaId ?? nothing}>${meta}</span>
           <span class="session-row-actions">
             <button
               class="session-action session-action--pin"
@@ -269,7 +275,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ${collapsed
           ? nothing
           : html`
-              <div class="sidebar-recent-sessions__list">
+              <div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
                 ${showFallback
                   ? this.renderChatFallback()
                   : section.rows.map((session) => this.renderRecentSession(session))}
@@ -452,24 +458,29 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
   }
 
   private renderChatFallback() {
+    const active = this.activeRouteId === "chat";
     return html`
-      <a
-        href=${pathForRoute("chat", this.basePath)}
-        class="sidebar-recent-session ${this.activeRouteId === "chat"
-          ? "sidebar-recent-session--active"
-          : ""}"
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.onNavigate?.("chat");
-        }}
+      <div
+        class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
+        role="listitem"
       >
-        <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
-        </span>
-      </a>
+        <a
+          href=${pathForRoute("chat", this.basePath)}
+          class="sidebar-recent-session__link"
+          aria-current=${active ? "page" : nothing}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.("chat");
+          }}
+        >
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
+          </span>
+        </a>
+      </div>
     `;
   }
 }

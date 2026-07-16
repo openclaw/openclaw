@@ -116,6 +116,10 @@ describe("OpenClaw performance workflow", () => {
     expect(installRun).toContain(
       '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
     );
+    expect(installRun).toContain("--max-time 180");
+    expect(installRun).toContain(
+      "--retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused",
+    );
     expect(installRun).toContain('echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -');
   });
 
