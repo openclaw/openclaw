@@ -7,20 +7,25 @@ import Testing
 @MainActor
 struct GatewayProcessManagerTests {
     @Test func `coalesces concurrent launch agent enable requests`() async throws {
+        let port = 19081
         let configPath = TestIsolation.tempConfigPath()
         try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
         defer { try? FileManager.default.removeItem(atPath: configPath) }
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": "\(port)",
+        ]) {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusLoaded(false)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"ok":true,"service":{"loaded":false}}"#)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusLoaded(nil)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             }
 
@@ -34,21 +39,33 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `keeps a loaded launch agent running`() async throws {
+    @Test func `keeps a reusable launch agent running`() async throws {
+        let port = 19082
         let configPath = TestIsolation.tempConfigPath()
         try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
         defer { try? FileManager.default.removeItem(atPath: configPath) }
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": "\(port)",
+        ]) {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusLoaded(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                """
+                {"ok":true,"service":{
+                  "loaded":true,
+                  "runtime":{"status":"running","pid":4242},
+                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
+                  "configAudit":{"ok":true,"issues":[]}
+                }}
+                """)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-                GatewayLaunchAgentManager.setTestingDaemonStatusLoaded(nil)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             }
 
@@ -57,6 +74,66 @@ struct GatewayProcessManagerTests {
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
             #expect(calls.allSatisfy { $0.first != "install" })
+        }
+    }
+
+    @Test func `repairs loaded launch agents that are not reusable`() async throws {
+        let port = 19083
+        let configPath = TestIsolation.tempConfigPath()
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: URL(fileURLWithPath: configPath))
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": "\(port)",
+        ]) {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            let staleStatuses = [
+                """
+                {"ok":true,"service":{
+                  "loaded":true,
+                  "runtime":{"status":"stopped"},
+                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
+                  "configAudit":{"ok":true,"issues":[]}
+                }}
+                """,
+                """
+                {"ok":true,"service":{
+                  "loaded":true,
+                  "runtime":{"status":"running","pid":4242},
+                  "command":{"programArguments":["openclaw","gateway","--port","19084"]},
+                  "configAudit":{"ok":true,"issues":[]}
+                }}
+                """,
+                """
+                {"ok":true,"service":{
+                  "loaded":true,
+                  "runtime":{"status":"running","pid":4242},
+                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
+                  "configAudit":{"ok":false,"issues":[{"code":"gateway-service-version-mismatch"}]}
+                }}
+                """,
+            ]
+
+            for status in staleStatuses {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(status)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+                await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
+
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(calls.filter { $0.first == "status" }.count == 1)
+                #expect(calls.filter { $0.first == "install" }.count == 1)
+            }
         }
     }
 

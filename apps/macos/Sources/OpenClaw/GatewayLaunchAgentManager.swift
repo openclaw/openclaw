@@ -58,9 +58,19 @@ enum GatewayLaunchAgentManager {
         return nil
     }
 
-    static func isLoaded() async -> Bool {
-        guard let loaded = await self.readDaemonLoaded() else { return false }
-        return loaded
+    static func canReuseLoadedGateway(port: Int) async -> Bool {
+        guard let service = await self.readDaemonService(),
+              service["loaded"] as? Bool == true,
+              let runtime = service["runtime"] as? [String: Any],
+              runtime["status"] as? String == "running",
+              let pid = runtime["pid"] as? Int,
+              pid > 0,
+              let configAudit = service["configAudit"] as? [String: Any],
+              configAudit["ok"] as? Bool == true
+        else {
+            return false
+        }
+        return self.gatewayPort(from: service) == port
     }
 
     static func runningGatewayPID() async -> Int32? {
@@ -136,10 +146,6 @@ enum GatewayLaunchAgentManager {
 }
 
 extension GatewayLaunchAgentManager {
-    private static func readDaemonLoaded() async -> Bool? {
-        await self.readDaemonService()?["loaded"] as? Bool
-    }
-
     private static func readDaemonService() async -> [String: Any]? {
         let result = await self.runDaemonCommandResult(
             ["status", "--json", "--no-probe"],
@@ -153,6 +159,33 @@ extension GatewayLaunchAgentManager {
             return nil
         }
         return service
+    }
+
+    private static func gatewayPort(from service: [String: Any]) -> Int? {
+        guard let command = service["command"] as? [String: Any] else { return nil }
+        if let arguments = command["programArguments"] as? [String] {
+            for (index, argument) in arguments.enumerated() {
+                if argument == "--port" {
+                    guard arguments.indices.contains(index + 1) else { return nil }
+                    return self.validGatewayPort(arguments[index + 1])
+                }
+                if argument.hasPrefix("--port=") {
+                    return self.validGatewayPort(String(argument.dropFirst("--port=".count)))
+                }
+            }
+        }
+        let environment = command["environment"] as? [String: Any]
+        return self.validGatewayPort(environment?["OPENCLAW_GATEWAY_PORT"] as? String)
+    }
+
+    private static func validGatewayPort(_ raw: String?) -> Int? {
+        guard let raw,
+              let port = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (1...65535).contains(port)
+        else {
+            return nil
+        }
+        return port
     }
 
     private static func runningGatewayPID(from service: [String: Any]) -> Int32? {
@@ -197,9 +230,8 @@ extension GatewayLaunchAgentManager {
         #if DEBUG
         if self.testingInterceptDaemonCommands {
             self.testingDaemonCommandCalls.append(args)
-            let loaded = self.testingDaemonStatusLoaded
-            let payload = if args.first == "status", let loaded {
-                "{\"ok\":true,\"service\":{\"loaded\":\(loaded)}}"
+            let payload = if args.first == "status" {
+                self.testingDaemonStatusPayload ?? "{\"ok\":true}"
             } else {
                 "{\"ok\":true}"
             }
@@ -257,7 +289,7 @@ extension GatewayLaunchAgentManager {
     private nonisolated(unsafe) static var testingDisableLaunchAgentMarkerURL: URL?
     private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
     private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
-    private nonisolated(unsafe) static var testingDaemonStatusLoaded: Bool?
+    private nonisolated(unsafe) static var testingDaemonStatusPayload: String?
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
         self.testingDisableLaunchAgentMarkerURL = url
@@ -267,8 +299,8 @@ extension GatewayLaunchAgentManager {
         self.testingInterceptDaemonCommands = intercept
     }
 
-    static func setTestingDaemonStatusLoaded(_ loaded: Bool?) {
-        self.testingDaemonStatusLoaded = loaded
+    static func setTestingDaemonStatusPayload(_ payload: String?) {
+        self.testingDaemonStatusPayload = payload
     }
 
     static func clearTestingDaemonCommandCalls() {

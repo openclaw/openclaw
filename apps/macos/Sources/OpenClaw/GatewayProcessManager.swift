@@ -102,7 +102,7 @@ final class GatewayProcessManager {
         // App startup and onboarding can request persistence together. Share one check/install task;
         // a second forced install would kill the first Gateway during startup migrations.
         let task = Task { @MainActor in
-            if await GatewayLaunchAgentManager.isLoaded() {
+            if await GatewayLaunchAgentManager.canReuseLoadedGateway(port: port) {
                 return nil as String?
             }
             self.appendLog("[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
