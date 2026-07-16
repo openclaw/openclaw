@@ -2837,9 +2837,7 @@ jobs:
         include:
           - suite_id: native-live-src-agents
             label: Native live agents
-            # Keep the dedicated Coding Plan suite below while temporarily omitting
-            # API Platform calls from the broad agents shard.
-            command: ZAI_API_KEY= Z_AI_API_KEY= node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
