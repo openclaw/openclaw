@@ -188,92 +188,115 @@ function isReplayUnsafeInterSessionInput(message: AgentMessage): boolean {
   return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
 }
 
-function filterReplayUnsafeSessionsSendCalls(
-  message: AgentMessage,
-  replayUnsafeToolCallIds: Set<string>,
-): AgentMessage | undefined {
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return message;
-  }
-  let removed = false;
-  const filteredContent = content.filter((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    const record = block as {
-      type?: unknown;
-      id?: unknown;
-      name?: unknown;
-    };
-    if (typeof record.type !== "string" || !TOOL_CALL_BLOCK_TYPES.has(record.type)) {
-      return true;
-    }
-    if (record.name !== "sessions_send") {
-      return true;
-    }
-    removed = true;
-    if (typeof record.id === "string" && record.id.trim()) {
-      replayUnsafeToolCallIds.add(record.id.trim());
-    }
+function isSessionsSendToolName(value: unknown): boolean {
+  if (typeof value !== "string") {
     return false;
-  });
-  if (!removed) {
-    return message;
   }
-  return filteredContent.length > 0
-    ? ({ ...message, content: filteredContent } as AgentMessage)
-    : undefined;
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/^(?:functions?|tools?)[./_-]/, "") === "sessions_send"
+  );
 }
 
-function isReplayUnsafeSessionsSendResult(
-  message: AgentMessage,
-  replayUnsafeToolCallIds: Set<string>,
-): boolean {
-  if ((message as { role?: unknown }).role !== "toolResult") {
-    return false;
+function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
+  const sendCallIds = new Set<string>();
+  const resultTextByCallId = new Map<string, string>();
+
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const record = block as { type?: unknown; id?: unknown; name?: unknown };
+      if (
+        typeof record.type === "string" &&
+        TOOL_CALL_BLOCK_TYPES.has(record.type) &&
+        isSessionsSendToolName(record.name) &&
+        typeof record.id === "string" &&
+        record.id.trim()
+      ) {
+        sendCallIds.add(record.id.trim());
+      }
+    }
   }
-  const toolResultId = extractToolResultId(
-    message as Extract<AgentMessage, { role: "toolResult" }>,
-  );
-  if (toolResultId && replayUnsafeToolCallIds.has(toolResultId)) {
-    return true;
+
+  for (const message of messages) {
+    if (message.role !== "toolResult") {
+      continue;
+    }
+    const callId = extractToolResultId(message);
+    if (!callId || !sendCallIds.has(callId)) {
+      continue;
+    }
+    const resultText = extractMessageText(message) || formatNonTextPlaceholder(message.content);
+    if (resultText) {
+      resultTextByCallId.set(callId, resultText);
+    }
   }
-  return (message as { toolName?: unknown }).toolName === "sessions_send";
+
+  return messages.flatMap((message) => {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      let replaced = false;
+      const content = message.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const record = block as { type?: unknown; id?: unknown; name?: unknown };
+        if (
+          typeof record.type !== "string" ||
+          !TOOL_CALL_BLOCK_TYPES.has(record.type) ||
+          !isSessionsSendToolName(record.name)
+        ) {
+          return block;
+        }
+        replaced = true;
+        const callId = typeof record.id === "string" ? record.id.trim() : "";
+        const resultText = callId ? resultTextByCallId.get(callId) : undefined;
+        return {
+          type: "text",
+          text: resultText
+            ? `sessions_send completed; delivery call omitted from replay.\nResult: ${resultText}`
+            : "sessions_send completed; delivery call omitted from replay.",
+        };
+      });
+      return replaced ? [{ ...message, content } as AgentMessage] : [message];
+    }
+    if (message.role === "toolResult") {
+      const callId = extractToolResultId(message);
+      if ((callId && sendCallIds.has(callId)) || isSessionsSendToolName(message.toolName)) {
+        return [];
+      }
+    }
+    return [message];
+  });
 }
 
 function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): AgentMessage[] {
-  const filtered: AgentMessage[] = [];
-  const replayUnsafeToolCallIds = new Set<string>();
-  let skippingInterSessionReply = false;
-  for (const message of messages) {
-    if (isReplayUnsafeInterSessionInput(message)) {
-      skippingInterSessionReply = true;
-      continue;
+  const sanitizedMessages = sanitizeSourceSessionSends(messages);
+  let turnStart = sanitizedMessages.length;
+  while (turnStart > 0) {
+    const role = (sanitizedMessages[turnStart - 1] as { role?: unknown }).role;
+    if (role !== "assistant" && role !== "toolResult") {
+      break;
     }
-    const role = (message as { role?: unknown }).role;
-    if (skippingInterSessionReply) {
-      if (role === "assistant" || role === "toolResult") {
-        continue;
-      }
-      skippingInterSessionReply = false;
-    }
-    if (role === "assistant") {
-      // Only sessions_send is already delivered out-of-band. Other messaging calls
-      // remain ordinary transcript history and must survive fallback compaction.
-      const filteredMessage = filterReplayUnsafeSessionsSendCalls(message, replayUnsafeToolCallIds);
-      if (!filteredMessage) {
-        continue;
-      }
-      filtered.push(filteredMessage);
-      continue;
-    }
-    if (isReplayUnsafeSessionsSendResult(message, replayUnsafeToolCallIds)) {
-      continue;
-    }
-    filtered.push(message);
+    turnStart -= 1;
   }
-  return filtered;
+
+  // A completed sessions_send target run is already delivered to its caller.
+  // Drop only that active tail; historical inter-session decisions remain summary input.
+  if (
+    turnStart < sanitizedMessages.length &&
+    turnStart > 0 &&
+    isReplayUnsafeInterSessionInput(sanitizedMessages[turnStart - 1])
+  ) {
+    return sanitizedMessages.slice(0, turnStart - 1);
+  }
+  return sanitizedMessages;
 }
 
 function containsRealConversation(messages: AgentMessage[]): boolean {

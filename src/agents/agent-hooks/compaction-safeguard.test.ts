@@ -2602,9 +2602,9 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
 
-  it("does not replay source-session sessions_send tool calls as fallback history", async () => {
+  it("keeps source-session sends as inert completed history", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("user request summary");
+    mockSummarizeInStages.mockResolvedValue("completed send summary");
 
     const now = Date.now();
     const sessionManager = {
@@ -2632,7 +2632,7 @@ describe("compaction-safeguard double-compaction guard", () => {
               {
                 type: "toolCall",
                 id: "call-1",
-                name: "sessions_send",
+                name: "functions.sessions_send",
                 arguments: { sessionKey: "agent:bee", message: "say bee" },
               },
             ],
@@ -2647,8 +2647,8 @@ describe("compaction-safeguard double-compaction guard", () => {
           message: {
             role: "toolResult",
             toolCallId: "call-1",
-            toolName: "sessions_send",
-            content: [{ type: "text", text: "delivered" }],
+            toolName: "functions.sessions_send",
+            content: [{ type: "text", text: "bee replied" }],
             timestamp: now + 2,
           },
         },
@@ -2677,17 +2677,19 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
 
     const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("user request summary");
+    expect(compaction.summary).toContain("completed send summary");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
     const messages = requireArray(summarizeCall.messages);
-    expect(messages.map((message) => requireRecord(message).role)).toEqual(["user"]);
-    expect(JSON.stringify(messages)).not.toContain("sessions_send");
+    expect(messages.map((message) => requireRecord(message).role)).toEqual(["user", "assistant"]);
+    expect(JSON.stringify(messages)).toContain("sessions_send completed");
+    expect(JSON.stringify(messages)).toContain("bee replied");
+    expect(JSON.stringify(messages)).not.toContain("functions.sessions_send");
   });
 
-  it("preserves assistant text while filtering sessions_send tool calls as fallback history", async () => {
+  it("preserves completed historical inter-session turns outside the active tail", async () => {
     mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue("mixed branch summary");
+    mockSummarizeInStages.mockResolvedValue("historical branch summary");
 
     const now = Date.now();
     const sessionManager = {
@@ -2700,7 +2702,12 @@ describe("compaction-safeguard double-compaction guard", () => {
           timestamp: new Date(now).toISOString(),
           message: {
             role: "user",
-            content: "ask the bee session to respond",
+            content: "historical inter-session request",
+            provenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:pm",
+              sourceTool: "sessions_send",
+            },
             timestamp: now,
           },
         },
@@ -2711,47 +2718,25 @@ describe("compaction-safeguard double-compaction guard", () => {
           timestamp: new Date(now + 1).toISOString(),
           message: {
             role: "assistant",
-            content: [
-              { type: "text", text: "I will ask the bee session and keep context." },
-              {
-                type: "toolCall",
-                id: "call-1",
-                name: "sessions_send",
-                arguments: { sessionKey: "agent:bee", message: "say bee" },
-              },
-              {
-                type: "toolCall",
-                id: "call-2",
-                name: "message",
-                arguments: { action: "send", channel: "telegram", message: "status" },
-              },
-            ],
+            content: [{ type: "text", text: "historical reply" }],
             timestamp: now + 1,
           },
         },
         {
           type: "message",
-          id: "tool-1",
+          id: "user-2",
           parentId: "assistant-1",
           timestamp: new Date(now + 2).toISOString(),
-          message: {
-            role: "toolResult",
-            toolCallId: "call-1",
-            toolName: "sessions_send",
-            content: [{ type: "text", text: "delivered" }],
-            timestamp: now + 2,
-          },
+          message: { role: "user", content: "later user request", timestamp: now + 2 },
         },
         {
           type: "message",
-          id: "tool-2",
-          parentId: "tool-1",
+          id: "assistant-2",
+          parentId: "user-2",
           timestamp: new Date(now + 3).toISOString(),
           message: {
-            role: "toolResult",
-            toolCallId: "call-2",
-            toolName: "message",
-            content: [{ type: "text", text: "sent" }],
+            role: "assistant",
+            content: [{ type: "text", text: "later reply" }],
             timestamp: now + 3,
           },
         },
@@ -2764,7 +2749,7 @@ describe("compaction-safeguard double-compaction guard", () => {
       preparation: {
         messagesToSummarize: [] as AgentMessage[],
         turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-9",
+        firstKeptEntryId: "entry-8",
         tokensBefore: 38085,
         fileOps: { read: [], edited: [], written: [] },
         settings: { reserveTokens: 4000 },
@@ -2780,28 +2765,18 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
 
     const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("mixed branch summary");
+    expect(compaction.summary).toContain("historical branch summary");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
     const messages = requireArray(summarizeCall.messages);
     expect(messages.map((message) => requireRecord(message).role)).toEqual([
       "user",
       "assistant",
-      "toolResult",
+      "user",
+      "assistant",
     ]);
-    const assistantMessage = requireRecord(messages[1]);
-    expect(assistantMessage.content).toEqual([
-      { type: "text", text: "I will ask the bee session and keep context." },
-      {
-        type: "toolCall",
-        id: "call-2",
-        name: "message",
-        arguments: { action: "send", channel: "telegram", message: "status" },
-      },
-    ]);
-    expect(requireRecord(messages[2]).toolName).toBe("message");
-    expect(JSON.stringify(messages)).not.toContain("sessions_send");
-    expect(JSON.stringify(messages)).not.toContain("delivered");
+    expect(JSON.stringify(messages)).toContain("historical inter-session request");
+    expect(JSON.stringify(messages)).toContain("historical reply");
   });
 
   it("recovers user and assistant branch turns when compaction preparation has only tool output", async () => {
