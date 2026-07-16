@@ -707,7 +707,7 @@ describe("prepared provider auth state", () => {
               }]
             }
           });
-        }, 20);
+        }, 200);
       `,
     );
     let cancelled = false;
@@ -725,7 +725,7 @@ describe("prepared provider auth state", () => {
       cancelled = true;
       await warmPromise;
       await new Promise((resolve) => {
-        setTimeout(resolve, 40);
+        setTimeout(resolve, 250);
       });
 
       await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
