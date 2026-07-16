@@ -54,7 +54,8 @@ vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: hoisted.startSessionUpstreamMonitor,
 }));
 
-vi.mock("../infra/env.js", () => ({
+vi.mock("../infra/env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/env.js")>()),
   isVitestRuntimeEnv: hoisted.isVitestRuntimeEnv,
 }));
 
@@ -128,6 +129,7 @@ describe("server-runtime-services", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     resetGatewayWorkAdmission();
   });
 
@@ -171,6 +173,27 @@ describe("server-runtime-services", () => {
     services.heartbeatRunner.stop();
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
+
+  it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"] as const)(
+    "keeps channel health monitoring disabled when %s is enabled",
+    (envKey) => {
+      vi.stubEnv(envKey, "true");
+
+      const services = startGatewayRuntimeServices({
+        minimalTestGateway: false,
+        cfgAtStart: {} as never,
+        channelManager: {
+          getRuntimeSnapshot: vi.fn(),
+          isHealthMonitorEnabled: vi.fn(),
+          isManuallyStopped: vi.fn(),
+        } as never,
+        log: createLog(),
+      });
+
+      expect(hoisted.startChannelHealthMonitor).not.toHaveBeenCalled();
+      expect(services.channelHealthMonitor).toBeNull();
+    },
+  );
 
   it("starts model pricing refresh after scheduled services activate", async () => {
     const pluginLookUpTable = {

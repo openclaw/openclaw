@@ -1,6 +1,7 @@
 // Gateway startup-time runtime services.
 // Starts mode-dependent background monitors with inert handles for disabled paths.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import {
@@ -15,11 +16,17 @@ export type GatewayChannelManager = Parameters<
   typeof startChannelHealthMonitor
 >[0]["channelManager"];
 
-/** Starts channel health monitoring when gateway config enables it. */
+/** Starts channel health monitoring when the gateway mode and config enable it. */
 export function startGatewayChannelHealthMonitor(params: {
   cfg: OpenClawConfig;
   channelManager: GatewayChannelManager;
 }): ChannelHealthMonitor | null {
+  if (
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+  ) {
+    return null;
+  }
   const healthCheckMinutes = params.cfg.gateway?.channelHealthCheckMinutes;
   if (healthCheckMinutes === 0) {
     return null;
