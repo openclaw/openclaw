@@ -127,7 +127,6 @@ const PROFILE_EXPECTATIONS = [
       "opencode-go",
       "openrouter",
       "xai",
-      "zai",
       "fireworks",
     ],
   },
@@ -243,7 +242,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "opencode-go",
       "openrouter",
       "xai",
-      "zai",
       "fireworks",
     ]);
   });
