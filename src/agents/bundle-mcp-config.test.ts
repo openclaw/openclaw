@@ -97,4 +97,23 @@ describe("loadMergedBundleMcpConfig", () => {
 
     expect(merged.config.mcpServers).not.toHaveProperty("bundleProbe");
   });
+
+  it("migrates legacy disabled: true to enabled: false when merging", () => {
+    const merged = loadMergedBundleMcpConfig({
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            legacyDisabled: {
+              disabled: true,
+              command: "node",
+              args: ["docs.mjs"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(merged.config.mcpServers).not.toHaveProperty("legacyDisabled");
+  });
 });
