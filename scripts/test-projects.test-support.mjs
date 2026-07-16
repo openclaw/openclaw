@@ -1777,6 +1777,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
     ["test/scripts/codex-install-assertions.test.ts", "test/scripts/docker-build-helper.test.ts"],
   ],
+  [
+    "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs",
+    ["test/scripts/docker-build-helper.test.ts"],
+  ],
   ["scripts/e2e/lib/codex-install-utils.mjs", ["test/scripts/codex-install-assertions.test.ts"]],
   [
     "scripts/e2e/lib/codex-on-demand/assertions.mjs",

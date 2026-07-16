@@ -11,6 +11,7 @@ import {
   findPackageJson,
   npmProjectRootForInstalledPackage,
 } from "../../scripts/e2e/lib/codex-install-utils.mjs";
+import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const CODEX_ON_DEMAND_ASSERTIONS_SCRIPT = "scripts/e2e/lib/codex-on-demand/assertions.mjs";
@@ -21,7 +22,11 @@ const tempDirs: string[] = [];
 const tmpFixtureFiles = [
   "/tmp/openclaw-codex-agent.err",
   "/tmp/openclaw-codex-agent.json",
+  "/tmp/openclaw-codex-followthrough.err",
+  "/tmp/openclaw-codex-followthrough.json",
   "/tmp/openclaw-codex-inspect.json",
+  "/tmp/openclaw-codex-plugin-inspect.json",
+  "/tmp/openclaw-codex-plugins-list.json",
   "/tmp/openclaw-plugins-list.json",
 ];
 
@@ -121,6 +126,40 @@ function runCodexNpmPluginLiveAssertions(params: {
   );
 }
 
+function runCodexNpmPluginLiveFollowthroughAssertions(params: {
+  root: string;
+  progressMarker: string;
+  completeMarker: string;
+  sessionId: string;
+  modelRef: string;
+  artifactPath: string;
+  inputPaths: string[];
+}) {
+  return spawnSync(
+    process.execPath,
+    [
+      CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT,
+      "assert-followthrough",
+      params.progressMarker,
+      params.completeMarker,
+      params.sessionId,
+      params.modelRef,
+      params.artifactPath,
+      ...params.inputPaths,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: path.join(params.root, "home"),
+        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+        OPENCLAW_STATE_DIR: path.join(params.root, "state"),
+        OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT: "sqlite",
+      },
+    },
+  );
+}
+
 function runCodexNpmPluginLiveConfigure(root: string) {
   return spawnSync(process.execPath, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "configure"], {
     encoding: "utf8",
@@ -132,6 +171,23 @@ function runCodexNpmPluginLiveConfigure(root: string) {
       OPENCLAW_STATE_DIR: path.join(root, "state"),
     },
   });
+}
+
+function runCodexNpmPluginLivePluginAssertions(root: string) {
+  return spawnSync(
+    process.execPath,
+    [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-plugin", "npm:@openclaw/codex"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: path.join(root, "home"),
+        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+        OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+      },
+    },
+  );
 }
 
 function writeCodexBindingStateSqlite(params: {
@@ -244,6 +300,51 @@ function writeSessionStoreSqlite(params: {
   }
 }
 
+function replaceSessionTranscriptMessages(params: {
+  stateDir: string;
+  sessionId: string;
+  messages: unknown[];
+}) {
+  const dbPath = path.join(params.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  const db = new DatabaseSync(dbPath);
+  try {
+    const now = Date.now();
+    db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(params.sessionId);
+    const insert = db.prepare(
+      `INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+       VALUES (?, ?, ?, ?)`,
+    );
+    insert.run(params.sessionId, 0, '{"type":"session"}', now);
+    params.messages.forEach((message, index) => {
+      insert.run(
+        params.sessionId,
+        index + 1,
+        JSON.stringify({ type: "message", message }),
+        now + index + 1,
+      );
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function transcriptToolCall(id: string, name: string, args: Record<string, unknown>) {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name, arguments: args, input: args }],
+  };
+}
+
+function transcriptToolResult(id: string, name: string, isError = false) {
+  return {
+    role: "toolResult",
+    toolCallId: id,
+    toolName: name,
+    isError,
+    content: [{ type: "toolResult", id, name, content: "ok" }],
+  };
+}
+
 function createCodexNpmPluginLiveFixture(root: string, storedSessionId?: string) {
   const stateDir = path.join(root, "state");
   const sessionKey = "agent:main:codex-npm-plugin-live";
@@ -272,6 +373,94 @@ function createCodexNpmPluginLiveFixture(root: string, storedSessionId?: string)
     threadId,
   });
   return { root, marker, sessionId, modelRef };
+}
+
+function createCodexNpmPluginLiveFollowthroughFixture(params: {
+  root: string;
+  replyTexts?: string[];
+  artifactText?: string;
+  messageFinals?: Array<boolean | undefined>;
+  readFails?: boolean;
+  workPlacement?:
+    | "between"
+    | "before-progress"
+    | "before-progress-result"
+    | "write-result-after-completion";
+}) {
+  const fixture = createCodexNpmPluginLiveFixture(params.root);
+  const progressMarker = `${fixture.marker}-FOLLOWTHROUGH-PROGRESS`;
+  const completeMarker = `${fixture.marker}-FOLLOWTHROUGH-COMPLETE`;
+  const workspaceDir = path.join(params.root, "state", "workspace");
+  mkdirSync(workspaceDir, { recursive: true });
+  const inputPaths = ["ALPHA.md", "BETA.md", "GAMMA.md"].map((name, index) => {
+    const inputPath = path.join(workspaceDir, name);
+    writeFileSync(inputPath, `hidden-${index + 1}\n`, "utf8");
+    return inputPath;
+  });
+  const artifactPath = path.join(workspaceDir, "codex-progress-followthrough.txt");
+  writeFileSync(artifactPath, params.artifactText ?? "hidden-1\nhidden-2\nhidden-3\n", "utf8");
+  const replyTexts = params.replyTexts ?? [progressMarker, completeMarker];
+  writeJson("/tmp/openclaw-codex-followthrough.json", {
+    payloads: replyTexts.map((text) => ({ text })),
+    meta: { executionTrace: { winnerProvider: "openai" } },
+  });
+  const messageFinals = params.messageFinals ?? [undefined, true];
+  const messageCalls = [progressMarker, completeMarker].map((text, index) => {
+    const args = {
+      action: "send",
+      message: text,
+      ...(messageFinals[index] === undefined ? {} : { final: messageFinals[index] }),
+    };
+    const id = `message-${index + 1}`;
+    return [transcriptToolCall(id, "message", args), transcriptToolResult(id, "message")];
+  });
+  const [progressCalls, completionCalls] = messageCalls;
+  if (!progressCalls || !completionCalls) {
+    throw new Error("expected progress and completion message fixtures");
+  }
+  const readId = "workspace-read";
+  const readMessages = [
+    transcriptToolCall(readId, "bash", {
+      command: "cat *.md",
+    }),
+    transcriptToolResult(readId, "bash", params.readFails),
+  ];
+  const writeId = "workspace-write";
+  const writeMessages = [
+    transcriptToolCall(writeId, "bash", {
+      command: "cat *.md > codex-progress-followthrough.txt",
+    }),
+    transcriptToolResult(writeId, "bash"),
+  ];
+  const workMessages = [...readMessages, ...writeMessages];
+  let transcriptMessages;
+  if (params.workPlacement === "before-progress") {
+    transcriptMessages = [...workMessages, ...progressCalls, ...completionCalls];
+  } else if (params.workPlacement === "before-progress-result") {
+    transcriptMessages = [progressCalls[0], ...workMessages, progressCalls[1], ...completionCalls];
+  } else if (params.workPlacement === "write-result-after-completion") {
+    transcriptMessages = [
+      ...progressCalls,
+      ...readMessages,
+      ...writeMessages.slice(0, 1),
+      ...completionCalls,
+      ...writeMessages.slice(1),
+    ];
+  } else {
+    transcriptMessages = [...progressCalls, ...workMessages, ...completionCalls];
+  }
+  replaceSessionTranscriptMessages({
+    stateDir: path.join(params.root, "state"),
+    sessionId: fixture.sessionId,
+    messages: transcriptMessages,
+  });
+  return {
+    ...fixture,
+    progressMarker,
+    completeMarker,
+    artifactPath,
+    inputPaths,
+  };
 }
 
 function createLegacyCodexNpmPluginLiveFixture(root: string) {
@@ -341,7 +530,7 @@ describe("Codex install helpers", () => {
 
     const result = runCodexNpmPluginLiveConfigure(root);
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     const config = JSON.parse(readFileSync(path.join(root, "state", "openclaw.json"), "utf8")) as {
       agents: {
@@ -360,6 +549,54 @@ describe("Codex install helpers", () => {
       "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
     });
     expect(config.agents.defaults.models).not.toHaveProperty("codex/gpt-5.4");
+  });
+
+  it("accepts the canonical harness-only Codex plugin registration", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-harness-registration-");
+    createCodexInstallFixture(root);
+    const installPath = path.join(
+      root,
+      "state",
+      "npm",
+      "projects",
+      "codex",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    writePluginInstallIndexForE2E(
+      {
+        installRecords: {
+          codex: {
+            installPath,
+            source: "npm",
+            spec: "@openclaw/codex",
+            resolvedVersion: "2026.7.2",
+            resolvedSpec: "@openclaw/codex@2026.7.2",
+          },
+        },
+      },
+      { stateDir: path.join(root, "state") },
+    );
+    writeJson("/tmp/openclaw-codex-plugins-list.json", {
+      plugins: [{ id: "codex", enabled: true, status: "loaded" }],
+      diagnostics: [],
+    });
+    writeJson("/tmp/openclaw-codex-plugin-inspect.json", {
+      plugin: {
+        id: "codex",
+        status: "loaded",
+        providerIds: [],
+        agentHarnessIds: ["codex"],
+      },
+      capabilities: [{ kind: "agent-harness", ids: ["codex"] }],
+      diagnostics: [],
+    });
+
+    const result = runCodexNpmPluginLivePluginAssertions(root);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
   });
 
   it("resolves package roots and package manifests inside managed npm installs", () => {
@@ -412,6 +649,111 @@ describe("Codex install helpers", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  it("accepts progress, artifact work, and completion in one Codex live turn", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("accepts settled failed work before a later successful artifact write", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-recovered-work-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({ root, readFails: true });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects a Codex live turn that stops after its progress message", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-progress-only-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      replyTexts: ["OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK-FOLLOWTHROUGH-PROGRESS"],
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("expected exact progress and completion replies");
+  });
+
+  it("rejects a Codex live turn whose follow-through artifact is incomplete", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-incomplete-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      artifactText: "hidden-1\n",
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unexpected Codex follow-through artifact");
+  });
+
+  it("rejects workspace work outside the progress and completion messages", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-work-order-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      workPlacement: "before-progress",
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "expected progress to be the first completed tool call in its turn",
+    );
+  });
+
+  it("rejects workspace work issued before progress delivery completes", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-batched-work-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      workPlacement: "before-progress-result",
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "expected progress to be the first completed tool call in its turn",
+    );
+  });
+
+  it("rejects completion sent before the artifact write succeeds", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-pending-write-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      workPlacement: "write-result-after-completion",
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("expected all workspace work to settle before completion");
+  });
+
+  it.each([
+    ["explicit progress", [false, true]],
+    ["missing completion", [undefined, undefined]],
+  ] as const)("rejects %s Codex message final controls", (_label, messageFinals) => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-final-controls-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      messageFinals: [...messageFinals],
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("expected exact message final controls");
   });
 
   it("accepts the explicit frozen-target JSON session and sidecar binding contract", () => {
