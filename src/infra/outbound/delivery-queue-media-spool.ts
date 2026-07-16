@@ -226,7 +226,7 @@ export function collectEntrySpoolPaths(
  * age; the grace covers the stage-before-row-commit crash window and bounds all
  * final and partial artifacts that never acquire a row.
  */
-export async function pruneDeliveryQueueMedia(params: {
+async function pruneDeliveryQueueMedia(params: {
   retainPaths: ReadonlySet<string>;
   stateDir?: string;
   nowMs?: number;

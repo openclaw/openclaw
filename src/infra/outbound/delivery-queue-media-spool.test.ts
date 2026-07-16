@@ -37,7 +37,6 @@ vi.mock("../file-store.js", async (importOriginal) => {
 
 const {
   collectEntrySpoolPaths,
-  pruneDeliveryQueueMedia,
   pruneOrphanedDeliveryQueueMedia,
   releaseSpoolArtifacts,
   stageQueuePayloadMedia,
@@ -85,11 +84,16 @@ describe("retention", () => {
     const retained = await seedArtifact(ARTIFACT_A, 30 * DAY_MS);
     const orphan = await seedArtifact(ARTIFACT_B, 30 * DAY_MS);
     const fresh = await seedArtifact(PART_ARTIFACT, DAY_MS / 2);
-
-    await pruneDeliveryQueueMedia({
-      retainPaths: new Set([retained]),
+    await enqueueDelivery(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ mediaUrl: retained }],
+      },
       stateDir,
-    });
+    );
+
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
 
     expect(await exists(retained)).toBe(true);
     expect(await exists(orphan)).toBe(false);
@@ -104,7 +108,7 @@ describe("retention", () => {
     await fs.writeFile(outside, "keep");
     await fs.symlink(outside, path.join(spoolRoot, ARTIFACT_A));
 
-    await pruneDeliveryQueueMedia({ retainPaths: new Set(), stateDir });
+    await pruneOrphanedDeliveryQueueMedia({ stateDir });
 
     expect(await exists(partial)).toBe(false);
     expect(await exists(foreign)).toBe(true);
