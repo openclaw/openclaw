@@ -188,8 +188,8 @@
     "target": "Durable Core 残余差距架构提案"
   },
   {
-    "source": "Durable Core Residual-Gap Test Plan",
-    "target": "Durable Core 残余差距测试计划"
+    "source": "Durable Core Residual-Gap Compatibility Check Plan",
+    "target": "Durable Core 残余差距兼容性检查计划"
   },
   {
     "source": "Agent harness plugins",
