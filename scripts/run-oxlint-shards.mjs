@@ -278,6 +278,11 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
         platform: process.platform,
         splitCore: shardArgs.splitCore,
       });
+      const hostResources = resolveHostResources();
+      console.log(
+        `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
+          `(cpus=${hostResources.logicalCpuCount}, memGB=${Math.round(hostResources.totalMemoryBytes / 1024 ** 3)})`,
+      );
       const results = await runShards({
         concurrency: Math.max(1, Math.min(shardConcurrency, selectedShards.length)),
         entries: selectedShards,
