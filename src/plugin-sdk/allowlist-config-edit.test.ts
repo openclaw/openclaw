@@ -2,6 +2,7 @@
  * Tests allowlist config edit helpers for flat, nested, and account-scoped records.
  */
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildDmGroupAccountAllowlistAdapter,
   buildLegacyDmAccountAllowlistAdapter,
