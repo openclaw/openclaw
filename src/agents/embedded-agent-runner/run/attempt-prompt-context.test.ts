@@ -180,6 +180,24 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     );
   });
 
+  it("deduplicates aggregate pressure warnings per session key", () => {
+    hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
+      messages: [...inputMessages],
+      truncatedCount: 1,
+      aggregateTruncatedCount: 1,
+      aggregatePressureEngaged: true,
+      aggregateBudgetChars: 200,
+    }));
+    const attempt = createAttempt({ sessionId: "dup-session", sessionKey: "dup-session" });
+
+    prepareEmbeddedAttemptPromptContext(createInput({ attempt }).input);
+    expect(hoisted.warn).toHaveBeenCalledTimes(1);
+    hoisted.warn.mockClear();
+
+    prepareEmbeddedAttemptPromptContext(createInput({ attempt }).input);
+    expect(hoisted.warn).not.toHaveBeenCalled();
+  });
+
   it("moves runtime-only context into the active system prompt", () => {
     const fixture = createInput({
       attempt: createAttempt({

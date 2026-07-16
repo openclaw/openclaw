@@ -29,7 +29,9 @@ import {
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+const AGGREGATE_PRESSURE_WARNING_DEDUPE_LIMIT = 1024;
 const aggregateToolResultPressureWarnings = new Set<string>();
+const aggregatePressureWarningOrder: string[] = [];
 
 type PromptContextAttempt = Pick<
   EmbeddedRunAttemptParams,
@@ -140,7 +142,14 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       `sessionKey=${sessionLogKey}`;
     if (aggregatePressureEngaged) {
       if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
+        if (aggregateToolResultPressureWarnings.size >= AGGREGATE_PRESSURE_WARNING_DEDUPE_LIMIT) {
+          const oldest = aggregatePressureWarningOrder.shift();
+          if (oldest) {
+            aggregateToolResultPressureWarnings.delete(oldest);
+          }
+        }
         aggregateToolResultPressureWarnings.add(sessionLogKey);
+        aggregatePressureWarningOrder.push(sessionLogKey);
         log.warn(
           `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
         );
