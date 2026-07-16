@@ -109,7 +109,7 @@ class WearProxyControllerTest {
           assertEquals("chat.history", method)
           requestedParams = params
           json.parseToJsonElement(
-            """{"sessionKey":"main","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"},{"type":"image","base64":"private"}],"timestamp":9}],"defaults":{"token":"hidden"},"hasMore":false}""",
+            """{"sessionKey":"main","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"},{"type":"image","base64":"private"}],"timestamp":9}],"defaults":{"token":"hidden"},"offset":40,"nextOffset":60,"totalMessages":80,"hasMore":true}""",
           )
         }
 
@@ -121,18 +121,23 @@ class WearProxyControllerTest {
               put("sessionKey", "main")
               put("limit", 20)
               put("maxChars", 2_000)
+              put("offset", 40)
             },
           ),
         )
 
       assertEquals(
         json
-          .parseToJsonElement("""{"sessionKey":"main","limit":20,"maxChars":2000}""")
+          .parseToJsonElement("""{"sessionKey":"main","limit":20,"maxChars":2000,"offset":40}""")
           .jsonObject,
         requestedParams,
       )
       val result = checkNotNull(response.result).jsonObject
       assertFalse("defaults" in result)
+      assertEquals(40, result.getValue("offset").jsonPrimitive.content.toInt())
+      assertEquals(60, result.getValue("nextOffset").jsonPrimitive.content.toInt())
+      assertEquals(80, result.getValue("totalMessages").jsonPrimitive.content.toInt())
+      assertTrue(result.getValue("hasMore").jsonPrimitive.content.toBoolean())
       val content =
         result
           .getValue("messages")
