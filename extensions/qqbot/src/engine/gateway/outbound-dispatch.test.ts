@@ -11,10 +11,46 @@ import {
 } from "../messaging/outbound.js";
 import type { DeliveryTarget } from "../messaging/sender.js";
 import type { MessageResponse } from "../types.js";
+import {
+  sendReplySessionConflictTerminalNotice,
+  type SessionConflictTerminalNoticeDeps,
+} from "./gateway.js";
 import type { InboundContext } from "./inbound-context.js";
 import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
+
+/**
+ * Run `body` with `crypto.getRandomValues` overridden so that the first
+ * element of the supplied `Uint32Array` becomes `value`. Restores the
+ * original implementation regardless of how `body` exits (supports both
+ * sync and async bodies).
+ *
+ * Implemented via `Object.defineProperty` on the `Crypto` prototype to
+ * avoid `as any` casts and the corresponding oxlint directives, while
+ * remaining typed end-to-end.
+ */
+async function withDeterministicRandomValues(value: number, body: () => unknown): Promise<void> {
+  const proto = Object.getPrototypeOf(crypto) as Crypto;
+  const originalDescriptor = Object.getOwnPropertyDescriptor(proto, "getRandomValues");
+  try {
+    Object.defineProperty(proto, "getRandomValues", {
+      configurable: true,
+      writable: true,
+      value: <T extends ArrayBufferView>(buf: T): T => {
+        new Uint32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4)[0] = value;
+        return buf;
+      },
+    });
+    await body();
+  } finally {
+    if (originalDescriptor) {
+      Object.defineProperty(proto, "getRandomValues", originalDescriptor);
+    } else {
+      delete (proto as unknown as Record<string, unknown>)["getRandomValues"];
+    }
+  }
+}
 
 const sendVoiceMessageMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
@@ -1658,19 +1694,9 @@ describe("reply-session-conflict shared helpers", () => {
       typeof import("./reply-session-conflict.js")
     >("./reply-session-conflict.js");
 
-    // Deterministic: mock crypto.getRandomValues with a fixed value.
-    const originalGetRandomValues = crypto.getRandomValues;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = (buf: Uint32Array) => {
-        buf[0] = 0xabcdef01;
-        return buf;
-      };
+    await withDeterministicRandomValues(0xabcdef01, () => {
       expect(generateSessionConflictErrorId()).toBe("abcdef01");
-    } finally {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = originalGetRandomValues;
-    }
+    });
   });
 
   it("generateSessionConflictErrorId pads to 8 chars with leading zeros", async () => {
@@ -1678,18 +1704,9 @@ describe("reply-session-conflict shared helpers", () => {
       typeof import("./reply-session-conflict.js")
     >("./reply-session-conflict.js");
 
-    const originalGetRandomValues = crypto.getRandomValues;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = (buf: Uint32Array) => {
-        buf[0] = 0x00000042;
-        return buf;
-      };
+    await withDeterministicRandomValues(0x00000042, () => {
       expect(generateSessionConflictErrorId()).toBe("00000042");
-    } finally {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = originalGetRandomValues;
-    }
+    });
   });
 });
 
@@ -1753,29 +1770,18 @@ describe("sendReplySessionConflictTerminalNotice", () => {
   });
 
   it("sends terminal notice for a typed conflict error", async () => {
-    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
-
     // Override crypto for deterministic error ID.
-    const originalGetRandomValues = crypto.getRandomValues;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = (buf: Uint32Array) => {
-        buf[0] = 0xdeadbeef;
-        return buf;
-      };
-
-      await sendReplySessionConflictTerminalNotice(makeConflictError(), {
+    await withDeterministicRandomValues(0xdeadbeef, async () => {
+      const deps: SessionConflictTerminalNoticeDeps = {
         event: baseEvent,
         account: baseAccount,
         log,
         senderSendText: senderSendTextMock,
         buildDeliveryTargetFn: buildDeliveryTargetMock,
         accountToCredsFn: accountToCredsMock,
-      });
-    } finally {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = originalGetRandomValues;
-    }
+      };
+      await sendReplySessionConflictTerminalNotice(makeConflictError(), deps);
+    });
 
     // Verify: one static send.
     expect(senderSendTextMock).toHaveBeenCalledTimes(1);
@@ -1805,8 +1811,6 @@ describe("sendReplySessionConflictTerminalNotice", () => {
   });
 
   it("does nothing for a non-conflict error", async () => {
-    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
-
     await sendReplySessionConflictTerminalNotice(new Error("timeout"), {
       event: baseEvent,
       account: baseAccount,
@@ -1820,18 +1824,9 @@ describe("sendReplySessionConflictTerminalNotice", () => {
   });
 
   it("logs terminal_notice_failed when send fails", async () => {
-    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
+    senderSendTextMock.mockRejectedValue(new Error("network error"));
 
-    const originalGetRandomValues = crypto.getRandomValues;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = (buf: Uint32Array) => {
-        buf[0] = 0xcafebabe;
-        return buf;
-      };
-
-      senderSendTextMock.mockRejectedValue(new Error("network error"));
-
+    await withDeterministicRandomValues(0xcafebabe, async () => {
       await sendReplySessionConflictTerminalNotice(makeConflictError(), {
         event: baseEvent,
         account: baseAccount,
@@ -1840,10 +1835,7 @@ describe("sendReplySessionConflictTerminalNotice", () => {
         buildDeliveryTargetFn: buildDeliveryTargetMock,
         accountToCredsFn: accountToCredsMock,
       });
-    } finally {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = originalGetRandomValues;
-    }
+    });
 
     const logCalls = errorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
     expect(
@@ -1852,16 +1844,7 @@ describe("sendReplySessionConflictTerminalNotice", () => {
   });
 
   it("does not include internal stack or session key in the notice", async () => {
-    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
-
-    const originalGetRandomValues = crypto.getRandomValues;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = (buf: Uint32Array) => {
-        buf[0] = 0x11111111;
-        return buf;
-      };
-
+    await withDeterministicRandomValues(0x11111111, async () => {
       await sendReplySessionConflictTerminalNotice(makeConflictError(), {
         event: baseEvent,
         account: baseAccount,
@@ -1870,10 +1853,7 @@ describe("sendReplySessionConflictTerminalNotice", () => {
         buildDeliveryTargetFn: buildDeliveryTargetMock,
         accountToCredsFn: accountToCredsMock,
       });
-    } finally {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = originalGetRandomValues;
-    }
+    });
 
     expect(senderSendTextMock.mock.calls[0]).toBeDefined();
     const sentText: string = senderSendTextMock.mock.calls[0]![1];
@@ -1888,18 +1868,20 @@ describe("sendReplySessionConflictTerminalNotice", () => {
   });
 
   it("uses the same error ID in log and user-visible text", async () => {
-    const { sendReplySessionConflictTerminalNotice } = await import("./gateway.js");
-
-    const originalGetRandomValues = crypto.getRandomValues;
+    // Stateful mock: return a different value per call to ensure both
+    // log and user-visible text use the same generated ID.
+    const proto = Object.getPrototypeOf(crypto) as Crypto;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(proto, "getRandomValues");
+    let callCount = 0;
     try {
-      let callCount = 0;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = (buf: Uint32Array) => {
-        // Return a different value each call to ensure both log and text
-        // use the same generated ID.
-        buf[0] = callCount++ === 0 ? 0xaaaaaaaa : 0xbbbbbbbb;
-        return buf;
-      };
+      Object.defineProperty(proto, "getRandomValues", {
+        configurable: true,
+        writable: true,
+        value: (buf: Uint32Array) => {
+          buf[0] = callCount++ === 0 ? 0xaaaaaaaa : 0xbbbbbbbb;
+          return buf;
+        },
+      });
 
       await sendReplySessionConflictTerminalNotice(makeConflictError(), {
         event: baseEvent,
@@ -1910,8 +1892,11 @@ describe("sendReplySessionConflictTerminalNotice", () => {
         accountToCredsFn: accountToCredsMock,
       });
     } finally {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (crypto as any).getRandomValues = originalGetRandomValues;
+      if (originalDescriptor) {
+        Object.defineProperty(proto, "getRandomValues", originalDescriptor);
+      } else {
+        delete (proto as unknown as Record<string, unknown>)["getRandomValues"];
+      }
     }
 
     expect(senderSendTextMock.mock.calls[0]).toBeDefined();
