@@ -652,11 +652,8 @@ public actor GatewayNodeSession {
                 channel: channel,
                 channelGeneration: channelGeneration,
                 admissionGeneration: admissionGeneration,
-                method: "node.pluginSurface.refresh",
-                params: ["surface": AnyCodable(trimmedSurface)],
                 surface: trimmedSurface,
-                observedURL: observedURL,
-                timeoutMs: Self.pluginSurfaceRefreshTimeoutMs)
+                observedURL: observedURL)
         }
         self.pluginSurfaceRefreshes[trimmedSurface] = PluginSurfaceRefresh(
             id: id,
@@ -1021,17 +1018,15 @@ extension GatewayNodeSession {
         channel: GatewayChannelActor,
         channelGeneration: UInt64,
         admissionGeneration: UInt64,
-        method: String,
-        params: [String: AnyCodable]?,
         surface: String,
-        observedURL: String?,
-        timeoutMs: Double) async -> String?
+        observedURL: String?) async -> String?
     {
+        let method = "node.pluginSurface.refresh"
         do {
             let data = try await channel.request(
                 method: method,
-                params: params,
-                timeoutMs: timeoutMs)
+                params: ["surface": AnyCodable(surface)],
+                timeoutMs: Self.pluginSurfaceRefreshTimeoutMs)
             let decoded = try decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
             let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
             guard let refreshed = urls[surface] else { return nil }
