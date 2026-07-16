@@ -4131,16 +4131,24 @@ class NodeRuntime private constructor(
         operator = operatorSession.currentWidgetSurface(),
       )
 
-    // Initial loads may use the operator fallback; failures refresh the node under the mutex.
+    // Initial loads may use the operator fallback; failures rotate the preferred live route.
     if (failedResource == null) return ChatWidgetUrlResolver.resolvePreferred(currentSurfaceUrls(), path, excluding = null)
     return inlineWidgetRefreshMutex.withLock {
-      // Rotation is node-role only; a second rotation would also invalidate a sibling's token.
+      // Serialize both role sessions so sibling widgets cannot invalidate each other's new token.
       ChatWidgetUrlResolver.resolveAfterFailure(
         target = path,
         failedResource = failedResource,
         currentSurfaceUrls = ::currentSurfaceUrls,
         refreshNodeSurface = { observedUrl ->
           nodeSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
+            ChatWidgetSurface(
+              url = route.url,
+              tlsFingerprintSha256 = route.tlsFingerprintSha256,
+            )
+          }
+        },
+        refreshOperatorSurface = { observedUrl ->
+          operatorSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
             ChatWidgetSurface(
               url = route.url,
               tlsFingerprintSha256 = route.tlsFingerprintSha256,

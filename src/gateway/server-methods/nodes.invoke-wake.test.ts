@@ -461,7 +461,7 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   return respond;
 }
 
-describe("node plugin surface refresh", () => {
+describe("plugin surface refresh", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -512,6 +512,45 @@ describe("node plugin surface refresh", () => {
     const capabilityToken = parsedCanvasUrl.pathname.slice("/__openclaw__/cap/".length);
     expect(capabilityToken.length).toBeGreaterThan(0);
     expect(capabilityToken).not.toBe("old-token");
+    expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
+  });
+
+  it("refreshes the calling operator's own surface capability", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const respond = vi.fn();
+    const client = {
+      connect: {
+        role: "operator",
+        scopes: ["operator.read"],
+        client: { id: "operator-1", mode: "ui" },
+      },
+      pluginSurfaceUrls: {
+        canvas: "http://127.0.0.1:18789/__openclaw__/cap/old-token",
+      },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+    };
+
+    await expectDefined(
+      nodeHandlers["plugin.surface.refresh"],
+      'nodeHandlers["plugin.surface.refresh"] test invariant',
+    )({
+      req: { type: "req", id: "operator-r1", method: "plugin.surface.refresh", params: {} },
+      params: { surface: "canvas" },
+      client: client as never,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    const payload = requireRecord(call[1], "operator refresh payload");
+    const pluginSurfaceUrls = requireRecord(payload.pluginSurfaceUrls, "operator surface urls");
+    const canvasUrl = requireString(pluginSurfaceUrls.canvas, "operator canvas url");
+    expect(canvasUrl).not.toContain("old-token");
     expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
   });
 

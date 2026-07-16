@@ -101,9 +101,13 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                 let operatorSurface = await GatewayConnection.shared.canvasPluginSurfaceRoute()
                 return (node: node, operatorSurface: operatorSurface)
             },
-            // Gateway policy restricts capability rotation to the node session.
+            // Prefer the local node route; operator rotation keeps chat usable
+            // while macOS node mode is disabled or reconnecting.
             refreshNodeSurfaceRoute: { observed in
                 await MacNodeModeCoordinator.shared.refreshCanvasPluginSurfaceRoute(replacing: observed?.url)
+            },
+            refreshOperatorSurfaceRoute: { observed in
+                await GatewayConnection.shared.refreshCanvasPluginSurfaceRoute(replacing: observed?.url)
             })
     }
 

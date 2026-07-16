@@ -627,6 +627,48 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test func `operator canvas refresh uses the operator surface method`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [OpenClawGatewayClientCapability.inlineWidgets],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios",
+            clientMode: "ui",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        async let refreshed = gateway.refreshCanvasHostUrl(replacing: nil)
+        try await waitUntil("operator surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "plugin.surface.refresh") == 1
+        }
+        let task = try #require(session.latestTask())
+        let request = try #require(task.sentRequests(method: "plugin.surface.refresh").first)
+        try task.emitResponse(
+            id: #require(request["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/operator-token",
+                ],
+            ])
+
+        #expect(await refreshed?.hasSuffix("/operator-token") == true)
+        #expect(task.sentRequestCount(method: "node.pluginSurface.refresh") == 0)
+        await gateway.disconnect()
+    }
+
     @Test func `canvas surface refresh is shared across callers with different timeouts`() async throws {
         let expectedFingerprint = String(repeating: "ab", count: 32)
         let session = FakeGatewayWebSocketSession(effectiveTLSFingerprintSHA256: expectedFingerprint)

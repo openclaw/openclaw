@@ -65,7 +65,8 @@ struct ChatInlineWidgetTests {
             target: target,
             replacing: failedResource,
             currentSurfaceRoutes: { await probe.current() },
-            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) })
+            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) },
+            refreshOperatorSurfaceRoute: { _ in nil })
 
         #expect(resolved?.url == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
         #expect(await probe.refreshCount == 1)
@@ -88,7 +89,8 @@ struct ChatInlineWidgetTests {
             target: target,
             replacing: failedResource,
             currentSurfaceRoutes: { await probe.current() },
-            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) })
+            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) },
+            refreshOperatorSurfaceRoute: { _ in nil })
 
         #expect(resolved?.url == failedURL)
         #expect(resolved?.tlsFingerprintSHA256 == newPin)
@@ -113,7 +115,31 @@ struct ChatInlineWidgetTests {
             target: target,
             replacing: failedResource,
             currentSurfaceRoutes: { await probe.current() },
-            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) })
+            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) },
+            refreshOperatorSurfaceRoute: { _ in nil })
+
+        #expect(resolved?.url == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
+        #expect(await probe.refreshCount == 1)
+    }
+
+    @Test func `refreshes the operator capability when the node route is unavailable`() async throws {
+        let target = "/__openclaw__/canvas/documents/widget-1/index.html"
+        let oldSurface = "https://operator.example/__openclaw__/cap/old"
+        let newSurface = "https://operator.example/__openclaw__/cap/new"
+        let failedURL = try #require(OpenClawChatWidgetURLResolver.resolve(
+            surfaceURL: oldSurface,
+            target: target))
+        let failedResource = OpenClawChatWidgetResource(url: failedURL)
+        let probe = ChatWidgetOperatorRouteRefreshProbe(
+            route: GatewayCanvasHostRoute(url: oldSurface, tlsFingerprintSHA256: nil),
+            replacement: GatewayCanvasHostRoute(url: newSurface, tlsFingerprintSHA256: nil))
+
+        let resolved = await OpenClawChatWidgetURLResolver.resolveResource(
+            target: target,
+            replacing: failedResource,
+            currentSurfaceRoutes: { await probe.current() },
+            refreshNodeSurfaceRoute: { _ in nil },
+            refreshOperatorSurfaceRoute: { observed in await probe.refresh(observed: observed) })
 
         #expect(resolved?.url == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
         #expect(await probe.refreshCount == 1)
@@ -129,7 +155,8 @@ struct ChatInlineWidgetTests {
             target: target,
             replacing: nil,
             currentSurfaceRoutes: { (node: route, operatorSurface: nil) },
-            refreshNodeSurfaceRoute: { _ in nil })
+            refreshNodeSurfaceRoute: { _ in nil },
+            refreshOperatorSurfaceRoute: { _ in nil })
 
         #expect(resolved == nil)
     }
@@ -154,6 +181,27 @@ struct ChatInlineWidgetTests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     }
     #endif
+}
+
+private actor ChatWidgetOperatorRouteRefreshProbe {
+    private var route: GatewayCanvasHostRoute
+    private let replacement: GatewayCanvasHostRoute
+    private(set) var refreshCount = 0
+
+    init(route: GatewayCanvasHostRoute, replacement: GatewayCanvasHostRoute) {
+        self.route = route
+        self.replacement = replacement
+    }
+
+    func current() -> (node: GatewayCanvasHostRoute?, operatorSurface: GatewayCanvasHostRoute?) {
+        (node: nil, operatorSurface: self.route)
+    }
+
+    func refresh(observed _: GatewayCanvasHostRoute?) -> GatewayCanvasHostRoute? {
+        self.refreshCount += 1
+        self.route = self.replacement
+        return self.replacement
+    }
 }
 
 private actor ChatWidgetRouteReconnectProbe {

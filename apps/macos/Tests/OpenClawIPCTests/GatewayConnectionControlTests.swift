@@ -235,6 +235,67 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
+    @Test func `operator widget capability refresh is shared and retained`() async throws {
+        let oldSurface = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
+        let newSurface = "http://127.0.0.1:18789/__openclaw__/cap/new-token"
+        let recorder = WebSocketMessageRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(
+                sendHook: { task, message, sendIndex in
+                    recorder.append(message)
+                    guard sendIndex > 0,
+                          let data = Self.messageData(message),
+                          let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let method = frame["method"] as? String,
+                          let id = frame["id"] as? String
+                    else { return }
+                    if method == "plugin.surface.refresh" {
+                        task.emitReceiveSuccess(.data(Data(
+                            #"{"type":"res","id":"\#(id)","ok":true,"payload":{"surface":"canvas","pluginSurfaceUrls":{"canvas":"\#(newSurface)"}}}"#
+                                .utf8)))
+                    } else {
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    }
+                },
+                receiveHook: { task, receiveIndex in
+                    if receiveIndex == 0 {
+                        return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                    }
+                    let id = task.snapshotConnectRequestID() ?? "connect"
+                    return .data(GatewayWebSocketTestSupport.connectOkData(
+                        id: id,
+                        canvasPluginSurfaceURL: oldSurface))
+                })
+        })
+        let connection = GatewayConnection(
+            configProvider: {
+                (
+                    url: URL(string: "ws://127.0.0.1:1")!,
+                    token: "test-token-placeholder",
+                    password: nil)
+            },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        try await connection.refresh()
+        _ = try await connection.acquireServerLease()
+        #expect(await connection.canvasPluginSurfaceUrl() == oldSurface)
+        async let first = connection.refreshCanvasPluginSurfaceRoute(replacing: oldSurface)
+        async let second = connection.refreshCanvasPluginSurfaceRoute(replacing: oldSurface)
+        let routes = await (first, second)
+
+        #expect(routes.0?.url == newSurface)
+        #expect(routes.1?.url == newSurface)
+        #expect(await connection.canvasPluginSurfaceUrl() == newSurface)
+        let refreshCount = recorder.snapshot().count { message in
+            guard let data = Self.messageData(message),
+                  let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return frame["method"] as? String == "plugin.surface.refresh"
+        }
+        #expect(refreshCount == 1)
+        await connection.shutdown()
+    }
+
     @Test func `wizard not found means cancellation already reached a terminal session`() {
         let notFound = GatewayResponseError(
             method: "wizard.cancel",

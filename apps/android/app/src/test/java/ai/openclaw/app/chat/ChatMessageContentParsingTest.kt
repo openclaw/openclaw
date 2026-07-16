@@ -151,6 +151,7 @@ class ChatMessageContentParsingTest {
               )
             null
           },
+          refreshOperatorSurface = { null },
         )
 
       assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
@@ -185,6 +186,7 @@ class ChatMessageContentParsingTest {
               )
             null
           },
+          refreshOperatorSurface = { null },
         )
 
       assertEquals(url, resolved?.url)
@@ -217,10 +219,47 @@ class ChatMessageContentParsingTest {
             current = current.copy(node = ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = null))
             null
           },
+          refreshOperatorSurface = { null },
         )
 
       assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
       assertEquals(1, refreshCount)
+    }
+
+  @Test
+  fun refreshesOperatorCapabilityWhenNodeUnavailable() =
+    runTest {
+      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
+      val oldSurface = "https://operator.example/__openclaw__/cap/old"
+      val newSurface = "https://operator.example/__openclaw__/cap/new"
+      val failedResource =
+        ChatWidgetResource(
+          url = requireNotNull(ChatWidgetUrlResolver.resolve(oldSurface, target)),
+          tlsFingerprintSha256 = null,
+        )
+      var operatorRefreshCount = 0
+      var current =
+        ChatWidgetSurfaceUrls(
+          node = null,
+          operator = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = null),
+        )
+
+      val resolved =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = failedResource,
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = { null },
+          refreshOperatorSurface = {
+            operatorRefreshCount += 1
+            ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = null).also {
+              current = current.copy(operator = it)
+            }
+          },
+        )
+
+      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
+      assertEquals(1, operatorRefreshCount)
     }
 
   @Test

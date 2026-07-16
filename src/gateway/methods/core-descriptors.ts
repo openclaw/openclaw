@@ -227,7 +227,6 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "node.rename", scope: "operator.pairing" },
   { name: "node.list", scope: "operator.read" },
   { name: "node.describe", scope: "operator.read" },
-  { name: "node.pluginSurface.refresh", scope: "node" },
   { name: "node.pluginTools.update", scope: "node" },
   { name: "node.skills.update", scope: "node" },
   { name: "node.pending.drain", scope: "node" },
@@ -367,6 +366,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "migrations.memory.apply", scope: "operator.admin", controlPlaneWrite: true },
   { name: "ui.command", scope: "operator.write" },
   { name: "approval.history", scope: "operator.approvals" },
+  { name: "node.pluginSurface.refresh", scope: "node" },
+  { name: "plugin.surface.refresh", scope: "operator.read" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

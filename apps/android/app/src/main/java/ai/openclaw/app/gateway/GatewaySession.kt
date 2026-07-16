@@ -435,10 +435,16 @@ class GatewaySession(
             ?: return null
         Triple(capturedLease, capturedTarget, current)
       }
+    val refreshMethod =
+      when (target.options.role.trim().lowercase(Locale.ROOT)) {
+        "node" -> GatewayMethod.NodePluginSurfaceRefresh
+        "operator" -> GatewayMethod.PluginSurfaceRefresh
+        else -> return null
+      }
     val response =
       runCatching {
         lease.request(
-          GatewayMethod.NodePluginSurfaceRefresh.rawValue,
+          refreshMethod.rawValue,
           buildJsonObject {
             put("surface", JsonPrimitive("canvas"))
             requestObservedSurfaceUrl?.let { put("observedUrl", JsonPrimitive(it)) }

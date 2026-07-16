@@ -103,7 +103,7 @@ import {
   safeParseJson,
 } from "./nodes.helpers.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 export {
   clearNodeWakeState,
@@ -262,6 +262,20 @@ function respondRefreshedPluginSurface(params: {
     undefined,
   );
 }
+
+const handlePluginSurfaceRefresh: GatewayRequestHandler = ({ params, respond, client }) => {
+  const parsed = normalizePluginSurfaceRefreshParams(params);
+  if (!parsed) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
+    return;
+  }
+  respondRefreshedPluginSurface({
+    surface: parsed.surface,
+    observedUrl: parsed.observedUrl,
+    client,
+    respond,
+  });
+};
 
 async function resolveDirectNodePushConfig() {
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
@@ -1251,19 +1265,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
     });
   },
-  "node.pluginSurface.refresh": async ({ params, respond, client }) => {
-    const parsed = normalizePluginSurfaceRefreshParams(params);
-    if (!parsed) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "surface required"));
-      return;
-    }
-    respondRefreshedPluginSurface({
-      surface: parsed.surface,
-      observedUrl: parsed.observedUrl,
-      client,
-      respond,
-    });
-  },
+  "plugin.surface.refresh": handlePluginSurfaceRefresh,
+  "node.pluginSurface.refresh": handlePluginSurfaceRefresh,
   "node.pluginTools.update": async ({ params, respond, client, context }) => {
     if (!validateNodePluginToolsUpdateParams(params)) {
       respondInvalidParams({

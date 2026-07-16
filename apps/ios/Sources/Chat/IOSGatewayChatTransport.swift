@@ -313,9 +313,13 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 let operatorSurface = await gateway.currentCanvasHostRoute()
                 return (node: node, operatorSurface: operatorSurface)
             },
-            // Only node-role sessions may rotate plugin-surface capabilities.
+            // Prefer the device's node route; operator rotation covers clients
+            // whose node role is unavailable or intentionally disabled.
             refreshNodeSurfaceRoute: { observed in
                 await widgetGateway?.refreshCanvasHostRoute(replacing: observed?.url)
+            },
+            refreshOperatorSurfaceRoute: { observed in
+                await gateway.refreshCanvasHostRoute(replacing: observed?.url)
             })
     }
 

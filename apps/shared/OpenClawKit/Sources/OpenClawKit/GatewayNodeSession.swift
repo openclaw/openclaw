@@ -16,37 +16,6 @@ private struct NodeInvokeCancelPayload: Codable {
     var invokeId: String
 }
 
-func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
-    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    guard !trimmed.isEmpty else { return nil }
-    guard var parsed = URLComponents(string: trimmed) else { return trimmed }
-
-    let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopback(parsedHost)
-
-    if !parsedHost.isEmpty, !parsedIsLoopback {
-        guard let activeURL else { return trimmed }
-        let isTLS = activeURL.scheme?.lowercased() == "wss"
-        guard isTLS else { return trimmed }
-        parsed.scheme = "https"
-        if parsed.port == nil {
-            let tlsPort = activeURL.port ?? 443
-            parsed.port = (tlsPort == 443) ? nil : tlsPort
-        }
-        return parsed.string ?? trimmed
-    }
-
-    guard let activeURL, let fallbackHost = activeURL.host, !LoopbackHost.isLoopback(fallbackHost) else {
-        return trimmed
-    }
-    let isTLS = activeURL.scheme?.lowercased() == "wss"
-    parsed.scheme = isTLS ? "https" : "http"
-    parsed.host = fallbackHost
-    let fallbackPort = activeURL.port ?? (isTLS ? 443 : 80)
-    parsed.port = ((isTLS && fallbackPort == 443) || (!isTLS && fallbackPort == 80)) ? nil : fallbackPort
-    return parsed.string ?? trimmed
-}
-
 /// Binds suspended work to one installed gateway channel generation.
 /// Callers use this lease so an actor hop cannot retarget a payload to a replacement gateway.
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
@@ -684,6 +653,7 @@ public actor GatewayNodeSession {
         timeoutMs: Double) async -> String?
     {
         guard let channel else { return nil }
+        guard let method = self.pluginSurfaceRefreshMethod() else { return nil }
         let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSurface.isEmpty else { return nil }
         if self.pluginSurfaceUrls[trimmedSurface] != observedURL {
@@ -711,6 +681,7 @@ public actor GatewayNodeSession {
                     channel: channel,
                     channelGeneration: channelGeneration,
                     admissionGeneration: admissionGeneration,
+                    method: method,
                     surface: trimmedSurface,
                     observedURL: observedURL)
             }
@@ -1123,14 +1094,22 @@ extension GatewayNodeSession {
         return normalized
     }
 
+    private func pluginSurfaceRefreshMethod() -> String? {
+        switch self.connectOptions?.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "node": "node.pluginSurface.refresh"
+        case "operator": "plugin.surface.refresh"
+        default: nil
+        }
+    }
+
     private func requestPluginSurfaceRefresh(
         channel: GatewayChannelActor,
         channelGeneration: UInt64,
         admissionGeneration: UInt64,
+        method: String,
         surface: String,
         observedURL: String?) async -> String?
     {
-        let method = "node.pluginSurface.refresh"
         do {
             // Waiters own independent deadlines around this shared request. Zero
             // leaves its lifetime unbounded; the last waiter cancels channel work.

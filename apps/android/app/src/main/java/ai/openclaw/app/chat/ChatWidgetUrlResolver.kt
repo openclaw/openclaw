@@ -49,6 +49,7 @@ internal object ChatWidgetUrlResolver {
     failedResource: ChatWidgetResource,
     currentSurfaceUrls: () -> ChatWidgetSurfaceUrls,
     refreshNodeSurface: suspend (String?) -> ChatWidgetSurface?,
+    refreshOperatorSurface: suspend (String?) -> ChatWidgetSurface?,
   ): ChatWidgetResource? {
     val observed = currentSurfaceUrls()
     observed.node
@@ -60,6 +61,12 @@ internal object ChatWidgetUrlResolver {
 
     // A nil refresh can mean its route lease lost a reconnect race. Re-read
     // both roles so a replacement connection wins over the stale observation.
+    val afterNodeRefresh = currentSurfaceUrls()
+    resolvePreferred(afterNodeRefresh, target, excluding = failedResource)?.let { return it }
+
+    val refreshedOperator = refreshOperatorSurface(afterNodeRefresh.operator?.url)?.let { resolve(it, target) }
+    if (refreshedOperator != null && isReplacement(refreshedOperator, failedResource)) return refreshedOperator
+
     return resolvePreferred(currentSurfaceUrls(), target, excluding = failedResource)
   }
 

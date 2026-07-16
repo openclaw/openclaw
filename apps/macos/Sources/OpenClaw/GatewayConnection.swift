@@ -207,6 +207,14 @@ actor GatewayConnection {
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
+    var canvasPluginSurfaceURL: String?
+
+    struct CanvasPluginSurfaceRefresh {
+        let id: UUID
+        let task: Task<GatewayCanvasHostRoute?, Never>
+    }
+
+    var canvasPluginSurfaceRefresh: CanvasPluginSurfaceRefresh?
 
     private struct LossyDecodable<Value: Decodable>: Decodable {
         let value: Value?
@@ -861,6 +869,7 @@ extension GatewayConnection {
         self.routeGeneration &+= 1
         resetSocketGeneration()
         self.lastSnapshot = nil
+        self.resetCanvasPluginSurfaceState()
         let client = client
         self.client = nil
         self.configuredURL = nil
@@ -899,6 +908,7 @@ extension GatewayConnection {
         self.routeGeneration &+= 1
         resetSocketGeneration()
         self.lastSnapshot = nil
+        self.resetCanvasPluginSurfaceState()
         let configuredRouteGeneration = self.routeGeneration
         let previousClient = client
         client = nil
@@ -1018,6 +1028,7 @@ extension GatewayConnection {
               admitSocketGeneration(socketGeneration)
         else { return }
         self.lastSnapshot = snapshot
+        self.installCanvasPluginSurfaceURL(from: snapshot)
     }
 
     private func handleDisconnect(routeGeneration: UInt64, socketGeneration: UInt64) {
@@ -1025,6 +1036,7 @@ extension GatewayConnection {
               retireSocketGeneration(socketGeneration)
         else { return }
         self.lastSnapshot = nil
+        self.resetCanvasPluginSurfaceState()
     }
 }
 
@@ -1139,13 +1151,6 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
-    func canvasPluginSurfaceUrl() async -> String? {
-        guard let snapshot = lastSnapshot else { return nil }
-        let raw = snapshot.pluginsurfaceurls?["canvas"]?.value as? String
-        let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     func controlUiAutoAuthToken(config: Config) async -> String? {
         guard let endpoint = try? await currentEndpoint(),
               endpoint.config.url == config.url,
@@ -1271,6 +1276,9 @@ extension GatewayConnection {
     private func broadcast(_ push: GatewayPush) {
         if case let .snapshot(snapshot) = push {
             self.lastSnapshot = snapshot
+            if self.canvasPluginSurfaceURL == nil {
+                self.installCanvasPluginSurfaceURL(from: snapshot)
+            }
             if let mainSessionKey = cachedMainSessionKey() {
                 Task { @MainActor in
                     WorkActivityStore.shared.setMainSessionKey(mainSessionKey)

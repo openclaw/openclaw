@@ -46,7 +46,8 @@ public enum OpenClawChatWidgetURLResolver {
         currentSurfaceRoutes: @Sendable () async -> (
             node: GatewayCanvasHostRoute?,
             operatorSurface: GatewayCanvasHostRoute?),
-        refreshNodeSurfaceRoute: @Sendable (GatewayCanvasHostRoute?) async -> GatewayCanvasHostRoute?) async
+        refreshNodeSurfaceRoute: @Sendable (GatewayCanvasHostRoute?) async -> GatewayCanvasHostRoute?,
+        refreshOperatorSurfaceRoute: @Sendable (GatewayCanvasHostRoute?) async -> GatewayCanvasHostRoute?) async
         -> OpenClawChatWidgetResource?
     {
         let observed = await currentSurfaceRoutes()
@@ -69,6 +70,22 @@ public enum OpenClawChatWidgetURLResolver {
 
         // A nil refresh can mean its route lease lost a reconnect race. Re-read
         // both roles so a replacement connection and its TLS pin win together.
+        let afterNodeRefresh = await currentSurfaceRoutes()
+        if let replacement = self.resolvePreferred(
+            surfaces: afterNodeRefresh,
+            target: target,
+            excluding: failedResource)
+        {
+            return replacement
+        }
+
+        if let refreshedSurface = await refreshOperatorSurfaceRoute(afterNodeRefresh.operatorSurface),
+           let refreshed = resolve(surface: refreshedSurface, target: target),
+           self.isReplacement(refreshed, for: failedResource)
+        {
+            return refreshed
+        }
+
         return await self.resolvePreferred(
             surfaces: currentSurfaceRoutes(),
             target: target,

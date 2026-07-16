@@ -25,6 +25,7 @@ describe("GATEWAY_EVENTS", () => {
 
 describe("listGatewayMethods", () => {
   it("advertises plugin surface refresh for capability rotation", () => {
+    expect(listGatewayMethods()).toContain("plugin.surface.refresh");
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
@@ -43,12 +44,14 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-5)).toEqual([
+    expect(listGatewayMethods().slice(-7)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
       "ui.command",
       "approval.history",
+      "node.pluginSurface.refresh",
+      "plugin.surface.refresh",
     ]);
   });
 
@@ -97,7 +100,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-12)).toEqual([
+    expect(coreMethods.slice(-14)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -110,6 +113,8 @@ describe("listGatewayMethods", () => {
       "migrations.memory.apply",
       "ui.command",
       "approval.history",
+      "node.pluginSurface.refresh",
+      "plugin.surface.refresh",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
