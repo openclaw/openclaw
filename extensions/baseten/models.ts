@@ -286,7 +286,7 @@ export async function discoverBasetenModels(
       ttlMs: CACHE_TTL_MS,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(BASETEN_BASE_URL),
       auditContext: "baseten-model-discovery",
-      shouldCacheRows: (rows) => projectBasetenLiveModels(rows).length > 0,
+      shouldCacheRows: (candidateRows) => projectBasetenLiveModels(candidateRows).length > 0,
     });
     const models = projectBasetenLiveModels(rows);
     if (models.length > 0) {
