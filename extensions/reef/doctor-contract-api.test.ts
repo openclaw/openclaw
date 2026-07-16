@@ -215,11 +215,7 @@ describe("Reef doctor contract", () => {
     const isolatedEnv = { ...env, OPENCLAW_STATE_DIR: isolatedStateDir };
     const migration = migrationById("reef-keys-json-to-plugin-state");
     const params = {
-      config: {
-        channels: {
-          reef: { stateDir: path.join(homeDir, ".openclaw", "data", "reef") },
-        },
-      },
+      config: {},
       env: isolatedEnv,
       stateDir: isolatedStateDir,
       oauthDir: path.join(isolatedStateDir, "oauth"),
@@ -232,6 +228,44 @@ describe("Reef doctor contract", () => {
       warnings: [],
     });
     expect(fs.existsSync(homeKeysPath)).toBe(true);
+  });
+
+  it("imports an explicitly configured default-home Reef identity into isolated state", async () => {
+    const homeDir = path.join(stateDir, "explicit-home");
+    const isolatedStateDir = path.join(stateDir, "explicit-isolated");
+    const legacyDir = path.join(homeDir, ".openclaw", "data", "reef");
+    const homeKeysPath = path.join(legacyDir, "keys.json");
+    const keys = reefKeys();
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.mkdirSync(isolatedStateDir, { recursive: true });
+    fs.writeFileSync(homeKeysPath, JSON.stringify(keys));
+    vi.mocked(os.homedir).mockReturnValue(homeDir);
+    const isolatedEnv = { ...env, OPENCLAW_STATE_DIR: isolatedStateDir };
+    const context = createDoctorContext(isolatedEnv);
+    const migration = migrationById("reef-keys-json-to-plugin-state");
+    const params = {
+      config: { channels: { reef: { stateDir: legacyDir } } },
+      env: isolatedEnv,
+      stateDir: isolatedStateDir,
+      oauthDir: path.join(isolatedStateDir, "oauth"),
+      context,
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: ["- Reef identity keys -> plugin state (identity)"],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({ warnings: [] });
+    await expect(
+      context
+        .openPluginStateKeyedStore<ReefKeys>({
+          namespace: REEF_KEYS_NAMESPACE,
+          maxEntries: REEF_KEYS_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+        })
+        .lookup(REEF_KEYS_KEY),
+    ).resolves.toEqual(keys);
+    expect(fs.existsSync(homeKeysPath)).toBe(false);
+    expect(fs.existsSync(`${homeKeysPath}.migrated`)).toBe(true);
   });
 
   it("blocks identity regeneration after a failed keys.json import", async () => {

@@ -25,7 +25,7 @@ export function resolveLegacyReefStateDir(params: {
   const configured = isRecord(reef) && typeof reef.stateDir === "string" ? reef.stateDir : null;
   const defaultDir = resolveDefaultLegacyReefStateDir(params.homeDir);
   const configuredDir = configured ? resolveUserPath(configured, params.env) : null;
-  if (configuredDir && path.resolve(configuredDir) !== path.resolve(defaultDir)) {
+  if (configuredDir) {
     return configuredDir;
   }
   const relativeToActiveState = path.relative(path.resolve(params.stateDir), defaultDir);
