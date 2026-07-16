@@ -6,6 +6,9 @@ import {
 
 const PROVIDER_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const PROVIDER_ERROR_RESPONSE_MAX_BYTES = 8 * 1024;
+// Matches guardedJsonApiRequest's fetch timeout so stalled bodies cannot hang
+// after headers when the shared reader is used outside that client.
+const PROVIDER_RESPONSE_IDLE_TIMEOUT_MS = 30_000;
 const TRUNCATED_SUFFIX = "... [truncated]";
 
 type ReadProviderResponseTextParams = {
@@ -25,14 +28,23 @@ function appendTruncatedSuffix(text: string): string {
 async function readProviderResponseTextWithLimit(
   params: ReadProviderResponseTextParams,
 ): Promise<string> {
+  const chunkTimeoutMs = PROVIDER_RESPONSE_IDLE_TIMEOUT_MS;
+  const onIdleTimeout = ({ chunkTimeoutMs: idleMs }: { chunkTimeoutMs: number }) =>
+    new Error(`provider response body stalled: no data received for ${idleMs}ms`);
+
   if (params.truncateOnLimit) {
-    const prefix = await readResponseTextPrefix(params.response, params.maxBytes);
+    const prefix = await readResponseTextPrefix(params.response, params.maxBytes, {
+      chunkTimeoutMs,
+      onIdleTimeout,
+    });
     return prefix.truncated ? appendTruncatedSuffix(prefix.text) : prefix.text;
   }
 
   const body = await readResponseWithLimit(params.response, params.maxBytes, {
+    chunkTimeoutMs,
     onOverflow: ({ size, maxBytes }) =>
       new Error(`provider response body too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+    onIdleTimeout,
   });
   return new TextDecoder().decode(body);
 }
