@@ -181,6 +181,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     parentDefaultHelp: true,
   },
   {
+    name: "publisher",
+    description: "Follow and refresh signed publisher feeds",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "channels",
     description: "Manage connected chat channels and accounts",
     hasSubcommands: true,

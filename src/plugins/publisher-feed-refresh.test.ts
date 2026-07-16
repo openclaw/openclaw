@@ -66,6 +66,81 @@ describe("publisher feed durable refresh", () => {
     expect(memory.store.read).toHaveBeenCalledWith("https://clawhub.ai", "publishers:alice");
   });
 
+  it("revalidates complete state when a caller changes trust policy", async () => {
+    const initial = {
+      sourceOrigin: "https://clawhub.ai",
+      state: state(7),
+      verification,
+      verifiedAt: "2026-07-16T00:00:00.000Z",
+    };
+    const memory = memoryStore(initial);
+    const fetchSnapshot = vi.fn(async () => ({
+      state: state(8),
+      expiresAt: "2026-07-16T00:06:00.000Z",
+      verification: {
+        ...verification,
+        signedBy: "clawhub-feed-2026-q4",
+        signedByKeyIds: ["clawhub-feed-2026-q4"],
+      },
+    }));
+    const fetchChanges = vi.fn();
+    const result = await refreshPublisherFeedState({
+      ...target,
+      store: memory.store,
+      forceSnapshot: true,
+      dependencies: { fetchSnapshot, fetchChanges },
+    });
+
+    expect(result).toMatchObject({
+      status: "updated",
+      record: { state: { sequence: 8 }, verification: { signedBy: "clawhub-feed-2026-q4" } },
+    });
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+    expect(fetchChanges).not.toHaveBeenCalled();
+  });
+
+  it("rejects rollback and equivocation during forced revalidation", async () => {
+    const initial = {
+      sourceOrigin: "https://clawhub.ai",
+      state: state(7),
+      verification,
+      verifiedAt: "2026-07-16T00:00:00.000Z",
+    };
+    const stale = memoryStore(initial);
+    await expect(
+      refreshPublisherFeedState({
+        ...target,
+        store: stale.store,
+        forceSnapshot: true,
+        dependencies: {
+          fetchSnapshot: vi.fn(async () => ({
+            state: state(6),
+            expiresAt: "2026-07-16T00:06:00.000Z",
+            verification,
+          })),
+        },
+      }),
+    ).rejects.toThrow("older than accepted");
+    expect(stale.current()).toBe(initial);
+
+    const changed = memoryStore(initial);
+    await expect(
+      refreshPublisherFeedState({
+        ...target,
+        store: changed.store,
+        forceSnapshot: true,
+        dependencies: {
+          fetchSnapshot: vi.fn(async () => ({
+            state: { ...state(7), displayName: "Changed" },
+            expiresAt: "2026-07-16T00:06:00.000Z",
+            verification,
+          })),
+        },
+      }),
+    ).rejects.toThrow("without a sequence increment");
+    expect(changed.current()).toBe(initial);
+  });
+
   it("applies complete deltas and preserves state on transport failure", async () => {
     const initial = {
       sourceOrigin: "https://clawhub.ai",

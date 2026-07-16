@@ -848,6 +848,14 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface PublisherFeedFollows {
+  created_at_ms: number;
+  feed_profile: string;
+  publisher_id: string;
+  source_origin: string;
+  updated_at_ms: number;
+}
+
 export interface PublisherFeedStates {
   display_name: string;
   entries_json: string;
@@ -1411,6 +1419,7 @@ export interface DB {
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  publisher_feed_follows: PublisherFeedFollows;
   publisher_feed_states: PublisherFeedStates;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;

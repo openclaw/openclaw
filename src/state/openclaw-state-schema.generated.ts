@@ -849,6 +849,18 @@ CREATE TABLE IF NOT EXISTS publisher_feed_states (
 CREATE INDEX IF NOT EXISTS idx_publisher_feed_states_updated
   ON publisher_feed_states(updated_at_ms DESC, source_origin, publisher_id);
 
+CREATE TABLE IF NOT EXISTS publisher_feed_follows (
+  source_origin TEXT NOT NULL,
+  publisher_id TEXT NOT NULL,
+  feed_profile TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (source_origin, publisher_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_publisher_feed_follows_updated
+  ON publisher_feed_follows(updated_at_ms DESC, source_origin, publisher_id);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
