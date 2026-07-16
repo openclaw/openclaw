@@ -121,6 +121,7 @@ import type { ChannelAutostartSuppression } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
+import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
@@ -948,8 +949,9 @@ export async function startGatewayServer(
         })
       : undefined;
   // Without configured profiles, existing placements still reconcile but new dispatches stay off.
+  const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles
-    ? workerPlacementRuntime?.dispatchService
+    ? workerPlacementControlAvailable
     : undefined;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -969,7 +971,9 @@ export async function startGatewayServer(
   };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
-      (method) => workerPlacementDispatchAvailable || method !== "sessions.dispatch",
+      (method) =>
+        (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || method !== "sessions.reclaim"),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
@@ -1083,6 +1087,10 @@ export async function startGatewayServer(
   const startupAccountStartsReady = new Promise<void>((resolve) => {
     releaseStartupAccountStarts = resolve;
   });
+  let gatewayInstanceRuntime: GatewayInstanceRuntime | undefined;
+  // Internal principals belong to this server generation and become usable only after bind.
+  // Closing flips this first so delayed recovery/channel work cannot enter a retired context.
+  let gatewayInstanceDispatchReady = false;
   const { createChannelManager } = await import("./server-channels.js");
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
@@ -1097,6 +1105,7 @@ export async function startGatewayServer(
     getPluginHttpRouteRegistry: () => pluginRegistry,
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
+    getNativeApprovalRuntime: () => gatewayInstanceRuntime?.nativeApprovals,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
@@ -1296,6 +1305,8 @@ export async function startGatewayServer(
   };
   const markClosePreludeStarted = () => {
     closePreludeStarted = true;
+    gatewayInstanceDispatchReady = false;
+    gatewayInstanceRuntime?.close();
     cronReconciliation.invalidate();
     clearPostReadyMaintenanceTimer();
     retainedPluginCleanupHandle?.stop();
@@ -1557,6 +1568,7 @@ export async function startGatewayServer(
     const {
       execApprovalManager,
       forwardPluginApprovalRequest,
+      pluginApprovalIosPushDelivery,
       pluginApprovalManager,
       systemAgentApprovalManager,
       extraHandlers,
@@ -1621,7 +1633,8 @@ export async function startGatewayServer(
           (workerEnvironmentService ||
             (descriptor.name !== "environments.create" &&
               descriptor.name !== "environments.destroy")) &&
-          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch"),
+          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
+          (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
       );
       return createGatewayMethodRegistry([
         ...coreDescriptors,
@@ -1837,6 +1850,7 @@ export async function startGatewayServer(
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
           forwardPluginApprovalRequest,
+          pluginApprovalIosPushDelivery,
           pluginApprovalManager,
           systemAgentApprovalManager,
           listSessionPendingApprovals: approvalSessionEvents.replay,
@@ -1873,8 +1887,8 @@ export async function startGatewayServer(
           ...(workerPlacementRuntime
             ? { workerSessionPlacementService: workerPlacementRuntime.placements }
             : {}),
-          ...(workerPlacementDispatchAvailable
-            ? { workerPlacementDispatchService: workerPlacementDispatchAvailable }
+          ...(workerPlacementControlAvailable
+            ? { workerPlacementDispatchService: workerPlacementControlAvailable }
             : {}),
           terminalSessions,
           agentRunSeq,
@@ -1919,6 +1933,16 @@ export async function startGatewayServer(
       },
     );
     currentPluginRegistryGatewayContext = gatewayRequestContext;
+    const { createGatewayInstanceRuntime } = await import("./server-instance-runtime.js");
+    const gatewayInstanceRuntimeLocal = createGatewayInstanceRuntime({
+      getContext: () => gatewayRequestContext,
+      getMethodRegistry: () => attachedGatewayMethodRegistry,
+      isDispatchAvailable: () => gatewayInstanceDispatchReady && !closePreludeStarted,
+      logError: (message) => log.error(message),
+    });
+    gatewayInstanceRuntime = gatewayInstanceRuntimeLocal;
+    gatewayRequestContext.approvalEvents = gatewayInstanceRuntimeLocal.approvalEvents;
+    gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntimeLocal.recovery;
 
     const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
       () => gatewayRequestContext,
@@ -1991,6 +2015,7 @@ export async function startGatewayServer(
       }),
     );
     await startupTrace.measure("http.listen", () => startListening());
+    gatewayInstanceDispatchReady = true;
     startupTrace.mark("http.bound");
     const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     let postAttachRuntimeReturned = false;
@@ -2060,6 +2085,7 @@ export async function startGatewayServer(
             defaultWorkspaceDir,
             deps,
             startChannels,
+            recoveryRuntime: gatewayInstanceRuntimeLocal.recovery,
             logHooks,
             logChannels,
             unavailableGatewayMethods,

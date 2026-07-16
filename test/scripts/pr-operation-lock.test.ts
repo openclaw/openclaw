@@ -1001,6 +1001,27 @@ describePosix("scripts/pr per-PR operation lock", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
+
+  it("reports the child exit code when retaining a failed operation", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-operation.sh", [
+      "acquire_pr_operation_lock 42",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+    expect(refExists(repoDir)).toBe(false);
   });
 
   it("retains the exact owner when supervisor release cannot take the ref lock", async () => {
@@ -1440,6 +1461,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       expect(processGroupExists(operationPgid)).toBe(false);
       expect(result.stderr).toContain("process group remained active after wrapper exit");
+      expect(result.stderr).toContain(`surviving processes in group ${operationPgid}`);
+      expect(result.stderr).toMatch(/^\s+\d+ \d+ sleep$/mu);
+      expect(result.stderr).toContain("process group appears empty at report time");
       expect(result.stderr).toContain(
         `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
       );

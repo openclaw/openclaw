@@ -1191,15 +1191,9 @@ async function processDiscordMessageInner(
           if (payload.phase !== "update") {
             return;
           }
-          await draftPreview.pushToolProgress(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase,
-              title: payload.title,
-              explanation: payload.explanation,
-              steps: payload.steps,
-            }),
-          );
+          await draftPreview.pushPlanProgress(payload.planSteps, {
+            explanation: payload.explanation,
+          });
         },
         onApprovalEvent: async (payload) => {
           if (payload.phase !== "requested") {

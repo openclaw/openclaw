@@ -1,9 +1,10 @@
 // Docker E2E scheduler planning helpers.
 // This module turns the scenario catalog plus env-driven inputs into a concrete
 // lane plan. It intentionally does not define scenario commands.
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import ts from "typescript";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   DEFAULT_LIVE_RETRIES,
@@ -19,7 +20,6 @@ export { normalizeReleaseProfile };
 
 export const DEFAULT_E2E_BARE_IMAGE = "openclaw-docker-e2e-bare:local";
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE = "openclaw-docker-e2e-functional:local";
-export const DEFAULT_E2E_IMAGE = DEFAULT_E2E_FUNCTIONAL_IMAGE;
 export const DEFAULT_PARALLELISM = 10;
 export const DEFAULT_PROFILE = "all";
 export const DEFAULT_RESOURCE_LIMITS = {
@@ -94,7 +94,111 @@ const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
   ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
 ]);
 
-function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot) {
+// Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
+// closed instead of requiring a dependency or reimplementing a JavaScript parser.
+const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
+  [
+    "755557a6ea609e5b9d9fe9d61beb7e75651641e26a3f0ef2fe1fc3a973b398c8",
+    "base feishu-channel bootstrap-persona channel-post-core-restore plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path versioned-runtime-deps",
+  ],
+  [
+    "2657b5cc7b94cf46b9900f9259ee4cef0033837ee71a673e6ed09e7ee36684e8",
+    "base feishu-channel bootstrap-persona tilde-log-path versioned-runtime-deps",
+  ],
+  [
+    "0fefb170b4131932c7403f7f0dcdd1371e300cdcc1c033b9bd2bd6513e08d5e4",
+    "base feishu-channel bootstrap-persona plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path versioned-runtime-deps",
+  ],
+  [
+    "5a2c3a6e3d2a7166025333d4f1a77de0576847f9da7e902055160d0e5f20d4c5",
+    "base feishu-channel bootstrap-persona plugin-deps-cleanup configured-plugin-installs tilde-log-path versioned-runtime-deps",
+  ],
+  [
+    "f226c05636dfb4e759558b5127d1c684d28a609292f4e110ff656c0e4f95ad06",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path versioned-runtime-deps",
+  ],
+  [
+    "d9c9edcb27aca88a0b11c72e85592001cba732cf0f96bb8a73c1c0243c8f3678",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path versioned-runtime-deps",
+  ],
+  [
+    "8ac0113158bfe1ebde77272fb1ffb740c281378a170fbc1e9e281d4e44677f02",
+    "base feishu-channel bootstrap-persona plugin-deps-cleanup tilde-log-path versioned-runtime-deps",
+  ],
+]);
+
+function readLegacyFrozenScenarioContract(assertionsFile) {
+  const source = readFileSync(assertionsFile, "utf8");
+  const startMarker = "const SCENARIOS = new Set([";
+  const start = source.indexOf(startMarker);
+  if (start < 0 || source.lastIndexOf(startMarker) !== start) {
+    return undefined;
+  }
+  const end = source.indexOf("\n]);", start + startMarker.length);
+  if (end < 0) {
+    return undefined;
+  }
+  const block = source.slice(start, end + 4);
+  const digest = createHash("sha256").update(block).digest("hex");
+  return LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS.get(digest)?.split(" ");
+}
+
+function readFrozenScenarioContract(assertionsFile, targetRoot, allowExecutableContract) {
+  if (!allowExecutableContract) {
+    const inertScenarios = readLegacyFrozenScenarioContract(assertionsFile);
+    if (inertScenarios) {
+      return inertScenarios;
+    }
+    throw new Error(
+      `cannot read frozen upgrade-survivor scenarios from ${assertionsFile}: unrecognized scenario contract; require trusted workflow opt-in before executing target code`,
+    );
+  }
+  // Canonical frozen refs may expose a dependency-free catalog command. Run it
+  // only after the release workflow explicitly establishes the trust boundary.
+  const result = spawnSync(process.execPath, [assertionsFile, "list-scenarios"], {
+    cwd: targetRoot,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    const errorLines = result.stderr.trim().split("\n");
+    if (result.stderr.includes("unknown upgrade-survivor assertion command: list-scenarios")) {
+      const legacyScenarios = readLegacyFrozenScenarioContract(assertionsFile);
+      if (legacyScenarios) {
+        return legacyScenarios;
+      }
+    }
+    const detail =
+      errorLines.find((line) => line.startsWith("Error:")) ||
+      errorLines.at(-1) ||
+      "scenario command failed";
+    throw new Error(
+      `cannot read frozen upgrade-survivor scenarios from ${assertionsFile}: ${detail}`,
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error(
+      `cannot read frozen upgrade-survivor scenarios from ${assertionsFile}: list-scenarios did not return JSON`,
+    );
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    parsed.some(
+      (scenario) => typeof scenario !== "string" || !/^[a-z0-9][a-z0-9-]*$/u.test(scenario),
+    ) ||
+    new Set(parsed).size !== parsed.length
+  ) {
+    throw new Error(
+      `cannot read frozen upgrade-survivor scenarios from ${assertionsFile}: list-scenarios returned an invalid catalog`,
+    );
+  }
+  return parsed;
+}
+
+function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot, allowExecutableContract) {
   if (!targetRoot) {
     return scenarios;
   }
@@ -102,54 +206,12 @@ function filterUpgradeSurvivorScenariosForTarget(scenarios, targetRoot) {
   if (!existsSync(assertionsFile)) {
     return [];
   }
-  const assertionsSource = readFileSync(assertionsFile, "utf8");
-  const sourceFile = ts.createSourceFile(
+  const targetScenarios = readFrozenScenarioContract(
     assertionsFile,
-    assertionsSource,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.JS,
+    targetRoot,
+    allowExecutableContract,
   );
-  const parseDiagnostic = sourceFile.parseDiagnostics[0];
-  if (parseDiagnostic) {
-    throw new Error(
-      `cannot parse frozen upgrade-survivor scenarios from ${assertionsFile}: ${ts.flattenDiagnosticMessageText(parseDiagnostic.messageText, "\n")}`,
-    );
-  }
-  let scenarioDeclaration;
-  for (const statement of sourceFile.statements) {
-    if (
-      !ts.isVariableStatement(statement) ||
-      (statement.declarationList.flags & ts.NodeFlags.Const) === 0
-    ) {
-      continue;
-    }
-    scenarioDeclaration = statement.declarationList.declarations.find(
-      (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === "SCENARIOS",
-    );
-    if (scenarioDeclaration) {
-      break;
-    }
-  }
-  const initializer = scenarioDeclaration?.initializer;
-  const scenarioArray =
-    initializer &&
-    ts.isNewExpression(initializer) &&
-    ts.isIdentifier(initializer.expression) &&
-    initializer.expression.text === "Set" &&
-    initializer.arguments?.length === 1 &&
-    ts.isArrayLiteralExpression(initializer.arguments[0])
-      ? initializer.arguments[0]
-      : undefined;
-  if (
-    !scenarioArray ||
-    scenarioArray.elements.some((element) => !ts.isStringLiteralLike(element))
-  ) {
-    throw new Error(
-      `cannot read frozen upgrade-survivor scenarios from ${assertionsFile}: expected const SCENARIOS = new Set([<string literals>])`,
-    );
-  }
-  const supportedScenarios = new Set(scenarioArray.elements.map((element) => element.text));
+  const supportedScenarios = new Set(targetScenarios);
   return scenarios.filter((scenario) => supportedScenarios.has(scenario));
 }
 
@@ -280,6 +342,7 @@ function expandUpgradeSurvivorBaselineLanes(
   rawBaselineSpecs,
   targetRoot,
   rawScenarios = "",
+  allowExecutableContract = false,
 ) {
   const hasUpgradeSurvivorLane = poolLanes.some(
     (poolLane) =>
@@ -297,6 +360,7 @@ function expandUpgradeSurvivorBaselineLanes(
   const supportedScenarios = filterUpgradeSurvivorScenariosForTarget(
     requestedScenarios,
     targetRoot,
+    allowExecutableContract,
   );
   const supportedScenarioSet = new Set(supportedScenarios);
   const unsupportedScenarios = targetRoot
@@ -556,6 +620,7 @@ export function resolveDockerE2ePlan(options) {
       upgradeSurvivorBaselines,
       options.upgradeSurvivorTargetRoot,
       upgradeSurvivorScenarios,
+      options.allowFrozenTargetScenarioOmissions,
     );
     for (const laneName of expansion.omittedLaneNames) {
       omittedUnsupportedLaneNames.add(laneName);
@@ -612,6 +677,7 @@ export function resolveDockerE2ePlan(options) {
               upgradeSurvivorBaselines,
               options.upgradeSurvivorTargetRoot,
               upgradeSurvivorScenarios,
+              options.allowFrozenTargetScenarioOmissions,
             );
             const supportedLane = targetExpansion.lanes.find(
               (poolLane) => poolLane.name === selectedName,

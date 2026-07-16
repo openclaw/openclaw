@@ -48,7 +48,10 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
       : undefined,
   );
   setDiscordActivitiesRuntime(runtime);
-  const http = createDiscordActivityHttpHandler({ runtime });
+  const http = createDiscordActivityHttpHandler({
+    runtime,
+    vendorAssetPath: api.resolvePath("assets/embedded-app-sdk.mjs"),
+  });
   api.registerHttpRoute({
     path: DISCORD_ACTIVITY_ROUTE_PREFIX,
     auth: "plugin",

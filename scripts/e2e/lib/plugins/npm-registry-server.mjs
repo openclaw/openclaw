@@ -25,6 +25,9 @@ function normalizeUpstreamRegistry(raw) {
 }
 
 const upstreamRegistry = normalizeUpstreamRegistry(process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM);
+// Match other E2E package-download budgets while keeping a stalled public-registry hop
+// from consuming the much larger install phase deadline.
+const UPSTREAM_REQUEST_TIMEOUT_MS = 120_000;
 
 if (!portFile || packageArgs.length === 0 || packageArgs.length % 3 !== 0) {
   console.error(
@@ -139,7 +142,10 @@ async function proxyUpstream(rawRequestUrl, response) {
   }
   try {
     const upstreamUrl = resolveUpstreamRequestUrl(rawRequestUrl);
-    const upstreamResponse = await fetch(upstreamUrl, { redirect: "manual" });
+    const upstreamResponse = await fetch(upstreamUrl, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    });
     const body = Buffer.from(await upstreamResponse.arrayBuffer());
     // Fetch decodes compressed bodies but preserves upstream length metadata.
     // Emit the decoded size so npm clients do not truncate proxied responses.

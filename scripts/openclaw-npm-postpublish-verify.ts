@@ -1086,6 +1086,7 @@ function isRetryableRegistryProvenanceError(error: unknown): boolean {
     /npm registry request failed \((?:404|408|425|429|5\d\d)\)/u.test(message) ||
     message.includes("npm registry metadata is incomplete") ||
     message.includes("npm registry provenance metadata is incomplete") ||
+    message.includes("npm provenance attestation does not bind") ||
     /aborted|fetch failed|network|timeout|timed out/u.test(message)
   );
 }

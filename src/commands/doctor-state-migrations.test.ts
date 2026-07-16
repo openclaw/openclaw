@@ -1576,6 +1576,39 @@ describe("doctor legacy state migrations", () => {
     );
   });
 
+  it("deletes rebuildable legacy files after the SQLite target opens", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "command-deploy-cache.json");
+    fs.writeFileSync(sourcePath, "{malformed cache", "utf8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test rebuildable cache",
+        sourcePath,
+        targetPath: "plugin state:test.rebuildable-cache",
+        pluginId: "discord",
+        namespace: "test.rebuildable-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        cleanupSource: "remove",
+        cleanupWhenEmpty: true,
+        readEntries: () => [],
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(result.changes).toContain(
+      `Removed Test rebuildable cache legacy source (${sourcePath})`,
+    );
+  });
+
   it("replaces existing plugin-state entries when a channel import plan asks for it", async () => {
     const root = await makeTempRoot();
     const sourcePath = path.join(root, "legacy-cache.json");
@@ -1705,6 +1738,103 @@ describe("doctor legacy state migrations", () => {
     ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+  });
+
+  it("skips plugin-state imports when the namespace lacks room for every missing entry", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test namespace-capped cache",
+        sourcePath,
+        targetPath: "plugin state:test.namespace-capped-cache",
+        pluginId: "telegram",
+        namespace: "test.namespace-capped-cache",
+        maxEntries: 2,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [
+          { key: "legacy-first", value: { body: "first" } },
+          { key: "legacy-second", value: { body: "second" } },
+        ],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.namespace-capped-cache",
+        maxEntries: 2,
+      });
+      await store.register("current", { body: "current" });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      "Skipped migrating Test namespace-capped cache because plugin state namespace test.namespace-capped-cache has room for 1 of 2 missing entries; left legacy source in place",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.namespace-capped-cache",
+        maxEntries: 2,
+      });
+      expect(await store.lookup("current")).toStrictEqual({ body: "current" });
+      expect(await store.lookup("legacy-first")).toBeUndefined();
+      expect(await store.lookup("legacy-second")).toBeUndefined();
+    });
+  });
+
+  it("archives fully covered plugin-state imports when the namespace is full", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test covered cache",
+        sourcePath,
+        targetPath: "plugin state:test.covered-cache",
+        pluginId: "telegram",
+        namespace: "test.covered-cache",
+        maxEntries: 1,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [{ key: "covered", value: { body: "legacy" } }],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.covered-cache",
+        maxEntries: 1,
+      });
+      await store.register("covered", { body: "current" });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      `Archived Test covered cache legacy source → ${sourcePath}.migrated`,
+    );
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
   });
 
   it("keeps plugin-state import source when plugin cap eviction drops an imported row", async () => {
