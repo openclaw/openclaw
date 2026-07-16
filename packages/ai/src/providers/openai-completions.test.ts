@@ -667,12 +667,13 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedMaxTokens).toBe(32_000);
   });
 
-  it("uses max_tokens for Z.AI requests", async () => {
+  it("uses Z.AI max_tokens and disables thinking by default", async () => {
     const stream = streamOpenAICompletions(
       {
         ...createModel(32_000),
         provider: "zai",
         baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
       },
       context,
       {
@@ -683,8 +684,35 @@ describe("OpenAI-compatible completions params", () => {
 
     await stream.result();
 
-    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ max_tokens: 1_024 });
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      max_tokens: 1_024,
+      thinking: { type: "disabled" },
+    });
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("max_completion_tokens");
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
+  });
+
+  it("enables Z.AI thinking with the documented payload when requested", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "high",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      thinking: { type: "enabled" },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 
   it("forwards simple stop sequences to request params", async () => {
