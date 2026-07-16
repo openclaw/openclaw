@@ -1,51 +1,18 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { generateIdentity, signReceipt } from "../protocol/index.js";
-import type { ReefPeerTrust } from "./friend-types.js";
 import {
   createReefOwnerNoticeHandler,
   processReefInboxEntriesInOrder,
   ReefReceiptNotifier,
 } from "./owner-notice.js";
-import type { ReefTrustStore } from "./trust-store.js";
-import type { InboxEntry } from "./types.js";
+import type { InboxEntry, ReefDeliveryRejection } from "./types.js";
 
-function rejectedReceipt(
-  peer: string,
-  identity: ReturnType<typeof generateIdentity>,
-  id: string,
-): InboxEntry {
+function rejection(peer: string, id: string): ReefDeliveryRejection {
   return {
-    seq: 1,
     peer,
     id,
-    kind: "receipt",
-    receipt: signReceipt(
-      {
-        id,
-        bodyHash: "a".repeat(64),
-        auditHead: "b".repeat(64),
-        status: "rejected",
-        category: "guard_deny",
-      },
-      identity.signing.secretKey,
-    ),
-    ts: 1,
+    category: "guard_deny",
   };
-}
-
-function trustFor(peer: string, identity: ReturnType<typeof generateIdentity>): ReefTrustStore {
-  const friend: ReefPeerTrust = {
-    autonomy: "bounded",
-    ed25519PublicKey: identity.signing.publicKey,
-    x25519PublicKey: identity.encryption.publicKey,
-    keyEpoch: 1,
-    safetyNumberChanged: false,
-    approvedAt: 1,
-  };
-  return {
-    get: (candidate: string) => (candidate === peer ? friend : undefined),
-  } as ReefTrustStore;
 }
 
 describe("createReefOwnerNoticeHandler", () => {
@@ -120,25 +87,26 @@ describe("processReefInboxEntriesInOrder", () => {
 
     await processReefInboxEntriesInOrder({
       entries: [message, receipt, later],
-      notifyVerified: async ([entry]) => {
-        order.push(`notice:${entry!.id}`);
-        if (entry === receipt) {
-          throw new Error("notice failed");
-        }
-      },
       processEntries: async ([entry]) => {
         order.push(`process:${entry!.id}`);
+        return entry === receipt ? [rejection("alice", entry.id)] : [];
+      },
+      notifyRejections: async ([deliveryRejection]) => {
+        order.push(`notice:${deliveryRejection?.id ?? "none"}`);
+        if (deliveryRejection?.id === receipt.id) {
+          throw new Error("notice failed");
+        }
       },
       onNoticeError,
     });
 
     expect(order).toEqual([
-      "notice:message",
       "process:message",
-      "notice:receipt",
+      "notice:none",
       "process:receipt",
-      "notice:later",
+      "notice:receipt",
       "process:later",
+      "notice:none",
     ]);
     expect(onNoticeError).toHaveBeenCalledOnce();
     expect(onNoticeError).toHaveBeenCalledWith(
@@ -149,17 +117,17 @@ describe("processReefInboxEntriesInOrder", () => {
 
 describe("ReefReceiptNotifier", () => {
   it("wakes once per peer cooldown and tells later retries to stop", async () => {
-    const alice = generateIdentity();
     const notify = vi.fn(async () => {});
+    const complete = vi.fn();
     let now = 10_000;
-    const notifier = new ReefReceiptNotifier(trustFor("alice", alice), notify, {
+    const notifier = new ReefReceiptNotifier(notify, complete, {
       now: () => now,
     });
-    const first = rejectedReceipt("alice", alice, "01JZ0000000000000000000105");
-    const second = rejectedReceipt("alice", alice, "01JZ0000000000000000000107");
-    const later = rejectedReceipt("alice", alice, "01JZ0000000000000000000108");
+    const first = rejection("alice", "01JZ0000000000000000000105");
+    const second = rejection("alice", "01JZ0000000000000000000107");
+    const later = rejection("alice", "01JZ0000000000000000000108");
 
-    await notifier.notifyVerified([first, second, first]);
+    await notifier.notifyRejections([first, second, first]);
 
     expect(notify).toHaveBeenCalledTimes(2);
     expect(notify.mock.calls[0]![0]).toMatchObject({
@@ -174,19 +142,20 @@ describe("ReefReceiptNotifier", () => {
     });
 
     now += 15 * 60 * 1_000;
-    await notifier.notifyVerified([later]);
+    await notifier.notifyRejections([later]);
 
     expect(notify).toHaveBeenCalledTimes(3);
     expect(notify.mock.calls[2]![0]).toMatchObject({ wakeAgent: true });
+    expect(complete).toHaveBeenCalledTimes(3);
   });
 
   it("retries a failed notice once without blocking inbox progress", async () => {
-    const alice = generateIdentity();
     const error = new Error("queue unavailable");
     const notify = vi.fn().mockRejectedValue(error);
     const onError = vi.fn();
+    const complete = vi.fn();
     const scheduled: Array<() => Promise<void>> = [];
-    const notifier = new ReefReceiptNotifier(trustFor("alice", alice), notify, {
+    const notifier = new ReefReceiptNotifier(notify, complete, {
       schedule: (task, delayMs) => {
         expect(delayMs).toBe(1_000);
         scheduled.push(task);
@@ -195,7 +164,7 @@ describe("ReefReceiptNotifier", () => {
     });
 
     await expect(
-      notifier.notifyVerified([rejectedReceipt("alice", alice, "01JZ0000000000000000000109")]),
+      notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000109")]),
     ).resolves.toBeUndefined();
 
     expect(notify).toHaveBeenCalledOnce();
@@ -208,34 +177,71 @@ describe("ReefReceiptNotifier", () => {
     expect(scheduled).toHaveLength(1);
 
     notify.mockResolvedValueOnce(undefined);
-    await notifier.notifyVerified([rejectedReceipt("alice", alice, "01JZ0000000000000000000110")]);
+    await notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000110")]);
     expect(notify).toHaveBeenCalledTimes(3);
     expect(notify.mock.calls[2]![0]).toMatchObject({
       text: expect.stringMatching(/Stop automatic retries/),
       wakeAgent: true,
     });
+    expect(complete).toHaveBeenCalledOnce();
   });
 
-  it("cancels stale retry guidance when a later rejection is handled", async () => {
-    const alice = generateIdentity();
+  it("keeps a superseded rejection pending until replacement guidance is queued", async () => {
     const error = new Error("queue unavailable");
-    const notify = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(undefined);
+    const notify = vi
+      .fn()
+      .mockRejectedValueOnce(error)
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue(undefined);
+    const complete = vi.fn();
     const scheduled: Array<() => Promise<void>> = [];
-    const notifier = new ReefReceiptNotifier(trustFor("alice", alice), notify, {
+    const notifier = new ReefReceiptNotifier(notify, complete, {
       now: () => 10_000,
       schedule: (task) => scheduled.push(task),
     });
 
-    await notifier.notifyVerified([rejectedReceipt("alice", alice, "01JZ0000000000000000000111")]);
-    await notifier.notifyVerified([rejectedReceipt("alice", alice, "01JZ0000000000000000000112")]);
+    await notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000111")]);
+    await notifier.notifyRejections([rejection("alice", "01JZ0000000000000000000112")]);
 
     expect(notify).toHaveBeenCalledTimes(2);
     expect(notify.mock.calls[1]![0]).toMatchObject({
       text: expect.stringMatching(/Stop automatic retries/),
       wakeAgent: true,
     });
+    expect(complete).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(2);
 
     await scheduled[0]!();
     expect(notify).toHaveBeenCalledTimes(2);
+
+    await scheduled[1]!();
+    expect(notify).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a notice pending until durable completion succeeds", async () => {
+    const notify = vi.fn(async () => {});
+    const completionError = new Error("state unavailable");
+    const complete = vi.fn().mockImplementationOnce(() => {
+      throw completionError;
+    });
+    const onError = vi.fn();
+    const scheduled: Array<() => Promise<void>> = [];
+    const notifier = new ReefReceiptNotifier(notify, complete, {
+      schedule: (task) => scheduled.push(task),
+      onError,
+    });
+    const pending = rejection("alice", "01JZ0000000000000000000114");
+
+    await notifier.notifyRejections([pending]);
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(completionError, pending.id);
+    expect(scheduled).toHaveLength(1);
+
+    await scheduled[0]!();
+    expect(notify).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 });

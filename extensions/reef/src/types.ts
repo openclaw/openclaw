@@ -53,3 +53,9 @@ export interface ReefIngressMessage {
   provenance: string;
   autonomy: ReefAutonomy;
 }
+
+export interface ReefDeliveryRejection {
+  id: string;
+  peer: string;
+  category?: string;
+}

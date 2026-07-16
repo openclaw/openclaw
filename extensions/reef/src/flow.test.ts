@@ -79,10 +79,46 @@ function peerTrust(
 
 function trust(initial: Record<string, ReefPeerTrust>) {
   const values = new Map(Object.entries(initial));
+  const deliveries = new Map<string, { bodyHash: string; rejection?: { category?: string } }>();
   return {
     values,
+    deliveries,
     store: {
       get: (peer: string) => values.get(peer),
+      recordOutboundDelivery: (peer: string, id: string, bodyHash: string) => {
+        const key = `${peer}:${id}`;
+        if (deliveries.has(key)) {
+          throw new Error(`duplicate delivery ${id}`);
+        }
+        deliveries.set(key, { bodyHash });
+      },
+      outboundDelivery: (peer: string, id: string) => deliveries.get(`${peer}:${id}`),
+      consumeOutboundDelivery: (peer: string, id: string, bodyHash: string) => {
+        const key = `${peer}:${id}`;
+        if (deliveries.get(key)?.bodyHash !== bodyHash) {
+          return false;
+        }
+        return deliveries.delete(key);
+      },
+      recordOutboundRejection: (peer: string, id: string, bodyHash: string, category?: string) => {
+        const key = `${peer}:${id}`;
+        const current = deliveries.get(key);
+        if (current?.bodyHash !== bodyHash) {
+          return false;
+        }
+        deliveries.set(key, {
+          ...current,
+          rejection: category ? { category } : {},
+        });
+        return true;
+      },
+      completeOutboundRejection: (peer: string, id: string) => {
+        const key = `${peer}:${id}`;
+        if (!deliveries.get(key)?.rejection) {
+          return false;
+        }
+        return deliveries.delete(key);
+      },
     } as unknown as ReefTrustStore,
   };
 }
@@ -435,7 +471,7 @@ describe("ReefMessageFlow outbound", () => {
 
     await expect(flow.send("bob", "ordinary text")).rejects.toMatchObject({
       stage: "guard",
-      message: expect.stringContaining("Rephrase once and resend"),
+      message: expect.stringContaining("Do not retry or rephrase it automatically"),
     });
     expect(relay.sendEnvelope).not.toHaveBeenCalled();
   });
@@ -461,7 +497,9 @@ describe("ReefMessageFlow delivery receipts", () => {
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
-    const receiptNotifier = new ReefReceiptNotifier(trusted.store, onOwnerNotice);
+    const receiptNotifier = new ReefReceiptNotifier(onOwnerNotice, (rejection) => {
+      trusted.store.completeOutboundRejection(rejection.peer, rejection.id);
+    });
     const id = await flow.send("alice", "ordinary coordination");
     const receipt = signReceipt(
       {
@@ -502,15 +540,15 @@ describe("ReefMessageFlow delivery receipts", () => {
     await expect(
       processReefInboxEntriesInOrder({
         entries: [entry, invalidEntry],
-        notifyVerified: (batch) => receiptNotifier.notifyVerified(batch),
         processEntries: (batch) => flow.processEntries(batch),
+        notifyRejections: (rejections) => receiptNotifier.notifyRejections(rejections),
       }),
     ).rejects.toThrow("invalid delivery receipt");
     await expect(
       processReefInboxEntriesInOrder({
         entries: [{ ...entry, seq: 3 }, invalidEntry],
-        notifyVerified: (batch) => receiptNotifier.notifyVerified(batch),
         processEntries: (batch) => flow.processEntries(batch),
+        notifyRejections: (rejections) => receiptNotifier.notifyRejections(rejections),
       }),
     ).rejects.toThrow("invalid delivery receipt");
 
@@ -520,6 +558,111 @@ describe("ReefMessageFlow delivery receipts", () => {
       peer: "alice",
       contextKey: `reef:delivery-rejected:${id}`,
       wakeAgent: true,
+    });
+    expect(trusted.deliveries.size).toBe(0);
+  });
+
+  it("does not surface a signed rejection without matching outbound state", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const trusted = trust({ alice: peerTrust(alice) });
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trusted.store,
+      keys: bob,
+      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+      transport: transport() as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(12)),
+      replay: new MemoryReplayStore(),
+      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+    const id = "01JZ0000000000000000000113";
+    const receipt = signReceipt(
+      {
+        id,
+        bodyHash: "a".repeat(64),
+        auditHead: "b".repeat(64),
+        status: "rejected",
+        category: "guard_deny",
+      },
+      alice.signing.secretKey,
+    );
+
+    await expect(
+      flow.processEntries([{ seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 }]),
+    ).resolves.toEqual([]);
+  });
+
+  it("rejects a peer-signed receipt with the wrong outbound body hash", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const trusted = trust({ alice: peerTrust(alice) });
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trusted.store,
+      keys: bob,
+      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+      transport: transport() as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(13)),
+      replay: new MemoryReplayStore(),
+      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+    const id = await flow.send("alice", "expected body");
+    const receipt = signReceipt(
+      {
+        id,
+        bodyHash: "c".repeat(64),
+        auditHead: "d".repeat(64),
+        status: "rejected",
+        category: "guard_deny",
+      },
+      alice.signing.secretKey,
+    );
+
+    await expect(
+      flow.processEntries([{ seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 }]),
+    ).rejects.toThrow("invalid delivery receipt");
+    expect(trusted.deliveries.has(`alice:${id}`)).toBe(true);
+
+    const bodyHash = sha256Hex(canonicalBytes({ text: "expected body" }));
+    const rejected = signReceipt(
+      {
+        id,
+        bodyHash,
+        auditHead: "e".repeat(64),
+        status: "rejected",
+        category: "guard_deny",
+      },
+      alice.signing.secretKey,
+    );
+    await expect(
+      flow.processEntries([
+        { seq: 2, peer: "alice", id, kind: "receipt", receipt: rejected, ts: 1 },
+      ]),
+    ).resolves.toEqual([{ id, peer: "alice", category: "guard_deny" }]);
+
+    const conflictingAccepted = signReceipt(
+      {
+        id,
+        bodyHash,
+        auditHead: "f".repeat(64),
+        status: "accepted",
+      },
+      alice.signing.secretKey,
+    );
+    await expect(
+      flow.processEntries([
+        { seq: 3, peer: "alice", id, kind: "receipt", receipt: conflictingAccepted, ts: 1 },
+      ]),
+    ).rejects.toThrow("invalid delivery receipt");
+    expect(trusted.deliveries.get(`alice:${id}`)?.rejection).toEqual({
+      category: "guard_deny",
     });
   });
 });

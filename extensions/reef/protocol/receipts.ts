@@ -41,8 +41,14 @@ export async function confirmDelivery(
   receipt: SignedReceipt,
   recipientSigningPublicKey: string,
   audit: AuditStore,
+  expected?: { id?: string; bodyHash?: string; status?: ReceiptBody["status"] },
 ): Promise<AuditEntry> {
-  if (!verifyReceipt(receipt, recipientSigningPublicKey)) {
+  if (
+    !verifyReceipt(receipt, recipientSigningPublicKey) ||
+    (expected?.id !== undefined && receipt.id !== expected.id) ||
+    (expected?.bodyHash !== undefined && receipt.bodyHash !== expected.bodyHash) ||
+    (expected?.status !== undefined && receipt.status !== expected.status)
+  ) {
     throw new Error("invalid delivery receipt");
   }
   return appendAudit(audit, "confirm_delivery", {

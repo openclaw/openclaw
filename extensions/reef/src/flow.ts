@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   appendInboxRead,
+  bodyHash as hashMessageBody,
   composeInbound,
   composeOutbound,
   confirmDelivery,
@@ -20,7 +21,7 @@ import { autonomyBudget } from "./config-schema.js";
 import { ReviewApprovalStore, writePrivateJson } from "./state.js";
 import { ReefTransportClient } from "./transport.js";
 import type { ReefTrustStore } from "./trust-store.js";
-import type { InboxEntry, ReefIngressMessage, ReefKeys } from "./types.js";
+import type { InboxEntry, ReefDeliveryRejection, ReefIngressMessage, ReefKeys } from "./types.js";
 
 export class ReefMessageFlow {
   private readonly delivered = new Set<string>();
@@ -53,15 +54,16 @@ export class ReefMessageFlow {
       throw new Error(`Reef peer @${peer} is not approved with current keys`);
     }
     const id = this.ulid();
+    const body = {
+      text,
+      ...(context.thread ? { thread: context.thread } : {}),
+      ...(context.replyTo ? { replyTo: context.replyTo } : {}),
+    };
     const result = await composeOutbound({
       id,
       from: formatHandleEpoch(this.requireHandle(), this.options.keys.keyEpoch),
       to: formatHandleEpoch(peer, friend.keyEpoch),
-      body: {
-        text,
-        ...(context.thread ? { thread: context.thread } : {}),
-        ...(context.replyTo ? { replyTo: context.replyTo } : {}),
-      },
+      body,
       senderSigningSecretKey: this.options.keys.signing.secretKey,
       recipientEncryptionPublicKey: friend.x25519PublicKey,
       guard: this.options.guard,
@@ -69,23 +71,27 @@ export class ReefMessageFlow {
       policyVersion: this.requireGuardConfig().policyVersion,
       reviewGate: (request) => this.options.reviews.request(request),
     });
+    // Persist the exact peer/id/body binding before the relay can return a
+    // receipt. Only a matching atomic consume may later authorize a wake.
+    this.options.trust.recordOutboundDelivery(peer, id, hashMessageBody(body));
     await this.options.transport.sendEnvelope(peer, result.envelope);
     return id;
   }
 
-  async processEntries(entries: InboxEntry[]): Promise<void> {
+  async processEntries(entries: InboxEntry[]): Promise<ReefDeliveryRejection[]> {
     if (!entries.length) {
-      return;
+      return [];
     }
+    const rejections: ReefDeliveryRejection[] = [];
     await appendInboxRead(
       this.options.audit,
       entries.map((entry) => entry.id),
     );
     for (const entry of entries) {
       if (entry.kind === "receipt") {
-        const friend = this.options.trust.get(entry.peer);
-        if (entry.receipt && friend) {
-          await confirmDelivery(entry.receipt, friend.ed25519PublicKey, this.options.audit);
+        const rejection = await this.processReceipt(entry);
+        if (rejection) {
+          rejections.push(rejection);
         }
         continue;
       }
@@ -93,6 +99,54 @@ export class ReefMessageFlow {
         await this.processEnvelope(entry.peer, entry.envelope);
       }
     }
+    return rejections;
+  }
+
+  private async processReceipt(
+    entry: InboxEntry & { kind: "receipt" },
+  ): Promise<ReefDeliveryRejection | undefined> {
+    const receipt = entry.receipt;
+    const friend = this.options.trust.get(entry.peer);
+    if (!receipt || !friend) {
+      return undefined;
+    }
+    const delivery = this.options.trust.outboundDelivery(entry.peer, entry.id);
+    await confirmDelivery(receipt, friend.ed25519PublicKey, this.options.audit, {
+      id: entry.id,
+      ...(delivery ? { bodyHash: delivery.bodyHash } : {}),
+      ...(delivery?.rejection ? { status: "rejected" as const } : {}),
+    });
+    if (!delivery) {
+      return undefined;
+    }
+    if (receipt.status === "accepted") {
+      if (
+        !this.options.trust.consumeOutboundDelivery(entry.peer, entry.id, receipt.bodyHash) &&
+        this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection
+      ) {
+        throw new Error("invalid delivery receipt");
+      }
+      return undefined;
+    }
+    if (
+      !this.options.trust.recordOutboundRejection(
+        entry.peer,
+        entry.id,
+        receipt.bodyHash,
+        receipt.category,
+      )
+    ) {
+      return undefined;
+    }
+    const pending = this.options.trust.outboundDelivery(entry.peer, entry.id)?.rejection;
+    if (!pending) {
+      return undefined;
+    }
+    return {
+      id: receipt.id,
+      peer: entry.peer,
+      ...(pending.category ? { category: pending.category } : {}),
+    };
   }
 
   private async processEnvelope(

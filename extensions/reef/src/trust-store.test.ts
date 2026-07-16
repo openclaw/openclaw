@@ -107,6 +107,39 @@ describe("ReefTrustStore", () => {
     expect(store.outboundRequestStatus("clawd", second)).toBe("revoked");
   });
 
+  it("persists and atomically consumes outbound delivery bindings", () => {
+    const id = "01JZ0000000000000000000120";
+    const bodyHash = "a".repeat(64);
+    openReefTrustStore(runtime(), config()).recordOutboundDelivery("clawd", id, bodyHash);
+
+    const reopened = openReefTrustStore(runtime(), config());
+    expect(reopened.outboundDelivery("clawd", id)).toEqual({ bodyHash });
+    expect(reopened.consumeOutboundDelivery("clawd", id, "b".repeat(64))).toBe(false);
+    expect(reopened.outboundDelivery("clawd", id)).toEqual({ bodyHash });
+    expect(reopened.consumeOutboundDelivery("clawd", id, bodyHash)).toBe(true);
+    expect(reopened.outboundDelivery("clawd", id)).toBeUndefined();
+    expect(reopened.consumeOutboundDelivery("clawd", id, bodyHash)).toBe(false);
+  });
+
+  it("keeps rejection notices durable until the sender event is queued", () => {
+    const id = "01JZ0000000000000000000121";
+    const bodyHash = "a".repeat(64);
+    const store = openReefTrustStore(runtime(), config());
+    store.recordOutboundDelivery("clawd", id, bodyHash);
+
+    expect(store.recordOutboundRejection("clawd", id, "b".repeat(64), "guard_deny")).toBe(false);
+    expect(store.recordOutboundRejection("clawd", id, bodyHash, "guard_deny")).toBe(true);
+
+    const reopened = openReefTrustStore(runtime(), config());
+    expect(reopened.pendingOutboundRejections()).toEqual([
+      { id, peer: "clawd", category: "guard_deny" },
+    ]);
+    expect(reopened.consumeOutboundDelivery("clawd", id, bodyHash)).toBe(false);
+    expect(reopened.completeOutboundRejection("clawd", id)).toBe(true);
+    expect(reopened.pendingOutboundRejections()).toEqual([]);
+    expect(reopened.completeOutboundRejection("clawd", id)).toBe(false);
+  });
+
   it("rejects autonomy updates for untrusted or invalid peers", () => {
     const store = openReefTrustStore(runtime(), config());
 

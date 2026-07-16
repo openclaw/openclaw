@@ -10,13 +10,26 @@ import {
   type ReefAutonomy,
   type ReefPeerTrust,
 } from "./friend-types.js";
-import type { RelayFriend } from "./types.js";
+import type { ReefDeliveryRejection, RelayFriend } from "./types.js";
 
 export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
+const REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE = "outbound-deliveries";
+const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
+const REEF_OUTBOUND_DELIVERY_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const ReefOutboundRequestSchema = z.record(z.uuid(), z.number().int().nonnegative());
+const ReefOutboundRejectionSchema = z
+  .object({ category: z.string().min(1).max(64).optional() })
+  .strict();
+const ReefOutboundDeliverySchema = z
+  .object({
+    bodyHash: z.string().regex(SHA256_HEX_PATTERN),
+    rejection: ReefOutboundRejectionSchema.optional(),
+  })
+  .strict();
 
 const ReefPeerStateSchema = z
   .object({
@@ -30,6 +43,7 @@ type ReefPeerStateSnapshot = z.infer<typeof ReefPeerStateSchema>;
 
 type ReefTrustStores = {
   peers: PluginStateSyncKeyedStore<ReefPeerStateSnapshot>;
+  deliveries: PluginStateSyncKeyedStore<z.infer<typeof ReefOutboundDeliverySchema>>;
 };
 
 function requirePeer(raw: string): string {
@@ -73,6 +87,14 @@ function openStores(openStore: PluginRuntime["state"]["openSyncKeyedStore"]): Re
       namespace: REEF_TRUST_STORE_NAMESPACE,
       maxEntries: REEF_TRUST_STORE_MAX_ENTRIES,
       overflowPolicy: "reject-new",
+    }),
+    // The relay retains undelivered envelopes for 30 days. Matching expiry
+    // prevents an older signed receipt from authorizing a fresh agent wake.
+    deliveries: openStore<z.infer<typeof ReefOutboundDeliverySchema>>({
+      namespace: REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE,
+      maxEntries: REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: REEF_OUTBOUND_DELIVERY_TTL_MS,
     }),
   };
 }
@@ -284,8 +306,111 @@ export class ReefTrustStore {
     });
   }
 
+  recordOutboundDelivery(peer: string, id: string, bodyHash: string): void {
+    const key = this.#deliveryKey(peer, id);
+    const value = ReefOutboundDeliverySchema.parse({ bodyHash });
+    if (!this.stores.deliveries.registerIfAbsent(key, value)) {
+      throw new Error(`Duplicate outbound Reef delivery id ${id}`);
+    }
+  }
+
+  outboundDelivery(
+    peer: string,
+    id: string,
+  ): { bodyHash: string; rejection?: { category?: string } } | undefined {
+    const value = this.stores.deliveries.lookup(this.#deliveryKey(peer, id));
+    return value === undefined ? undefined : ReefOutboundDeliverySchema.parse(value);
+  }
+
+  consumeOutboundDelivery(peer: string, id: string, bodyHash: string): boolean {
+    const expected = ReefOutboundDeliverySchema.parse({ bodyHash });
+    const deleteIf = this.stores.deliveries.deleteIf;
+    if (!deleteIf) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
+    }
+    return deleteIf(this.#deliveryKey(peer, id), (current) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(current);
+      return (
+        parsed.success &&
+        parsed.data.bodyHash === expected.bodyHash &&
+        parsed.data.rejection === undefined
+      );
+    });
+  }
+
+  recordOutboundRejection(peer: string, id: string, bodyHash: string, category?: string): boolean {
+    const key = this.#deliveryKey(peer, id);
+    const expected = ReefOutboundDeliverySchema.parse({ bodyHash });
+    const current = this.outboundDelivery(peer, id);
+    if (current?.bodyHash !== expected.bodyHash) {
+      return false;
+    }
+    if (current.rejection) {
+      return true;
+    }
+    const update = this.stores.deliveries.update;
+    if (!update) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state updates");
+    }
+    const rejection = ReefOutboundRejectionSchema.parse(category ? { category } : {});
+    return update(key, (value) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(value);
+      if (!parsed.success || parsed.data.bodyHash !== expected.bodyHash) {
+        return undefined;
+      }
+      if (parsed.data.rejection) {
+        return parsed.data;
+      }
+      return { ...parsed.data, rejection };
+    });
+  }
+
+  pendingOutboundRejections(): ReefDeliveryRejection[] {
+    return this.stores.deliveries
+      .entries()
+      .filter((entry) => entry.key.startsWith(this.#prefix))
+      .flatMap((entry) => {
+        const delivery = ReefOutboundDeliverySchema.parse(entry.value);
+        if (!delivery.rejection) {
+          return [];
+        }
+        const separator = entry.key.lastIndexOf(":");
+        const peer = requirePeer(entry.key.slice(this.#prefix.length, separator));
+        const id = entry.key.slice(separator + 1);
+        if (!MESSAGE_ID_PATTERN.test(id)) {
+          return [];
+        }
+        return [
+          {
+            id,
+            peer,
+            ...(delivery.rejection.category ? { category: delivery.rejection.category } : {}),
+          },
+        ];
+      })
+      .toSorted((left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1));
+  }
+
+  completeOutboundRejection(peer: string, id: string): boolean {
+    const deleteIf = this.stores.deliveries.deleteIf;
+    if (!deleteIf) {
+      throw new Error("Reef outbound delivery state requires atomic plugin-state deletion");
+    }
+    return deleteIf(this.#deliveryKey(peer, id), (current) => {
+      const parsed = ReefOutboundDeliverySchema.safeParse(current);
+      return parsed.success && parsed.data.rejection !== undefined;
+    });
+  }
+
   #key(peer: string): string {
     return `${this.#prefix}${requirePeer(peer)}`;
+  }
+
+  #deliveryKey(peer: string, id: string): string {
+    if (!MESSAGE_ID_PATTERN.test(id)) {
+      throw new Error(`Invalid Reef delivery id: ${id}`);
+    }
+    return `${this.#prefix}${requirePeer(peer)}:${id}`;
   }
 
   #parseState(value: ReefPeerStateSnapshot | undefined): ReefPeerStateSnapshot {

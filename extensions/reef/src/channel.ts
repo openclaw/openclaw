@@ -282,10 +282,17 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             contextKey: `reef:${ctx.account.config.handle}`,
           }),
       });
-      const receiptNotifier = new ReefReceiptNotifier(trust, ownerNotice, {
-        onError: (error, receiptId) =>
-          ctx.log?.error?.(`reef rejection notice failed for ${receiptId}: ${String(error)}`),
-      });
+      const receiptNotifier = new ReefReceiptNotifier(
+        ownerNotice,
+        (rejection) => {
+          trust.completeOutboundRejection(rejection.peer, rejection.id);
+        },
+        {
+          onError: (error, receiptId) =>
+            ctx.log?.error?.(`reef rejection notice failed for ${receiptId}: ${String(error)}`),
+        },
+      );
+      await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
       setActiveReef({ flow, friends, reviews });
 
       const reconcile = async () => {
@@ -306,8 +313,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         (entries) =>
           processReefInboxEntriesInOrder({
             entries,
-            notifyVerified: (batch) => receiptNotifier.notifyVerified(batch),
             processEntries: (batch) => flow.processEntries(batch),
+            notifyRejections: (rejections) => receiptNotifier.notifyRejections(rejections),
             onNoticeError: (error) =>
               ctx.log?.error?.(`reef rejection notice processing failed: ${String(error)}`),
           }),

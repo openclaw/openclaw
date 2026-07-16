@@ -1,7 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { verifyReceipt } from "../protocol/index.js";
-import type { ReefTrustStore } from "./trust-store.js";
-import type { InboxEntry } from "./types.js";
+import type { InboxEntry, ReefDeliveryRejection } from "./types.js";
 
 type ResolveAgentRouteParams = Parameters<
   PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
@@ -14,7 +12,7 @@ export interface ReefOwnerNotice {
   wakeAgent?: boolean;
 }
 
-const MAX_REJECTION_NOTICES = 1_024;
+const MAX_REJECTION_PEERS = 1_024;
 const REJECTION_WAKE_COOLDOWN_MS = 15 * 60 * 1_000;
 const REJECTION_NOTICE_RETRY_MS = 1_000;
 
@@ -27,8 +25,23 @@ interface ReefReceiptNotifierOptions {
 interface ReefPeerNoticeState {
   lastRejectionAt?: number;
   lastWakeAt?: number;
-  retryToken?: symbol;
+  retry?: ReefNoticeRetry;
 }
+
+type ReefNoticeRetry =
+  | {
+      kind: "notify";
+      generation: symbol;
+      rejection: ReefDeliveryRejection;
+      notice: ReefOwnerNotice;
+      covered: ReefDeliveryRejection[];
+      cleanup: ReefDeliveryRejection[];
+    }
+  | {
+      kind: "complete";
+      generation: symbol;
+      pending: ReefDeliveryRejection[];
+    };
 
 function scheduleNoticeRetry(task: () => Promise<void>, delayMs: number): void {
   setTimeout(() => void task(), delayMs).unref();
@@ -40,68 +53,72 @@ export class ReefReceiptNotifier {
   private readonly peerQueues = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly trust: ReefTrustStore,
     private readonly notify: (notice: ReefOwnerNotice) => Promise<void>,
+    private readonly complete: (rejection: ReefDeliveryRejection) => void,
     private readonly options: ReefReceiptNotifierOptions = {},
   ) {}
 
-  async notifyVerified(entries: readonly InboxEntry[]): Promise<void> {
-    for (const entry of entries) {
-      if (entry.kind !== "receipt") {
-        continue;
-      }
-      await this.runForPeer(entry.peer, () => this.notifyVerifiedReceipt(entry));
+  async notifyRejections(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
+    for (const rejection of rejections) {
+      await this.runForPeer(rejection.peer, () => this.notifyRejection(rejection));
     }
   }
 
-  private async notifyVerifiedReceipt(entry: InboxEntry & { kind: "receipt" }): Promise<void> {
-    const receipt = entry.receipt;
-    const friend = this.trust.get(entry.peer);
-    if (
-      !receipt ||
-      receipt.status !== "rejected" ||
-      !friend ||
-      !verifyReceipt(receipt, friend.ed25519PublicKey) ||
-      this.noticed.has(receipt.id)
-    ) {
+  private async notifyRejection(rejection: ReefDeliveryRejection): Promise<void> {
+    if (this.noticed.has(rejection.id)) {
       return;
     }
-    // Relay reconnects can replay signed receipts. A bounded per-process memory
-    // prevents retry storms while preserving per-entry verification before wake.
-    this.noticed.add(receipt.id);
-    if (this.noticed.size > MAX_REJECTION_NOTICES) {
+    // Flow already atomically bound this rejection to a durable outbound record.
+    // This secondary bound prevents a duplicate callback from waking twice.
+    this.noticed.add(rejection.id);
+    if (this.noticed.size > MAX_REJECTION_PEERS) {
       const oldest = this.noticed.values().next().value;
       if (oldest !== undefined) {
         this.noticed.delete(oldest);
       }
     }
     const now = this.now();
-    const state = this.touchPeerState(entry.peer);
+    const state = this.touchPeerState(rejection.peer);
+    const previousRetry = state.retry;
+    state.retry = undefined;
+    const covered =
+      previousRetry?.kind === "notify"
+        ? this.uniqueRejections([...previousRetry.covered, previousRetry.rejection])
+        : [];
+    const cleanup =
+      previousRetry?.kind === "notify"
+        ? previousRetry.cleanup
+        : previousRetry?.kind === "complete"
+          ? previousRetry.pending
+          : [];
     const repeatedRejection =
       state.lastRejectionAt !== undefined &&
       now - state.lastRejectionAt < REJECTION_WAKE_COOLDOWN_MS;
     const wakeAgent =
       state.lastWakeAt === undefined || now - state.lastWakeAt >= REJECTION_WAKE_COOLDOWN_MS;
     state.lastRejectionAt = now;
-    state.retryToken = undefined;
-    const guardRejected = receipt.category === "guard_deny";
+    const guardRejected = rejection.category === "guard_deny";
     const notice: ReefOwnerNotice = {
       text: guardRejected
         ? repeatedRejection
-          ? `Another Reef message to @${entry.peer} was rejected by the peer's inbound guard (message ${receipt.id}). Stop automatic retries and wait for owner guidance.`
-          : `Your Reef message to @${entry.peer} was rejected by the peer's inbound guard (message ${receipt.id}). Rephrase it at most once and resend if still appropriate; do not retry unchanged text. If that retry is also rejected, stop and wait for owner guidance.`
+          ? `Another Reef message to @${rejection.peer} was rejected by the peer's inbound guard (message ${rejection.id}). Stop automatic retries and wait for owner guidance.`
+          : `Your Reef message to @${rejection.peer} was rejected by the peer's inbound guard (message ${rejection.id}). Rephrase it at most once and resend if still appropriate; do not retry unchanged text. If that retry is also rejected, stop and wait for owner guidance.`
         : repeatedRejection
-          ? `Another Reef message to @${entry.peer} was rejected before delivery (message ${receipt.id}). Stop automatic retries and wait for owner guidance.`
-          : `Your Reef message to @${entry.peer} was rejected before delivery (message ${receipt.id}).`,
-      peer: entry.peer,
-      contextKey: `reef:delivery-rejected:${receipt.id}`,
+          ? `Another Reef message to @${rejection.peer} was rejected before delivery (message ${rejection.id}). Stop automatic retries and wait for owner guidance.`
+          : `Your Reef message to @${rejection.peer} was rejected before delivery (message ${rejection.id}).`,
+      peer: rejection.peer,
+      contextKey: `reef:delivery-rejected:${rejection.id}`,
       wakeAgent,
     };
-    if (await this.deliverNotice(notice, receipt.id)) {
-      this.commitWake(state, notice);
+    if (!(await this.notifyOnce(notice, rejection.id))) {
+      this.scheduleNotifyRetry(rejection.peer, state, notice, rejection, covered, cleanup);
       return;
     }
-    this.scheduleRetry(entry.peer, state, notice, receipt.id);
+    this.commitWake(state, notice);
+    const pending = this.completeRejections([...cleanup, ...covered, rejection]);
+    if (pending.length > 0) {
+      this.scheduleCompletionRetry(rejection.peer, state, pending);
+    }
   }
 
   private now(): number {
@@ -112,7 +129,7 @@ export class ReefReceiptNotifier {
     const state = this.peerStates.get(peer) ?? {};
     this.peerStates.delete(peer);
     this.peerStates.set(peer, state);
-    if (this.peerStates.size > MAX_REJECTION_NOTICES) {
+    if (this.peerStates.size > MAX_REJECTION_PEERS) {
       const oldest = this.peerStates.keys().next().value;
       if (oldest !== undefined) {
         this.peerStates.delete(oldest);
@@ -140,7 +157,7 @@ export class ReefReceiptNotifier {
     }
   }
 
-  private async deliverNotice(notice: ReefOwnerNotice, receiptId: string): Promise<boolean> {
+  private async notifyOnce(notice: ReefOwnerNotice, receiptId: string): Promise<boolean> {
     try {
       await this.notify(notice);
       return true;
@@ -150,34 +167,114 @@ export class ReefReceiptNotifier {
     }
   }
 
-  private scheduleRetry(
+  private completeRejections(
+    rejections: readonly ReefDeliveryRejection[],
+  ): ReefDeliveryRejection[] {
+    const pending: ReefDeliveryRejection[] = [];
+    for (const rejection of this.uniqueRejections(rejections)) {
+      try {
+        this.complete(rejection);
+      } catch (error) {
+        this.reportError(error, rejection.id);
+        pending.push(rejection);
+      }
+    }
+    return pending;
+  }
+
+  private uniqueRejections(rejections: readonly ReefDeliveryRejection[]): ReefDeliveryRejection[] {
+    const unique = new Map<string, ReefDeliveryRejection>();
+    for (const rejection of rejections) {
+      unique.set(`${rejection.peer}\n${rejection.id}`, rejection);
+    }
+    return [...unique.values()];
+  }
+
+  private scheduleNotifyRetry(
     peer: string,
     state: ReefPeerNoticeState,
     notice: ReefOwnerNotice,
-    receiptId: string,
+    rejection: ReefDeliveryRejection,
+    covered: ReefDeliveryRejection[],
+    cleanup: ReefDeliveryRejection[],
   ): void {
-    const retryToken = Symbol(receiptId);
-    state.retryToken = retryToken;
+    const retryGeneration = Symbol(rejection.id);
+    state.retry = {
+      kind: "notify",
+      generation: retryGeneration,
+      rejection,
+      notice,
+      covered,
+      cleanup,
+    };
     const schedule = this.options.schedule ?? scheduleNoticeRetry;
     try {
       schedule(
         () =>
           this.runForPeer(peer, async () => {
-            if (this.peerStates.get(peer) !== state || state.retryToken !== retryToken) {
+            if (
+              this.peerStates.get(peer) !== state ||
+              state.retry?.generation !== retryGeneration
+            ) {
               return;
             }
-            state.retryToken = undefined;
-            if (await this.deliverNotice(notice, receiptId)) {
-              this.commitWake(state, notice);
+            state.retry = undefined;
+            const remainingCleanup = this.completeRejections(cleanup);
+            if (!(await this.notifyOnce(notice, rejection.id))) {
+              this.noticed.delete(rejection.id);
+              for (const coveredRejection of covered) {
+                this.noticed.delete(coveredRejection.id);
+              }
+              return;
+            }
+            this.commitWake(state, notice);
+            const pending = this.completeRejections([...remainingCleanup, ...covered, rejection]);
+            if (pending.length > 0) {
+              this.scheduleCompletionRetry(peer, state, pending);
             }
           }),
         REJECTION_NOTICE_RETRY_MS,
       );
     } catch (scheduleError) {
-      if (state.retryToken === retryToken) {
-        state.retryToken = undefined;
+      if (state.retry?.generation === retryGeneration) {
+        state.retry = undefined;
       }
-      this.reportError(scheduleError, receiptId);
+      this.noticed.delete(rejection.id);
+      for (const coveredRejection of covered) {
+        this.noticed.delete(coveredRejection.id);
+      }
+      this.reportError(scheduleError, rejection.id);
+    }
+  }
+
+  private scheduleCompletionRetry(
+    peer: string,
+    state: ReefPeerNoticeState,
+    pending: ReefDeliveryRejection[],
+  ): void {
+    const retryGeneration = Symbol("reef-notice-completion");
+    state.retry = { kind: "complete", generation: retryGeneration, pending };
+    const schedule = this.options.schedule ?? scheduleNoticeRetry;
+    try {
+      schedule(
+        () =>
+          this.runForPeer(peer, async () => {
+            if (
+              this.peerStates.get(peer) !== state ||
+              state.retry?.generation !== retryGeneration
+            ) {
+              return;
+            }
+            state.retry = undefined;
+            this.completeRejections(pending);
+          }),
+        REJECTION_NOTICE_RETRY_MS,
+      );
+    } catch (scheduleError) {
+      if (state.retry?.generation === retryGeneration) {
+        state.retry = undefined;
+      }
+      this.reportError(scheduleError, pending[0]?.id ?? "unknown");
     }
   }
 
@@ -192,13 +289,14 @@ export class ReefReceiptNotifier {
 
 export async function processReefInboxEntriesInOrder(params: {
   entries: readonly InboxEntry[];
-  notifyVerified: (entries: readonly InboxEntry[]) => Promise<void>;
-  processEntries: (entries: InboxEntry[]) => Promise<void>;
+  processEntries: (entries: InboxEntry[]) => Promise<ReefDeliveryRejection[]>;
+  notifyRejections: (rejections: readonly ReefDeliveryRejection[]) => Promise<void>;
   onNoticeError?: (error: unknown) => void;
 }): Promise<void> {
   for (const entry of params.entries) {
+    const rejections = await params.processEntries([entry]);
     try {
-      await params.notifyVerified([entry]);
+      await params.notifyRejections(rejections);
     } catch (error) {
       try {
         params.onNoticeError?.(error);
@@ -206,7 +304,6 @@ export async function processReefInboxEntriesInOrder(params: {
         // Notification diagnostics cannot hold the durable inbox cursor open.
       }
     }
-    await params.processEntries([entry]);
   }
 }
 

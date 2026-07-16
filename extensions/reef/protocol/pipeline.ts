@@ -352,7 +352,7 @@ async function classifyWithReview(
     throw new PipelineError(
       "guard",
       direction === "outbound"
-        ? "Reef outbound guard denied the message. Rephrase once and resend if still appropriate; do not retry unchanged text."
+        ? "Reef outbound guard denied the message. Do not retry or rephrase it automatically; ask the owner before sending related content."
         : "guard denied message",
       verdict,
     );
