@@ -190,7 +190,7 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
       return Boolean(
         resolveSeedSpeechApiKey(cfg.apiKey) ||
         ((cfg.appId || process.env.VOLCENGINE_TTS_APPID) &&
-          (cfg.token || process.env.VOLCENGINE_TTS_TOKEN)),
+          (cfg.token || process.env.VOLCENGINE_TTS_TOKEN?.trim())),
       );
     },
 
@@ -199,7 +199,7 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
       const overrides = readVolcengineOverrides(req.providerOverrides);
       const apiKey = resolveSeedSpeechApiKey(cfg.apiKey);
       const appId = cfg.appId || process.env.VOLCENGINE_TTS_APPID;
-      const token = cfg.token || process.env.VOLCENGINE_TTS_TOKEN;
+      const token = cfg.token || process.env.VOLCENGINE_TTS_TOKEN?.trim();
 
       if (!apiKey && (!appId || !token)) {
         throw new Error(
