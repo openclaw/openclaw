@@ -96,7 +96,7 @@ describe("verify-pr-hosted-gates", () => {
       workflowRuns: [inProgressRun],
       ciGateJobs: [gateJob],
     });
-    expect(evidence.workflows.map((workflow: { id: number }) => workflow.id)).toContain(42);
+    expect(evidence.workflows.map((workflow: { id: unknown }) => workflow.id)).toContain(42);
 
     // A gate job from a different run, a failed gate, and a missing gate all
     // fall back to requiring run completion. (A previous attempt's gate is

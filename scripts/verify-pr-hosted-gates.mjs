@@ -160,7 +160,7 @@ const CI_GATE_CHECK_NAME = "openclaw/ci-gate";
  * the run's own run_attempt — a prior attempt's gate success can never vouch
  * for a rerun that has not reached its gate yet.
  */
-export function hasSuccessfulCiGateJob(run, ciGateJobs, nowMs) {
+function hasSuccessfulCiGateJob(run, ciGateJobs, nowMs) {
   if (!run?.id || !Array.isArray(ciGateJobs)) {
     return false;
   }
