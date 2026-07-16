@@ -1735,6 +1735,26 @@ describe("sendMessageTelegram", () => {
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
+  it("preserves word boundaries when rendered markdown exceeds the text limit", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 53, chat: { id: "123" } });
+    const markdown = `**${"alpha beta gamma ".repeat(260)}**`;
+
+    await sendMessageTelegram("123", markdown, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    const chunks = sendMessageTexts(botApi.sendMessage);
+    const visibleChunks = chunks.map((chunk) => telegramHtmlToPlainTextFallback(chunk));
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    for (let index = 0; index < visibleChunks.length - 1; index += 1) {
+      const left = visibleChunks[index] ?? "";
+      const right = visibleChunks[index + 1] ?? "";
+      expect(`${left.at(-1) ?? ""}${right.at(0) ?? ""}`).not.toMatch(/^[A-Za-z]{2}$/);
+    }
+  });
+
   it("chunks long markdown headings on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
     const markdown = Array.from({ length: 600 }, (_, index) => `# Heading ${index + 1}`).join("\n");
