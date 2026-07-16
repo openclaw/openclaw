@@ -29,10 +29,7 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
-import {
-  createToolLimit,
-  resolveBudgetSummaryProfileFailureReason,
-} from "./run/budget-exhaustion.js";
+import { createToolLimit, resolveToolLimitSummaryAttempt } from "./run/budget-exhaustion.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -412,63 +409,47 @@ export async function runPreparedEmbeddedLoop(
         canRestartForLiveSwitch,
         preflightRecovery,
       } = normalizedAttempt;
-      const budgetSummaryInterrupted = terminalAborted || signalOwnedInterruption;
-      const finishBudgetSummary = async (
-        reason?: Parameters<
-          typeof failoverRetryController.maybeMarkAuthProfileFailure
-        >[0]["reason"],
-        failed = false,
-      ) => {
-        await failoverRetryController
-          .maybeMarkAuthProfileFailure({ profileId: lastProfileId, reason, modelId })
-          .catch((error: unknown) =>
-            log.warn(`summary profile failure mark failed: ${formatErrorMessage(error)}`),
-          );
-        return roundLimit!.finish(
+      const budgetSummaryResolution = await resolveToolLimitSummaryAttempt({
+        limit: roundLimit,
+        attempt,
+        assistant: attemptAssistant,
+        nativeModelOwned: preparedRuntime.nativeModelOwned,
+        preflightRecovery,
+        maxRecoveryAttempts: MAX_RUN_LOOP_ITERATIONS,
+        interrupted: terminalAborted || signalOwnedInterruption,
+        hasPromptError: Boolean(promptError),
+        terminalInterrupted,
+        provider: activeErrorContext.provider,
+        policy: params.authProfileFailurePolicy,
+        agentMeta: buildAttemptAgentMeta({
           attempt,
-          buildAttemptAgentMeta({
-            attempt,
-            assistant: attemptAssistant,
-            provider,
-            model: model.id,
-            ...outerContextTokenMeta,
-            contextBudgetStatus: contextRecoveryState.lastContextBudgetStatus,
-            compactionCount: contextRecoveryState.autoCompactionCount,
-            compactionTokensAfter: contextRecoveryState.lastCompactionTokensAfter,
-            usageAccumulator,
-            lastRunPromptUsage,
-            lastTurnTotal,
-          }),
-          terminalAborted,
-          setTerminalLifecycleMeta,
-          failed,
-        );
-      };
-      if (
-        roundLimit?.summaryPending &&
-        !budgetSummaryInterrupted &&
-        !preparedRuntime.nativeModelOwned &&
-        preflightRecovery?.handled
-      ) {
-        if (roundLimit.exhaustsRecovery(MAX_RUN_LOOP_ITERATIONS)) {
-          return await finishBudgetSummary(undefined, true);
-        }
-        if (preflightRecovery.source === "mid-turn") {
+          assistant: attemptAssistant,
+          provider,
+          model: model.id,
+          ...outerContextTokenMeta,
+          contextBudgetStatus: contextRecoveryState.lastContextBudgetStatus,
+          compactionCount: contextRecoveryState.autoCompactionCount,
+          compactionTokensAfter: contextRecoveryState.lastCompactionTokensAfter,
+          usageAccumulator,
+          lastRunPromptUsage,
+          lastTurnTotal,
+        }),
+        aborted: terminalAborted,
+        markTerminal: setTerminalLifecycleMeta,
+        maybeMarkProfileFailure: async (reason) => {
+          await failoverRetryController
+            .maybeMarkAuthProfileFailure({ profileId: lastProfileId, reason, modelId })
+            .catch((error: unknown) => log.warn(`summary: ${formatErrorMessage(error)}`));
+        },
+      });
+      if (budgetSummaryResolution.action === "retry") {
+        if (budgetSummaryResolution.continueFromCurrentTranscript) {
           sessionPromptState.continueFromCurrentTranscript();
         }
         continue;
       }
-      if (roundLimit?.summaryPending && !budgetSummaryInterrupted) {
-        const profileFailureReason = resolveBudgetSummaryProfileFailureReason({
-          attempt,
-          assistant: attemptAssistant,
-          provider: activeErrorContext.provider,
-          policy: params.authProfileFailurePolicy,
-        });
-        return await finishBudgetSummary(
-          profileFailureReason,
-          Boolean(promptError || terminalInterrupted || attemptAssistant?.stopReason === "error"),
-        );
+      if (budgetSummaryResolution.action === "complete") {
+        return budgetSummaryResolution.result;
       }
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: input,

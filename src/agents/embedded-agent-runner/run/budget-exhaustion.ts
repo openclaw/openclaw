@@ -100,6 +100,70 @@ export function resolveBudgetSummaryProfileFailureReason(params: {
   });
 }
 
+export async function resolveToolLimitSummaryAttempt(params: {
+  limit?: ToolCallingRoundLimitController;
+  attempt: EmbeddedRunAttemptForRunner;
+  assistant?: AssistantMessage;
+  nativeModelOwned: boolean;
+  preflightRecovery?: { handled: boolean; source: "mid-turn" | "preflight" };
+  maxRecoveryAttempts: number;
+  interrupted: boolean;
+  hasPromptError: boolean;
+  terminalInterrupted: boolean;
+  provider: string;
+  policy?: AuthProfileFailurePolicy;
+  agentMeta?: EmbeddedAgentMeta;
+  aborted: boolean;
+  markTerminal: (meta: { replayInvalid: true; livenessState: "blocked" }) => void;
+  maybeMarkProfileFailure: (reason?: AuthProfileFailureReason | null) => Promise<void>;
+}): Promise<
+  | { action: "none" }
+  | { action: "retry"; continueFromCurrentTranscript: boolean }
+  | { action: "complete"; result: EmbeddedAgentRunResult }
+> {
+  const { limit } = params;
+  if (!limit?.summaryPending || params.interrupted) {
+    return { action: "none" };
+  }
+
+  if (!params.nativeModelOwned && params.preflightRecovery?.handled) {
+    if (!limit.exhaustsRecovery(params.maxRecoveryAttempts)) {
+      return {
+        action: "retry",
+        continueFromCurrentTranscript: params.preflightRecovery.source === "mid-turn",
+      };
+    }
+    await params.maybeMarkProfileFailure();
+    return {
+      action: "complete",
+      result: limit.finish(
+        params.attempt,
+        params.agentMeta,
+        params.aborted,
+        params.markTerminal,
+        true,
+      ),
+    };
+  }
+
+  const reason = resolveBudgetSummaryProfileFailureReason(params);
+  await params.maybeMarkProfileFailure(reason);
+  return {
+    action: "complete",
+    result: limit.finish(
+      params.attempt,
+      params.agentMeta,
+      params.aborted,
+      params.markTerminal,
+      Boolean(
+        params.hasPromptError ||
+        params.terminalInterrupted ||
+        params.assistant?.stopReason === "error",
+      ),
+    ),
+  };
+}
+
 /**
  * Build an EmbeddedAgentRunResult for a budget-exhausted run.
  */

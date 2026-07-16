@@ -1633,12 +1633,12 @@ describe("onBeforeToolCallingRound", () => {
   };
 
   function withTestToolRoundLimit<T extends object>(
-    config: T,
+    loopConfig: T,
     hook: (round: number) => boolean | Promise<boolean>,
   ): T {
     const carrier = {};
     setAgentToolRoundLimit(carrier, hook);
-    return withAgentToolRoundLimit(config, carrier);
+    return withAgentToolRoundLimit(loopConfig, carrier);
   }
 
   it("carries an agent-scoped internal limit into the loop", async () => {
