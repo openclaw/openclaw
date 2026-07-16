@@ -64,6 +64,61 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("fails Responses streams that end before a terminal event", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await expect(
+      testing.processResponsesStream(
+        streamChunks([
+          { type: "response.created", response: { id: "resp_interrupted" } },
+          {
+            type: "response.output_item.added",
+            item: { type: "message", id: "msg_interrupted" },
+          },
+          { type: "response.output_text.delta", delta: "partial answer" },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      ),
+    ).rejects.toThrow("Responses stream ended before a terminal response event");
+
+    expect(output.responseId).toBe("resp_interrupted");
+    expect(output.content).toEqual([{ type: "text", text: "partial answer" }]);
+  });
+
+  it("accepts Responses streams that end with response.incomplete", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        { type: "response.created", response: { id: "resp_incomplete" } },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_incomplete" },
+        },
+        { type: "response.output_text.delta", delta: "truncated answer" },
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp_incomplete",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("length");
+    expect(output.responseId).toBe("resp_incomplete");
+    expect(output.content).toEqual([{ type: "text", text: "truncated answer" }]);
+  });
+
   it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
     vi.useFakeTimers();
     try {
@@ -265,6 +320,10 @@ describe("openai transport stream", () => {
             encrypted_content: "ciphertext",
             summary: [{ type: "summary_text", text: "Need a tool." }],
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_reasoning_replay", status: "completed" },
         },
       ]),
       output,

@@ -968,6 +968,10 @@ describe("openai transport stream", () => {
         { type: "response.output_item.added", item: { type: "message" } },
         { type: "response.output_text.delta", delta: "a" },
         { type: "response.output_text.delta", delta: "b" },
+        {
+          type: "response.completed",
+          response: { id: "resp_delta_partial", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as CapturedStreamEvent) },
@@ -1057,6 +1061,10 @@ describe("openai transport stream", () => {
           {
             type: "response.output_item.done",
             item: { type: "function_call", name: "computer", arguments: "{}" },
+          },
+          {
+            type: "response.completed",
+            response: { id: "resp_idless_tool", status: "completed" },
           },
         ]),
         output,
@@ -1314,6 +1322,11 @@ describe("openai transport stream", () => {
             status: "completed",
           },
         },
+        {
+          type: "response.completed",
+          sequence_number: 7,
+          response: { id: "resp_interleaved_tools", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as (typeof events)[number]) },
@@ -1471,7 +1484,7 @@ describe("openai transport stream", () => {
         { push: (event) => events.push(event as CapturedStreamEvent) },
         model,
       ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    ).rejects.toThrow("Responses stream terminated with unresolved tool calls");
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
   });
 
@@ -1647,7 +1660,7 @@ describe("openai transport stream", () => {
         { push: (event) => events.push(event as (typeof events)[number]) },
         model,
       ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    ).rejects.toThrow("Responses stream terminated with unresolved tool calls");
     expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
   });
@@ -1845,6 +1858,10 @@ describe("openai transport stream", () => {
             arguments: '{"slot":1}',
           },
         },
+        {
+          type: "response.completed",
+          response: { id: "resp_omitted_index_suffix", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as (typeof events)[number]) },
@@ -1915,6 +1932,10 @@ describe("openai transport stream", () => {
             arguments: '{"slot":0}',
           },
         },
+        {
+          type: "response.completed",
+          response: { id: "resp_omitted_parallel", status: "completed" },
+        },
       ]),
       output,
       { push: (event) => events.push(event as (typeof events)[number]) },
@@ -1971,6 +1992,10 @@ describe("openai transport stream", () => {
             name: "computer",
             arguments: '{"slot":0}',
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_omitted_mismatch", status: "completed" },
         },
       ]),
       output,
@@ -2036,6 +2061,10 @@ describe("openai transport stream", () => {
             name: "computer",
             arguments: '{"slot":1}',
           },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_sequential_omitted", status: "completed" },
         },
       ]),
       output,
