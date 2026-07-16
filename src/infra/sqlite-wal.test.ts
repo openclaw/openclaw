@@ -13,6 +13,7 @@ import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
   configureSqliteWalMaintenance,
+  resetCachedMountEntries,
 } from "./sqlite-wal.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -47,6 +48,7 @@ describe("sqlite WAL maintenance", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    resetCachedMountEntries();
   });
 
   it("uses rollback journaling for databases on NFS-backed volumes", () => {
@@ -445,6 +447,48 @@ describe("sqlite WAL maintenance", () => {
       });
 
       expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("caches mount command results globally and respects TTL", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-cache-"));
+    try {
+      vi.useFakeTimers();
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+        throw new Error("no proc mountinfo");
+      });
+      const execSpy = vi
+        .spyOn(childProcess, "execFileSync")
+        .mockReturnValue(Buffer.from(`//server/share on ${tempDir} (smbfs, nodev, nosuid)\n`));
+
+      // First call triggers execution
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+      expect(execSpy).toHaveBeenCalledTimes(1);
+
+      // Second call within TTL should hit cache and NOT execute child process again
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+      expect(execSpy).toHaveBeenCalledTimes(1);
+
+      // Advance time beyond TTL (10 seconds)
+      vi.advanceTimersByTime(11000);
+
+      // Third call after TTL should trigger execution again
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+      expect(execSpy).toHaveBeenCalledTimes(2);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

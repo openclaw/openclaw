@@ -164,15 +164,33 @@ function parseMountCommandEntries(contents: string): MountEntry[] {
   return entries;
 }
 
+let cachedMountEntries: MountEntry[] | null = null;
+let lastMountReadMs = 0;
+const MOUNT_CACHE_TTL_MS = 10_000; // 10 second cache
+
+export function resetCachedMountEntries(): void {
+  cachedMountEntries = null;
+  lastMountReadMs = 0;
+}
+
 function readMountEntries(): MountEntry[] {
-  try {
-    return parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8"));
-  } catch {
-    // macOS/BSD expose filesystem type names in `mount` output instead of
-    // Linux superblock magic, so keep this fallback for named filesystem types.
+  const now = Date.now();
+  if (cachedMountEntries && now - lastMountReadMs < MOUNT_CACHE_TTL_MS) {
+    return cachedMountEntries;
   }
   try {
-    return parseMountCommandEntries(String(childProcess.execFileSync("mount", [])));
+    const entries = parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8"));
+    cachedMountEntries = entries;
+    lastMountReadMs = now;
+    return entries;
+  } catch {
+    // macOS/BSD fallback
+  }
+  try {
+    const entries = parseMountCommandEntries(String(childProcess.execFileSync("mount", [])));
+    cachedMountEntries = entries;
+    lastMountReadMs = now;
+    return entries;
   } catch {
     return [];
   }
