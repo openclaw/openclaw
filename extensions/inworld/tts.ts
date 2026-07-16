@@ -140,7 +140,9 @@ export async function inworldTTS(params: {
       },
       body: requestBody,
     },
-    timeoutMs: params.timeoutMs,
+    // Cover the phase before response headers; the bounded body reader below
+    // only starts after fetch resolves.
+    timeoutMs: params.timeoutMs ?? INWORLD_UPSTREAM_IDLE_TIMEOUT_MS,
     policy: ssrfPolicyFromInworldBaseUrl(baseUrl),
     auditContext: "inworld-tts",
   });
