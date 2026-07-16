@@ -100,9 +100,9 @@ function safeName(name: string) {
   return cc;
 }
 
-function swiftPropertyName(structName: string, key: string): string {
-  // Stored properties and canonical initializer labels must stay identical; compatibility
-  // initializers declare legacy labels separately.
+// Canonical initializer labels must match stored properties; compatibility initializers
+// declare legacy labels separately.
+function swiftStoredPropertyName(structName: string, key: string): string {
   if (structName === "ChatSendParams" && key === "fastMode") {
     return "fastmodevalue";
   }
@@ -394,7 +394,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
   lines.push(`public struct ${name}: Codable, Sendable {`);
   const codingKeys: string[] = [];
   for (const [key, propSchema] of Object.entries(props)) {
-    const propName = swiftPropertyName(name, key);
+    const propName = swiftStoredPropertyName(name, key);
     const propType = swiftType(propSchema, required.has(key), true);
     lines.push(`    public let ${propName}: ${propType}`);
     lines.push(...swiftCompatibilityPropertyLines(name, key));
@@ -408,7 +408,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
     "\n    public init(\n" +
       Object.entries(props)
         .map(([key, prop]) => {
-          const propName = swiftPropertyName(name, key);
+          const propName = swiftStoredPropertyName(name, key);
           const req = required.has(key);
           if (name === "AgentsUpdateParams" && key === "model") {
             // Keep the raw nullable value explicit so the source-compatible initializer stays
@@ -426,7 +426,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
       "    {\n" +
       Object.entries(props)
         .map(([key]) => {
-          const propName = swiftPropertyName(name, key);
+          const propName = swiftStoredPropertyName(name, key);
           return `        self.${propName} = ${propName}`;
         })
         .join("\n") +
@@ -452,7 +452,7 @@ function emitStructCustomCodable(
     return "";
   }
   const decodedProperties = Object.entries(props).map(([key, propSchema]) => {
-    const propName = swiftPropertyName(name, key);
+    const propName = swiftStoredPropertyName(name, key);
     if (key === "model") {
       // decodeIfPresent collapses an explicit JSON null into nil. Presence-aware decoding
       // preserves the Gateway patch distinction between clearing and omitting the model.
@@ -464,7 +464,7 @@ function emitStructCustomCodable(
     return `        self.${propName} = try container.decodeIfPresent(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
   });
   const encodedProperties = Object.keys(props).map((key) => {
-    const propName = swiftPropertyName(name, key);
+    const propName = swiftStoredPropertyName(name, key);
     if (required.has(key)) {
       return `        try container.encode(${propName}, forKey: .${propName})`;
     }
@@ -489,7 +489,7 @@ function emitStructCompatibilityInitializer(
 ): string {
   if (name === "AgentsUpdateParams" && props.model) {
     const initializerParams = Object.entries(props).map(([key, prop]) => {
-      const propName = swiftPropertyName(name, key);
+      const propName = swiftStoredPropertyName(name, key);
       if (key === "model") {
         return "        model: String? = nil";
       }
@@ -500,7 +500,7 @@ function emitStructCompatibilityInitializer(
       })}`;
     });
     const delegatedArgs = Object.keys(props).map((key) => {
-      const propName = swiftPropertyName(name, key);
+      const propName = swiftStoredPropertyName(name, key);
       if (key === "model") {
         return "            modelvalue: model.map { AnyCodable($0) }";
       }
@@ -528,7 +528,7 @@ function emitStructCompatibilityInitializer(
     if (!prop) {
       throw new Error(`missing ${name}.${key} schema`);
     }
-    const propName = swiftPropertyName(name, key);
+    const propName = swiftStoredPropertyName(name, key);
     if (key === "fastMode") {
       return "        fastmode: Bool?";
     }
@@ -539,7 +539,7 @@ function emitStructCompatibilityInitializer(
     })}`;
   });
   const delegatedArgs = Object.keys(props).map((key) => {
-    const propName = swiftPropertyName(name, key);
+    const propName = swiftStoredPropertyName(name, key);
     if (key === "fastMode") {
       return "            fastmodevalue: fastmode.map { AnyCodable($0) }";
     }
