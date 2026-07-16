@@ -1,7 +1,10 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
-import { isAdminOnlyNodeInvokeCommand } from "../infra/node-commands.js";
+import {
+  NODE_ADMIN_ONLY_INVOKE_COMMANDS,
+  isAdminOnlyNodeInvokeCommand,
+} from "../infra/node-commands.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
@@ -155,6 +158,18 @@ function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScop
   return [WRITE_SCOPE];
 }
 
+/** Returns true when node.invoke params carry a command that requires operator.admin. */
+function isNodeInvokeAdminCommand(params: unknown): boolean {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return false;
+  }
+  const command = (params as { command?: unknown }).command;
+  return (
+    typeof command === "string" &&
+    (NODE_ADMIN_ONLY_INVOKE_COMMANDS as readonly string[]).includes(command)
+  );
+}
+
 function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params: unknown,
@@ -246,6 +261,11 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params?: unknown,
 ): OperatorScope[] {
+  // node.invoke commands that require operator.admin need admin scope,
+  // not the default operator.write for generic node.invoke.
+  if (method === "node.invoke" && isNodeInvokeAdminCommand(params)) {
+    return [ADMIN_SCOPE];
+  }
   if (isDynamicOperatorGatewayMethod(method)) {
     return resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params);
   }
@@ -265,6 +285,11 @@ export function authorizeOperatorScopesForMethod(
 ): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
+  }
+  // node.invoke admin-only commands need operator.admin — fail early with
+  // a clear scope error instead of reaching the handler-level admin check.
+  if (method === "node.invoke" && isNodeInvokeAdminCommand(params)) {
+    return { allowed: false, missingScope: ADMIN_SCOPE };
   }
   if (isDynamicOperatorGatewayMethod(method)) {
     if (method === "plugins.sessionAction") {

@@ -474,6 +474,35 @@ describe("method scope resolution", () => {
     );
   });
 
+  describe("node.invoke command-aware scopes", () => {
+    it.each(["browser.proxy", "fs.listDir", "terminal.upload"])(
+      "resolves operator.admin for node.invoke with admin-only command %s",
+      (command) => {
+        expect(resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command })).toEqual([
+          "operator.admin",
+        ]);
+      },
+    );
+
+    it("resolves operator.write for node.invoke with a non-admin command", () => {
+      expect(
+        resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "system.run" }),
+      ).toEqual(["operator.write"]);
+    });
+
+    it("resolves operator.write for node.invoke without params", () => {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod("node.invoke")).toEqual([
+        "operator.write",
+      ]);
+    });
+
+    it("resolves operator.write for node.invoke with empty params object", () => {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {})).toEqual([
+        "operator.write",
+      ]);
+    });
+  });
+
   it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
     const registry = createEmptyPluginRegistry();
     registry.gatewayHandlers["browser.request"] = pluginHandler;
@@ -637,6 +666,39 @@ describe("operator scope authorization", () => {
     expect(authorizeOperatorScopesForMethod("unknown.method", ["operator.read"])).toEqual({
       allowed: false,
       missingScope: "operator.admin",
+    });
+  });
+
+  describe("node.invoke command-aware authorization", () => {
+    it.each(["browser.proxy", "fs.listDir", "terminal.upload"])(
+      "rejects write scope for node.invoke with admin-only command %s",
+      (command) => {
+        expect(
+          authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], { command }),
+        ).toEqual({ allowed: false, missingScope: "operator.admin" });
+      },
+    );
+
+    it("allows admin scope for node.invoke with an admin-only command", () => {
+      expect(
+        authorizeOperatorScopesForMethod("node.invoke", ["operator.admin"], {
+          command: "browser.proxy",
+        }),
+      ).toEqual({ allowed: true });
+    });
+
+    it("allows write scope for node.invoke with a standard command", () => {
+      expect(
+        authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], {
+          command: "system.run",
+        }),
+      ).toEqual({ allowed: true });
+    });
+
+    it("allows write scope for node.invoke without params", () => {
+      expect(authorizeOperatorScopesForMethod("node.invoke", ["operator.write"])).toEqual({
+        allowed: true,
+      });
     });
   });
 
