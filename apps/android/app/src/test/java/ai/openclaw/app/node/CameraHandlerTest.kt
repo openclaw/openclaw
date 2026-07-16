@@ -113,6 +113,21 @@ class CameraHandlerTest {
   }
 
   @Test
+  fun truncateCameraDebugStackTrace_preservesUtf16BoundariesAtLimit() {
+    val splitPairPrefix = "x".repeat(1_999)
+    assertEquals(
+      splitPairPrefix,
+      truncateCameraDebugStackTrace("${splitPairPrefix}\uD83D\uDE00tail"),
+    )
+
+    val completePairPrefix = "x".repeat(1_998)
+    assertEquals(
+      "${completePairPrefix}\uD83D\uDE00",
+      truncateCameraDebugStackTrace("${completePairPrefix}\uD83D\uDE00tail"),
+    )
+  }
+
+  @Test
   fun cameraClipSession_closesRecordingUnbindsAndDeletesOwnedFile() {
     val tempFile = File.createTempFile("openclaw-clip-test-", ".mp4")
     val cleanup = mutableListOf<String>()
