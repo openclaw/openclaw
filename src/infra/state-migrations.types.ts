@@ -104,6 +104,10 @@ export type LegacyStateDetection = {
     sourceDir: string;
     hasLegacy: boolean;
   };
+  apns: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   webPush: {
     subscriptionsPath: string;
     vapidKeysPath: string;

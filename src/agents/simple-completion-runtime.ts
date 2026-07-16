@@ -56,7 +56,7 @@ type CompletionRuntimeCredential = {
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
-export type SimpleCompletionModelOptions = {
+type SimpleCompletionModelOptions = {
   maxTokens?: number;
   temperature?: number;
   reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
@@ -75,7 +75,7 @@ export type PreparedSimpleCompletionModel =
       auth?: ResolvedProviderAuth;
     };
 
-export type AgentSimpleCompletionSelection = {
+type AgentSimpleCompletionSelection = {
   provider: string;
   modelId: string;
   /** Provider used for auth/transport when runtime policy redirects the logical model ref. */
@@ -84,7 +84,7 @@ export type AgentSimpleCompletionSelection = {
   agentDir: string;
 };
 
-export type PreparedSimpleCompletionModelForAgent =
+type PreparedSimpleCompletionModelForAgent =
   | {
       selection: AgentSimpleCompletionSelection;
       model: Model;

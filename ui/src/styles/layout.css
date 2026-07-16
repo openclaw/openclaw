@@ -1687,6 +1687,12 @@ html.openclaw-native-macos
   text-decoration: none;
 }
 
+.sidebar-recent-session__state,
+.sidebar-recent-session__unread {
+  order: -1;
+  flex: none;
+}
+
 .sidebar-recent-session__name {
   flex: 1 1 auto;
   min-width: 0;

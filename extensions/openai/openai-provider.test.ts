@@ -1,4 +1,5 @@
 // Openai tests cover openai provider plugin behavior.
+import fs from "node:fs";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
@@ -144,13 +145,39 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
   };
 
   return {
-    ...actual,
+    buildProviderStreamFamilyHooks: actual.buildProviderStreamFamilyHooks,
+    createCodexNativeWebSearchWrapper: actual.createCodexNativeWebSearchWrapper,
+    createOpenAIAttributionHeadersWrapper: actual.createOpenAIAttributionHeadersWrapper,
+    createOpenAIFastModeWrapper: actual.createOpenAIFastModeWrapper,
+    createOpenAIReasoningCompatibilityWrapper: actual.createOpenAIReasoningCompatibilityWrapper,
+    createOpenAIResponsesContextManagementWrapper:
+      actual.createOpenAIResponsesContextManagementWrapper,
+    createOpenAIServiceTierWrapper: actual.createOpenAIServiceTierWrapper,
+    createOpenAITextVerbosityWrapper: actual.createOpenAITextVerbosityWrapper,
+    getOpenRouterModelCapabilities: actual.getOpenRouterModelCapabilities,
+    loadOpenRouterModelCapabilities: actual.loadOpenRouterModelCapabilities,
+    resolveOpenAIFastMode: actual.resolveOpenAIFastMode,
+    resolveOpenAIServiceTier: actual.resolveOpenAIServiceTier,
+    resolveOpenAITextVerbosity: actual.resolveOpenAITextVerbosity,
     OPENAI_RESPONSES_STREAM_HOOKS: {
       ...actual.OPENAI_RESPONSES_STREAM_HOOKS,
       wrapStreamFn,
     },
   };
 });
+
+const OPENAI_CODEX_MODELS_URL = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${readPinnedCodexClientVersion()}`;
+
+function readPinnedCodexClientVersion(): string {
+  const packageJson = JSON.parse(
+    fs.readFileSync(new URL("../codex/package.json", import.meta.url), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const version = packageJson.dependencies?.["@openai/codex"];
+  if (typeof version !== "string") {
+    throw new Error("expected an exact @openai/codex dependency");
+  }
+  return version;
+}
 
 function runWrappedPayloadCase(params: {
   wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
@@ -663,9 +690,7 @@ describe("buildOpenAIProvider", () => {
         maxTokens: 64_000,
       });
       expect(fetchSpy).toHaveBeenCalledOnce();
-      expect(fetchSpy.mock.calls[0]?.[0]).toBe(
-        "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-      );
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe(OPENAI_CODEX_MODELS_URL);
       const headers = fetchSpy.mock.calls[0]?.[1]?.headers;
       expect(headers).toBeInstanceOf(Headers);
       if (!(headers instanceof Headers)) {
@@ -676,6 +701,25 @@ describe("buildOpenAIProvider", () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+
+  it("uses the managed Codex package version for OAuth model discovery", async () => {
+    const pinnedVersion = readPinnedCodexClientVersion();
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async (params) => ({
+      response: Response.json({ models: [{ slug: "gpt-5.5", visibility: "list" }] }),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }));
+
+    await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "placeholder",
+      fetchGuard,
+    });
+
+    const requestUrl = vi.mocked(fetchGuard).mock.calls[0]?.[0].url;
+    expect(new URL(requestUrl ?? "https://placeholder").searchParams.get("client_version")).toBe(
+      pinnedVersion,
+    );
   });
 
   it("uses runtime OAuth profiles when catalog auth resolution is empty", async () => {
@@ -784,9 +828,7 @@ describe("buildOpenAIProvider", () => {
       maxTokens: 128_000,
     });
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
-    expect(fetchParams?.url).toBe(
-      "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-    );
+    expect(fetchParams?.url).toBe(OPENAI_CODEX_MODELS_URL);
     const init = fetchParams?.init;
     const headers = init?.headers;
     expect(headers).toBeInstanceOf(Headers);
@@ -863,52 +905,9 @@ describe("buildOpenAIProvider", () => {
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       },
     });
-    expect(provider.models.find((model) => model.id === "gpt-5.6-terra")).toMatchObject({
-      contextWindow: 372_000,
-      contextTokens: 372_000,
-      compat: {
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-      },
-    });
-    expect(provider.models.find((model) => model.id === "gpt-5.6-luna")).toMatchObject({
-      contextWindow: 372_000,
-      contextTokens: 372_000,
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-    });
+    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-terra");
+    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-luna");
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
-    const gpt56Models = Object.fromEntries(
-      provider.models
-        .filter((model) => model.id.startsWith("gpt-5.6-"))
-        .map((model) => [model.id, model]),
-    );
-    for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra"]) {
-      const model = gpt56Models[modelId];
-      expect(model?.compat?.supportedReasoningEfforts).toContain("ultra");
-      expect(
-        buildOpenAIProvider()
-          .resolveThinkingProfile?.({
-            provider: "openai",
-            modelId,
-            agentRuntime: "codex",
-            api: "openai-chatgpt-responses",
-            compat: model?.compat,
-          } as never)
-          ?.levels.map((level) => level.id),
-      ).toContain("ultra");
-    }
-    const luna = gpt56Models["gpt-5.6-luna"];
-    expect(luna?.compat?.supportedReasoningEfforts).not.toContain("ultra");
-    const lunaLevels = buildOpenAIProvider()
-      .resolveThinkingProfile?.({
-        provider: "openai",
-        modelId: "gpt-5.6-luna",
-        agentRuntime: "codex",
-        api: "openai-chatgpt-responses",
-        compat: luna?.compat,
-      } as never)
-      ?.levels.map((level) => level.id);
-    expect(lunaLevels).toContain("max");
-    expect(lunaLevels).not.toContain("ultra");
     expect(release).toHaveBeenCalledOnce();
   });
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -720,24 +721,33 @@ export function tryResolveInvocationCwd(): string | undefined {
   }
 }
 
-export async function resolvePackageRuntimePreflightError(params: {
+type PackageRuntimePreflight = {
+  nodeRunner?: string;
+  replacedNodeRunner?: string;
+  targetVersion?: string;
+};
+
+export async function resolvePackageRuntimePreflight(params: {
   tag: string;
   timeoutMs?: number;
   nodeRunner?: string;
+  fallbackNodeRunner?: string;
   spec?: string;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<string | null> {
+}): Promise<Result<PackageRuntimePreflight, string>> {
+  const nodeRunner = normalizeOptionalString(params.nodeRunner);
+  const unchanged = (): PackageRuntimePreflight => (nodeRunner ? { nodeRunner } : {});
   if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
-    return null;
+    return ok(unchanged());
   }
   if (params.spec && !canResolveRegistryVersionForPackageTarget(params.spec)) {
-    return null;
+    return ok(unchanged());
   }
   const target = params.tag.trim();
   if (!target) {
-    return null;
+    return ok(unchanged());
   }
   const status = await fetchNpmPackageTargetStatus({
     target,
@@ -748,29 +758,58 @@ export async function resolvePackageRuntimePreflightError(params: {
     env: params.env,
   });
   if (status.error) {
-    return null;
+    return ok(unchanged());
   }
   const runtime = await resolvePackageRuntimeForPreflight({
-    nodeRunner: params.nodeRunner,
+    nodeRunner,
     timeoutMs: params.timeoutMs,
   });
   const satisfies = nodeVersionSatisfiesEngine(runtime.version, status.nodeEngine);
-  if (satisfies !== false) {
-    return null;
+  const targetVersion = status.version ?? target;
+  if (satisfies === true) {
+    return ok({
+      ...(nodeRunner ? { nodeRunner } : {}),
+      targetVersion,
+    });
   }
-  const targetLabel = status.version ?? target;
+  const fallbackNodeRunner = normalizeOptionalString(params.fallbackNodeRunner);
+  if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
+    const fallbackRuntime = await resolvePackageRuntimeForPreflight({
+      nodeRunner: fallbackNodeRunner,
+      timeoutMs: params.timeoutMs,
+    });
+    const fallbackSatisfies = nodeVersionSatisfiesEngine(
+      fallbackRuntime.version,
+      status.nodeEngine,
+    );
+    if (fallbackSatisfies === true) {
+      return ok({
+        nodeRunner: fallbackNodeRunner,
+        replacedNodeRunner: nodeRunner,
+        targetVersion,
+      });
+    }
+  }
+  if (satisfies !== false) {
+    return ok({
+      ...(nodeRunner ? { nodeRunner } : {}),
+      targetVersion,
+    });
+  }
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
-  return [
-    `${runtimeLabel} is too old for openclaw@${targetLabel}.`,
-    `The requested package requires ${status.nodeEngine}.`,
-    runtime.nodeRunner
-      ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-      : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
-    "Bare `npm i -g openclaw` can silently install an older compatible release.",
-    "After upgrading Node, use `npm i -g openclaw@latest`.",
-  ].join("\n");
+  return resultError(
+    [
+      `${runtimeLabel} is too old for openclaw@${targetVersion}.`,
+      `The requested package requires ${status.nodeEngine}.`,
+      runtime.nodeRunner
+        ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
+        : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
+      "Bare `npm i -g openclaw` can silently install an older compatible release.",
+      "After upgrading Node, use `npm i -g openclaw@latest`.",
+    ].join("\n"),
+  );
 }
 
 async function resolvePackageRuntimeForPreflight(params: {

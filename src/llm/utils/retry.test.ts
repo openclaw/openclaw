@@ -112,4 +112,21 @@ describe("isRetryableAssistantError", () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    "OpenAI API error (500): 500 The server had an error while processing your request. Sorry about that!",
+    "Azure OpenAI API error (502): Bad gateway from upstream",
+    "Mistral API error (503): service temporarily unavailable",
+    "Provider API error (504): gateway timeout",
+  ])("retries built-in provider-wrapped transient 5xx: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+  });
+
+  it("does not treat permanent provider-wrapped 4xx as retryable", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage("OpenAI API error (400): 400 Model Id [gpt-5.4-nano] not found"),
+      ),
+    ).toBe(false);
+  });
 });

@@ -61,6 +61,7 @@ import {
   loadDiscordSendModule,
   loadDiscordTargetResolverModule,
   loadDiscordThreadBindingsManagerModule,
+  probeDiscordStatusAccount,
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
@@ -531,9 +532,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         buildChannelSummary: ({ snapshot }) =>
           buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
         probeAccount: async ({ account, timeoutMs }) =>
-          (await loadDiscordProbeRuntime()).probeDiscord(account.token, timeoutMs, {
-            includeApplication: true,
-          }),
+          await probeDiscordStatusAccount({ token: account.token, timeoutMs }),
         formatCapabilitiesProbe: ({ probe }) => {
           const discordProbe = probe as DiscordProbe | undefined;
           const lines = [];

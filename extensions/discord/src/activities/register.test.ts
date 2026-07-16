@@ -13,6 +13,7 @@ function createApi(config: Record<string, unknown>) {
   const routes: unknown[] = [];
   const tools: unknown[] = [];
   const warn = vi.fn();
+  const resolvePath = vi.fn((input: string) => `/plugin-root/${input}`);
   const api = {
     config,
     logger: { warn },
@@ -22,8 +23,9 @@ function createApi(config: Record<string, unknown>) {
     },
     registerHttpRoute: vi.fn((route) => routes.push(route)),
     registerTool: vi.fn((tool) => tools.push(tool)),
+    resolvePath,
   } as unknown as OpenClawPluginApi;
-  return { api, routes, tools, warn };
+  return { api, routes, tools, warn, resolvePath };
 }
 
 describe("Discord Activities registration", () => {
@@ -78,6 +80,7 @@ describe("Discord Activities registration", () => {
       auth: "plugin",
       match: "prefix",
     });
+    expect(test.resolvePath).toHaveBeenCalledWith("assets/embedded-app-sdk.mjs");
     expect(test.tools).toHaveLength(1);
     const factory = test.tools[0] as (context: { messageChannel?: string }) => unknown;
     expect(factory({ messageChannel: "slack" })).toBeNull();
