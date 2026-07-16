@@ -36,7 +36,7 @@ type WebFetchProxySourceConflict = {
 
 /**
  * Returns a warning when HTTP/HTTPS proxy env vars are present, web_fetch is enabled,
- * and trusted-env proxy use is not opted in.
+ * trusted-env proxy use is not opted in, and NO_PROXY does not bypass every target.
  */
 export function resolveWebFetchProxySourceConflict(params: {
   cfg: OpenClawConfig;
@@ -49,6 +49,15 @@ export function resolveWebFetchProxySourceConflict(params: {
     !hasEnvHttpProxyConfigured("http", params.env) &&
     !hasEnvHttpProxyConfigured("https", params.env)
   ) {
+    return null;
+  }
+
+  // Mirror matchesNoProxy()'s all-bypass contract: a bare `*` NO_PROXY value
+  // (lower-case shadows upper-case, blanks included) bypasses the env proxy for
+  // every target, so enabling useTrustedEnvProxy would not route anything and
+  // the remediation would be misleading. `*` entries inside comma/whitespace
+  // lists are skipped per-entry by that matcher, so partial lists still warn.
+  if ((params.env.no_proxy ?? params.env.NO_PROXY) === "*") {
     return null;
   }
 

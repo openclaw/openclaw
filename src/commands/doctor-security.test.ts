@@ -44,6 +44,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevHttpsProxyLower: string | undefined;
   let prevAllProxy: string | undefined;
   let prevAllProxyLower: string | undefined;
+  let prevNoProxy: string | undefined;
+  let prevNoProxyLower: string | undefined;
 
   beforeEach(() => {
     note.mockClear();
@@ -60,6 +62,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevHttpsProxyLower = process.env.https_proxy;
     prevAllProxy = process.env.ALL_PROXY;
     prevAllProxyLower = process.env.all_proxy;
+    prevNoProxy = process.env.NO_PROXY;
+    prevNoProxyLower = process.env.no_proxy;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_SERVICE_KIND;
@@ -69,6 +73,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
     delete process.env.https_proxy;
     delete process.env.ALL_PROXY;
     delete process.env.all_proxy;
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
   });
 
   afterEach(() => {
@@ -121,6 +127,16 @@ describe("noteSecurityWarnings gateway exposure", () => {
       delete process.env.all_proxy;
     } else {
       process.env.all_proxy = prevAllProxyLower;
+    }
+    if (prevNoProxy === undefined) {
+      delete process.env.NO_PROXY;
+    } else {
+      process.env.NO_PROXY = prevNoProxy;
+    }
+    if (prevNoProxyLower === undefined) {
+      delete process.env.no_proxy;
+    } else {
+      process.env.no_proxy = prevNoProxyLower;
     }
   });
 
@@ -375,6 +391,56 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+  });
+
+  it("does not warn when NO_PROXY=* bypasses every target (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.NO_PROXY = "*";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+    expect(message).not.toContain("web_fetch will use direct connections");
+  });
+
+  it("does not warn when lowercase no_proxy=* bypasses every target (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.no_proxy = "*";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+  });
+
+  it("still warns when a * entry sits inside a NO_PROXY list (matchesNoProxy skips it) (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.NO_PROXY = "*,localhost";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("HTTP_PROXY");
+    expect(message).toContain("tools.web.fetch.useTrustedEnvProxy");
+  });
+
+  it("still warns when NO_PROXY only excludes some hosts (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.NO_PROXY = "internal.example.com";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("HTTP_PROXY");
+    expect(message).toContain("tools.web.fetch.useTrustedEnvProxy");
+  });
+
+  it("still warns when blank lowercase no_proxy shadows uppercase NO_PROXY=* (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.NO_PROXY = "*";
+    process.env.no_proxy = "";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("HTTP_PROXY");
+    expect(message).toContain("tools.web.fetch.useTrustedEnvProxy");
   });
 
   it("warns about HTTP_PROXY but omits ALL_PROXY from the env list when both are set (#95560)", async () => {

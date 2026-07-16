@@ -325,6 +325,33 @@ describe("status.scan.config-shared", () => {
     expect(result.secretDiagnostics).toStrictEqual([]);
   });
 
+  it("does not add a proxy diagnostic when NO_PROXY=* bypasses every target (#95560)", async () => {
+    const sourceConfig = {};
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readConfigSnapshot,
+      resolveConfig,
+      env: {
+        VITEST: "true",
+        HTTP_PROXY: "http://127.0.0.1:7897",
+        HTTPS_PROXY: "http://127.0.0.1:7897",
+        NO_PROXY: "*",
+      },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toStrictEqual([]);
+  });
+
   it("adds a status diagnostic when lowercase http_proxy is set without useTrustedEnvProxy (#95560)", async () => {
     const sourceConfig = {};
     const readConfigSnapshot = vi.fn(async () => ({
