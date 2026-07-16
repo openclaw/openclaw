@@ -52,6 +52,9 @@ const OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS = 300_000;
 const OLLAMA_RECOMMENDED_TOOLS_MODEL = "gemma4:e4b";
 const OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE = "about 9.6 GB";
 const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
+// Idle alone resets on every NDJSON chunk, so a slow drip can hang setup forever.
+// Keep a wall-clock bound for the /api/pull body after headers arrive.
+const OLLAMA_PULL_STREAM_DEADLINE_MS = 60 * 60_000;
 
 type OllamaSetupOptions = {
   customBaseUrl?: string;
@@ -180,8 +183,16 @@ type OllamaPullChunk = {
 
 type OllamaPullResult = { ok: true } | { ok: false; message: string };
 
+function formatOllamaPullStreamDeadlineMessage(
+  modelName: string,
+  streamDeadlineMs: number,
+): string {
+  return `Failed to download ${modelName}: Ollama pull exceeded ${Math.round(streamDeadlineMs / 1000)}s wall-clock deadline`;
+}
+
 async function readOllamaPullChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  idleTimeoutMs: number,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -199,11 +210,9 @@ async function readOllamaPullChunkWithIdleTimeout(
       clear();
       void reader.cancel().catch(() => undefined);
       reject(
-        new Error(
-          `Ollama pull stalled: no data received for ${Math.round(OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS / 1000)}s`,
-        ),
+        new Error(`Ollama pull stalled: no data received for ${Math.round(idleTimeoutMs / 1000)}s`),
       );
-    }, OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS);
+    }, idleTimeoutMs);
 
     void reader.read().then(
       (result) => {
@@ -226,15 +235,32 @@ async function pullOllamaModelCore(params: {
   baseUrl: string;
   modelName: string;
   onStatus?: (status: string, percent: number | null) => void;
-  signal?: AbortSignal;
+  /** Wall-clock bound for the NDJSON body after headers; drip cannot reset it. */
+  streamDeadlineMs?: number;
+  /** Per-chunk idle stall timeout for the NDJSON body. */
+  streamIdleTimeoutMs?: number;
 }): Promise<OllamaPullResult> {
   const baseUrl = resolveOllamaApiBase(params.baseUrl);
   const modelName = normalizeOllamaModelName(params.modelName) ?? params.modelName.trim();
+  const streamDeadlineMs =
+    typeof params.streamDeadlineMs === "number" &&
+    Number.isFinite(params.streamDeadlineMs) &&
+    params.streamDeadlineMs > 0
+      ? Math.floor(params.streamDeadlineMs)
+      : OLLAMA_PULL_STREAM_DEADLINE_MS;
+  const streamIdleTimeoutMs =
+    typeof params.streamIdleTimeoutMs === "number" &&
+    Number.isFinite(params.streamIdleTimeoutMs) &&
+    params.streamIdleTimeoutMs > 0
+      ? Math.floor(params.streamIdleTimeoutMs)
+      : OLLAMA_PULL_STREAM_IDLE_TIMEOUT_MS;
   const responseController = new AbortController();
   const responseTimeout = setTimeout(
     responseController.abort.bind(responseController),
     OLLAMA_PULL_RESPONSE_TIMEOUT_MS,
   );
+  let streamDeadlineTimeout: ReturnType<typeof setTimeout> | undefined;
+  let streamDeadlineTimedOut = false;
   try {
     params.signal?.throwIfAborted();
     const { response, release } = await fetchWithSsrFGuard({
@@ -250,7 +276,15 @@ async function pullOllamaModelCore(params: {
       policy: buildOllamaBaseUrlSsrFPolicy(baseUrl),
       auditContext: "ollama-setup.pull",
     });
+    // Headers arrived within the response budget. Arm a separate wall-clock for
+    // the body: chunk-idle alone resets on every drip and cannot bound hang time.
     clearTimeout(responseTimeout);
+    let pullReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    streamDeadlineTimeout = setTimeout(() => {
+      streamDeadlineTimedOut = true;
+      responseController.abort();
+      void pullReader?.cancel().catch(() => undefined);
+    }, streamDeadlineMs);
     try {
       if (!response.ok) {
         return { ok: false, message: `Failed to download ${modelName} (HTTP ${response.status})` };
@@ -259,7 +293,8 @@ async function pullOllamaModelCore(params: {
         return { ok: false, message: `Failed to download ${modelName} (no response body)` };
       }
 
-      const reader = response.body.getReader();
+      pullReader = response.body.getReader();
+      const reader = pullReader;
       const decoder = new TextDecoder();
       let buffer = "";
       const layers = new Map<string, { total: number; completed: number }>();
@@ -299,7 +334,16 @@ async function pullOllamaModelCore(params: {
       };
 
       for (;;) {
-        const { done, value } = await readOllamaPullChunkWithIdleTimeout(reader);
+        const { done, value } = await readOllamaPullChunkWithIdleTimeout(
+          reader,
+          streamIdleTimeoutMs,
+        );
+        if (streamDeadlineTimedOut) {
+          return {
+            ok: false,
+            message: formatOllamaPullStreamDeadlineMessage(modelName, streamDeadlineMs),
+          };
+        }
         if (done) {
           break;
         }
@@ -314,6 +358,13 @@ async function pullOllamaModelCore(params: {
         }
       }
 
+      if (streamDeadlineTimedOut) {
+        return {
+          ok: false,
+          message: formatOllamaPullStreamDeadlineMessage(modelName, streamDeadlineMs),
+        };
+      }
+
       const trailing = buffer.trim();
       if (trailing) {
         const parsed = parseLine(trailing);
@@ -324,13 +375,26 @@ async function pullOllamaModelCore(params: {
 
       return { ok: true };
     } finally {
+      if (streamDeadlineTimeout !== undefined) {
+        clearTimeout(streamDeadlineTimeout);
+        streamDeadlineTimeout = undefined;
+      }
       await release();
     }
   } catch (err) {
+    if (streamDeadlineTimedOut) {
+      return {
+        ok: false,
+        message: formatOllamaPullStreamDeadlineMessage(modelName, streamDeadlineMs),
+      };
+    }
     const reason = formatErrorMessage(err);
     return { ok: false, message: `Failed to download ${modelName}: ${reason}` };
   } finally {
     clearTimeout(responseTimeout);
+    if (streamDeadlineTimeout !== undefined) {
+      clearTimeout(streamDeadlineTimeout);
+    }
   }
 }
 
@@ -338,13 +402,17 @@ async function pullOllamaModel(
   baseUrl: string,
   modelName: string,
   prompter: WizardPrompter,
-  signal?: AbortSignal,
+  timeouts?: {
+    streamDeadlineMs?: number;
+    streamIdleTimeoutMs?: number;
+  },
 ): Promise<boolean> {
   const spinner = prompter.progress(`Downloading ${modelName}...`);
   const result = await pullOllamaModelCore({
     baseUrl,
     modelName,
-    ...(signal ? { signal } : {}),
+    streamDeadlineMs: timeouts?.streamDeadlineMs,
+    streamIdleTimeoutMs: timeouts?.streamIdleTimeoutMs,
     onStatus: (status, percent) => {
       const displayStatus = formatOllamaPullStatus(status);
       if (displayStatus.hidePercent) {
@@ -907,6 +975,10 @@ export async function ensureOllamaModelPulled(params: {
   config: OpenClawConfig;
   model: string;
   prompter: WizardPrompter;
+  /** Wall-clock bound for the /api/pull NDJSON body after headers. */
+  streamDeadlineMs?: number;
+  /** Per-chunk idle stall timeout for the /api/pull NDJSON body. */
+  streamIdleTimeoutMs?: number;
 }): Promise<void> {
   if (!params.model.startsWith("ollama/")) {
     return;
@@ -926,7 +998,12 @@ export async function ensureOllamaModelPulled(params: {
   ) {
     return;
   }
-  if (!(await pullOllamaModel(baseUrl, modelName, params.prompter))) {
+  if (
+    !(await pullOllamaModel(baseUrl, modelName, params.prompter, {
+      streamDeadlineMs: params.streamDeadlineMs,
+      streamIdleTimeoutMs: params.streamIdleTimeoutMs,
+    }))
+  ) {
     throw new WizardCancelledError("Failed to download selected Ollama model");
   }
 }

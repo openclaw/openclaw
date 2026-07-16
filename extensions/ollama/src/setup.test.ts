@@ -815,6 +815,65 @@ describe("ollama setup", () => {
       }
     });
 
+    it("bounds a dripping pull stream with a wall-clock deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const progress = { update: vi.fn(), stop: vi.fn() };
+        const prompter = {
+          progress: vi.fn(() => progress),
+        } as unknown as WizardPrompter;
+        const encoder = new TextEncoder();
+        let dripTimer: ReturnType<typeof setInterval> | undefined;
+        const fetchMock = vi.fn(async (input: string | URL | Request) => {
+          const url = requestUrl(input);
+          if (url.endsWith("/api/tags")) {
+            return jsonResponse({ models: [] });
+          }
+          if (url.endsWith("/api/pull")) {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  dripTimer = setInterval(() => {
+                    controller.enqueue(encoder.encode('{"status":"pulling manifest"}\n'));
+                  }, 40);
+                },
+                cancel() {
+                  if (dripTimer !== undefined) {
+                    clearInterval(dripTimer);
+                    dripTimer = undefined;
+                  }
+                },
+              }),
+              { status: 200 },
+            );
+          }
+          throw new Error(`Unexpected fetch: ${url}`);
+        });
+        vi.stubGlobal("fetch", fetchMock);
+
+        const pullPromise = ensureOllamaModelPulled({
+          config: createDefaultOllamaConfig("ollama/gemma4"),
+          model: "ollama/gemma4",
+          prompter,
+          streamDeadlineMs: 1_000,
+          // Keep idle well above the drip interval so only the wall-clock can win.
+          streamIdleTimeoutMs: 10_000,
+        }).catch((err: unknown) => err);
+
+        await vi.waitFor(() => expect(mockCallArg(fetchMock, 1)).toContain("/api/pull"));
+        await vi.advanceTimersByTimeAsync(1_000);
+        const pullError = await pullPromise;
+        expect(pullError).toBeInstanceOf(Error);
+        expect((pullError as Error).name).toBe("WizardCancelledError");
+        expect((pullError as Error).message).toBe("Failed to download selected Ollama model");
+        expect(progress.stop).toHaveBeenCalledWith(
+          "Failed to download gemma4: Ollama pull exceeded 1s wall-clock deadline",
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("skips pull when model is already available", async () => {
       const prompter = {} as unknown as WizardPrompter;
 
