@@ -75,6 +75,10 @@ export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 export const SIDEBAR_SESSION_PAGE_SIZE = 10;
 export const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 
+export function sidebarSessionMetaId(key: string): string {
+  return `sidebar-session-meta-${encodeURIComponent(key)}`;
+}
+
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
