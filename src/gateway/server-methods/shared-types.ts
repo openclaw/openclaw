@@ -15,7 +15,10 @@ import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
@@ -36,6 +39,10 @@ import type {
   ChatRunRegistration,
 } from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
+import type {
+  GatewayApprovalEventPublisher,
+  GatewayRecoveryRuntime,
+} from "../server-instance-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
@@ -67,6 +74,11 @@ export type GatewayClient = {
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
+    /** Host-owned exact media set for a scoped automatic recovery delivery. */
+    internalDeliveryMediaUrls?: string[];
+    internalDeliverySuppressText?: boolean;
+    /** Plugin-owned tools authorized for this internal subagent run. */
+    runtimePluginToolGrant?: RuntimePluginToolGrant;
   };
 };
 
@@ -78,18 +90,25 @@ export type RespondFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
-/** Minimal hosted Crestodian contract retained by the gateway request router. */
-type GatewayCrestodianSession = {
+/** Minimal hosted OpenClaw contract retained by the gateway request router. */
+type GatewaySystemAgentSession = {
   engine: {
     handle: (message: string) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
     }>;
+    getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
+    resolveOperatorApproval: (
+      decision: "allow-once" | "allow-always" | "deny" | null,
+      proposalHash: string,
+    ) => Promise<unknown>;
     dispose: () => Promise<void>;
   };
   welcome: string;
   lastUsedAt: number;
+  delegationKey?: string;
+  pendingApproval?: { id: string; proposalHash: string };
 };
 
 /** Runtime services and mutable gateway state available to request handlers. */
@@ -103,7 +122,17 @@ export type GatewayRequestContext = {
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
+  systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  pluginApprovalIosPushDelivery?: {
+    handleRequested?: (
+      request: PluginApprovalRequest,
+      opts?: {
+        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+      },
+    ) => Promise<boolean>;
+    handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
+  };
   listSessionPendingApprovals?: (
     sessionKey: string,
     client: GatewayClient | null,
@@ -129,7 +158,11 @@ export type GatewayRequestContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => boolean;
+  isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
+  /** Instance-local native approval subscribers; never derived from a network client. */
+  approvalEvents?: GatewayApprovalEventPublisher;
+  recoveryRuntime?: GatewayRecoveryRuntime;
   getApprovalClientConnIds?: <TPayload>(params?: {
     excludeConnId?: string;
     filter?: (client: GatewayClient, record?: ExecApprovalRecord<TPayload>) => boolean;
@@ -184,7 +217,7 @@ export type GatewayRequestContext = {
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;
-  crestodianSessions: Map<string, GatewayCrestodianSession>;
+  systemAgentSessions: Map<string, GatewaySystemAgentSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;

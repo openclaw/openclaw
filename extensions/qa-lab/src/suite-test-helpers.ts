@@ -8,6 +8,7 @@ export function makeQaSuiteTestScenario(
   id: string,
   params: {
     channel?: string;
+    driver?: QaSuiteTestScenario["execution"]["driver"];
     config?: Record<string, unknown>;
     plugins?: string[];
     gatewayConfigPatch?: Record<string, unknown>;
@@ -32,6 +33,7 @@ export function makeQaSuiteTestScenario(
     execution: {
       kind: "flow",
       ...(params.channel ? { channel: params.channel } : {}),
+      ...(params.driver ? { driver: params.driver } : {}),
       ...(params.suiteIsolation ? { suiteIsolation: params.suiteIsolation } : {}),
       ...(params.transportPolicy ? { transportPolicy: params.transportPolicy } : {}),
       ...(params.config ? { config: params.config } : {}),

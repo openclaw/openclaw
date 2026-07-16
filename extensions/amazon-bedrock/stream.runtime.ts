@@ -596,7 +596,6 @@ function handleContentBlockStop(
       });
       break;
     case "toolCall":
-      block.arguments = parseStreamingJson(block.partialJson);
       // Finalize in-place and strip the scratch buffer so replay only
       // carries parsed arguments.
       delete (block as Block).partialJson;
@@ -1174,7 +1173,7 @@ function createImageBlock(mimeType: string, data: string) {
 }
 
 /** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
-export const testing = {
+const testing = {
   buildAdditionalModelRequestFields,
   convertMessages,
   getConfiguredBedrockRegion,
@@ -1183,3 +1182,8 @@ export const testing = {
   resolveSimpleBedrockOptions,
   shouldUseExplicitBedrockEndpoint,
 };
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockStreamTestApi"), testing);
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

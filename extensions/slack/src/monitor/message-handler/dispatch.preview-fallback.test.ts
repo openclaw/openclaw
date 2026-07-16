@@ -100,7 +100,17 @@ let capturedReplyOptions:
         deleted?: string[];
         summary?: string;
       }) => Promise<void> | void;
+      onPlanUpdate?: (payload: {
+        phase?: string;
+        explanation?: string;
+        steps?: string[];
+        planSteps?: Array<{
+          step: string;
+          status: "pending" | "in_progress" | "completed";
+        }>;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+      onQueuedFollowupAdmitted?: () => Promise<void> | void;
     }
   | undefined;
 let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
@@ -188,8 +198,15 @@ let mockedReplyOptionEvents: Array<
       phase?: string;
       title?: string;
       name?: string;
+      explanation?: string;
       status?: string;
       exitCode?: number | null;
+    }
+  | {
+      kind: "plan";
+      phase?: string;
+      explanation?: string;
+      steps: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }
   | { kind: "concurrent_items"; progressTexts: string[] }
   | { kind: "partial"; text: string }
@@ -272,7 +289,11 @@ function planUpdate(title: string) {
   return { type: "plan_update", title };
 }
 
-function taskUpdate(id: unknown, title: string, status: "in_progress" | "complete" | "error") {
+function taskUpdate(
+  id: unknown,
+  title: string,
+  status: "pending" | "in_progress" | "complete" | "error",
+) {
   return { type: "task_update", id, title, status };
 }
 
@@ -542,11 +563,23 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       toolCallId?: string;
       progressText?: string;
       summary?: string;
+      explanation?: string;
       title?: string;
       name?: string;
       status?: string;
       exitCode?: number | null;
     }) => {
+      if (params.event === "plan") {
+        return params.explanation
+          ? {
+              kind: "plan",
+              text: `🗺️ Update Plan: ${params.explanation}`,
+              label: "Update Plan",
+              detail: params.explanation,
+              toolName: "update_plan",
+            }
+          : undefined;
+      }
       if (params.event === "command-output") {
         const status =
           params.exitCode === 0
@@ -651,25 +684,23 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
     },
     createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
       let started = false;
-      let workEvents = 0;
+      const startNow = async () => {
+        if (!started) {
+          started = true;
+          await params.onStart();
+        }
+      };
       return {
         get hasStarted() {
           return started;
         },
         async noteWork() {
-          workEvents += 1;
-          if (!started && workEvents > 1) {
-            started = true;
-            await params.onStart();
-          }
+          // Gate timing is covered by the SDK suite; these tests exercise the
+          // downstream Slack renderer after an explicit start.
+          await startNow();
           return started;
         },
-        async startNow() {
-          if (!started) {
-            started = true;
-            await params.onStart();
-          }
-        },
+        startNow,
         cancel() {},
       };
     },
@@ -1026,6 +1057,15 @@ vi.mock("../reply.runtime.js", () => ({
         deleted?: string[];
         summary?: string;
       }) => Promise<void> | void;
+      onPlanUpdate?: (payload: {
+        phase?: string;
+        explanation?: string;
+        steps?: string[];
+        planSteps?: Array<{
+          step: string;
+          status: "pending" | "in_progress" | "completed";
+        }>;
+      }) => Promise<void> | void;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
       onReasoningStream?: (payload?: {
@@ -1081,6 +1121,13 @@ vi.mock("../reply.runtime.js", () => ({
             modified: entry.modified,
             deleted: entry.deleted,
             summary: entry.summary,
+          });
+        } else if (entry.kind === "plan") {
+          await params.replyOptions?.onPlanUpdate?.({
+            phase: entry.phase,
+            explanation: entry.explanation,
+            steps: entry.steps.map((step) => step.step),
+            planSteps: entry.steps,
           });
         } else if (entry.kind === "concurrent_items") {
           await Promise.all(
@@ -1176,6 +1223,15 @@ vi.mock("../reply.runtime.js", () => ({
         deleted?: string[];
         summary?: string;
       }) => Promise<void> | void;
+      onPlanUpdate?: (payload: {
+        phase?: string;
+        explanation?: string;
+        steps?: string[];
+        planSteps?: Array<{
+          step: string;
+          status: "pending" | "in_progress" | "completed";
+        }>;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
     dispatcher: {
@@ -1217,6 +1273,13 @@ vi.mock("../reply.runtime.js", () => ({
             modified: entry.modified,
             deleted: entry.deleted,
             summary: entry.summary,
+          });
+        } else if (entry.kind === "plan") {
+          await params.replyOptions?.onPlanUpdate?.({
+            phase: entry.phase,
+            explanation: entry.explanation,
+            steps: entry.steps.map((step) => step.step),
+            planSteps: entry.steps,
           });
         } else if (entry.kind === "concurrent_items") {
           await Promise.all(
@@ -2959,6 +3022,70 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
+  it("starts native Slack progress from typed plan steps", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        {
+          kind: "plan",
+          phase: "update",
+          explanation: "Executing the checklist.",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+            { step: "Test", status: "pending" },
+          ],
+        },
+      ],
+    });
+
+    expectNativeProgressStart([
+      planUpdate("Executing the checklist."),
+      taskUpdate("plan_step_1", "Inspect", "complete"),
+      taskUpdate("plan_step_2", "Patch", "in_progress"),
+      taskUpdate("plan_step_3", "Test", "pending"),
+    ]);
+  });
+
+  it("starts native Slack progress from an explanation-only plan", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        {
+          kind: "plan",
+          phase: "update",
+          explanation: "Reviewing the implementation.",
+          steps: [],
+        },
+      ],
+    });
+
+    expectNativeProgressStart([
+      planUpdate("Reviewing the implementation."),
+      taskUpdate(expect.any(String), "Update Plan — Reviewing the implementation.", "in_progress"),
+    ]);
+  });
+
+  it("does not replace answer text with a late plan update", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "partial", text: "Answer started" },
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: "Late plan",
+        steps: [{ step: "Should stay hidden", status: "in_progress" }],
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(draftStream.update).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).toHaveBeenLastCalledWith("Answer started");
+  });
+
   it("starts native Slack progress from the first running tool callback before final text", async () => {
     const taskId = expect.stringMatching(/^exec_call_1_[a-f0-9]{8}$/);
 
@@ -3285,6 +3412,24 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
 
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a new draft delivery target when a queued followup is admitted", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [{ kind: "partial", text: "first reply" }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+    await capturedReplyOptions?.onQueuedFollowupAdmitted?.();
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -4419,3 +4564,4 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(postMessageMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -235,8 +235,6 @@ async function retireRolledCronSessionMcpRuntime(params: {
   });
 }
 
-export type { RunCronAgentTurnResult } from "./run.types.js";
-
 type CronExecutionRuntime = typeof import("./run-executor.runtime.js");
 type CronExecutionResult = Awaited<ReturnType<CronExecutionRuntime["executeCronRun"]>>;
 type CronModelCatalogRuntime = typeof import("./run-model-catalog.runtime.js");
@@ -411,8 +409,8 @@ async function createCronToolsAllowPreflightDiagnostics(params: {
   }
 }
 
-/** Exported for #91613 keyless-inherited delivery-context regression coverage. */
-export async function resolveCronDeliveryContext(params: {
+/** Resolves the delivery plan and concrete target for one isolated cron run. */
+async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
@@ -491,7 +489,7 @@ function appendCronDeliveryInstruction(params: {
         : "for the current chat";
     return `${params.commandBody}\n\nUse the message tool if you need to notify the user directly ${targetHint}. If you do not send directly, your final plain-text reply will be delivered automatically.`.trim();
   }
-  return `${params.commandBody}\n\nReturn your response as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+  return `${params.commandBody}\n\nYour response will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
 function resolvePositiveContextTokens(value: unknown): number | undefined {
@@ -1860,3 +1858,4 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

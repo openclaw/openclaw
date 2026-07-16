@@ -19,6 +19,7 @@ import type { CodexAppServerClient } from "./client.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
@@ -267,7 +268,7 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
-export function getMockServerVersion() {
+function getMockServerVersion() {
   return "0.132.0";
 }
 
@@ -628,6 +629,7 @@ export function setupRunAttemptTestHooks(): void {
     resetGlobalHookRunner();
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
+    defaultCodexPluginMetadataCache.clear();
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();

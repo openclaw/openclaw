@@ -1,6 +1,7 @@
 // Verifies managed local provider services start, lease, probe, and stop safely.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -583,6 +584,30 @@ describe("provider local service", () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
+  it("preserves UTF-8 split across local service startup diagnostic chunks", async () => {
+    const port = await freePort();
+    const expected = "startup-😀-failure";
+    const serviceScript = [
+      `const bytes=Buffer.from(${JSON.stringify(expected)},"utf8");`,
+      `const split=Buffer.byteLength("startup-","utf8")+2;`,
+      `process.stderr.write(bytes.subarray(0,split));`,
+      `setTimeout(()=>process.stderr.write(bytes.subarray(split),()=>process.exit(17)),75);`,
+    ].join("");
+    const target = {
+      providerId: "local-utf8-exit",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      service: {
+        command: process.execPath,
+        args: ["-e", serviceScript],
+        readyTimeoutMs: 60_000,
+      },
+    };
+
+    await expect(ensureProviderLocalService(target)).rejects.toThrow(
+      `local-utf8-exit local service exited before readiness with code 17; stderr: ${expected}`,
+    );
+  });
+
   it("reports a local service startup signal exit without waiting for readiness timeout", async () => {
     const port = await freePort();
     const model = attachModelProviderLocalService(
@@ -803,5 +828,82 @@ describe("provider local service", () => {
     expect(startupError?.message).not.toContain(argumentDiagnosticSecret);
     expect(Buffer.byteLength(startupError?.message ?? "")).toBeLessThanOrEqual(8 * 1024 + 256);
     expect(getManagedProviderLocalServiceDiagnosticsForTest()).toEqual([]);
+  });
+
+  it("does not spawn a local service after its last startup caller aborts", async () => {
+    const tempDir = tempDirs.make("openclaw-local-service-abort-");
+    const pidPath = path.join(tempDir, "child.pid");
+    const controller = new AbortController();
+    let probeCount = 0;
+    let childPid: number | undefined;
+    const server = http.createServer((_request, response) => {
+      probeCount += 1;
+      response.writeHead(503, { "content-type": "text/plain" });
+      response.end("not ready");
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server port");
+    }
+    const port = address.port;
+    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-abort-before-spawn",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: [
+          "-e",
+          `require("node:fs").writeFileSync(${JSON.stringify(pidPath)},String(process.pid));setInterval(()=>{},1000);`,
+        ],
+        healthUrl,
+        readyTimeoutMs: 60_000,
+      },
+    );
+    const realFetch = globalThis.fetch;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+      const response = await realFetch(...args);
+      if (response.status === 503 && !controller.signal.aborted) {
+        controller.abort(new Error("request aborted after unhealthy probe"));
+      }
+      return response;
+    });
+
+    try {
+      await expect(
+        ensureModelProviderLocalService(model, undefined, controller.signal),
+      ).rejects.toThrow("request aborted after unhealthy probe");
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
+      childPid = await readPidFile(pidPath).catch(() => undefined);
+
+      expect(probeCount).toBe(1);
+      expect(childPid).toBeUndefined();
+    } finally {
+      fetchSpy.mockRestore();
+      childPid ??= await readPidFile(pidPath).catch(() => undefined);
+      killPidIfAlive(childPid);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    }
   });
 });

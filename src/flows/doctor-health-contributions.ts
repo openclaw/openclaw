@@ -29,6 +29,8 @@ type DoctorConfigResult = {
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
+  shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
+  blockedCodexModelIdentities?: readonly string[];
 };
 
 export type DoctorHealthFlowContext = {
@@ -103,9 +105,7 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
-export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
-  env: NodeJS.ProcessEnv;
-}): boolean {
+function shouldSkipLegacyUpdateDoctorConfigWrite(params: { env: NodeJS.ProcessEnv }): boolean {
   if (!isTruthyEnvValue(params.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
     return false;
   }
@@ -115,7 +115,7 @@ export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
   return true;
 }
 
-export function createDoctorHealthContribution(params: {
+function createDoctorHealthContribution(params: {
   id: string;
   label: string;
   healthCheckIds?: readonly string[];
@@ -525,6 +525,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
+    doctorOnlyStateMigrations: true,
     crossStateDirImports:
       ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
   });
@@ -653,6 +654,9 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    ...(ctx.configResult.blockedCodexModelIdentities?.length
+      ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+      : {}),
   });
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
@@ -674,6 +678,7 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({
+    cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
   });
@@ -1329,6 +1334,28 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       );
     }
   }
+  if (ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite === true) {
+    // Two-phase safety: replaceConfigFile above persists ctx.cfg itself
+    // (cfgForPersistence is only the flow-start change-detection clone), and
+    // when no write was scheduled ctx.cfg still mirrors disk because the
+    // required runtime policy was already persisted. Either way ctx.cfg is the
+    // durable config, so the cron rewrite below validates against real state.
+    const { repairCronCodexModelRefsAfterConfigWrite } =
+      await import("../commands/doctor/cron/legacy-repair.js");
+    const result = await repairCronCodexModelRefsAfterConfigWrite({
+      cfg: ctx.cfg,
+      ...(ctx.configResult.blockedCodexModelIdentities?.length
+        ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+        : {}),
+    });
+    const { note } = await loadNoteModule();
+    if (result.changes.length > 0) {
+      note(result.changes.join("\n"), "Doctor changes");
+    }
+    if (result.warnings.length > 0) {
+      note(result.warnings.join("\n"), "Doctor warnings");
+    }
+  }
 }
 
 async function collectWriteConfigHealthFindings(
@@ -1529,7 +1556,7 @@ async function runSkillWorkshopToolPolicyHealth(ctx: DoctorHealthFlowContext): P
   await runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy");
 }
 
-export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
+function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
@@ -2282,3 +2309,10 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
     await contribution.run(ctx);
   }
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorHealthContributionsTestApi")
+  ] = { createDoctorHealthContribution, resolveDoctorHealthContributions };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

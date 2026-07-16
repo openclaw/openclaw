@@ -525,6 +525,19 @@ describe("grouped chat rendering", () => {
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
   });
 
+  it("does not replay an arrival animation when a message row mounts", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "Stable transcript row",
+      timestamp: 1000,
+    });
+
+    const bubble = expectElement(container, ".chat-bubble", HTMLElement);
+    expect(bubble.classList.contains("fade-in")).toBe(false);
+    expect(expectElement(container, ".chat-group", HTMLElement).dataset.chatRowKey).toBeTruthy();
+  });
+
   it("uses the displayed answer for assistant message actions", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
@@ -564,6 +577,7 @@ describe("grouped chat rendering", () => {
     );
 
     expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      assistantTranscriptRoleHeaders: false,
       codeBlockChrome: "none",
       fileLinks: true,
     });
@@ -580,6 +594,7 @@ describe("grouped chat rendering", () => {
     });
 
     expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
     });
@@ -1024,6 +1039,7 @@ describe("grouped chat rendering", () => {
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
     expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
+      assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
     });
@@ -1034,7 +1050,10 @@ describe("grouped chat rendering", () => {
   it("renders a reading-indicator-only run without avatar or footer", () => {
     const container = document.createElement("div");
 
-    render(renderStreamGroup([{ kind: "reading-indicator", key: "reading" }]), container);
+    render(
+      renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }]),
+      container,
+    );
 
     const group = container.querySelector(".chat-group.assistant");
     expect(group).not.toBeNull();
@@ -1042,6 +1061,16 @@ describe("grouped chat rendering", () => {
     // Working runs are pure claw: the avatar only arrives with stream text.
     expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
+    expect(
+      container.querySelector(".chat-working-indicator__status > .agent-chat__sr-only")
+        ?.textContent,
+    ).toBe("Working…");
+    expect(
+      container.querySelectorAll(
+        ".chat-working-indicator__status > span:not(.agent-chat__sr-only)",
+      ),
+    ).toHaveLength(0);
     expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
@@ -1051,7 +1080,7 @@ describe("grouped chat rendering", () => {
     render(
       renderStreamGroup([
         { kind: "stream", key: "stream:s:live", text: "reply", startedAt: 10, isStreaming: true },
-        { kind: "reading-indicator", key: "reading" },
+        { kind: "reading-indicator", key: "reading", startedAt: 10 },
       ]),
       container,
     );
@@ -1065,7 +1094,7 @@ describe("grouped chat rendering", () => {
   it("seeds a stable punch stance per reading-indicator key", () => {
     const stanceFor = (key: string) => {
       const container = document.createElement("div");
-      render(renderStreamGroup([{ kind: "reading-indicator", key }]), container);
+      render(renderStreamGroup([{ kind: "reading-indicator", key, startedAt: 1 }]), container);
       const bubble = container.querySelector(".chat-reading-indicator");
       return [...(bubble?.classList ?? [])].filter((cls) =>
         cls.startsWith("chat-reading-indicator--"),
@@ -1084,6 +1113,25 @@ describe("grouped chat rendering", () => {
         "chat-reading-indicator--haymaker",
       ]).toContain(cls);
     }
+  });
+
+  it("keeps the synthetic progress word screen-reader-only across runs", () => {
+    const statusFor = (startedAt: number) => {
+      const container = document.createElement("div");
+      render(
+        renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt }]),
+        container,
+      );
+      const status = container.querySelector(".chat-working-indicator__status");
+      return {
+        hidden: status?.querySelector(".agent-chat__sr-only")?.textContent,
+        visibleLabels: status?.querySelectorAll("span:not(.agent-chat__sr-only)").length,
+      };
+    };
+
+    expect(statusFor(1_000)).toEqual({ hidden: "Working…", visibleLabels: 0 });
+    expect(statusFor(1_500)).toEqual({ hidden: "Working…", visibleLabels: 0 });
+    expect(statusFor(8_000)).toEqual({ hidden: "Working…", visibleLabels: 0 });
   });
 
   it("renders configured local user names", () => {
@@ -3113,3 +3161,4 @@ describe("grouped chat rendering", () => {
     expect(sidebar.fullMessageRequest).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

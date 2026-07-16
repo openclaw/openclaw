@@ -202,6 +202,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
     expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
+    expect(hoisted.createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceLoader: fixture.resourceLoader }),
+    );
     expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
       expect.objectContaining({

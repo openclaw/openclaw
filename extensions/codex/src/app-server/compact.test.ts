@@ -1406,7 +1406,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(
       new CodexAppServerRpcError(
-        { code: -32_602, message: "thread not found: thread-1" },
+        { code: -32_600, message: "thread not found: thread-1" },
         "thread/compact/start",
       ),
     );
@@ -2025,3 +2025,4 @@ function createFakeCodexClient(
     completeCompaction,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

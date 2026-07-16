@@ -49,6 +49,18 @@ export {
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";
 export {
+  buildChannelGroupsScopeTree,
+  encodeScopeSegment,
+  resolveScopeIntroHint,
+  resolveScopeKeyCaseInsensitive,
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+  scopeKey,
+  type ScopeNode,
+  type ScopePath,
+  type ScopeTree,
+} from "../config/group-scope-tree.js";
+export {
   DM_GROUP_ACCESS_REASON,
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithCommandGate,

@@ -2,8 +2,7 @@
 import { stream as streamModel, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { resolveFirstGithubToken } from "./auth.js";
-import { buildCopilotDynamicHeaders } from "./stream.js";
-import { wrapCopilotOpenAIResponsesStream } from "./stream.js";
+import { wrapCopilotProviderStream } from "./stream.js";
 import { resolveCopilotApiToken } from "./token.js";
 
 const LIVE =
@@ -196,7 +195,7 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
     };
     let capturedPayload: Record<string, unknown> | undefined;
 
-    const wrappedStream = wrapCopilotOpenAIResponsesStream(streamModel as never);
+    const wrappedStream = wrapCopilotProviderStream({ streamFn: streamModel } as never);
     if (!wrappedStream) {
       throw new Error("expected Copilot Responses stream wrapper");
     }
@@ -205,10 +204,6 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
       context as never,
       {
         apiKey: token.token,
-        headers: buildCopilotDynamicHeaders({
-          messages: context.messages,
-          hasImages: false,
-        }),
         maxTokens: 32,
         onPayload: (payload: unknown) => {
           capturedPayload = payload as Record<string, unknown>;

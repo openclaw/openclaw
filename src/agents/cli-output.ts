@@ -5,6 +5,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { AgentPlanStep } from "../channels/streaming.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
@@ -123,6 +124,10 @@ export type CliThinkingProgress = {
   progressTokens: number;
 };
 
+export type CliPlanUpdate = {
+  steps: AgentPlanStep[];
+};
+
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
@@ -172,7 +177,7 @@ function isStreamJsonDialect(params: { backend: CliBackendConfig; providerId: st
 }
 
 /** Returns whether JSONL output carries correlated provider tool events. */
-export function supportsCliJsonlToolEvents(params: {
+function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
@@ -561,7 +566,7 @@ function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
 
 /** Parses JSON CLI output, including mixed stdout that contains embedded JSON objects. */
 /** Parses a single JSON payload emitted by a CLI backend. */
-export function parseCliJson(
+function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
   providerId?: string,
@@ -1199,6 +1204,7 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
+  onPlanUpdate?: (update: CliPlanUpdate) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
@@ -1320,6 +1326,23 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     const item = isRecord(parsed.item) ? parsed.item : null;
+    if (item?.type === "todo_list" && Array.isArray(item.items)) {
+      const steps = item.items.flatMap((entry) => {
+        if (!isRecord(entry) || typeof entry.text !== "string") {
+          return [];
+        }
+        return [
+          {
+            step: entry.text,
+            // codex exec JSONL exposes only a completed boolean for todo items.
+            status: entry.completed === true ? ("completed" as const) : ("pending" as const),
+          },
+        ];
+      });
+      if (steps.length > 0) {
+        params.onPlanUpdate?.({ steps });
+      }
+    }
     if (item && typeof item.text === "string") {
       const type = normalizeLowercaseStringOrEmpty(item.type);
       if (!type || type.includes("message")) {
@@ -1502,7 +1525,7 @@ export function createCliJsonlStreamingParser(params: {
 
 /** Parses complete JSONL CLI output into the final assistant result and metadata. */
 /** Parses complete JSONL output from a CLI backend into normalized text and metadata. */
-export function parseCliJsonl(
+function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
   providerId: string,
@@ -1662,3 +1685,4 @@ export function extractCliErrorMessage(raw: string): string | null {
 
   return errorText || null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

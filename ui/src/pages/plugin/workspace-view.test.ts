@@ -109,11 +109,46 @@ describe("renderWorkspace", () => {
     try {
       render(renderWorkspace({ host, client: null, connected: false }), host);
       expect(state.activeSlug).toBe("empty");
-      host.querySelector<HTMLButtonElement>('[data-ws="main"]')?.click();
+      host
+        .querySelector<HTMLElement>("wa-tab-group")
+        ?.dispatchEvent(new CustomEvent("wa-tab-show", { detail: { name: "main" } }));
       expect(new URLSearchParams(window.location.search).get("ws")).toBe("main");
       expect(onPopState).toHaveBeenCalledOnce();
     } finally {
       window.removeEventListener("popstate", onPopState);
+      stopWorkspace(host);
+      host.remove();
+    }
+  });
+
+  it("cancels a removed deep link before the initial workspace finishes loading", async () => {
+    window.history.replaceState({}, "", "/plugin?plugin=workspaces&id=workspaces&ws=empty");
+    const host = document.createElement("div");
+    document.body.append(host);
+    let resolveWorkspace!: (value: unknown) => void;
+    const request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveWorkspace = resolve;
+        }),
+    );
+    const client = {
+      request,
+      addEventListener: vi.fn(() => () => {}),
+    } as unknown as GatewayBrowserClient;
+    const state = getWorkspaceState(host);
+
+    try {
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(request).toHaveBeenCalledOnce();
+
+      window.history.replaceState({}, "", "/plugin?plugin=workspaces&id=workspaces");
+      render(renderWorkspace({ host, client, connected: true }), host);
+
+      resolveWorkspace({ doc, workspaceVersion: doc.workspaceVersion });
+      await vi.waitFor(() => expect(state.loaded).toBe(true));
+      expect(state.activeSlug).toBe("main");
+    } finally {
       stopWorkspace(host);
       host.remove();
     }
