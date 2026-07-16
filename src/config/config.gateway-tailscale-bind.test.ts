@@ -3,6 +3,49 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("gateway tailscale bind validation", () => {
+  it.each(["none", "trusted-proxy"] as const)(
+    "rejects requireTailscaleSharedSecret with %s auth mode",
+    (mode) => {
+      const res = validateConfigObject({
+        gateway: {
+          auth: {
+            mode,
+            requireTailscaleSharedSecret: true,
+            ...(mode === "trusted-proxy"
+              ? { trustedProxy: { userHeader: "x-forwarded-user" } }
+              : {}),
+          },
+        },
+      });
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues).toContainEqual({
+          path: "gateway.auth.mode",
+          message:
+            "gateway.auth.requireTailscaleSharedSecret=true requires gateway.auth.mode=token or password",
+        });
+      }
+    },
+  );
+
+  it.each(["token", "password"] as const)(
+    "accepts requireTailscaleSharedSecret with %s auth mode",
+    (mode) => {
+      const res = validateConfigObject({
+        gateway: {
+          auth: {
+            mode,
+            requireTailscaleSharedSecret: true,
+            ...(mode === "token" ? { token: "secret" } : { password: "secret" }),
+          },
+        },
+      });
+
+      expect(res.ok).toBe(true);
+    },
+  );
+
   it("accepts loopback bind when tailscale serve/funnel is enabled", () => {
     const serveRes = validateConfigObject({
       gateway: {

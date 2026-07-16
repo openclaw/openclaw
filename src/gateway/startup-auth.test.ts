@@ -336,6 +336,40 @@ describe("ensureGatewayStartupAuth", () => {
     );
   });
 
+  it.each(["none", "trusted-proxy"] as const)(
+    "rejects requireTailscaleSharedSecret with effective %s auth mode",
+    async (mode) => {
+      await expect(
+        runStartupAuth({
+          cfg: gatewayAuthConfig({
+            mode,
+            requireTailscaleSharedSecret: true,
+            ...(mode === "trusted-proxy"
+              ? { trustedProxy: { userHeader: "x-forwarded-user" } }
+              : {}),
+          }),
+        }),
+      ).rejects.toThrow(
+        "gateway.auth.requireTailscaleSharedSecret=true requires gateway.auth.mode=token or password",
+      );
+    },
+  );
+
+  it("rejects a runtime override that changes layered auth to an unsupported mode", async () => {
+    await expect(
+      runStartupAuth({
+        cfg: gatewayAuthConfig({
+          mode: "token",
+          token: "configured-token",
+          requireTailscaleSharedSecret: true,
+        }),
+        authOverride: { mode: "none" },
+      }),
+    ).rejects.toThrow(
+      "gateway.auth.requireTailscaleSharedSecret=true requires gateway.auth.mode=token or password",
+    );
+  });
+
   it("treats undefined token override as no override", async () => {
     await expectResolvedToken({
       cfg: {

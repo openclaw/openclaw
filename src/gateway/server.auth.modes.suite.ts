@@ -15,6 +15,10 @@ import {
   testState,
   testTailscaleWhois,
 } from "./server.auth.test-helpers.js";
+import {
+  loadGatewayConfig,
+  waitForGatewayWsClose,
+} from "./shared-auth.test-helpers.js";
 
 export function registerAuthModesSuite(): void {
   describe("password auth", () => {
@@ -212,6 +216,63 @@ export function registerAuthModesSuite(): void {
       const health = await rpcReq(ws, "health");
       expect(health.ok).toBe(true);
       ws.close();
+    });
+
+    test("requires the shared token when layered tailscale auth is enabled", async () => {
+      testState.gatewayAuth = {
+        mode: "token",
+        token: "secret",
+        allowTailscale: true,
+        requireTailscaleSharedSecret: true,
+      };
+
+      const withoutToken = await openTailscaleWs(port);
+      const rejected = await connectReq(withoutToken, {
+        skipDefaultAuth: true,
+        device: null,
+      });
+      expect(rejected.ok).toBe(false);
+      expect(rejected.error?.message ?? "").toContain("unauthorized");
+      withoutToken.close();
+
+      const withToken = await openTailscaleWs(port);
+      const accepted = await connectReq(withToken, {
+        token: "secret",
+        device: null,
+      });
+      expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+      withToken.close();
+    });
+
+    test("disconnects a tokenless tailscale session when config.patch enables layered auth", async () => {
+      const ws = await openTailscaleWs(port, { origin: tailscaleOrigin });
+      const connected = await connectReq(ws, {
+        skipDefaultAuth: true,
+        client: {
+          ...CONTROL_UI_CLIENT,
+        },
+      });
+      expect(connected.ok, JSON.stringify(connected)).toBe(true);
+
+      const current = await loadGatewayConfig(ws);
+      const closed = waitForGatewayWsClose(ws);
+      const patched = await rpcReq(ws, "config.patch", {
+        baseHash: current.hash,
+        raw: JSON.stringify({
+          gateway: {
+            auth: {
+              requireTailscaleSharedSecret: true,
+            },
+          },
+        }),
+        restartDelayMs: 1_000,
+      });
+
+      expect(patched.ok).toBe(true);
+      await expect(closed).resolves.toEqual({
+        code: 4001,
+        reason: "gateway auth changed",
+      });
     });
   });
 }

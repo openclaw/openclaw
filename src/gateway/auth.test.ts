@@ -752,6 +752,25 @@ describe("gateway auth", () => {
       }),
     ).toThrow("gateway auth mode is token, but no token was configured");
   });
+
+  it.each(["none", "trusted-proxy"] as const)(
+    "rejects requireTailscaleSharedSecret with %s auth mode",
+    (mode) => {
+      const auth = resolveGatewayAuth({
+        authConfig: {
+          mode,
+          requireTailscaleSharedSecret: true,
+          ...(mode === "trusted-proxy"
+            ? { trustedProxy: { userHeader: "x-forwarded-user" } }
+            : {}),
+        },
+      });
+
+      expect(() => assertGatewayAuthConfigured(auth)).toThrow(
+        "gateway.auth.requireTailscaleSharedSecret=true requires gateway.auth.mode=token or password",
+      );
+    },
+  );
 });
 
 describe("trusted-proxy auth", () => {

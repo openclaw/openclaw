@@ -38,6 +38,9 @@ export type { GatewayAuthResult } from "./auth-shared-secret.js";
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 
+const TAILSCALE_SHARED_SECRET_AUTH_MODE_ERROR =
+  "gateway.auth.requireTailscaleSharedSecret=true requires gateway.auth.mode=token or password";
+
 type GatewayAuthSurface = "http" | "ws-control-ui";
 
 /** Inputs needed to authorize one HTTP or websocket gateway connection. */
@@ -232,11 +235,23 @@ async function resolveVerifiedTailscaleUser(params: {
   };
 }
 
+/** Reject layered Tailscale auth when the effective mode cannot validate a shared secret. */
+export function assertTailscaleSharedSecretAuthMode(auth: ResolvedGatewayAuth): void {
+  if (
+    auth.requireTailscaleSharedSecret === true &&
+    auth.mode !== "token" &&
+    auth.mode !== "password"
+  ) {
+    throw new Error(TAILSCALE_SHARED_SECRET_AUTH_MODE_ERROR);
+  }
+}
+
 /** Validate that the selected gateway auth mode has the required resolved credentials/config. */
 export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
   rawAuthConfig?: GatewayAuthConfig | null,
 ): void {
+  assertTailscaleSharedSecretAuthMode(auth);
   if (auth.mode === "token" && !auth.token) {
     if (auth.allowTailscale && auth.requireTailscaleSharedSecret !== true) {
       return;

@@ -36,4 +36,19 @@ export const GatewayAuthSchema = z
       .optional(),
   })
   .strict()
+  .superRefine((auth, ctx) => {
+    if (
+      auth.requireTailscaleSharedSecret === true &&
+      auth.mode !== undefined &&
+      auth.mode !== "token" &&
+      auth.mode !== "password"
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["mode"],
+        message:
+          "gateway.auth.requireTailscaleSharedSecret=true requires gateway.auth.mode=token or password",
+      });
+    }
+  })
   .optional();

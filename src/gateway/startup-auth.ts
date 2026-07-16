@@ -10,7 +10,11 @@ import {
   resolveGatewayTokenSecretRefValue,
 } from "./auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-policy.js";
-import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  assertTailscaleSharedSecretAuthMode,
+  resolveGatewayAuth,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import {
   hasGatewayPasswordEnvCandidate,
   hasGatewayTokenEnvCandidate,
@@ -224,6 +228,7 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
+  assertTailscaleSharedSecretAuthMode(resolved);
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
     assertGatewayAuthNotKnownWeak(resolved);
     warnHooksTokenReuseGatewayAuth({ cfg: params.cfg, auth: resolved, warn: params.warn });
@@ -248,6 +253,7 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
+  assertTailscaleSharedSecretAuthMode(nextAuth);
   // The generated token is crypto-random, so this cannot match the weak set
   // in practice — but running the assertion on both branches documents that
   // the rule applies uniformly and guards against any future path that might
