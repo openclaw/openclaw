@@ -121,6 +121,41 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("does not mark not_required delivery as delivered when completion_announced_at exists", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        expectsCompletionMessage: false,
+        completion: { required: false },
+        delivery: { status: "not_required" },
+      });
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      const restored = loadSubagentRegistryFromSqlite();
+      const restoredRun = restored.get(run.runId)!;
+      expect(restoredRun.delivery?.status).toBe("not_required");
+      expect(restoredRun.delivery?.announcedAt).toBeUndefined();
+    });
+  });
+
+  it("preserves announcedAt for not_required delivery when completion was announced", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        expectsCompletionMessage: false,
+        completion: { required: false },
+        delivery: { status: "not_required", announcedAt: 300 },
+      });
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      const restored = loadSubagentRegistryFromSqlite();
+      const restoredRun = restored.get(run.runId)!;
+      expect(restoredRun.delivery?.status).toBe("not_required");
+      expect(restoredRun.delivery?.announcedAt).toBe(300);
+      expect(restoredRun.delivery?.deliveredAt).toBeUndefined();
+    });
+  });
+
   it("does not read or delete the retired JSON registry at runtime", async () => {
     await withTempStateEnv(async () => {
       const legacyRun = createRun({
