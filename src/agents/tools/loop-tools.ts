@@ -433,10 +433,9 @@ export function createLoopUpdateTool(): AnyAgentTool {
         // Store subtasks from plan phase
         if (subtasks && Array.isArray(subtasks) && subtasks.length > 0) {
           state.subtasks = subtasks.map((s) => {
-            s.status = "pending" as const;
-            s.worktreePath = undefined;
-            s.result = undefined;
-            return s;
+            const out = s as LoopSubtask;
+            out.status = "pending" as const;
+            return out;
           });
         }
 
