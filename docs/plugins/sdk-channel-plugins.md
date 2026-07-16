@@ -448,6 +448,28 @@ approval channels such as Matrix, Slack, Telegram, and custom chat transports
 should use the shared native helpers instead of rolling their own approval
 lifecycle.
 
+## Account-scoped config reloads
+
+Channel config changes restart the whole channel by default. A multi-account
+channel may set `reload.accountScopedRestart: true` only when both of these
+contracts hold:
+
+- Resolving, routing, or authenticating one named account never reads mutable
+  state from a sibling named account.
+- The gateway runtime can stop and start one account by `accountId` without
+  interrupting or replacing sibling runtimes.
+
+The scoped path applies only to changes under
+`channels.<channel>.accounts.<non-default-id>.*`. Changes to shared channel
+fields, the `default` account, removed or unresolvable accounts, and any mixed
+change that can affect inheritance are promoted to a whole-channel restart.
+Plugins that do not opt in always use the whole-channel path.
+
+Treat this flag as a capability claim, not a performance preference. Contract
+tests should prove that adding and editing one named account leaves a sibling's
+resolved config unchanged, and that hot reload stops and starts only the named
+runtime. If either guarantee cannot be proved, omit the flag.
+
 ## Inbound mention policy
 
 Keep inbound mention handling split in two layers:
