@@ -47,6 +47,29 @@ describe("gradium speech provider", () => {
     }
   });
 
+  it("reports not configured for an invalid baseUrl instead of throwing", () => {
+    const original = process.env.GRADIUM_API_KEY;
+    try {
+      delete process.env.GRADIUM_API_KEY;
+      expect(
+        provider.isConfigured({
+          providerConfig: { apiKey: String(true), baseUrl: "https://example.com" },
+          timeoutMs: 5_000,
+        }),
+      ).toBe(false);
+      expect(
+        provider.isConfigured({
+          providerConfig: { apiKey: String(true), baseUrl: "not-a-url" },
+          timeoutMs: 5_000,
+        }),
+      ).toBe(false);
+    } finally {
+      if (original !== undefined) {
+        process.env.GRADIUM_API_KEY = original;
+      }
+    }
+  });
+
   it("synthesizes audio via the Gradium TTS endpoint", async () => {
     const audioData = Buffer.from("wav-audio-data");
     const fetchMock = vi.fn().mockResolvedValue(new Response(audioData, { status: 200 }));

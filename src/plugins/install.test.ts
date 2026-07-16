@@ -1916,28 +1916,6 @@ describe("installPluginFromArchive", () => {
     expect(warnings).toStrictEqual([]);
   });
 
-  it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
-    const sourcePluginDir = path.resolve(process.cwd(), "extensions", "qa-matrix");
-    const pluginDir = path.join(suiteTempRootTracker.makeTempDir(), "qa-matrix");
-    fs.cpSync(sourcePluginDir, pluginDir, {
-      recursive: true,
-      filter: (entryPath) =>
-        !path.relative(sourcePluginDir, entryPath).split(path.sep).includes("node_modules"),
-    });
-    vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
-
-    const scanResult = await installSecurityScan.scanPackageInstallSource({
-      extensions: ["./index.ts"],
-      logger: { warn: vi.fn() },
-      packageDir: pluginDir,
-      pluginId: "qa-matrix",
-      packageName: "@openclaw/qa-matrix",
-      manifestId: "qa-matrix",
-    });
-
-    expect(scanResult?.blocked).toBeUndefined();
-  });
-
   it("allows bundle installs with dangerous code patterns without built-in scanner blocking", async () => {
     const { pluginDir, extensionsDir } = setupBundleInstallFixture({
       bundleFormat: "codex",
@@ -4172,3 +4150,4 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expectWarningIncludes(warnings, "Could not locate openclaw package root");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

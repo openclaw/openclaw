@@ -694,6 +694,16 @@
   opacity: 0.72;
 }
 
+.workboard-card.workboard-card--dragging {
+  opacity: 0.45;
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent),
+    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+  transform: scale(0.985);
+  cursor: grabbing;
+}
+
 .workboard-card h3 {
   margin: 0;
   color: var(--text-strong);

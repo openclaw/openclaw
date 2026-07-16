@@ -18,13 +18,15 @@ import type {
 } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
-import {
-  isLoopbackIpAddress,
-  normalizeIpAddress,
-  parseCanonicalIpAddress,
-  type ParsedIpAddress,
-} from "@openclaw/net-policy/ip";
+import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
+import {
+  isSensitiveUrlQueryParamName,
+  normalizeFingerprint,
+  normalizeLowercaseStringOrEmpty,
+  parseGatewayIpAddress,
+  parseHostForAddressChecks,
+} from "./client-address-utils.js";
 import {
   buildGatewayConnectAuth,
   type GatewayConnectAuthSelection,
@@ -42,7 +44,11 @@ import {
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
-import { resolveConnectChallengeTimeoutMs, resolveSafeTimeoutDelayMs } from "./timeouts.js";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  resolveConnectChallengeTimeoutMs,
+  resolveSafeTimeoutDelayMs,
+} from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
 
 export type DeviceIdentity = {
@@ -115,40 +121,6 @@ function resolveHostDeps(overrides?: GatewayClientHostDeps): Required<GatewayCli
   ) as Required<GatewayClientHostDeps>;
 }
 
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
-function isSensitiveUrlQueryParamName(key: string): boolean {
-  return /(?:token|password|secret|key|auth|credential)/iu.test(key);
-}
-
-function normalizeFingerprint(fingerprint: string | undefined): string {
-  return (fingerprint ?? "").replaceAll(":", "").trim().toLowerCase();
-}
-
-function parseHostForAddressChecks(
-  host: string,
-): { isLocalhost: boolean; unbracketedHost: string } | null {
-  if (!host) {
-    return null;
-  }
-  const normalizedHost = host.toLowerCase().trim();
-  const canonicalHost = normalizedHost.replace(/\.+$/, "");
-  if (canonicalHost === "localhost") {
-    return { isLocalhost: true, unbracketedHost: canonicalHost };
-  }
-  return {
-    isLocalhost: false,
-    // URL.hostname canonicalizes IPv6 with brackets in some call sites. Strip
-    // them before net.isIP so address checks do not fall back to hostname rules.
-    unbracketedHost:
-      normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
-        ? normalizedHost.slice(1, -1)
-        : normalizedHost,
-  };
-}
-
 const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
   "loopback",
   "private",
@@ -162,11 +134,6 @@ const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<string>([
   "uniqueLocal",
   "deprecatedSiteLocal",
 ]);
-
-function parseGatewayIpAddress(host: string): ParsedIpAddress | undefined {
-  const normalized = normalizeIpAddress(host);
-  return normalized ? parseCanonicalIpAddress(normalized) : undefined;
-}
 
 function isPrivateOrLoopbackIpAddress(address: ParsedIpAddress): boolean {
   const ranges =
@@ -444,7 +411,7 @@ export class GatewayClient {
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
         ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
-        : 30_000;
+        : DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
     this.protocol = new GatewayProtocolClient<AssembledConnect>({
       createSocket: (handlers) => this.createSocket(handlers),
       createRequestId: randomUUID,
@@ -514,6 +481,19 @@ export class GatewayClient {
       mode: this.opts.mode,
       preauthHandshakeTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
     };
+  }
+
+  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+    this.opts = {
+      ...this.opts,
+      caps: [...manifest.caps],
+      commands: [...manifest.commands],
+    };
+    // Node command declarations are connect metadata. Reconnect so the Gateway
+    // can reconcile approval before dispatching a newly available command.
+    if (!this.stopped) {
+      this.protocol.closeSocket(1012, "node manifest changed");
+    }
   }
 
   start() {
@@ -1228,3 +1208,4 @@ function createGatewayRequestAbortError(method: string): Error {
   err.name = "AbortError";
   return err;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -137,7 +137,11 @@ download_file() {
     detect_downloader
   fi
   if [[ "$DOWNLOADER" == "curl" ]]; then
-    curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused -o "$output" "$url"
+    # Bound post-connect stalls without imposing a total download duration.
+    curl -fsSL --proto '=https' --tlsv1.2 \
+      --speed-limit 1 --speed-time 30 \
+      --retry 3 --retry-delay 1 --retry-connrefused \
+      -o "$output" "$url"
     return
   fi
   wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
@@ -1274,12 +1278,8 @@ refresh_gateway_service_if_loaded() {
     return 0
   fi
 
-  if ! "$claw" gateway restart >/dev/null 2>&1; then
-    emit_json '{"event":"step","name":"gateway-service","status":"warn","reason":"restart-failed"}'
-    log "Warning: gateway service restart failed; continuing. Run: openclaw gateway restart"
-    return 0
-  fi
-
+  # `gateway install --force` activates the replacement service. A second
+  # restart can kill startup migrations and strand their lock until expiry.
   "$claw" gateway status --probe --json >/dev/null 2>&1 || true
   emit_json '{"event":"step","name":"gateway-service","status":"ok"}'
 }

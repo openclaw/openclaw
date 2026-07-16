@@ -7,7 +7,11 @@ import {
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
-import { setLastActiveSessionKey } from "../../app/settings.ts";
+import {
+  normalizeChatFollowUpMode,
+  setLastActiveSessionKey,
+  type ChatFollowUpMode,
+} from "../../app/settings.ts";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -125,6 +129,7 @@ export type ChatHost = ChatInputHistoryState &
     eventLogBuffer?: unknown[];
     assistantAgentId?: string | null;
     agentsList?: ChatAgentsListSnapshot | null;
+    settings?: { chatFollowUpMode?: ChatFollowUpMode };
     /** Selected message to reply to (right-click / keyboard shortcut). */
     chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
     /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
@@ -249,6 +254,7 @@ async function requestChatSend(
     runId: string;
     sessionKey?: string;
     agentId?: string;
+    queueMode?: "steer";
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -264,6 +270,7 @@ async function requestChatSend(
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
     deliver: false,
+    ...(params.queueMode ? { queueMode: params.queueMode } : {}),
     idempotencyKey: params.runId,
     attachments: buildChatApiAttachments(params.attachments),
   });
@@ -347,8 +354,11 @@ async function sendChatMessageWithGeneratedRunId(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-  canApplyError: () => boolean = () => true,
-  runIdOverride?: string,
+  options: {
+    canApplyError?: () => boolean;
+    queueMode?: "steer";
+    runId?: string;
+  } = {},
 ): Promise<ChatSendAck | null> {
   if (!state.client || !state.connected) {
     return null;
@@ -358,12 +368,18 @@ async function sendChatMessageWithGeneratedRunId(
   if (!msg && !hasAttachments) {
     return null;
   }
+  const canApplyError = options.canApplyError ?? (() => true);
   if (canApplyError()) {
     setChatError(state, null);
   }
-  const runId = runIdOverride ?? generateUUID();
+  const runId = options.runId ?? generateUUID();
   try {
-    return await requestChatSend(state, { message: msg, attachments, runId });
+    return await requestChatSend(state, {
+      message: msg,
+      attachments,
+      runId,
+      ...(options.queueMode ? { queueMode: options.queueMode } : {}),
+    });
   } catch (err) {
     if (canApplyError()) {
       setChatError(state, formatConnectError(err));
@@ -378,7 +394,7 @@ async function sendDetachedChatMessage(
   attachments?: ChatAttachment[],
   runId?: string,
 ): Promise<ChatSendAck | null> {
-  return sendChatMessageWithGeneratedRunId(state, message, attachments, () => true, runId);
+  return sendChatMessageWithGeneratedRunId(state, message, attachments, { runId });
 }
 
 function isChatResetCommand(text: string) {
@@ -1294,7 +1310,7 @@ async function sendDetachedCommandMessage(
 }
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string) {
-  if (!host.connected || !host.chatRunId) {
+  if (!host.connected || !hasAbortableSessionRun(host)) {
     return;
   }
   const activeRunId = host.chatRunId;
@@ -1333,7 +1349,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     createdAt: item.createdAt,
     kind: "steered",
     ...(item.attachments?.length ? { attachments: item.attachments } : {}),
-    pendingRunId: activeRunId,
+    ...(activeRunId ? { pendingRunId: activeRunId } : { sendState: "steering" as const }),
   };
   const hasTransientProjection = setTransientQueuedMessageProjection(
     host,
@@ -1359,19 +1375,24 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     host as unknown as ChatState,
     message,
     hasAttachments ? attachments : undefined,
-    () => visibleSessionMatches(host, itemSessionKey, item.agentId),
+    {
+      canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
+      queueMode: "steer",
+    },
   );
-  const pendingStillVisible = host.chatQueue.some(
-    (entry) => entry.id === id && entry.pendingRunId === activeRunId,
-  );
-  replacePendingQueuedMessageProjection(
-    host,
-    itemSessionKey,
-    id,
-    activeRunId,
-    claimed,
-    item.agentId,
-  );
+  const pendingStillVisible = activeRunId
+    ? host.chatQueue.some((entry) => entry.id === id && entry.pendingRunId === activeRunId)
+    : false;
+  if (activeRunId) {
+    replacePendingQueuedMessageProjection(
+      host,
+      itemSessionKey,
+      id,
+      activeRunId,
+      claimed,
+      item.agentId,
+    );
+  }
   clearTransientQueuedMessageProjection(host, itemSessionKey, id, item.agentId);
   const itemStillVisible = visibleSessionMatches(host, itemSessionKey, item.agentId);
   if (!ack) {
@@ -2428,6 +2449,17 @@ export async function handleSendChat(
       } else {
         recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
         sendResult = "pending";
+        // Steer-by-default injects the follow-up into the active run, same as
+        // clicking Steer on the queued row. When steering is unavailable the
+        // message stays queued, keeping the queue row as the visible fallback.
+        if (
+          !skillWorkshopRevision &&
+          normalizeChatFollowUpMode(host.settings?.chatFollowUpMode) === "steer" &&
+          host.connected &&
+          hasAbortableSessionRun(host)
+        ) {
+          void steerQueuedChatMessage(host, pending.id);
+        }
       }
     } else {
       sendResult = await sendChatMessageNow(host, effectiveMessage, {
@@ -2477,3 +2509,4 @@ function escapeMarkdownInline(value: string): string {
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
