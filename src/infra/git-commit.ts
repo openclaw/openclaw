@@ -23,6 +23,8 @@ const formatCommit = (value?: string | null) => {
 };
 
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
+const GIT_COMMIT_CACHE_LIMIT = 256;
+const gitCommitInsertionOrder: string[] = [];
 
 type CommitMetadataReaders = {
   readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
@@ -65,7 +67,14 @@ const safeReadFilePrefix = (filePath: string, limit = 256) => {
 };
 
 const cacheGitCommit = (searchDir: string, commit: string | null) => {
+  if (cachedGitCommitBySearchDir.size >= GIT_COMMIT_CACHE_LIMIT) {
+    const oldest = gitCommitInsertionOrder.shift();
+    if (oldest !== undefined) {
+      cachedGitCommitBySearchDir.delete(oldest);
+    }
+  }
   cachedGitCommitBySearchDir.set(searchDir, commit);
+  gitCommitInsertionOrder.push(searchDir);
   return commit;
 };
 const resolveGitLookupDepth = (searchDir: string, packageRoot: string | null) => {
