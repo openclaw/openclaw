@@ -1720,7 +1720,18 @@ jobs:
         run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
-        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+        # Scale the in-process Vitest worker budget with the runner class. Bins
+        # run one Vitest process at a time (planConcurrency 1), so workers are
+        # the only in-job parallelism; import-bound suites scale near-linearly.
+        # Timing-sensitive groups stay pinned to 2 via plan-level env.
+        env:
+          SHARD_RUNNER: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+        run: |
+          if [[ "$SHARD_RUNNER" == *"-8vcpu-"* ]]; then
+            echo "OPENCLAW_VITEST_MAX_WORKERS=6" >> "$GITHUB_ENV"
+          else
+            echo "OPENCLAW_VITEST_MAX_WORKERS=3" >> "$GITHUB_ENV"
+          fi
 
       - name: Run Node test shard
         # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
