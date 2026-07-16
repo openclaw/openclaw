@@ -109,26 +109,22 @@ describe("mark command", () => {
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       label: `🚧${MARK_SEPARATOR}测试会话`,
       pinnedAt,
-      sessionMark: { symbol: "🚧", baseLabel: "测试会话" },
     });
 
     await runMark(storePath, "/mark 3");
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       label: `🔥${MARK_SEPARATOR}测试会话`,
       pinnedAt,
-      sessionMark: { symbol: "🔥", baseLabel: "测试会话" },
     });
 
     await runMark(storePath, "/mark clear");
-    const cleared = loadSessionEntry({ storePath, sessionKey });
-    expect(cleared).toMatchObject({
+    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       label: "测试会话",
       pinnedAt,
     });
-    expect(cleared?.sessionMark).toBeUndefined();
   });
 
-  it("preserves arbitrary separator labels when clearing or applying a mark", async () => {
+  it("uses the separator as the mark fingerprint", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry(
       { storePath, sessionKey },
@@ -140,15 +136,31 @@ describe("mark command", () => {
       },
     );
     await runMark(storePath, "/mark clear");
-    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe(`custom${MARK_SEPARATOR}name`);
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe("name");
 
     await runMark(storePath, "/mark done");
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      label: `✅${MARK_SEPARATOR}custom${MARK_SEPARATOR}name`,
-      sessionMark: { symbol: "✅", baseLabel: `custom${MARK_SEPARATOR}name` },
-    });
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe(`✅${MARK_SEPARATOR}name`);
 
     await runMark(storePath, "/mark clear");
-    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe(`custom${MARK_SEPARATOR}name`);
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe("name");
+  });
+
+  it("does not restore a previous label after an external rename", async () => {
+    const storePath = await createStorePath();
+    await seedSession(storePath);
+
+    await runMark(storePath, "/mark wip");
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "sess-mark",
+        updatedAt: 2,
+        label: "新名称",
+        pinnedAt,
+      },
+    );
+
+    await runMark(storePath, "/mark clear");
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe("新名称");
   });
 });

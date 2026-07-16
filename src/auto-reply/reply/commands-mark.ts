@@ -8,7 +8,6 @@ import {
   loadSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { MARK_PRESETS, MARK_SEPARATOR, type MarkPreset } from "../commands-mark.shared.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
@@ -34,8 +33,12 @@ function markReply(text: string): CommandHandlerResult {
   return { shouldContinue: false, reply: { text } };
 }
 
-function resolveUnmarkedLabel(entry: SessionEntry): string {
-  return entry.sessionMark?.baseLabel ?? normalizeOptionalString(entry.label) ?? "";
+function stripMarkPrefix(label: string): string {
+  const separatorIndex = label.indexOf(MARK_SEPARATOR);
+  if (separatorIndex === -1) {
+    return label;
+  }
+  return label.slice(separatorIndex + MARK_SEPARATOR.length);
 }
 
 function matchMarkPreset(arg: string): MarkPreset | undefined {
@@ -109,18 +112,18 @@ export const handleMarkCommand: CommandHandler = async (params, allowTextCommand
       if (!entry) {
         return { ok: false, error: "no active session to mark" };
       }
-      const base = resolveUnmarkedLabel(entry);
+      const currentLabel = normalizeOptionalString(entry.label) ?? "";
+      const hasMark = currentLabel.includes(MARK_SEPARATOR);
+      const base = stripMarkPrefix(currentLabel);
       if (isClear) {
-        if (entry.sessionMark) {
+        if (hasMark) {
           if (base) {
             entry.label = base;
           } else {
             delete entry.label;
           }
-          delete entry.sessionMark;
         }
       } else if (preset) {
-        entry.sessionMark = { symbol: preset.symbol, baseLabel: base };
         entry.label = `${preset.symbol}${MARK_SEPARATOR}${base}`;
       }
       entry.updatedAt = Math.max(entry.updatedAt ?? 0, Date.now());
