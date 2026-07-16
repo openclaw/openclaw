@@ -1368,10 +1368,12 @@ export async function runCli(argv: string[] = process.argv) {
       };
       if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) {
         await startupTrace.measure("register-primary", async () => {
+          let skipCoreFallback = false;
           if (isPluginYieldingBuiltinCommandRoot(primary)) {
             await registerPluginCliCommandsForPrimary();
+            skipCoreFallback = hasProgramCommand(program, primary);
           }
-          if (!hasProgramCommand(program, primary)) {
+          if (!skipCoreFallback) {
             const { getProgramContext } = await import("./program/program-context.js");
             const ctx = getProgramContext(program);
             if (ctx) {
@@ -1393,10 +1395,7 @@ export async function runCli(argv: string[] = process.argv) {
       if (!shouldSkipPluginRegistration && !pluginCliRegistrationPromise) {
         const config = await registerPluginCliCommandsForPrimary();
         if (config) {
-          if (
-            primary &&
-            !hasProgramCommand(program, primary)
-          ) {
+          if (primary && !hasProgramCommand(program, primary)) {
             const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
               await loadManifestCommandAliasesRuntimeModule();
             const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner({
