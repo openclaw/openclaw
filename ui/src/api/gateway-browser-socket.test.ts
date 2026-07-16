@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "@openclaw/gateway-client/timeouts";
+import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 

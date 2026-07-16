@@ -1,8 +1,8 @@
-import type {
-  GatewayProtocolSocket,
-  GatewayProtocolSocketHandlers,
+import {
+  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  type GatewayProtocolSocket,
+  type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
-import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "@openclaw/gateway-client/timeouts";
 
 export function createBrowserGatewaySocket(
   url: string,
