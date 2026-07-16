@@ -38,7 +38,10 @@ export async function saveMatrixCredentials(
     const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
     return {
       accountId: normalizedAccountId,
-      ...credentials,
+      homeserver: credentials.homeserver,
+      userId: credentials.userId,
+      accessToken: credentials.accessToken,
+      ...(typeof credentials.deviceId === "string" ? { deviceId: credentials.deviceId } : {}),
       createdAt: existing?.createdAt ?? now,
       lastUsedAt: now,
     } satisfies MatrixStoredCredentialRecord;
@@ -72,7 +75,10 @@ export async function saveBackfilledMatrixDeviceId(
     }
     return {
       accountId: normalizedAccountId,
-      ...credentials,
+      homeserver: credentials.homeserver,
+      userId: credentials.userId,
+      accessToken: credentials.accessToken,
+      ...(typeof credentials.deviceId === "string" ? { deviceId: credentials.deviceId } : {}),
       createdAt: existing?.createdAt ?? now,
       lastUsedAt: now,
     } satisfies MatrixStoredCredentialRecord;

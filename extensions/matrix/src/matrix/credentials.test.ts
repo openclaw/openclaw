@@ -88,6 +88,21 @@ describe("matrix credentials storage", () => {
     expect(touched.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
   });
 
+  it("omits an explicitly undefined device id from persisted credentials", async () => {
+    const credentials = {
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token",
+      deviceId: undefined,
+    };
+
+    await saveMatrixCredentials(credentials, {}, "default");
+    await expect(saveBackfilledMatrixDeviceId(credentials, {}, "ops")).resolves.toBe("saved");
+
+    expect(openMatrixCredentialsStore({}).lookup("account:default")).not.toHaveProperty("deviceId");
+    expect(openMatrixCredentialsStore({}).lookup("account:ops")).not.toHaveProperty("deviceId");
+  });
+
   it("backfills a matching device id but preserves newer auth lineage", async () => {
     await saveMatrixCredentials(
       {
