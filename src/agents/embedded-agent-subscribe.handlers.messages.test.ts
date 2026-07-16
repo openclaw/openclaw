@@ -1437,7 +1437,7 @@ describe("handleMessageEnd", () => {
       message,
     } as never);
 
-    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
+    expect(firstMockArg(ctx.noteCompletedAssistant as never, "completed assistant")).toMatchObject({
       usage: {
         input: 7,
         output: 5,
@@ -1480,7 +1480,7 @@ describe("handleMessageEnd", () => {
       message,
     } as never);
 
-    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toBe(message);
+    expect(firstMockArg(ctx.noteCompletedAssistant as never, "completed assistant")).toBe(message);
     expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
   });
 
