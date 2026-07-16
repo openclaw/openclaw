@@ -31,6 +31,7 @@ const WIN_PATHEXT = [".exe", ".cmd", ".bat", ".com"] as const;
 const WINDOWS_PROGRAM_FILES_TOOL_DIR_PREFIXES = ["ImageMagick-", "GraphicsMagick-"] as const;
 const WINDOWS_PROGRAM_FILES_TOOL_DIRS = ["ImageMagick", "GraphicsMagick"] as const;
 
+const RESOLVED_BIN_CACHE_LIMIT = 512;
 const resolvedCacheStrict = new Map<string, string>();
 const resolvedCacheStandard = new Map<string, string>();
 
@@ -186,6 +187,10 @@ export function resolveSystemBin(
         const candidate = path.win32.join(dir, name + ext);
         if (isExecutableFn(candidate)) {
           if (!hasExtra) {
+            if (cache.size >= RESOLVED_BIN_CACHE_LIMIT) {
+              const oldest = cache.keys().next().value;
+              if (oldest !== undefined) cache.delete(oldest);
+            }
             cache.set(name, candidate);
           }
           return candidate;
