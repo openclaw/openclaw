@@ -514,7 +514,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "loop": {
-        if (state.activeChatRunId || state.pendingOptimisticUserMessage) {
+        if (state.activeChatRunId || state.pendingSubmit) {
           chatLog.addSystem("abort the current run before /loop");
           break;
         }
@@ -570,7 +570,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
         /** Waits for the current run to end, with a timeout. */
         const createPhaseWait = (timeout = 300_000): Promise<void> => {
-          if (!state.activeChatRunId && !state.pendingChatRunId) {
+          if (!state.activeChatRunId && !state.pendingSubmit) {
             return Promise.resolve();
           }
           return new Promise<void>((resolve, reject) => {
@@ -660,7 +660,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               if (msgs?.length) {
                 const assistantMsgs = msgs.filter((m) => m.role === "assistant");
                 if (assistantMsgs.length > 0) {
-                  const text = assistantMsgs[assistantMsgs.length - 1].content ?? "";
+                  const text = assistantMsgs[assistantMsgs.length - 1]?.content ?? "";
 
                   // Parse structured verdict
                   const parsed = parseSpawnedVerdict(text);
@@ -821,11 +821,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         const serialTasks = subtaskList.filter((s) => !s.parallelizable);
         const parallelTasks = subtaskList.filter((s) => s.parallelizable);
 
+        const SUBTASK_TIMEOUT = 300_000; // 5 min per subtask operation
+
         if (serialTasks.length > 0) {
           chatLog.addSystem(`/loop: Executing ${serialTasks.length} serial subtask(s) (each: execute → verify → pass → next)`);
           tui.requestRender();
-
-        const SUBTASK_TIMEOUT = 300_000; // 5 min per subtask operation
 
         for (const subtask of serialTasks) {
           if (!state.loopState) break;
@@ -1021,7 +1021,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
           // Save final report
           const finalSummary = getLoopState()?.phaseResult?.summary;
-          if (loopDir && finalSummary) {
+          if (loopDir && typeof finalSummary === "string") {
             writeFinalReport(reportDir, finalSummary).catch(() => {});
           }
         }
