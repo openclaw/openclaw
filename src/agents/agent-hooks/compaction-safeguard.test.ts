@@ -2719,6 +2719,12 @@ describe("compaction-safeguard double-compaction guard", () => {
                 name: "sessions_send",
                 arguments: { sessionKey: "agent:bee", message: "say bee" },
               },
+              {
+                type: "toolCall",
+                id: "call-2",
+                name: "message",
+                arguments: { action: "send", channel: "telegram", message: "status" },
+              },
             ],
             timestamp: now + 1,
           },
@@ -2734,6 +2740,19 @@ describe("compaction-safeguard double-compaction guard", () => {
             toolName: "sessions_send",
             content: [{ type: "text", text: "delivered" }],
             timestamp: now + 2,
+          },
+        },
+        {
+          type: "message",
+          id: "tool-2",
+          parentId: "tool-1",
+          timestamp: new Date(now + 3).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "call-2",
+            toolName: "message",
+            content: [{ type: "text", text: "sent" }],
+            timestamp: now + 3,
           },
         },
       ],
@@ -2765,11 +2784,22 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
     const messages = requireArray(summarizeCall.messages);
-    expect(messages.map((message) => requireRecord(message).role)).toEqual(["user", "assistant"]);
+    expect(messages.map((message) => requireRecord(message).role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
     const assistantMessage = requireRecord(messages[1]);
     expect(assistantMessage.content).toEqual([
       { type: "text", text: "I will ask the bee session and keep context." },
+      {
+        type: "toolCall",
+        id: "call-2",
+        name: "message",
+        arguments: { action: "send", channel: "telegram", message: "status" },
+      },
     ]);
+    expect(requireRecord(messages[2]).toolName).toBe("message");
     expect(JSON.stringify(messages)).not.toContain("sessions_send");
     expect(JSON.stringify(messages)).not.toContain("delivered");
   });

@@ -34,7 +34,6 @@ import {
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
-import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -189,13 +188,7 @@ function isReplayUnsafeInterSessionInput(message: AgentMessage): boolean {
   return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
 }
 
-function recordOrEmpty(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function filterReplayUnsafeMessagingToolCalls(
+function filterReplayUnsafeSessionsSendCalls(
   message: AgentMessage,
   replayUnsafeToolCallIds: Set<string>,
 ): AgentMessage | undefined {
@@ -212,17 +205,11 @@ function filterReplayUnsafeMessagingToolCalls(
       type?: unknown;
       id?: unknown;
       name?: unknown;
-      arguments?: unknown;
-      input?: unknown;
     };
     if (typeof record.type !== "string" || !TOOL_CALL_BLOCK_TYPES.has(record.type)) {
       return true;
     }
-    if (typeof record.name !== "string" || !record.name.trim()) {
-      return true;
-    }
-    const args = recordOrEmpty(record.arguments ?? record.input);
-    if (!isMessagingToolSendAction(record.name, args)) {
+    if (record.name !== "sessions_send") {
       return true;
     }
     removed = true;
@@ -239,7 +226,7 @@ function filterReplayUnsafeMessagingToolCalls(
     : undefined;
 }
 
-function isReplayUnsafeMessagingToolResult(
+function isReplayUnsafeSessionsSendResult(
   message: AgentMessage,
   replayUnsafeToolCallIds: Set<string>,
 ): boolean {
@@ -272,17 +259,16 @@ function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): Agen
       skippingInterSessionReply = false;
     }
     if (role === "assistant") {
-      const filteredMessage = filterReplayUnsafeMessagingToolCalls(
-        message,
-        replayUnsafeToolCallIds,
-      );
+      // Only sessions_send is already delivered out-of-band. Other messaging calls
+      // remain ordinary transcript history and must survive fallback compaction.
+      const filteredMessage = filterReplayUnsafeSessionsSendCalls(message, replayUnsafeToolCallIds);
       if (!filteredMessage) {
         continue;
       }
       filtered.push(filteredMessage);
       continue;
     }
-    if (isReplayUnsafeMessagingToolResult(message, replayUnsafeToolCallIds)) {
+    if (isReplayUnsafeSessionsSendResult(message, replayUnsafeToolCallIds)) {
       continue;
     }
     filtered.push(message);
