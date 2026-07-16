@@ -5,6 +5,7 @@ import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { setTimeout as delay } from "node:timers/promises";
 import { saveMediaStream } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 
 interface DownloadResult {
   path: string;
@@ -33,7 +34,7 @@ async function fetchLineContentWhenReady(
   deadline.unref();
   try {
     for (let attempt = 0; attempt < CONTENT_READY_MAX_ATTEMPTS; attempt++) {
-      const response = await fetch(
+      const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
         `${LINE_CONTENT_BASE_URL}/${encodeURIComponent(messageId)}/content`,
         {
           headers: { Authorization: `Bearer ${channelAccessToken}` },
