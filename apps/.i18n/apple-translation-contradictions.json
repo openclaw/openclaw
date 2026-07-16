@@ -1592,6 +1592,14 @@
       ]
     },
     {
+      "locale": "zh-CN",
+      "source": "Cron",
+      "translations": [
+        "Cron",
+        "定时任务"
+      ]
+    },
+    {
       "locale": "id",
       "source": "Cron expression",
       "translations": [
@@ -6419,174 +6427,20 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "تحديث"
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "Refresh",
-      "translations": [
-        "Aktualisieren",
-        "Refresh"
-      ]
-    },
-    {
-      "locale": "es",
-      "source": "Refresh",
-      "translations": [
-        "Actualizar",
-        "Refresh"
-      ]
-    },
-    {
       "locale": "fa",
       "source": "Refresh",
       "translations": [
-        "Refresh",
         "بازآوری",
         "بازخوانی",
         "تازه‌سازی"
       ]
     },
     {
-      "locale": "fr",
-      "source": "Refresh",
-      "translations": [
-        "Actualiser",
-        "Refresh"
-      ]
-    },
-    {
       "locale": "hi",
       "source": "Refresh",
       "translations": [
-        "Refresh",
         "रिफ्रेश करें",
         "रीफ़्रेश करें"
-      ]
-    },
-    {
-      "locale": "id",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "Segarkan"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "Refresh",
-      "translations": [
-        "Aggiorna",
-        "Refresh"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "更新"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "새로 고침"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "Vernieuwen"
-      ]
-    },
-    {
-      "locale": "pl",
-      "source": "Refresh",
-      "translations": [
-        "Odśwież",
-        "Refresh"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Refresh",
-      "translations": [
-        "Atualizar",
-        "Refresh"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "Обновить"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "Uppdatera"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "รีเฟรช"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "Yenile"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "Оновити"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Refresh",
-      "translations": [
-        "Làm mới",
-        "Refresh"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "刷新"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Refresh",
-      "translations": [
-        "Refresh",
-        "重新整理"
       ]
     },
     {
@@ -6891,52 +6745,19 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "قيد التشغيل"
-      ]
-    },
-    {
-      "locale": "de",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "Wird ausgeführt"
-      ]
-    },
-    {
-      "locale": "es",
-      "source": "Running",
-      "translations": [
-        "En ejecución",
-        "Running"
-      ]
-    },
-    {
-      "locale": "fa",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "در حال اجرا"
-      ]
-    },
-    {
       "locale": "fr",
       "source": "Running",
       "translations": [
         "En cours",
-        "En cours d’exécution",
-        "Running"
+        "En cours d’exécution"
       ]
     },
     {
       "locale": "hi",
       "source": "Running",
       "translations": [
-        "Running",
-        "चल रहा है"
+        "चल रहा है",
+        "जारी"
       ]
     },
     {
@@ -6944,32 +6765,8 @@
       "source": "Running",
       "translations": [
         "Berjalan",
-        "Running",
-        "Sedang Berjalan"
-      ]
-    },
-    {
-      "locale": "it",
-      "source": "Running",
-      "translations": [
-        "In esecuzione",
-        "Running"
-      ]
-    },
-    {
-      "locale": "ja-JP",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "実行中"
-      ]
-    },
-    {
-      "locale": "ko",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "실행 중"
+        "Sedang Berjalan",
+        "Sedang berjalan"
       ]
     },
     {
@@ -6977,7 +6774,6 @@
       "source": "Running",
       "translations": [
         "Actief",
-        "Running",
         "Wordt uitgevoerd"
       ]
     },
@@ -6985,25 +6781,9 @@
       "locale": "pl",
       "source": "Running",
       "translations": [
-        "Running",
         "Uruchomione",
-        "Uruchomiono"
-      ]
-    },
-    {
-      "locale": "pt-BR",
-      "source": "Running",
-      "translations": [
-        "Em execução",
-        "Running"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "Выполняется"
+        "Uruchomiono",
+        "W toku"
       ]
     },
     {
@@ -7011,56 +6791,15 @@
       "source": "Running",
       "translations": [
         "Körs",
-        "Running"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "กำลังทำงาน"
-      ]
-    },
-    {
-      "locale": "tr",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "Çalışıyor"
-      ]
-    },
-    {
-      "locale": "uk",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "Виконується"
-      ]
-    },
-    {
-      "locale": "vi",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "Đang chạy"
+        "Pågår"
       ]
     },
     {
       "locale": "zh-CN",
       "source": "Running",
       "translations": [
-        "Running",
         "正在运行",
         "运行中"
-      ]
-    },
-    {
-      "locale": "zh-TW",
-      "source": "Running",
-      "translations": [
-        "Running",
-        "執行中"
       ]
     },
     {
