@@ -23,6 +23,7 @@ const MATRIX_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 // matrix-js-sdk also uses the injected fetch for raw encrypted key bundles.
 // Keep that path bounded without applying the tighter control-plane JSON cap.
 const MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const MATRIX_SDK_FETCH_RESPONSE_IDLE_TIMEOUT_MS = 30_000;
 
 type QueryValue =
   | string
@@ -289,8 +290,11 @@ export function createMatrixGuardedFetch(params: {
           ),
       });
       const body = await readResponseWithLimit(response, MATRIX_SDK_RESPONSE_MAX_BYTES, {
+        chunkTimeoutMs: MATRIX_SDK_FETCH_RESPONSE_IDLE_TIMEOUT_MS,
         onOverflow: ({ maxBytes, size }) =>
           new Error(`Matrix SDK response exceeds size limit (${size} bytes > ${maxBytes} bytes)`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Matrix SDK response stalled: no data received for ${chunkTimeoutMs}ms`),
       });
       return buildBufferedResponse({
         source: response,

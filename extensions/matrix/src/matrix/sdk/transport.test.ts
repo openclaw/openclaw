@@ -500,6 +500,40 @@ describe("createMatrixGuardedFetch", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it("times out when an SDK response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"next_batch":'));
+        },
+        cancel,
+      });
+      stubRuntimeFetch(
+        vi.fn(
+          async () =>
+            new Response(stream, {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+        ),
+      );
+
+      const guardedFetch = createMatrixGuardedFetch({
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+      const settled = expect(
+        guardedFetch("http://127.0.0.1:8008/_matrix/client/v3/sync"),
+      ).rejects.toThrow("Matrix SDK response stalled: no data received for 30000ms");
+      await vi.advanceTimersByTimeAsync(30_010);
+      await settled;
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("strips matrix-js-sdk state_after sync opt-in from /sync requests", async () => {
     const runtimeFetch = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
