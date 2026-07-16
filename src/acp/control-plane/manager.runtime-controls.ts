@@ -188,9 +188,6 @@ export async function applyManagerRuntimeControls(params: {
             advertisedKeys.size > 0 &&
             !advertisedKeys.has(normalizeLowercaseStringOrEmpty(key))
           ) {
-            if (isThinkingConfigKey(key)) {
-              continue;
-            }
             throw new AcpRuntimeError(
               "ACP_BACKEND_UNSUPPORTED_CONTROL",
               `ACP backend "${backend}" does not accept config key "${key}".`,

@@ -570,15 +570,6 @@ function normalizeCodexAcpModelOverride(
   };
 }
 
-function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
-  if (!override.model) {
-    return "";
-  }
-  return override.reasoningEffort
-    ? `${override.model}/${override.reasoningEffort}`
-    : override.model;
-}
-
 function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
   const raw = rawModel?.trim();
   if (!raw) {
@@ -1117,9 +1108,7 @@ export class AcpxRuntime implements AcpRuntime {
 
     const normalizedInput = {
       ...ensureInput,
-      ...(codexAcpSessionModelId(codexModelOverride)
-        ? { model: codexAcpSessionModelId(codexModelOverride) }
-        : {}),
+      ...(codexModelOverride.model ? { model: codexModelOverride.model } : {}),
     };
     return await this.runWithLaunchLease({
       sessionKey: input.sessionKey,
@@ -1286,31 +1275,10 @@ export class AcpxRuntime implements AcpRuntime {
     };
   }
 
-  async getCapabilities(
+  getCapabilities(
     input?: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0],
   ): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
-    const raw = this.delegate.getCapabilities(input);
-    const caps = raw instanceof Promise ? await raw : raw;
-    const keys = caps.configOptionKeys ? [...caps.configOptionKeys] : undefined;
-    // Only inject thinking aliases for Codex ACP sessions — the acpx
-    // setConfigOption only translates thinking/thought_level to
-    // reasoning_effort for Codex ACP, so advertising aliases to
-    // non-Codex agents would claim support that doesn't exist.
-    if (keys?.includes("reasoning_effort") && input?.handle) {
-      const command = await this.resolveCommandForHandle(input.handle);
-      if (isCodexAcpCommand(command)) {
-        const aliases = ["thinking", "thought_level"];
-        for (const alias of aliases) {
-          if (!keys.includes(alias)) {
-            keys.push(alias);
-          }
-        }
-      }
-    }
-    return {
-      ...caps,
-      ...(keys ? { configOptionKeys: keys } : {}),
-    };
+    return this.delegate.getCapabilities(input);
   }
 
   async getStatus(
@@ -1377,6 +1345,7 @@ export class AcpxRuntime implements AcpRuntime {
     }
     await delegate.setConfigOption(input);
   }
+
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
     const record = await this.sessionStore.load(
       input.handle.acpxRecordId ?? input.handle.sessionKey,
@@ -1430,7 +1399,6 @@ export {
 export const testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
-  codexAcpSessionModelId,
   isClaudeAcpCommand,
   isCodexAcpCommand,
   normalizeClaudeAcpModelOverride,
