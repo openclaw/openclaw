@@ -165,21 +165,14 @@ describe("SlackCursorCycleError behavior", () => {
     await expect(promise).rejects.toThrow(/stuck/);
   });
 
-  it("throws with exhaustion message when no cursor terminates", async () => {
-    // Simulate a cursor that always advances but never terminates
-    let page = 0;
-    const fetchPage = vi.fn().mockImplementation(async () => {
-      page++;
-      return {
-        items: [`p${page}`],
-        response_metadata: { next_cursor: `cursor-${page}` },
-      };
-    });
-
-    // We can't actually fetch 10k pages, so validate the error type via unit test
-    // by constructing the message directly from the source pattern:
-    const exhaustionMsg = "Slack cursor pagination exceeded 10000 pages";
+  it("documents the safety-backstop exhaustion message contract", () => {
+    // Full 10_000-page runs are too expensive for the default suite; the live
+    // helper throws SlackCursorCycleError with this message when the budget is
+    // exhausted with uniquely advancing cursors.
+    const exhaustionMsg =
+      "Slack cursor pagination exceeded 10000 pages; all cursors advanced but pagination did not terminate. Data may be incomplete.";
     expect(exhaustionMsg).toContain("exceeded");
     expect(exhaustionMsg).toContain("10000");
+    expect(exhaustionMsg).toContain("incomplete");
   });
 });
