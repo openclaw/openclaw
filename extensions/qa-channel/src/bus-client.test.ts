@@ -345,9 +345,7 @@ describe("qa-bus client", () => {
     });
 
     const timeout = new AbortController();
-    const timeoutSpy = vi
-      .spyOn(AbortSignal, "timeout")
-      .mockReturnValueOnce(timeout.signal);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(timeout.signal);
     const request = sendQaBusMessage({
       baseUrl: `http://127.0.0.1:${port}`,
       accountId: "acct-a",
