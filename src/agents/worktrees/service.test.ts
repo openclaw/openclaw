@@ -650,15 +650,15 @@ describe("ManagedWorktreeService", () => {
       ownerId: "agent:main:inactive",
     });
     now += IDLE_GC_MS + 1;
-    const isOwnerActive = vi.fn(
+    const shouldProtectOwner = vi.fn(
       (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
     );
 
-    const result = await service.gc({ isOwnerActive });
+    const result = await service.gc({ shouldProtectOwner });
 
     expect(result.removed).toEqual([inactive.id]);
-    expect(isOwnerActive).toHaveBeenCalledWith("session", "agent:main:active");
-    expect(isOwnerActive).toHaveBeenCalledWith("session", "agent:main:inactive");
+    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:active");
+    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:inactive");
     expect(getRegistryWorktree(env, active.id)?.removedAt).toBeUndefined();
     expect(getRegistryWorktree(env, inactive.id)?.removedAt).toBeDefined();
   });
@@ -781,11 +781,11 @@ describe("ManagedWorktreeService", () => {
       ownerKind: "session",
       ownerId: "agent:main:idle",
     });
-    const isOwnerActive = vi.fn(
+    const shouldProtectOwner = vi.fn(
       (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
     );
 
-    const result = await service.gc({ limits: { maxCount: 1 }, isOwnerActive });
+    const result = await service.gc({ limits: { maxCount: 1 }, shouldProtectOwner });
 
     expect(result.removed).toEqual([idle.id]);
     expect(getRegistryWorktree(env, activeOldest.id)?.removedAt).toBeUndefined();

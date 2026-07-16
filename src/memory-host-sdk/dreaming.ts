@@ -1,6 +1,10 @@
 // Memory host dreaming helpers record and load memory dreaming artifacts.
 import path from "node:path";
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   lowercasePreservingWhitespace,
@@ -179,38 +183,16 @@ function normalizeTrimmedString(value: unknown): string | undefined {
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  const normalized = normalizeStringifiedOptionalString(value);
-  if (typeof value === "string" && !normalized) {
-    return fallback;
-  }
-  const num = typeof value === "string" ? Number(normalized) : Number(value);
-  if (!Number.isFinite(num)) {
-    return fallback;
-  }
-  const floored = Math.floor(num);
-  if (floored < 0) {
-    return fallback;
-  }
-  return floored;
+  // Config integers are decimal-only; Number() would accept hex/exponent forms.
+  return parseStrictNonNegativeInteger(value) ?? fallback;
 }
 
 function normalizeOptionalPositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  const normalized = normalizeStringifiedOptionalString(value);
-  if (typeof value === "string" && !normalized) {
-    return undefined;
-  }
-  const num = typeof value === "string" ? Number(normalized) : Number(value);
-  if (!Number.isFinite(num)) {
-    return undefined;
-  }
-  const floored = Math.floor(num);
-  if (floored <= 0) {
-    return undefined;
-  }
-  return floored;
+  // Same strict decimal contract as normalizeNonNegativeInt for optional fields.
+  return parseStrictPositiveInteger(value);
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {

@@ -49,6 +49,7 @@ const installPluginFromClawHubMock = vi.fn();
 const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
+const validatePackageExtensionEntriesForInstallMock = vi.fn();
 const tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
@@ -92,6 +93,19 @@ vi.mock("./bundled-sources.js", () => ({
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
+
+vi.mock("./package-entry-resolution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./package-entry-resolution.js")>();
+  return {
+    ...actual,
+    validatePackageExtensionEntriesForInstall: async (
+      ...args: Parameters<typeof actual.validatePackageExtensionEntriesForInstall>
+    ) => {
+      validatePackageExtensionEntriesForInstallMock(...args);
+      return await actual.validatePackageExtensionEntriesForInstall(...args);
+    },
+  };
+});
 
 vi.resetModules();
 
@@ -523,6 +537,7 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReset();
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
+    validatePackageExtensionEntriesForInstallMock.mockReset();
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
@@ -567,6 +582,7 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReset();
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
+    validatePackageExtensionEntriesForInstallMock.mockReset();
   });
 
   afterEach(() => {
@@ -2043,6 +2059,34 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("defers installed payload validation until metadata probing fails", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw@^0.9.0",
+        installPath,
+        resolvedName: "@martian-engineering/lossless-claw",
+        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        resolvedVersion: "0.9.0",
+      }),
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+    });
+
+    expect(result.outcomes[0]?.status).toBe("unchanged");
+    expect(validatePackageExtensionEntriesForInstallMock).not.toHaveBeenCalled();
+  });
+
   it("preserves healthy plugin state when metadata probing fails before replacement", async () => {
     const warn = vi.fn();
     const installPath = createInstalledPackageDir({
@@ -2101,6 +2145,7 @@ describe("updateNpmInstalledPlugins", () => {
       memory: "lossless-claw",
       contextEngine: "lossless-claw",
     });
+    expect(validatePackageExtensionEntriesForInstallMock).toHaveBeenCalledTimes(1);
     expect(result.outcomes).toEqual([
       {
         pluginId: "lossless-claw",
@@ -2164,6 +2209,48 @@ describe("updateNpmInstalledPlugins", () => {
         message,
       },
     ]);
+  });
+
+  it("continues the plugin sweep when deferred payload validation throws", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.0.0",
+      runnable: true,
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry timeout",
+    });
+    validatePackageExtensionEntriesForInstallMock.mockImplementationOnce(() => {
+      throw new Error("permission denied");
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          entries: { demo: { enabled: true } },
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "@acme/demo@^1.0.0",
+              installPath,
+            },
+            local: {
+              source: "path",
+              installPath: "/tmp/local",
+            },
+          },
+        },
+      },
+      pluginIds: ["demo", "local"],
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    expect(result.config.plugins?.entries?.demo?.enabled).toBe(false);
+    expect(result.outcomes.map(({ pluginId }) => pluginId)).toEqual(["demo", "local"]);
   });
 
   it("disables a missing plugin payload when metadata probing also fails", async () => {

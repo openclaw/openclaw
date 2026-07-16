@@ -140,6 +140,13 @@ function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
   };
 }
 
+function expectUsageLimitPromptError(value: unknown): Error & { status: 429 } {
+  expect(value).toBeInstanceOf(Error);
+  const error = value as Error & { status?: unknown };
+  expect(error.status).toBe(429);
+  return error as Error & { status: 429 };
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Expected ${label}`);
@@ -200,7 +207,7 @@ function findAgentEvent(
   throw new Error(`Expected agent event ${params.stream}`);
 }
 
-function findPlanEventWithSteps(mock: unknown, steps: string[]) {
+function findPlanEventWithSteps(mock: unknown, steps: Array<{ step: string; status: string }>) {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
   if (!Array.isArray(calls)) {
     throw new Error("Expected onAgentEvent mock calls");
@@ -215,7 +222,7 @@ function findPlanEventWithSteps(mock: unknown, steps: string[]) {
       return data;
     }
   }
-  throw new Error(`Expected plan event ${steps.join(", ")}`);
+  throw new Error(`Expected plan event ${JSON.stringify(steps)}`);
 }
 
 function forCurrentTurn(
@@ -1851,9 +1858,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Wait until the reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
+    expect(promptError.message).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1880,8 +1888,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1920,8 +1929,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1946,9 +1956,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
-    expect(result.promptError).not.toContain("Codex did not return a reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
+    expect(promptError.message).not.toContain("Codex did not return a reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -2501,7 +2512,7 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(
       forCurrentTurn("turn/plan/updated", {
         explanation: "next",
-        plan: [{ step: "patch", status: "in_progress" }],
+        plan: [{ step: "patch", status: "inProgress" }],
       }),
     );
     await projector.handleNotification(
@@ -2535,9 +2546,12 @@ describe("CodexAppServerEventProjector", () => {
       isReasoningSnapshot: true,
     });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-    expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
-      "patch (in_progress)",
-    ]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "inspect", status: "pending" }]).steps,
+    ).toEqual([{ step: "inspect", status: "pending" }]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "patch", status: "in_progress" }]).steps,
+    ).toEqual([{ step: "patch", status: "in_progress" }]);
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
     );
@@ -5992,8 +6006,8 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
-      "step one",
-      "step two",
+      { step: "step one", status: "pending" },
+      { step: "step two", status: "pending" },
     ]);
     expect(result.assistantTexts).toEqual(["final answer"]);
     expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");

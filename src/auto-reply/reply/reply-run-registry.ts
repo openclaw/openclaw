@@ -1368,7 +1368,7 @@ export function listActiveReplyRunSessionKeys(): string[] {
   return [...replyRunState.activeSessionIdsByKey.keys()];
 }
 
-export const testing = {
+const replyRunRegistryTestApi = {
   resetReplyRunRegistry(): void {
     for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
       markReplyRunDiagnosticProgress({
@@ -1391,4 +1391,9 @@ export const testing = {
     replyRunState.followupAdmissionBarriersByKey.clear();
   },
 };
+
+if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.replyRunRegistryTestApi")] =
+    replyRunRegistryTestApi;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

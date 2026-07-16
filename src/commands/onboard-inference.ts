@@ -155,7 +155,7 @@ async function probeCodexCommand(params: {
   return pathProbe;
 }
 /** Detects a native Codex App Server without coupling it to inference selection. */
-export async function detectNativeCodexAppServer(
+async function detectNativeCodexAppServer(
   options: DetectNativeCodexAppServerOptions = {},
 ): Promise<LocalCommandProbe> {
   return await probeCodexCommand({
@@ -163,6 +163,12 @@ export async function detectNativeCodexAppServer(
     env: options.env ?? process.env,
     platform: options.platform ?? process.platform,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardInferenceTestApi")] = {
+    detectNativeCodexAppServer,
+  };
 }
 /**
  * Detect usable inference backends in ladder order. Returns candidates only

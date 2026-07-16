@@ -13,14 +13,14 @@ export function resolveGatewayStartupSecretProjection(params: {
   reason: GatewaySecretsActivationReason;
   channelAutostartSuppression?: ChannelAutostartSuppression | null;
   env?: NodeJS.ProcessEnv;
-}): { sourceConfig: OpenClawConfig; assignmentConfig: OpenClawConfig } {
+}): { sourceConfig: OpenClawConfig; assignmentConfig?: OpenClawConfig } {
   const sourceConfig = resolveGatewayStartupSourceConfig(params.config, params.env ?? process.env);
   if (
     params.reason !== "startup" ||
     params.channelAutostartSuppression == null ||
     !sourceConfig.channels
   ) {
-    return { sourceConfig, assignmentConfig: sourceConfig };
+    return { sourceConfig };
   }
   return {
     sourceConfig,

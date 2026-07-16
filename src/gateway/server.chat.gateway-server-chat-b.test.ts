@@ -228,6 +228,11 @@ function createDirectChatContext(): GatewayRequestContext {
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig: () => ({}),
+    recoveryRuntime: {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    },
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
@@ -957,6 +962,7 @@ describe("gateway server chat", () => {
               id: "gpt-5.5",
               name: "GPT-5.5",
               provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
               contextWindow: 400_000,
               reasoning: false,
               available: true,
@@ -2551,16 +2557,19 @@ describe("gateway server chat", () => {
       });
       expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
       if (retryable) {
+        expect(stored?.restartRecoveryBeforeAgentReplyState).toBe("admitted");
         expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
           expect.stringMatching(/^hmac-sha256:v1:/u),
         );
         expect(stored?.restartRecoveryDeliveryRunId).toBe(runId);
         expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
+        expect(stored?.restartRecoverySourceIngress).toBe("control-ui");
         expect(stored?.restartRecoveryTerminalRunIds).toBeUndefined();
       } else {
         expect(stored?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
         expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
         expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+        expect(stored?.restartRecoverySourceIngress).toBeUndefined();
         expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
       }
       expect(loadTranscriptEventsSync(scope)).toEqual(
@@ -2699,6 +2708,7 @@ describe("gateway server chat", () => {
         expectedSessionId: "sess-main",
         sessionKey: "main",
         storePath,
+        gatewayRuntime: expect.any(Object),
       });
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(loadExactSessionEntry({ sessionKey: "main", storePath })?.entry).toMatchObject({
@@ -5240,6 +5250,47 @@ describe("gateway server chat", () => {
 
         expect(capturedOpts?.requestedSessionId).toBe("sess-main");
         expect(capturedOpts?.resumeRequestedSession).toBe(true);
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
+  });
+
+  test("chat.send forwards one-turn queue mode overrides internally", async () => {
+    await withGatewayChatHarness(
+      async ({ ws, createSessionDir }) => {
+        const spy = getReplyFromConfig;
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        await createSessionDir();
+        await writeMainSessionStore();
+        let capturedOpts: InternalGetReplyOptions | undefined;
+        mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+          capturedOpts = opts;
+          return undefined;
+        });
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "steer this turn",
+          queueMode: "steer",
+          idempotencyKey: "idem-queue-mode-override",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(() => {
+          expect(spy.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
+
+        expect(capturedOpts).toMatchObject({ queueModeOverride: "steer" });
       },
       {
         headers: { origin: `http://127.0.0.1:${harness.port}` },

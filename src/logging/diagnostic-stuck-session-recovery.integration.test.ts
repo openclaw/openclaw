@@ -3,17 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
-  testing as embeddedRunTesting,
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import { makeModelFallbackCfg } from "../agents/test-helpers/model-fallback-config-fixture.js";
-import {
-  testing as replyRunTesting,
-  createReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,

@@ -968,6 +968,29 @@ def safe_temp_root(repo: Path) -> Path:
     return root
 
 
+def parallel_test_temp_root(repo: Path) -> Path:
+    root = safe_temp_root(repo)
+    if os.name == "nt" or not env_truthy("OPENCLAW_TESTBOX"):
+        return root
+
+    # Blacksmith stores its SSH control socket below HOME. macOS temp roots can
+    # already consume the Unix-socket path budget before the socket name.
+    try:
+        short_root = Path("/tmp").resolve(strict=True)
+        short_root_stat = short_root.stat()
+    except OSError as exc:
+        raise SystemExit(f"unable to resolve short Testbox temp root: {exc}") from exc
+    if not stat.S_ISDIR(short_root_stat.st_mode):
+        raise SystemExit("short Testbox temp root must be a directory")
+    if is_within(short_root, repo.resolve()):
+        raise SystemExit("short Testbox temp root must be outside the reviewed repository")
+    if short_root_stat.st_mode & stat.S_IWOTH and not (
+        short_root_stat.st_mode & stat.S_ISVTX
+    ):
+        raise SystemExit("world-writable Testbox temp root must have the sticky bit set")
+    return short_root
+
+
 def safe_proxy_url(value: str) -> bool:
     try:
         candidate = value if "://" in value else f"http://{value}"
@@ -8971,7 +8994,10 @@ def start_parallel_tests(
 ) -> tuple[subprocess.Popen, float]:
     print(f"tests: {command}")
     test_home = Path(
-        tempfile.mkdtemp(prefix="autoreview-test-home-", dir=safe_temp_root(repo))
+        tempfile.mkdtemp(
+            prefix="autoreview-test-home-",
+            dir=parallel_test_temp_root(repo),
+        )
     )
     try:
         env = safe_test_env(repo, test_home)

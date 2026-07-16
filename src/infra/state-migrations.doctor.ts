@@ -31,6 +31,10 @@ import {
   migrateLegacyChannelPairingState,
 } from "./state-migrations.channel-pairing.js";
 import {
+  detectLegacyCommitments,
+  migrateLegacyCommitments,
+} from "./state-migrations.commitments.js";
+import {
   detectLegacyDebugProxyCaptureSidecar,
   migrateLegacyDebugProxyCaptureSidecar,
 } from "./state-migrations.debug-proxy.js";
@@ -48,12 +52,24 @@ import {
   migrateLegacyAgentDir,
   migrateLegacySessions,
 } from "./state-migrations.legacy-sessions.js";
+import {
+  detectLegacyManagedOutgoingImages,
+  migrateLegacyManagedOutgoingImages,
+} from "./state-migrations.managed-outgoing-images.js";
 import { mergeNotices } from "./state-migrations.messages.js";
+import {
+  detectLegacyNodeHostConfig,
+  migrateLegacyNodeHostConfig,
+} from "./state-migrations.node-host.js";
 import {
   migrateLegacyInstalledPluginIndex,
   migrateLegacyPluginStateSidecar,
   runLegacyMigrationPlans,
 } from "./state-migrations.plugin-state.js";
+import {
+  detectLegacyRescuePending,
+  discardLegacyRescuePending,
+} from "./state-migrations.rescue-pending.js";
 import {
   migrateLegacyConfigHealth,
   migrateLegacyCurrentConversationBindings,
@@ -93,6 +109,14 @@ import {
   resolveLegacyPluginStateSidecarPath,
   resolveLegacyTaskRunsSidecarPath,
 } from "./state-migrations.storage.js";
+import {
+  detectLegacySubagentRegistry,
+  migrateLegacySubagentRegistry,
+} from "./state-migrations.subagent-registry.js";
+import {
+  detectLegacyTuiLastSessions,
+  migrateLegacyTuiLastSessions,
+} from "./state-migrations.tui-last-session.js";
 import type {
   DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
@@ -103,6 +127,7 @@ import {
   migrateLegacyUpdateCheckState,
   resolveLegacyUpdateCheckPath,
 } from "./state-migrations.update-check.js";
+import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
 
 let autoMigrateChecked = false;
 
@@ -202,6 +227,7 @@ export async function detectLegacyStateMigrations(params: {
   pluginSessionStoreAgentIds?: readonly string[];
   sessionStoreOwnership?: SessionStoreOwnership;
   crossStateDirImports?: boolean;
+  doctorOnlyStateMigrations?: boolean;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
@@ -368,6 +394,34 @@ export async function detectLegacyStateMigrations(params: {
     sourcePath: resolveLegacyCurrentConversationBindingsPath(stateDir),
   };
   const hasCurrentConversationBindings = fileExists(currentConversationBindings.sourcePath);
+  const tuiLastSessions = detectLegacyTuiLastSessions({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const commitments = detectLegacyCommitments({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const managedOutgoingImages = detectLegacyManagedOutgoingImages({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const webPush = detectLegacyWebPush({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const nodeHost = detectLegacyNodeHostConfig({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const subagentRegistry = detectLegacySubagentRegistry({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const rescuePending = detectLegacyRescuePending({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const configuredChannels = Object.entries(params.cfg.channels ?? {});
   const configuredAccountIds = Object.fromEntries(
     configuredChannels.map(([channelId, value]) => {
@@ -513,6 +567,27 @@ export async function detectLegacyStateMigrations(params: {
   if (hasCurrentConversationBindings) {
     preview.push("- Current-conversation bindings: legacy JSON file → shared SQLite state");
   }
+  if (tuiLastSessions.hasLegacy) {
+    preview.push("- TUI last-session pointers: legacy JSON file → shared SQLite state");
+  }
+  if (commitments.hasLegacy) {
+    preview.push("- Commitments: legacy JSON file → shared SQLite state");
+  }
+  if (managedOutgoingImages.hasLegacy) {
+    preview.push("- Managed outgoing images: legacy record JSON → shared SQLite state");
+  }
+  if (webPush.hasLegacy) {
+    preview.push("- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state");
+  }
+  if (nodeHost.hasLegacy) {
+    preview.push("- Node-host config: legacy node.json → shared SQLite state");
+  }
+  if (subagentRegistry.hasLegacy) {
+    preview.push("- Subagent runs: discard retired transient subagents/runs.json state");
+  }
+  if (rescuePending.hasLegacy) {
+    preview.push("- System-agent rescue approvals: discard retired pending JSON capabilities");
+  }
   if (channelPairing.hasLegacy) {
     preview.push("- Channel pairing state: legacy JSON files → shared SQLite state");
   }
@@ -598,6 +673,13 @@ export async function detectLegacyStateMigrations(params: {
       ...currentConversationBindings,
       hasLegacy: hasCurrentConversationBindings,
     },
+    tuiLastSessions,
+    commitments,
+    managedOutgoingImages,
+    webPush,
+    nodeHost,
+    subagentRegistry,
+    rescuePending,
     channelPairing,
     execApprovals,
     warnings: pluginPlanWarnings,
@@ -776,6 +858,37 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.currentConversationBindings,
     stateDir: detected.stateDir,
   });
+  const tuiLastSessions = migrateLegacyTuiLastSessions({
+    detected: detected.tuiLastSessions,
+    stateDir: detected.stateDir,
+  });
+  const commitments = migrateLegacyCommitments({
+    detected: detected.commitments,
+    stateDir: detected.stateDir,
+  });
+  const managedOutgoingImages = migrateLegacyManagedOutgoingImages({
+    detected: detected.managedOutgoingImages,
+    stateDir: detected.stateDir,
+  });
+  const webPush = await migrateLegacyWebPush({
+    detected: detected.webPush,
+    env,
+    stateDir: detected.stateDir,
+  });
+  const nodeHost = await migrateLegacyNodeHostConfig({
+    detected: detected.nodeHost,
+    env,
+    stateDir: detected.stateDir,
+  });
+  const subagentRegistry = await migrateLegacySubagentRegistry({
+    detected: detected.subagentRegistry,
+    env,
+    stateDir: detected.stateDir,
+  });
+  const rescuePending = discardLegacyRescuePending({
+    detected: detected.rescuePending,
+    stateDir: detected.stateDir,
+  });
   const channelPairing = migrateLegacyChannelPairingState({
     detected: detected.channelPairing,
     env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
@@ -803,7 +916,17 @@ export async function runLegacyStateMigrations(params: {
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
   );
-  const notices = mergeNotices([pluginInstallIndex, updateCheck, pluginPlans]);
+  const notices = mergeNotices([
+    pluginInstallIndex,
+    updateCheck,
+    tuiLastSessions,
+    commitments,
+    managedOutgoingImages,
+    webPush,
+    nodeHost,
+    subagentRegistry,
+    pluginPlans,
+  ]);
   return {
     changes: [
       ...stateSchema.changes,
@@ -817,6 +940,13 @@ export async function runLegacyStateMigrations(params: {
       ...configHealth.changes,
       ...pluginBindingApprovals.changes,
       ...currentConversationBindings.changes,
+      ...tuiLastSessions.changes,
+      ...commitments.changes,
+      ...managedOutgoingImages.changes,
+      ...webPush.changes,
+      ...nodeHost.changes,
+      ...subagentRegistry.changes,
+      ...rescuePending.changes,
       ...channelPairing.changes,
       ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
@@ -839,6 +969,13 @@ export async function runLegacyStateMigrations(params: {
       ...configHealth.warnings,
       ...pluginBindingApprovals.warnings,
       ...currentConversationBindings.warnings,
+      ...tuiLastSessions.warnings,
+      ...commitments.warnings,
+      ...managedOutgoingImages.warnings,
+      ...webPush.warnings,
+      ...nodeHost.warnings,
+      ...subagentRegistry.warnings,
+      ...rescuePending.warnings,
       ...channelPairing.warnings,
       ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,

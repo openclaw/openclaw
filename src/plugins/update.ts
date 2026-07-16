@@ -1676,17 +1676,11 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
     let currentVersion: string | undefined;
-    let installedPayloadRunnable: boolean;
+    let installedManifest: PackageManifest | undefined;
     try {
-      const installedManifest = readInstalledPackageManifest(installPath) as
-        | PackageManifest
-        | undefined;
+      installedManifest = readInstalledPackageManifest(installPath) as PackageManifest | undefined;
       currentVersion =
         typeof installedManifest?.version === "string" ? installedManifest.version : undefined;
-      installedPayloadRunnable =
-        Boolean(params.disableOnFailure) &&
-        currentVersion !== undefined &&
-        (await hasRunnableInstalledNpmPayload({ installPath, manifest: installedManifest }));
     } catch (err) {
       recordFailure(
         pluginId,
@@ -1694,6 +1688,24 @@ export async function updateNpmInstalledPlugins(params: {
       );
       continue;
     }
+    // Payload validation is filesystem work needed only to preserve state after metadata failures.
+    // Every failure path below ends this plugin iteration, so the result cannot be reused.
+    const hasRunnableInstalledPayloadForFailure = async (code?: string): Promise<boolean> => {
+      if (
+        code !== PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE ||
+        !params.disableOnFailure ||
+        params.dryRun ||
+        currentVersion === undefined
+      ) {
+        return false;
+      }
+      try {
+        return await hasRunnableInstalledNpmPayload({ installPath, manifest: installedManifest });
+      } catch {
+        // Damaged or unreadable payloads fail closed without aborting the remaining plugin sweep.
+        return false;
+      }
+    };
     const extensionsDir = resolveRecordedExtensionsDir({
       pluginId,
       installPath,
@@ -1789,12 +1801,13 @@ export async function updateNpmInstalledPlugins(params: {
         }
       } else {
         if (!parseRegistryNpmSpec(effectiveSpec!)) {
+          const code =
+            metadataResult.category === "metadata-env"
+              ? PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
+              : undefined;
           recordFailure(pluginId, `Failed to check ${pluginId}: ${metadataResult.error}`, {
-            code:
-              metadataResult.category === "metadata-env"
-                ? PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
-                : undefined,
-            installedPayloadRunnable,
+            code,
+            installedPayloadRunnable: await hasRunnableInstalledPayloadForFailure(code),
           });
           continue;
         }
@@ -2004,6 +2017,7 @@ export async function updateNpmInstalledPlugins(params: {
           );
           continue;
         }
+        const code = "code" in probe && probe.code ? probe.code : undefined;
         recordFailure(
           pluginId,
           record.source === "npm" || usedOfficialNpmFallback
@@ -2042,8 +2056,8 @@ export async function updateNpmInstalledPlugins(params: {
                   }),
           {
             channelFallback: npmChannelFallback,
-            code: "code" in probe && probe.code ? probe.code : undefined,
-            installedPayloadRunnable,
+            code,
+            installedPayloadRunnable: await hasRunnableInstalledPayloadForFailure(code),
           },
         );
         continue;
@@ -2311,6 +2325,7 @@ export async function updateNpmInstalledPlugins(params: {
         );
         continue;
       }
+      const code = resultSource === "npm" && result && "code" in result ? result.code : undefined;
       recordFailure(
         pluginId,
         resultSource === "npm"
@@ -2349,8 +2364,8 @@ export async function updateNpmInstalledPlugins(params: {
                 }),
         {
           channelFallback: npmChannelFallback,
-          code: resultSource === "npm" && result && "code" in result ? result.code : undefined,
-          installedPayloadRunnable,
+          code,
+          installedPayloadRunnable: await hasRunnableInstalledPayloadForFailure(code),
         },
       );
       continue;

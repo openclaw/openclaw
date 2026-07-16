@@ -73,7 +73,6 @@ export const terminalPanelStyles = css`
   .tp-tabs::part(nav) {
     display: flex;
     align-items: stretch;
-    gap: 1px;
   }
   .tp-tabs::part(body) {
     display: none;
@@ -85,7 +84,7 @@ export const terminalPanelStyles = css`
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 0 10px;
+    padding: 0 4px 0 10px;
     height: 36px;
     color: var(--muted, #8a919e);
     white-space: nowrap;
@@ -123,27 +122,62 @@ export const terminalPanelStyles = css`
     font-size: 11px;
     color: var(--muted, #8a919e);
   }
+  /* Each close button sits right after its tab in the nav slot; the pair is
+     styled as one surface (shared hover background, shared active underline)
+     while the X keeps its own inner highlight. */
   .tp-tab__close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    align-self: center;
-    flex: 0 0 26px;
-    width: 26px;
-    height: 26px;
+    align-self: stretch;
+    flex: 0 0 auto;
+    width: 24px;
+    margin-right: 1px;
+    padding: 0 4px 0 0;
     opacity: 0;
     border: none;
+    border-bottom: 2px solid transparent;
     background: transparent;
     color: var(--muted, #8a919e);
-    border-radius: 6px;
-    padding: 0;
+    transition:
+      color 0.12s ease,
+      background 0.12s ease,
+      opacity 0.12s ease;
   }
-  :where(.tp-tab:hover, .tp-tab[active]) + .tp-tab__close {
-    opacity: 0.7;
+  .tp-tab__close-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
   }
+  :where(.tp-tab:hover, .tp-tab[active]) + .tp-tab__close,
   .tp-tab__close:hover,
   .tp-tab__close:focus-visible {
     opacity: 1;
+  }
+  .tp-tab:hover + .tp-tab__close,
+  .tp-tab__close:hover,
+  .tp-tab__close:focus-visible {
+    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
+  }
+  /* Back-propagate hover from the X to its tab so the pair lights up together. */
+  .tp-tab:has(+ .tp-tab__close:hover)::part(base),
+  .tp-tab:has(+ .tp-tab__close:focus-visible)::part(base) {
+    color: var(--text, #d7dae0);
+    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
+  }
+  .tp-tab[active] + .tp-tab__close {
+    border-bottom-color: var(--accent, #ff5c5c);
+  }
+  .tp-tab__close:hover,
+  .tp-tab__close:focus-visible {
+    color: var(--text, #d7dae0);
+  }
+  .tp-tab__close:hover .tp-tab__close-box,
+  .tp-tab__close:focus-visible .tp-tab__close-box {
+    background: color-mix(in srgb, var(--text, #d7dae0) 14%, transparent);
   }
   .tp-new,
   .tp-icon {
@@ -161,7 +195,6 @@ export const terminalPanelStyles = css`
   .tp-new {
     align-self: center;
   }
-  .tp-tab__close:hover,
   .tp-new:hover,
   .tp-icon:hover {
     background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);

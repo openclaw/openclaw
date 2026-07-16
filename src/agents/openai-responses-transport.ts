@@ -1319,9 +1319,12 @@ async function processResponsesStream(
     if (outputIndex !== undefined) {
       const indexed = toolCallsByOutputIndex.get(outputIndex);
       if (indexed) {
-        return !identitiesConflict(indexed, identity)
-          ? adoptToolCallIdentity(indexed, identity)
-          : undefined;
+        if (indexed.callId && identity.callId && indexed.callId !== identity.callId) {
+          return undefined;
+        }
+        // output_index owns routing once registered, but call_id stays stable;
+        // compatible providers may rotate item_id for the same output item.
+        return adoptToolCallIdentity(indexed, identity);
       }
       // A compatibility stream may add calls without indices, then start
       // including them. Bind only the one identity-matched (or sole) candidate.
@@ -2571,7 +2574,7 @@ type OpenAIResponsesRequestParams = {
   include?: string[];
 };
 
-export const responsesTesting = {
+const responsesTesting = {
   getCompat,
   assertCodeModeResponsesToolSurface,
   buildOpenAIResponsesParams,
@@ -2599,4 +2602,12 @@ export const responsesTesting = {
   stringifyRedactedEvent,
   stringifyRedactedPayload,
 };
+
+declare global {
+  var openclawOpenAIResponsesTransportTestApi: typeof responsesTesting | undefined;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  globalThis.openclawOpenAIResponsesTransportTestApi = responsesTesting;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -18,7 +18,8 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 let server: ControlUiE2eServer;
-const contextBrowsers = new WeakMap<BrowserContext, Browser>();
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 const openBrowserContexts = new Set<BrowserContext>();
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -47,7 +48,7 @@ async function waitForRequests(
       return requests;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
@@ -140,26 +141,14 @@ async function scrollChatThreadToTop(page: Page): Promise<void> {
 }
 
 async function newBrowserContext(options: Parameters<Browser["newContext"]>[0]) {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  let context: BrowserContext | undefined;
-  try {
-    context = await browser.newContext(options);
-    contextBrowsers.set(context, browser);
-    openBrowserContexts.add(context);
-    return context;
-  } catch (error) {
-    await context?.close().catch(() => {});
-    await browser.close().catch(() => {});
-    throw error;
-  }
+  const context = await browser.newContext(options);
+  openBrowserContexts.add(context);
+  return context;
 }
 
 async function closeBrowserContext(context: BrowserContext): Promise<void> {
-  const browser = contextBrowsers.get(context);
   openBrowserContexts.delete(context);
-  contextBrowsers.delete(context);
   await context.close().catch(() => {});
-  await browser?.close().catch(() => {});
 }
 
 async function closeOpenBrowserContexts(): Promise<void> {
@@ -237,11 +226,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
     await closeOpenBrowserContexts();
+    await browser?.close();
     await server?.close();
   });
 
@@ -705,7 +701,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page
         .locator(".agent-chat__composer-combobox textarea")
         .fill("/steer use the smaller fix");
-      await page.getByRole("button", { name: "Queue message" }).click();
+      await page.getByRole("button", { name: "Steer into the active run" }).click();
 
       const steerRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(steerRequest.params);
@@ -1985,7 +1981,52 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps a steerable queued message above the composer while a run is active", async () => {
+  it("steers ordinary follow-ups into the active run by default", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const followUp = "tighten the active plan";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
+      await page.getByRole("button", { name: "Steer into the active run" }).click();
+
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({
+        deliver: false,
+        message: followUp,
+        sessionKey: "main",
+      });
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Steered").waitFor({ timeout: 10_000 });
+      await queue.getByText(followUp).waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/steer-default.png`,
+          fullPage: true,
+        });
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a steerable queued message above the composer in queue mode", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1996,6 +2037,13 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     const gateway = await installMockGateway(page);
 
     try {
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      const followUpSelect = page.locator("[data-settings-follow-up-mode]");
+      await followUpSelect.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await followUpSelect.inputValue()).toBe("steer");
+      await followUpSelect.selectOption("queue");
+      expect(await followUpSelect.inputValue()).toBe("queue");
+
       await page.goto(`${server.baseUrl}chat`);
 
       const activePrompt = "keep this run active";
@@ -2016,7 +2064,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({
-          path: `${artifactDir}/steer-queue-composer-only.png`,
+          path: `${artifactDir}/queue-mode.png`,
           fullPage: true,
         });
       }
@@ -2035,6 +2083,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     const gateway = await installMockGateway(page);
 
     try {
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
       await page.goto(`${server.baseUrl}chat`);
 
       await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");

@@ -43,6 +43,7 @@ import {
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
+import { buildPlanUpdateStepFields } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
@@ -70,6 +71,7 @@ import {
   resolveAgentLifecycleTerminalMetadata,
   type AgentLifecycleTerminalBackstop,
 } from "./agent-lifecycle-terminal.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   clearDroppedCliSessionBinding,
   createCliReasoningStreamBridge,
@@ -77,13 +79,12 @@ import {
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import {
   buildEmptyInteractiveReplyPayload,
-  buildTerminalAgentRunFailureReplyPayload,
-  buildCommandOutputFromToolResultEvent,
   buildPreflightCompactionFailureText,
-  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
-} from "./agent-runner-execution.js";
+  buildTerminalAgentRunFailureReplyPayload,
+} from "./agent-runner-failure-reply.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -295,7 +296,7 @@ async function forwardFollowupProgressEvent(params: {
       phase: readStringValue(evt.data.phase),
       title: readStringValue(evt.data.title),
       explanation: readStringValue(evt.data.explanation),
-      steps: filterStringArray(evt.data.steps),
+      ...buildPlanUpdateStepFields(evt.data.steps),
       source: readStringValue(evt.data.source),
     });
   }
@@ -1186,6 +1187,7 @@ export function createFollowupRunner(params: {
                       onReasoningText: createCliReasoningStreamBridge(
                         progressOpts?.onReasoningStream,
                       ),
+                      onPlanUpdate: progressOpts?.onPlanUpdate,
                       onReasoningProgress: async (payload) => {
                         await progressOpts?.onReasoningProgress?.(payload);
                       },

@@ -60,6 +60,15 @@ describe("SessionSchema maintenance extensions", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts disabling the session disk budget", () => {
+    const result = SessionSchema.safeParse({
+      maintenance: {
+        maxDiskBytes: false,
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects invalid maintenance extension values", () => {
     expect(() =>
       SessionSchema.parse({

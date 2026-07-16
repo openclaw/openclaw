@@ -34,20 +34,12 @@ function isZeroDuration(val: unknown): boolean {
   }
 }
 
-function isZeroDurationPruneAfter(raw: unknown): boolean {
+function hasZeroDuration(raw: unknown, key: "pruneAfter" | "resetArchiveRetention"): boolean {
   const maintenance = getRecord(raw);
-  if (!maintenance || !Object.hasOwn(maintenance, "pruneAfter")) {
+  if (!maintenance || !Object.hasOwn(maintenance, key)) {
     return false;
   }
-  return isZeroDuration(maintenance.pruneAfter);
-}
-
-function isZeroDurationResetArchiveRetention(raw: unknown): boolean {
-  const maintenance = getRecord(raw);
-  if (!maintenance || !Object.hasOwn(maintenance, "resetArchiveRetention")) {
-    return false;
-  }
-  return isZeroDuration(maintenance.resetArchiveRetention);
+  return isZeroDuration(maintenance[key]);
 }
 
 const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
@@ -68,14 +60,14 @@ const SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
     'session.maintenance.pruneAfter is a zero duration — this causes immediate deletion of eligible stale/non-preserved session entries. Run "openclaw doctor --fix" to remove it so the documented 30d default applies.',
-  match: isZeroDurationPruneAfter,
+  match: (raw) => hasZeroDuration(raw, "pruneAfter"),
 };
 
 const SESSION_MAINTENANCE_RESET_ARCHIVE_RETENTION_ZERO_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
   message:
     'session.maintenance.resetArchiveRetention is a zero duration — this causes immediate deletion of all reset transcript archives. Run "openclaw doctor --fix" to remove it so the keep-by-default archive retention applies.',
-  match: isZeroDurationResetArchiveRetention,
+  match: (raw) => hasZeroDuration(raw, "resetArchiveRetention"),
 };
 
 /** Legacy config migration specs for session runtime config compatibility. */
@@ -107,7 +99,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
     },
   }),
   defineLegacyConfigMigration({
-    id: "session.maintenance.resetArchiveRetention-zero",
+    id: "session.maintenance.zero-duration-retention",
     describe: "Remove zero-duration session maintenance values so documented defaults apply",
     legacyRules: [
       SESSION_MAINTENANCE_PRUNE_AFTER_ZERO_RULE,

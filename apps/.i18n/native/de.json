@@ -19554,9 +19554,9 @@
       "translated": "OpenClaw prüft erneut, bevor Inferenzeinstellungen geändert werden."
     },
     {
-      "id": "native.apple.c7a02803addf11fa",
-      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
-      "translated": "Es wird nach Claude Code, Codex, Gemini und gespeicherten API-Schlüsseln gesucht."
+      "id": "native.apple.a0a8f45082d0ba99",
+      "source": "Checking CLI logins, saved API keys, and local model servers on the Gateway.",
+      "translated": "CLI-Anmeldungen, gespeicherte API-Schlüssel und lokale Modellserver auf dem Gateway werden überprüft."
     },
     {
       "id": "native.apple.0fd3e5267cdf8250",
@@ -19564,9 +19564,9 @@
       "translated": "Dieses Gateway konnte nicht auf KI-Konten geprüft werden"
     },
     {
-      "id": "native.apple.0af61b95d249c351",
-      "source": "Couldn’t check this Mac for AI accounts",
-      "translated": "Dieser Mac konnte nicht auf KI-Konten geprüft werden"
+      "id": "native.apple.82ba8c9a69fbb84b",
+      "source": "Couldn’t check this Gateway for AI access",
+      "translated": "Der KI-Zugriff auf diesem Gateway konnte nicht geprüft werden"
     },
     {
       "id": "native.apple.ab05bb1569f89077",
@@ -19609,14 +19609,24 @@
       "translated": "Einrichtungsdetails kopieren"
     },
     {
-      "id": "native.apple.f5a157404f7a0eff",
-      "source": "No AI accounts found on this Mac",
-      "translated": "Keine KI-Konten auf diesem Mac gefunden"
+      "id": "native.apple.e0458fcb8c0536ea",
+      "source": "No usable AI access found on this Gateway",
+      "translated": "Auf diesem Gateway wurde kein nutzbarer KI-Zugriff gefunden"
     },
     {
-      "id": "native.apple.76072d0308a553ca",
-      "source": "That’s fine — you can connect one with an API key or token. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
-      "translated": "Das ist in Ordnung – du kannst eines mit einem API-Schlüssel oder Token verbinden. Wenn du Claude Code, Codex oder die Gemini CLI auf diesem Mac verwendest, melde dich dort zuerst an und tippe auf „Erneut prüfen“."
+      "id": "native.apple.06b98c6084617183",
+      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
+      "translated": "Das ist kein Problem — Sie können einen Dienst mit einem API-Schlüssel oder Token verbinden. Sie können sich auch bei Claude Code oder Codex anmelden oder Ollama bzw. LM Studio mit einem geeigneten Modell starten und dann auf „Erneut prüfen“ klicken."
+    },
+    {
+      "id": "native.apple.e2749739df556643",
+      "source": "Detected, but not auto-tested",
+      "translated": "Erkannt, aber nicht automatisch getestet"
+    },
+    {
+      "id": "native.apple.5f604e17336ca8a7",
+      "source": "\\(candidate.label) — \\(candidate.detail)",
+      "translated": "\\(candidate.label) — \\(candidate.detail)"
     },
     {
       "id": "native.apple.5f28927fe23c11cb",
@@ -20584,36 +20594,6 @@
       "translated": "Mac-App und Gateway werden überprüft…"
     },
     {
-      "id": "native.apple.3a2e38e488490964",
-      "source": "The Mac app is updated. Gateway setup is not configured on this Mac.",
-      "translated": "Die Mac-App wurde aktualisiert. Die Gateway-Einrichtung ist auf diesem Mac nicht konfiguriert."
-    },
-    {
-      "id": "native.apple.3abafcfb64b362fb",
-      "source": "The Gateway could not be checked.",
-      "translated": "Das Gateway konnte nicht überprüft werden."
-    },
-    {
-      "id": "native.apple.00e3d2037782506c",
-      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
-      "translated": "OpenClaw konnte den Eigentümerschaftseintrag des Gateway-Dienstes nicht lesen. Versuchen Sie es erneut, nachdem Sie den Gateway LaunchAgent überprüft haben."
-    },
-    {
-      "id": "native.apple.c4b8806a570dad31",
-      "source": "The Mac node could not be checked.",
-      "translated": "Der Mac-Knoten konnte nicht überprüft werden."
-    },
-    {
-      "id": "native.apple.0483bf19d612560b",
-      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
-      "translated": "OpenClaw konnte den Eigentümerschaftseintrag des Knotendienstes nicht lesen. Versuchen Sie es erneut, nachdem Sie den Knoten-LaunchAgent überprüft haben."
-    },
-    {
-      "id": "native.apple.1c57b3fcc10eabe7",
-      "source": "The Mac app is updated. Gateway \\(found) is newer than app \\(required), so OpenClaw left it unchanged.",
-      "translated": "Die Mac-App wurde aktualisiert. Gateway \\(found) ist neuer als die App-Version \\(required), daher hat OpenClaw es unverändert gelassen."
-    },
-    {
       "id": "native.apple.e9b1899627402a15",
       "source": "Gateway recovery failed.",
       "translated": "Die Gateway-Wiederherstellung ist fehlgeschlagen."
@@ -20622,11 +20602,6 @@
       "id": "native.apple.91debe404bb7affc",
       "source": "The managed OpenClaw runtime could not be reinstalled.",
       "translated": "Die verwaltete OpenClaw-Laufzeitumgebung konnte nicht neu installiert werden."
-    },
-    {
-      "id": "native.apple.3522be8112301d9f",
-      "source": "The Mac app is updated. This Gateway is managed separately, so OpenClaw left it unchanged.",
-      "translated": "Die Mac-App wurde aktualisiert. Dieses Gateway wird separat verwaltet, daher hat OpenClaw es unverändert gelassen."
     },
     {
       "id": "native.apple.1cc391ec928070c4",
@@ -20734,14 +20709,34 @@
       "translated": "OpenClaw hat das Update installiert, konnte die Gateway-Verbindung jedoch nicht überprüfen."
     },
     {
-      "id": "native.apple.8bf292892311882e",
-      "source": "Mac app updated",
-      "translated": "Mac-App aktualisiert"
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Das Gateway konnte nicht überprüft werden."
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw konnte den Eigentümerschaftseintrag des Gateway-Dienstes nicht lesen. Versuchen Sie es erneut, nachdem Sie den Gateway LaunchAgent überprüft haben."
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Der Mac-Knoten konnte nicht überprüft werden."
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw konnte den Eigentümerschaftseintrag des Knotendienstes nicht lesen. Versuchen Sie es erneut, nachdem Sie den Knoten-LaunchAgent überprüft haben."
     },
     {
       "id": "native.apple.d0f712a2ed470a3e",
       "source": "Gateway update needs help",
       "translated": "Gateway-Update benötigt Unterstützung"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "Update-Anleitung"
     },
     {
       "id": "native.apple.3a6aaa0aa0be82e7",
@@ -20752,11 +20747,6 @@
       "id": "native.apple.11b9ee23142b1060",
       "source": "Retry",
       "translated": "Erneut versuchen"
-    },
-    {
-      "id": "native.apple.e2ffc7753f75e1b8",
-      "source": "Update guide",
-      "translated": "Update-Anleitung"
     },
     {
       "id": "native.apple.144b21229f65f2a4",
