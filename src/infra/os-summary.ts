@@ -12,6 +12,7 @@ type OsSummary = {
 
 const cachedOsSummaryByKey = new Map<string, OsSummary>();
 const cachedRuntimeOsLabelByKey = new Map<string, string>();
+const OS_SUMMARY_CACHE_LIMIT = 16;
 
 /**
  * Resolve Darwin product version via sw_vers.
@@ -43,6 +44,10 @@ export function resolveRuntimeOsLabel(): string {
   }
   const label =
     platform === "darwin" ? `macOS ${resolveDarwinProductVersion()}` : `${os.type()} ${release}`;
+  if (cachedRuntimeOsLabelByKey.size >= OS_SUMMARY_CACHE_LIMIT) {
+    const oldest = cachedRuntimeOsLabelByKey.keys().next().value;
+    if (oldest !== undefined) cachedRuntimeOsLabelByKey.delete(oldest);
+  }
   cachedRuntimeOsLabelByKey.set(cacheKey, label);
   return label;
 }
@@ -71,6 +76,10 @@ export function resolveOsSummary(): OsSummary {
     return `${platform} ${release} (${arch})`;
   })();
   const summary = { platform, arch, release, label };
+  if (cachedOsSummaryByKey.size >= OS_SUMMARY_CACHE_LIMIT) {
+    const oldest = cachedOsSummaryByKey.keys().next().value;
+    if (oldest !== undefined) cachedOsSummaryByKey.delete(oldest);
+  }
   cachedOsSummaryByKey.set(cacheKey, summary);
   return summary;
 }
