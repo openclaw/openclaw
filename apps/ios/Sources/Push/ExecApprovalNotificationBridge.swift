@@ -159,18 +159,6 @@ enum ApprovalNotificationBridge {
             configuration: configuration)
     }
 
-    fileprivate static func registerCategory(
-        _ configuration: ApprovalNotificationConfiguration,
-        center: UNUserNotificationCenter)
-    {
-        let category = self.category(for: configuration)
-        center.getNotificationCategories { categories in
-            var updated = categories
-            updated.update(with: category)
-            center.setNotificationCategories(updated)
-        }
-    }
-
     fileprivate static func shouldPresentNotification(
         userInfo: [AnyHashable: Any],
         configuration: ApprovalNotificationConfiguration) -> Bool
@@ -371,10 +359,6 @@ enum ExecApprovalNotificationBridge {
         encodedRequestPrefix: "exec.approval-v2.",
         legacyRequestPrefix: "exec.approval.")
 
-    static func registerCategory(center: UNUserNotificationCenter = .current()) {
-        ApprovalNotificationBridge.registerCategory(self.configuration, center: center)
-    }
-
     static func shouldPresentNotification(userInfo: [AnyHashable: Any]) -> Bool {
         ApprovalNotificationBridge.shouldPresentNotification(
             userInfo: userInfo,
@@ -393,12 +377,6 @@ enum ExecApprovalNotificationBridge {
 
     static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
         ApprovalNotificationBridge.parseRequestedPush(
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
-    static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
-        ApprovalNotificationBridge.parseResolvedPush(
             userInfo: userInfo,
             configuration: self.configuration)
     }
@@ -431,10 +409,6 @@ enum PluginApprovalNotificationBridge {
         reviewActionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
         encodedRequestPrefix: "plugin.approval-v2.",
         legacyRequestPrefix: "plugin.approval.")
-
-    static func registerCategory(center: UNUserNotificationCenter = .current()) {
-        ApprovalNotificationBridge.registerCategory(self.configuration, center: center)
-    }
 
     static func shouldPresentNotification(userInfo: [AnyHashable: Any]) -> Bool {
         ApprovalNotificationBridge.shouldPresentNotification(
