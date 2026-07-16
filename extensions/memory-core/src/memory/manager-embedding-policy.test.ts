@@ -1,4 +1,5 @@
 // Memory Core tests cover manager embedding policy plugin behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
@@ -286,6 +287,56 @@ describe("memory embedding policy", () => {
 
     expect(captured).toHaveLength(1);
     expect((captured[0] as Error).message).toContain("429");
+  });
+
+  it("uses more attempts for rate-limit errors than for non-rate-limit errors with a function maxAttempts", async () => {
+    const rateLimitRun = vi.fn(async () => {
+      throw new Error("gemini embeddings failed (429)");
+    });
+    const nonRateLimitRun = vi.fn(async () => {
+      throw new Error("TypeError: fetch failed | other side closed");
+    });
+    const maxAttemptsFn = (err: unknown) =>
+      /(rate[_ ]limit|too many requests|429)/i.test(formatErrorMessage(err)) ? 7 : 3;
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run: rateLimitRun,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async () => {},
+        maxAttempts: maxAttemptsFn,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toThrow("429");
+    expect(rateLimitRun).toHaveBeenCalledTimes(7);
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run: nonRateLimitRun,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async () => {},
+        maxAttempts: maxAttemptsFn,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toThrow("fetch failed");
+    expect(nonRateLimitRun).toHaveBeenCalledTimes(3);
+  });
+
+  it("accepts a plain number as maxAttempts for backward compatibility", async () => {
+    const run = vi.fn(async () => {
+      throw new Error("connect ECONNREFUSED");
+    });
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry: async () => {},
+        maxAttempts: 5,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toThrow("ECONNREFUSED");
+    expect(run).toHaveBeenCalledTimes(5);
   });
 
   it("caps retry jittered delays", () => {

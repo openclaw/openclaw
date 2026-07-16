@@ -117,13 +117,15 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   run: () => Promise<T>;
   isRetryable: (message: string) => boolean;
   waitForRetry: (delayMs: number, error?: unknown) => Promise<void>;
-  maxAttempts: number;
+  maxAttempts: number | ((error: unknown) => number);
   baseDelayMs: number;
   /** Caller-owned cancellation; an aborted caller stops the retry loop. */
   signal?: AbortSignal;
 }): Promise<T> {
-  const attempts = Math.max(1, params.maxAttempts);
-  for (const attempt of Array.from({ length: attempts }, (_, index) => index + 1)) {
+  const resolveMaxAttempts =
+    typeof params.maxAttempts === "function" ? params.maxAttempts : () => params.maxAttempts;
+
+  for (let attempt = 1; ; attempt++) {
     const delayMs = params.baseDelayMs * 2 ** (attempt - 1);
     try {
       return await params.run();
@@ -135,13 +137,13 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
         throw err;
       }
       const message = formatErrorMessage(err);
-      if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
+      const effectiveMax = resolveMaxAttempts(err);
+      if (!params.isRetryable(message) || attempt >= effectiveMax) {
         throw err;
       }
       await params.waitForRetry(delayMs, err);
     }
   }
-  throw new Error("retry loop exhausted");
 }
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
@@ -150,7 +152,7 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   isRetryable: (message: string) => boolean;
   isSplittable: (message: string) => boolean;
   waitForRetry: (delayMs: number, error?: unknown) => Promise<void>;
-  maxAttempts: number;
+  maxAttempts: number | ((error: unknown) => number);
   baseDelayMs: number;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {

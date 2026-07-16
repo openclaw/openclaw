@@ -60,7 +60,10 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
-const EMBEDDING_RETRY_MAX_ATTEMPTS = 7;
+/** Max retry attempts for non-rate-limit errors (5xx, network, timeouts). */
+const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
+/** Max retry attempts for rate-limit errors (429) — extra budget to cover 60s windows. */
+const EMBEDDING_RETRY_RATE_LIMIT_MAX_ATTEMPTS = 7;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
 
@@ -74,6 +77,12 @@ const SOURCE_WIDE_BATCH_MAX_FILES = 2048;
 const SOURCE_WIDE_BATCH_MAX_REQUESTS = 50000;
 
 const log = createSubsystemLogger("memory");
+
+const RATE_LIMIT_MEMORY_EMBEDDING_ERROR_RE = /(rate[_ ]limit|too many requests|429)/i;
+
+function isRateLimitEmbeddingError(err: unknown): boolean {
+  return RATE_LIMIT_MEMORY_EMBEDDING_ERROR_RE.test(formatErrorMessage(err));
+}
 
 function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
   if (!Number.isFinite(seconds)) {
@@ -438,7 +447,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         waitForRetry: async (delayMs, err) => {
           await this.waitForEmbeddingRetry(delayMs, "retrying", err);
         },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+        maxAttempts: (err: unknown) =>
+          isRateLimitEmbeddingError(err)
+            ? EMBEDDING_RETRY_RATE_LIMIT_MAX_ATTEMPTS
+            : EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
         onSplit: ({ itemCount, splitAt }) => {
           log.warn(
@@ -490,7 +502,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         waitForRetry: async (delayMs, err) => {
           await this.waitForEmbeddingRetry(delayMs, "retrying structured batch", err);
         },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+        maxAttempts: (err: unknown) =>
+          isRateLimitEmbeddingError(err)
+            ? EMBEDDING_RETRY_RATE_LIMIT_MAX_ATTEMPTS
+            : EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
         onSplit: ({ itemCount, splitAt }) => {
           log.warn(
@@ -513,8 +528,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     action: string,
     err?: unknown,
   ): Promise<void> {
-    const isRateLimit =
-      err !== undefined && /(rate[_ ]limit|too many requests|429)/i.test(formatErrorMessage(err));
+    const isRateLimit = err !== undefined && isRateLimitEmbeddingError(err);
     // For rate-limit errors, multiply delay by 4x to cover typical 60s reset windows
     // while keeping the same exponential growth pattern. Non-rate-limit errors use
     // the raw computed delay (capped at EMBEDDING_RETRY_MAX_DELAY_MS).
@@ -561,7 +575,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         waitForRetry: async (delayMs, err) => {
           await this.waitForEmbeddingRetry(delayMs, "retrying query", err);
         },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+        maxAttempts: (err: unknown) =>
+          isRateLimitEmbeddingError(err)
+            ? EMBEDDING_RETRY_RATE_LIMIT_MAX_ATTEMPTS
+            : EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
       });
     } catch (err) {
