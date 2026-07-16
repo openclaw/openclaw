@@ -23,12 +23,15 @@ describe("downloadVydraAsset", () => {
     server = undefined;
   });
 
-  it("bounds a dripping download body with one wall-clock deadline", async () => {
-    const timeoutMs = 250;
+  async function listenDripServer(params: {
+    statusCode: number;
+    contentType: string;
+    chunk: Buffer | string;
+  }): Promise<number> {
     server = http.createServer((_req, res) => {
       res.on("error", () => {});
-      res.writeHead(200, {
-        "Content-Type": "image/png",
+      res.writeHead(params.statusCode, {
+        "Content-Type": params.contentType,
         "Transfer-Encoding": "chunked",
       });
       // Keep sending bytes so chunk idle alone would never fire.
@@ -36,7 +39,7 @@ describe("downloadVydraAsset", () => {
         if (res.writableEnded || res.destroyed) {
           return;
         }
-        res.write(Buffer.from([0x00]));
+        res.write(params.chunk);
         const timer = setTimeout(drip, 20);
         dripTimers.add(timer);
       };
@@ -45,16 +48,49 @@ describe("downloadVydraAsset", () => {
     server.on("clientError", (_err, socket) => socket.destroy());
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
-
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("expected loopback server address");
     }
+    return address.port;
+  }
+
+  it("bounds a dripping download body with one wall-clock deadline", async () => {
+    const timeoutMs = 250;
+    const port = await listenDripServer({
+      statusCode: 200,
+      contentType: "image/png",
+      chunk: Buffer.from([0x00]),
+    });
 
     const startedAt = performance.now();
     await expect(
       downloadVydraAsset({
-        url: `http://127.0.0.1:${address.port}/generated/test.png`,
+        url: `http://127.0.0.1:${port}/generated/test.png`,
+        kind: "image",
+        timeoutMs,
+        fetchFn: fetch,
+        maxBytes: 1024 * 1024,
+      }),
+    ).rejects.toThrow(`Vydra image download timed out after ${timeoutMs}ms`);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 50);
+    expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
+  });
+
+  it("bounds a dripping non-2xx error body with one wall-clock deadline", async () => {
+    const timeoutMs = 250;
+    const port = await listenDripServer({
+      statusCode: 500,
+      contentType: "text/plain",
+      chunk: "e",
+    });
+
+    const startedAt = performance.now();
+    await expect(
+      downloadVydraAsset({
+        url: `http://127.0.0.1:${port}/generated/test.png`,
         kind: "image",
         timeoutMs,
         fetchFn: fetch,

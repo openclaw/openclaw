@@ -13,7 +13,10 @@ import {
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -233,6 +236,21 @@ export function resolveVydraGeneratedMediaMaxBytes(params: {
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
+function resolveVydraDownloadBodyTimeout(params: {
+  kind: VydraMediaKind;
+  timeoutMs: number;
+  deadlineMs: number;
+}) {
+  return {
+    chunkTimeoutMs: params.timeoutMs,
+    timeoutMs: Math.max(1, params.deadlineMs - Date.now()),
+    onIdleTimeout: ({ chunkTimeoutMs }: { chunkTimeoutMs: number }) =>
+      new Error(`Vydra ${params.kind} download stalled after ${chunkTimeoutMs}ms`),
+    onTimeout: () =>
+      new Error(`Vydra ${params.kind} download timed out after ${params.timeoutMs}ms`),
+  };
+}
+
 export async function downloadVydraAsset(params: {
   url: string;
   kind: VydraMediaKind;
@@ -242,21 +260,30 @@ export async function downloadVydraAsset(params: {
 }): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
   const timeoutMs = resolveVydraHttpTimeoutMs(params.timeoutMs);
   // fetchWithTimeout clears its abort after headers land. Keep one wall-clock deadline across
-  // the body read so a slow drip cannot reset chunk idle forever past the download budget.
+  // non-2xx error-detail and successful-body reads so a slow drip cannot reset chunk idle forever.
   const deadlineMs = Date.now() + timeoutMs;
   const response = await fetchWithTimeout(params.url, { method: "GET" }, timeoutMs, params.fetchFn);
-  await assertOkOrThrowHttpError(response, `Vydra ${params.kind} download failed`);
+  if (!response.ok) {
+    // Shared assertOkOrThrowHttpError reads error detail without a wall-clock bound; a dripping
+    // non-2xx body would hang before the success-path reader runs.
+    const prefix = await readResponseTextPrefix(
+      response,
+      16 * 1024,
+      resolveVydraDownloadBodyTimeout({ kind: params.kind, timeoutMs, deadlineMs }),
+    );
+    const detail = prefix.text.replace(/\s+/g, " ").trim();
+    throw new Error(
+      `Vydra ${params.kind} download failed (HTTP ${response.status})` +
+        (detail ? `: ${detail.length > 220 ? `${detail.slice(0, 219)}…` : detail}` : ""),
+    );
+  }
   const mimeType =
     response.headers.get("content-type")?.trim() ||
     (params.kind === "image" ? "image/png" : params.kind === "audio" ? "audio/mpeg" : "video/mp4");
   const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    chunkTimeoutMs: timeoutMs,
-    timeoutMs: Math.max(1, deadlineMs - Date.now()),
+    ...resolveVydraDownloadBodyTimeout({ kind: params.kind, timeoutMs, deadlineMs }),
     onOverflow: ({ maxBytes }) =>
       new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Vydra ${params.kind} download stalled after ${chunkTimeoutMs}ms`),
-    onTimeout: () => new Error(`Vydra ${params.kind} download timed out after ${timeoutMs}ms`),
   });
   const extension = resolveVydraFileExtension(params.kind, mimeType);
   const fileStem = params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";
