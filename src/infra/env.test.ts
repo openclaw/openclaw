@@ -1,13 +1,6 @@
 // Tests infra environment loading and variable normalization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import {
-  isTruthyEnvValue,
-  logAcceptedEnvOption,
-  normalizeEnv,
-  normalizeZaiEnv,
-  resetLoggedEnvCacheForTest,
-} from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -21,32 +14,36 @@ vi.mock("../logging/subsystem.js", () => ({
 
 beforeEach(() => {
   loggerMocks.info.mockClear();
-  resetLoggedEnvCacheForTest();
+  vi.resetModules();
 });
 
 describe("normalizeZaiEnv", () => {
-  it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
+  it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", async () => {
+    const { normalizeZaiEnv } = await import("./env.js");
     withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
     });
   });
 
-  it("does not override existing ZAI_API_KEY", () => {
+  it("does not override existing ZAI_API_KEY", async () => {
+    const { normalizeZaiEnv } = await import("./env.js");
     withEnv({ ZAI_API_KEY: "zai-current", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("zai-current");
     });
   });
 
-  it("ignores blank legacy Z_AI_API_KEY values", () => {
+  it("ignores blank legacy Z_AI_API_KEY values", async () => {
+    const { normalizeZaiEnv } = await import("./env.js");
     withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "   " }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("");
     });
   });
 
-  it("does not copy when legacy Z_AI_API_KEY is unset", () => {
+  it("does not copy when legacy Z_AI_API_KEY is unset", async () => {
+    const { normalizeZaiEnv } = await import("./env.js");
     withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: undefined }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("");
@@ -55,14 +52,16 @@ describe("normalizeZaiEnv", () => {
 });
 
 describe("isTruthyEnvValue", () => {
-  it("accepts common truthy values", () => {
+  it("accepts common truthy values", async () => {
+    const { isTruthyEnvValue } = await import("./env.js");
     expect(isTruthyEnvValue("1")).toBe(true);
     expect(isTruthyEnvValue("true")).toBe(true);
     expect(isTruthyEnvValue(" yes ")).toBe(true);
     expect(isTruthyEnvValue("ON")).toBe(true);
   });
 
-  it("rejects other values", () => {
+  it("rejects other values", async () => {
+    const { isTruthyEnvValue } = await import("./env.js");
     expect(isTruthyEnvValue("0")).toBe(false);
     expect(isTruthyEnvValue("false")).toBe(false);
     expect(isTruthyEnvValue("")).toBe(false);
@@ -72,6 +71,7 @@ describe("isTruthyEnvValue", () => {
 
 describe("logAcceptedEnvOption", () => {
   it("logs accepted env options once with redaction and formatting", async () => {
+    const { logAcceptedEnvOption } = await import("./env.js");
     loggerMocks.info.mockClear();
 
     withEnv(
@@ -103,6 +103,7 @@ describe("logAcceptedEnvOption", () => {
   });
 
   it("caps the dedupe cache at 256 entries and re-logs evicted keys", async () => {
+    const { logAcceptedEnvOption } = await import("./env.js");
     withEnv(
       {
         VITEST: "",
@@ -142,7 +143,8 @@ describe("logAcceptedEnvOption", () => {
     });
   });
 
-  it("skips blank values and test-mode logging", () => {
+  it("skips blank values and test-mode logging", async () => {
+    const { logAcceptedEnvOption } = await import("./env.js");
     loggerMocks.info.mockClear();
 
     withEnv(
@@ -177,6 +179,7 @@ describe("logAcceptedEnvOption", () => {
   });
 
   it("keeps bounded non-secret values UTF-16 well-formed", async () => {
+    const { logAcceptedEnvOption } = await import("./env.js");
     withEnv(
       {
         VITEST: "",
@@ -199,7 +202,8 @@ describe("logAcceptedEnvOption", () => {
 });
 
 describe("normalizeEnv", () => {
-  it("normalizes the legacy ZAI env alias", () => {
+  it("normalizes the legacy ZAI env alias", async () => {
+    const { normalizeEnv } = await import("./env.js");
     withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeEnv();
       expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
