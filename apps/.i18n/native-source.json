@@ -3499,7 +3499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 77,
+      "line": 78,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Health",
       "surface": "android",
@@ -3507,7 +3507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 78,
+      "line": 79,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Gateway status, phone node readiness, and recent log stream.",
       "surface": "android",
@@ -3515,7 +3515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 85,
+      "line": 86,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Offline",
       "surface": "android",
@@ -3523,7 +3523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 86,
+      "line": 87,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Node",
       "surface": "android",
@@ -3531,7 +3531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 88,
+      "line": 89,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Logs",
       "surface": "android",
@@ -3539,7 +3539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 93,
+      "line": 94,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Online",
       "surface": "android",
@@ -3547,7 +3547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 93,
+      "line": 94,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Waiting",
       "surface": "android",
@@ -3555,7 +3555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 94,
+      "line": 95,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Needs connection",
       "surface": "android",
@@ -3563,7 +3563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 94,
+      "line": 95,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Ready",
       "surface": "android",
@@ -3571,7 +3571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 95,
+      "line": 96,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "${modelCount.size} available",
       "surface": "android",
@@ -3579,7 +3579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 97,
+      "line": 98,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "$pendingRunCount active",
       "surface": "android",
@@ -3587,7 +3587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 97,
+      "line": 98,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Idle",
       "surface": "android",
@@ -3595,7 +3595,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 113,
+      "line": 114,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Refresh Logs",
       "surface": "android",
@@ -3603,7 +3603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 113,
+      "line": 114,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Refreshing",
       "surface": "android",
@@ -3611,7 +3611,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 148,
+      "line": 149,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Log Entry",
       "surface": "android",
@@ -3619,7 +3619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 149,
+      "line": 150,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Readable gateway log detail.",
       "surface": "android",
@@ -3627,7 +3627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 156,
+      "line": 157,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Time",
       "surface": "android",
@@ -3635,7 +3635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 157,
+      "line": 158,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Level",
       "surface": "android",
@@ -3643,7 +3643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 158,
+      "line": 159,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Subsystem",
       "surface": "android",
@@ -3651,7 +3651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 158,
+      "line": 159,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Unknown",
       "surface": "android",
@@ -3659,7 +3659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 163,
+      "line": 164,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Message",
       "surface": "android",
@@ -3667,7 +3667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 169,
+      "line": 170,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Raw",
       "surface": "android",
@@ -3675,7 +3675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 196,
+      "line": 197,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Gateway",
       "surface": "android",
@@ -3683,7 +3683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 198,
+      "line": 199,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Phone Node",
       "surface": "android",
@@ -3691,7 +3691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 200,
+      "line": 201,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Chat",
       "surface": "android",
@@ -3699,7 +3699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 202,
+      "line": 203,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Models",
       "surface": "android",
@@ -3707,7 +3707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 204,
+      "line": 205,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Voice",
       "surface": "android",
@@ -3715,7 +3715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 206,
+      "line": 207,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Runs",
       "surface": "android",
@@ -3723,7 +3723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 219,
+      "line": 220,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "RECENT LOGS",
       "surface": "android",
@@ -3731,7 +3731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 227,
+      "line": 228,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Connect the gateway to load recent logs.",
       "surface": "android",
@@ -3739,7 +3739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 231,
+      "line": 232,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "No recent log entries.",
       "surface": "android",
@@ -3747,7 +3747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 247,
+      "line": 248,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Showing the latest log chunk.",
       "surface": "android",
@@ -3755,7 +3755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 261,
+      "line": 262,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/HealthLogsSettingsScreen.kt",
       "source": "Open log entry",
       "surface": "android",

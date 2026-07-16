@@ -21,9 +21,6 @@ private const val CAMERA_DEBUG_STACK_TRACE_MAX_CHARS = 2_000
  */
 internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean = rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
 
-internal fun truncateCameraDebugStackTrace(stackTrace: String): String =
-  stackTrace.takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)
-
 /**
  * Gateway camera command adapter that adds HUD feedback and payload-size enforcement.
  */
@@ -89,7 +86,7 @@ class CameraHandler(
           throw err
         } catch (err: Throwable) {
           camLog("inner error: ${err::class.java.simpleName}: ${err.message}")
-          camLog("stack: ${truncateCameraDebugStackTrace(err.stackTraceToString())}")
+          camLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           val (code, message) = invokeErrorFromThrowable(err)
           showCameraHud(message, CameraHudKind.Error, 2200)
           return GatewaySession.InvokeResult.error(code = code, message = message)
@@ -101,7 +98,7 @@ class CameraHandler(
       throw err
     } catch (err: Throwable) {
       camLog("outer error: ${err::class.java.simpleName}: ${err.message}")
-      camLog("stack: ${truncateCameraDebugStackTrace(err.stackTraceToString())}")
+      camLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera snap failed")
     }
   }
@@ -139,7 +136,7 @@ class CameraHandler(
           throw err
         } catch (err: Throwable) {
           clipLog("inner error: ${err::class.java.simpleName}: ${err.message}")
-          clipLog("stack: ${truncateCameraDebugStackTrace(err.stackTraceToString())}")
+          clipLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           val (code, message) = invokeErrorFromThrowable(err)
           showCameraHud(message, CameraHudKind.Error, 2400)
           return GatewaySession.InvokeResult.error(code = code, message = message)
@@ -175,7 +172,7 @@ class CameraHandler(
       throw err
     } catch (err: Throwable) {
       clipLog("outer error: ${err::class.java.simpleName}: ${err.message}")
-      clipLog("stack: ${truncateCameraDebugStackTrace(err.stackTraceToString())}")
+      clipLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera clip failed")
     } finally {
       // Prevent talk/transcription capture from competing with camera audio after every exit path.
