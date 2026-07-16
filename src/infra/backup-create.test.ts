@@ -1465,6 +1465,62 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("preserves a configured workspace nested under a managed runtime root", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-managed-root-workspace-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const stateDir = state.stateDir;
+        const workspaceDir = path.join(stateDir, "dev", "workspace");
+        const runtimeDir = path.join(stateDir, "dev", "openclaw");
+        const workspaceDbPath = path.join(workspaceDir, "workspace.sqlite");
+        const outputDir = state.path("backups");
+        await state.writeConfig({
+          agents: {
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
+          },
+        });
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(runtimeDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "durable workspace\n", "utf8");
+        await fs.writeFile(path.join(runtimeDir, "package.json"), "{}\n", "utf8");
+        const sqlite = requireNodeSqlite();
+        const workspaceDb = new sqlite.DatabaseSync(workspaceDbPath);
+        try {
+          workspaceDb.exec(
+            "CREATE TABLE durable_state (value TEXT NOT NULL); INSERT INTO durable_state VALUES ('keep');",
+          );
+        } finally {
+          workspaceDb.close();
+        }
+        await fs.mkdir(outputDir, { recursive: true });
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: true,
+          nowMs: Date.UTC(2026, 3, 28, 12, 30, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+
+        expect(entries.some((entry) => entry.endsWith("/state/dev/workspace/AGENTS.md"))).toBe(
+          true,
+        );
+        expect(
+          entries.some((entry) => entry.endsWith("/state/dev/workspace/workspace.sqlite")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.includes("/state/dev/openclaw/"))).toBe(false);
+
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
+      },
+    );
+  });
+
   it("dereferences hardlinks instead of emitting restore-hostile Link entries", async () => {
     await withOpenClawTestState(
       {

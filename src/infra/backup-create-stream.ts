@@ -4,9 +4,13 @@ import { pipeline } from "node:stream/promises";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
+type DestroyableArchiveStream = (NodeJS.ReadableStream | AsyncIterable<Uint8Array>) & {
+  destroy(error?: Error): unknown;
+};
+
 export async function writeArchiveStreamToFile(params: {
   archivePath: string;
-  archiveStream: AsyncIterable<Uint8Array> | NodeJS.ReadableStream;
+  archiveStream: DestroyableArchiveStream;
   idleTimeoutMs?: number;
 }): Promise<void> {
   // Own both stream lifecycles so a tar read error closes the output handle
@@ -24,9 +28,9 @@ export async function writeArchiveStreamToFile(params: {
       idleTimeoutError = new Error(
         `Backup archive write stalled: no data produced for ${idleTimeoutMs}ms`,
       );
+      params.archiveStream.destroy(idleTimeoutError);
       controller.abort(idleTimeoutError);
     }, idleTimeoutMs);
-    idleTimer.unref?.();
   };
   const progress = new Transform({
     transform(chunk, _encoding, callback) {

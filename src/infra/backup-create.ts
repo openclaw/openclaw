@@ -365,9 +365,13 @@ function normalizeBackupFilterPath(value: string): string {
 
 const REINSTALLABLE_STATE_ROOTS = new Set(["dev", "git", "npm", "npm-runtime", "tools"]);
 
-function buildStateBackupFilter(stateDir: string): (filePath: string) => boolean {
+function buildStateBackupFilter(
+  stateDir: string,
+  preservedStatePaths: readonly string[] = [],
+): (filePath: string) => boolean {
   const normalizedStateDir = normalizeBackupFilterPath(stateDir);
   const statePrefix = `${normalizedStateDir}/`;
+  const resolvedPreservedPaths = preservedStatePaths.map((entry) => path.resolve(entry));
 
   return (filePath: string): boolean => {
     const normalizedFilePath = normalizeBackupFilterPath(filePath);
@@ -377,7 +381,14 @@ function buildStateBackupFilter(stateDir: string): (filePath: string) => boolean
 
     const segments = normalizedFilePath.slice(statePrefix.length).split("/");
     if (REINSTALLABLE_STATE_ROOTS.has(segments[0] ?? "")) {
-      return false;
+      const resolvedFilePath = path.resolve(filePath);
+      // Configured workspaces nested under a managed root remain authoritative
+      // user state. Keep their ancestors traversable without admitting siblings.
+      return resolvedPreservedPaths.some(
+        (preservedPath) =>
+          isPathWithin(resolvedFilePath, preservedPath) ||
+          isPathWithin(preservedPath, resolvedFilePath),
+      );
     }
 
     return segments[0] !== "extensions" || !segments.includes("node_modules");
@@ -497,10 +508,11 @@ function sanitizeGlobalStateSqliteSnapshot(db: DatabaseSync): void {
 async function listStateSqlitePaths(params: {
   stateDir: string;
   globalStateSqlitePath: string;
+  preservedStatePaths?: readonly string[];
 }): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
   const snapshotPaths = new Set<string>();
   const discoveredSourcePaths = new Set<string>();
-  const stateFilter = buildStateBackupFilter(params.stateDir);
+  const stateFilter = buildStateBackupFilter(params.stateDir, params.preservedStatePaths);
   async function visit(dir: string): Promise<void> {
     let entries: import("node:fs").Dirent[];
     try {
@@ -583,6 +595,7 @@ async function listStateSqlitePaths(params: {
 async function createStateSqliteBackupPlan(params: {
   stateDir: string;
   tempDir: string;
+  preservedStatePaths?: readonly string[];
 }): Promise<StateSqliteBackupPlan> {
   // Complete discovery before writing snapshots. chooseBackupTempRoot keeps
   // tempDir outside stateDir, and this ordering prevents future overlap from
@@ -596,6 +609,7 @@ async function createStateSqliteBackupPlan(params: {
   const discovery = await listStateSqlitePaths({
     stateDir: params.stateDir,
     globalStateSqlitePath,
+    preservedStatePaths: params.preservedStatePaths,
   });
   const snapshots: SqliteBackupAsset[] = [];
   for (const archiveSourcePath of discovery.snapshotPaths) {
@@ -699,11 +713,15 @@ export async function createBackupArchive(
   const tempArchivePath = buildTempArchivePath(outputPath);
   const tempArchiveCleanupPaths = resolveBackupTarAttemptTempPaths(tempArchivePath);
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
+  const preservedStatePaths = plan.skipped
+    .filter((asset) => asset.kind === "workspace" && asset.reason === "covered")
+    .map((asset) => asset.sourcePath);
   try {
     const stateSqliteBackup = stateAsset
       ? await createStateSqliteBackupPlan({
           stateDir: stateAsset.sourcePath,
           tempDir,
+          preservedStatePaths,
         })
       : { snapshots: [], discoveredSourcePaths: new Set<string>() };
     const sourcePathRemaps = new Map<string, string>();
@@ -729,7 +747,9 @@ export async function createBackupArchive(
     await writeJson(manifestPath, manifest, { trailingNewline: true });
 
     const tar = await loadTarRuntime();
-    const stateFilter = stateAsset ? buildStateBackupFilter(stateAsset.sourcePath) : undefined;
+    const stateFilter = stateAsset
+      ? buildStateBackupFilter(stateAsset.sourcePath, preservedStatePaths)
+      : undefined;
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
     // node-tar invokes filters from async stat callbacks, so throwing inside
