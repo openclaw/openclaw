@@ -35,17 +35,30 @@ async function expectModelReturnsAssistantText(
     contextWindow: modelId === "glm-5.2" ? 1_000_000 : 202_800,
     maxTokens: modelId === "glm-5.2" ? 131_072 : 131_100,
   };
-  // GLM-5 reasoning is enabled by default and consumes the same output budget.
-  // Keep enough headroom for a visible answer while retaining a bounded probe.
-  const res = await completeSimple(
-    model,
-    {
-      messages: createSingleUserPromptMessage(),
-    },
-    { apiKey: ZAI_KEY, maxTokens: 1_024 },
-  );
-  const text = extractNonEmptyAssistantText(res.content);
-  expect(text.length).toBeGreaterThan(0);
+  const complete = (maxTokens: number) =>
+    completeSimple(
+      model,
+      {
+        messages: createSingleUserPromptMessage(),
+      },
+      { apiKey: ZAI_KEY, maxTokens },
+    );
+
+  // A small probe cap can occasionally yield only hidden reasoning even though
+  // production allows much more output. Retry once, but still require visible text.
+  const initial = await complete(1_024);
+  let final = initial;
+  let text = extractNonEmptyAssistantText(final.content);
+  if (!text && (initial.stopReason === "stop" || initial.stopReason === "length")) {
+    final = await complete(8_192);
+    text = extractNonEmptyAssistantText(final.content);
+  }
+  const summarize = (res: typeof final) =>
+    `stopReason=${res.stopReason}; contentTypes=${res.content.map((block) => block.type).join(",") || "none"}`;
+  expect(
+    text.length,
+    `${modelId} returned no assistant text; initial(${summarize(initial)}); final(${summarize(final)})`,
+  ).toBeGreaterThan(0);
 }
 
 describeCodingLive("zai Coding Plan live", () => {
