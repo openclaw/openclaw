@@ -350,6 +350,36 @@ describe("legacy APNs Doctor migration", () => {
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
+  it("sanitizes legacy entry identifiers in warnings", async () => {
+    const privateMarker = "must-not-appear-in-doctor-output";
+    const malformedStores = [
+      {
+        registrationsByNodeId: {
+          [privateMarker]: directRegistration({ nodeId: "different-node" }),
+        },
+      },
+      {
+        registrationsByNodeId: {
+          node: directRegistration({ nodeId: "node", [privateMarker]: true }),
+        },
+      },
+    ];
+
+    for (const raw of malformedStores) {
+      closeOpenClawStateDatabaseForTest();
+      const stateDir = useStateDir();
+      const sourcePath = path.join(stateDir, "push", "apns-registrations.json");
+      await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fsp.writeFile(sourcePath, JSON.stringify(raw), "utf8");
+
+      const result = await migrate(stateDir);
+
+      expect(result.warnings[0]).toMatch(/legacy APNs/i);
+      expect(result.warnings.join("\n")).not.toContain(privateMarker);
+      expect(fs.existsSync(sourcePath)).toBe(true);
+    }
+  });
+
   it("rolls back inserted rows when a later canonical row is invalid", async () => {
     const stateDir = useStateDir();
     const sourcePath = await writeLegacyState(stateDir, {

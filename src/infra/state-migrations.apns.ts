@@ -113,7 +113,7 @@ function relativeLegacyPath(stateDir: string, filePath: string): string {
     relativePath.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relativePath)
   ) {
-    throw new Error(`legacy APNs path is outside the state directory: ${filePath}`);
+    throw new Error("legacy APNs path is outside the state directory");
   }
   return relativePath;
 }
@@ -145,14 +145,10 @@ function snapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot)
   );
 }
 
-function assertOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-  label: string,
-): void {
+function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): void {
   const unexpected = Object.keys(value).find((key) => !allowed.has(key));
   if (unexpected) {
-    throw new Error(`${label} has unexpected field ${unexpected}`);
+    throw new Error("legacy APNs registration has an unexpected field");
   }
 }
 
@@ -162,20 +158,19 @@ function parseLegacyApnsRegistration(
   env: NodeJS.ProcessEnv,
 ): [string, ApnsRegistration] {
   if (!isRecord(rawRegistration)) {
-    throw new Error(`legacy APNs registration for ${rawNodeId} is not an object`);
+    throw new Error("legacy APNs registration is not an object");
   }
   const transport = rawRegistration.transport ?? "direct";
   if (transport !== "direct" && transport !== "relay") {
-    throw new Error(`legacy APNs registration for ${rawNodeId} has invalid transport`);
+    throw new Error("legacy APNs registration has invalid transport");
   }
   assertOnlyKeys(
     rawRegistration,
     transport === "relay" ? RELAY_REGISTRATION_KEYS : DIRECT_REGISTRATION_KEYS,
-    `legacy APNs registration for ${rawNodeId}`,
   );
   const normalizedNodeId = normalizeApnsNodeId(rawNodeId);
   if (!isValidApnsNodeId(normalizedNodeId)) {
-    throw new Error(`legacy APNs registration has invalid node id ${rawNodeId}`);
+    throw new Error("legacy APNs registration has an invalid node id");
   }
   const candidate =
     transport === "direct"
@@ -200,7 +195,7 @@ function parseLegacyApnsRegistration(
     invalidRelayOrigin ||
     invalidTokenDebugSuffix
   ) {
-    throw new Error(`legacy APNs registration for ${rawNodeId} is invalid`);
+    throw new Error("legacy APNs registration is invalid");
   }
   return [normalizedNodeId, registration];
 }
@@ -274,7 +269,7 @@ function importAndRecordReceipt(params: {
             .where("node_id", "=", nodeId),
         );
         if (existing && tombstone) {
-          throw new Error(`APNs node ${nodeId} has both a registration and deletion tombstone`);
+          throw new Error("APNs state has both a registration and deletion tombstone");
         }
         if (existing) {
           // SQLite is already canonical. Never let a stale retired file replace a
@@ -300,7 +295,7 @@ function importAndRecordReceipt(params: {
           stateDb.selectFrom("apns_registrations").selectAll().where("node_id", "=", nodeId),
         );
         if (!verified) {
-          throw new Error(`SQLite verification failed for APNs node ${nodeId}`);
+          throw new Error("SQLite verification failed for an APNs registration");
         }
         apnsRegistrationFromRow(verified);
       }
@@ -483,7 +478,7 @@ async function migrateWithExclusiveStateOwnership(params: {
           params.env,
         );
         if (registrations.has(nodeId)) {
-          throw new Error(`legacy APNs registration has duplicate node id ${nodeId}`);
+          throw new Error("legacy APNs registration has a duplicate node id");
         }
         registrations.set(nodeId, registration);
       },
@@ -540,7 +535,7 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   try {
     if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) {
-      throw new Error(`legacy APNs source reappeared during import: ${sourcePath}`);
+      throw new Error("legacy APNs source reappeared during import");
     }
     await removePath({ ...params, sourcePath: claimPath });
     markSourceRemoved(result.sourceKey, params.env);
