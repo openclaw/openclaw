@@ -151,29 +151,31 @@ function isSuccessfulRecentRun(run, nowMs) {
 const CI_GATE_CHECK_NAME = "openclaw/ci-gate";
 
 /**
- * True when this run's own openclaw/ci-gate check already succeeded. The gate
- * job needs every selected lane and fails on any non-success result, so a
- * successful gate bound to this run's check suite proves the merge-relevant
+ * True when this run's own openclaw/ci-gate job already succeeded on the
+ * run's CURRENT attempt. The gate job needs every selected lane and fails on
+ * any non-success result, so a successful gate proves the merge-relevant
  * outcome minutes before post-gate stragglers (timing summaries, artifact
- * uploads) let the run itself reach completed.
+ * uploads) let the run itself reach completed. Check suites survive reruns,
+ * so binding goes through the attempt-scoped jobs listing: the job must carry
+ * the run's own run_attempt — a prior attempt's gate success can never vouch
+ * for a rerun that has not reached its gate yet.
  */
-export function hasSuccessfulCiGateCheck(run, ciGateCheckRuns, nowMs) {
-  if (!run?.check_suite_id || !Array.isArray(ciGateCheckRuns)) {
+export function hasSuccessfulCiGateJob(run, ciGateJobs, nowMs) {
+  if (!run?.id || !Array.isArray(ciGateJobs)) {
     return false;
   }
-  return ciGateCheckRuns.some((checkRun) => {
-    if (checkRun?.name !== CI_GATE_CHECK_NAME) {
+  const runAttempt = run.run_attempt ?? 1;
+  return ciGateJobs.some((job) => {
+    if (job?.name !== CI_GATE_CHECK_NAME) {
       return false;
     }
-    if (checkRun?.status !== "completed" || checkRun?.conclusion !== "success") {
+    if (job?.run_id !== run.id || (job?.run_attempt ?? 1) !== runAttempt) {
       return false;
     }
-    // Exact attempt binding: the check suite ties the gate to this run, so a
-    // stale success from a previous attempt can never vouch for a rerun.
-    if (checkRun?.check_suite?.id !== run.check_suite_id) {
+    if (job?.status !== "completed" || job?.conclusion !== "success") {
       return false;
     }
-    const completedAtMs = Date.parse(String(checkRun?.completed_at ?? ""));
+    const completedAtMs = Date.parse(String(job?.completed_at ?? ""));
     return (
       Number.isFinite(completedAtMs) &&
       completedAtMs >= nowMs - HOSTED_GATE_MAX_AGE_MS &&
@@ -182,11 +184,11 @@ export function hasSuccessfulCiGateCheck(run, ciGateCheckRuns, nowMs) {
   });
 }
 
-function isGateProvenInProgressRun(run, ciGateCheckRuns, nowMs) {
+function isGateProvenInProgressRun(run, ciGateJobs, nowMs) {
   return (
     (run?.status === "in_progress" || run?.status === "queued") &&
     isRecentRun(run, nowMs) &&
-    hasSuccessfulCiGateCheck(run, ciGateCheckRuns, nowMs)
+    hasSuccessfulCiGateJob(run, ciGateJobs, nowMs)
   );
 }
 
@@ -213,14 +215,14 @@ function successfulRunOrThrow(
   runs,
   workflowName,
   sha,
-  { allowManual = true, nowMs = Date.now(), ciGateCheckRuns = [] } = {},
+  { allowManual = true, nowMs = Date.now(), ciGateJobs = [] } = {},
 ) {
   const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual);
   const run = workflowName === "CI" ? preferredCiRun(matchingRuns, nowMs) : latestRun(matchingRuns);
   if (isSuccessfulRecentRun(run, nowMs)) {
     return run;
   }
-  if (workflowName === "CI" && isGateProvenInProgressRun(run, ciGateCheckRuns, nowMs)) {
+  if (workflowName === "CI" && isGateProvenInProgressRun(run, ciGateJobs, nowMs)) {
     return run;
   }
   throw new Error(
@@ -312,7 +314,7 @@ export function collectHostedGateEvidence({
   pullRequestHeadBranch = "",
   pullRequestHeadRepository = "",
   workflowRuns,
-  ciGateCheckRuns = [],
+  ciGateJobs = [],
   changelogOnly = false,
   nowMs = Date.now(),
 }) {
@@ -330,7 +332,7 @@ export function collectHostedGateEvidence({
           allowManual,
           nowMs,
           // Gate proof only vouches for the exact head under verification.
-          ciGateCheckRuns: evidenceSha === sha ? ciGateCheckRuns : [],
+          ciGateJobs: evidenceSha === sha ? ciGateJobs : [],
         }),
       );
     }
@@ -524,17 +526,25 @@ function loadPullRequestCommitShas(repo, { baseSha, headSha }) {
   return shas;
 }
 
-function loadCiGateCheckRuns(repo, sha) {
-  const payload = JSON.parse(
-    execGhApiRead(
-      `repos/${repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(CI_GATE_CHECK_NAME)}&per_page=20`,
-      {
+function loadCiGateJobs(repo, workflowRuns, sha, nowMs = Date.now()) {
+  // Only an in-progress exact-head CI run can benefit from gate proof; fetch
+  // its latest-attempt jobs (filter=latest is attempt-scoped) on demand.
+  const candidates = workflowRuns.filter(
+    (run) =>
+      run?.name === "CI" &&
+      run?.head_sha === sha &&
+      (run?.status === "in_progress" || run?.status === "queued") &&
+      isRecentRun(run, nowMs),
+  );
+  return candidates.flatMap((run) => {
+    const payload = JSON.parse(
+      execGhApiRead(`repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
-      },
-    ),
-  );
-  return Array.isArray(payload?.check_runs) ? payload.check_runs : [];
+      }),
+    );
+    return Array.isArray(payload?.jobs) ? payload.jobs : [];
+  });
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -555,6 +565,7 @@ function main(argv = process.argv.slice(2)) {
   if (headSha !== args.sha) {
     throw new Error(`PR #${args.pr} head changed from ${args.sha} to ${headSha}.`);
   }
+  const workflowRuns = loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch);
   const evidence = collectHostedGateEvidence({
     sha: args.sha,
     pr: args.pr,
@@ -562,8 +573,8 @@ function main(argv = process.argv.slice(2)) {
     pullRequestCommitShas: loadPullRequestCommitShas(args.repo, { baseSha, headSha }),
     pullRequestHeadBranch: headBranch,
     pullRequestHeadRepository: headRepository,
-    workflowRuns: loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch),
-    ciGateCheckRuns: loadCiGateCheckRuns(args.repo, args.sha),
+    workflowRuns,
+    ciGateJobs: loadCiGateJobs(args.repo, workflowRuns, args.sha),
     changelogOnly: args.changelogOnly,
   });
   const evidenceHeadSha = evidence.evidenceHeadSha ?? args.sha;
