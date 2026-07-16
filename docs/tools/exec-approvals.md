@@ -244,9 +244,7 @@ Configure the STOP list in `openclaw.json`, not `exec-approvals.json`:
 {
   tools: {
     exec: {
-      denylist: [
-        { pattern: "git push*--force*", reason: "history rewrite" },
-      ],
+      denylist: [{ pattern: "git push*--force*", reason: "history rewrite" }],
     },
   },
 }

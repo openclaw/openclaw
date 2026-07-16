@@ -7,8 +7,8 @@ import {
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
-import type { ExecDenylistEntry } from "../infra/exec-approvals-denylist.js";
 import { createDedupeCache } from "../infra/dedupe.js";
+import type { ExecDenylistEntry } from "../infra/exec-approvals-denylist.js";
 import {
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
