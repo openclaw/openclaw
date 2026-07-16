@@ -363,17 +363,24 @@ function normalizeBackupFilterPath(value: string): string {
   return value.replaceAll("\\", "/").replace(/\/+$/u, "");
 }
 
-function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
+const REINSTALLABLE_STATE_ROOTS = new Set(["dev", "git", "npm", "npm-runtime", "tools"]);
+
+function buildStateBackupFilter(stateDir: string): (filePath: string) => boolean {
   const normalizedStateDir = normalizeBackupFilterPath(stateDir);
-  const extensionsPrefix = `${normalizedStateDir}/extensions/`;
+  const statePrefix = `${normalizedStateDir}/`;
 
   return (filePath: string): boolean => {
     const normalizedFilePath = normalizeBackupFilterPath(filePath);
-    if (!normalizedFilePath.startsWith(extensionsPrefix)) {
+    if (!normalizedFilePath.startsWith(statePrefix)) {
       return true;
     }
 
-    return !normalizedFilePath.slice(extensionsPrefix.length).split("/").includes("node_modules");
+    const segments = normalizedFilePath.slice(statePrefix.length).split("/");
+    if (REINSTALLABLE_STATE_ROOTS.has(segments[0] ?? "")) {
+      return false;
+    }
+
+    return segments[0] !== "extensions" || !segments.includes("node_modules");
   };
 }
 
@@ -493,7 +500,7 @@ async function listStateSqlitePaths(params: {
 }): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
   const snapshotPaths = new Set<string>();
   const discoveredSourcePaths = new Set<string>();
-  const extensionsFilter = buildExtensionsNodeModulesFilter(params.stateDir);
+  const stateFilter = buildStateBackupFilter(params.stateDir);
   async function visit(dir: string): Promise<void> {
     let entries: import("node:fs").Dirent[];
     try {
@@ -509,12 +516,12 @@ async function listStateSqlitePaths(params: {
         continue;
       }
       if (entry.isDirectory()) {
-        if (extensionsFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
+        if (stateFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
           await visit(entryPath);
         }
       } else if (
         entry.isFile() &&
-        extensionsFilter(entryPath) &&
+        stateFilter(entryPath) &&
         !isStatePackageContentPath(entryPath, params.stateDir)
       ) {
         const resolvedEntryPath = path.resolve(entryPath);
@@ -722,9 +729,7 @@ export async function createBackupArchive(
     await writeJson(manifestPath, manifest, { trailingNewline: true });
 
     const tar = await loadTarRuntime();
-    const extensionsFilter = stateAsset
-      ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
-      : undefined;
+    const stateFilter = stateAsset ? buildStateBackupFilter(stateAsset.sourcePath) : undefined;
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
     // node-tar invokes filters from async stat callbacks, so throwing inside
@@ -740,7 +745,7 @@ export async function createBackupArchive(
       if (resolvedEntryPath === manifestPath) {
         return true;
       }
-      if (extensionsFilter && !extensionsFilter(entryPath)) {
+      if (stateFilter && !stateFilter(entryPath)) {
         return false;
       }
       const sqliteSourceKind = stateAsset

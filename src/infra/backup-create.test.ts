@@ -1369,7 +1369,7 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("omits installed plugin node_modules from the real archive while keeping plugin files", async () => {
+  it("omits reinstallable runtime trees and plugin dependencies while keeping plugin files", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -1387,6 +1387,14 @@ describe("createBackupArchive", () => {
         await fs.mkdir(path.join(stateDir, "npm", "projects", "demo", "node_modules", "dep"), {
           recursive: true,
         });
+        for (const managedRoot of ["dev", "git", "npm-runtime", "tools"]) {
+          await fs.mkdir(path.join(stateDir, managedRoot, "runtime"), { recursive: true });
+          await fs.writeFile(
+            path.join(stateDir, managedRoot, "runtime", "fixture.sqlite"),
+            "reinstallable runtime content\n",
+            "utf8",
+          );
+        }
         await fs.writeFile(
           path.join(stateDir, "extensions", "demo", "openclaw.plugin.json"),
           '{"id":"demo"}\n',
@@ -1436,7 +1444,15 @@ describe("createBackupArchive", () => {
         expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
         expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
         expect(entrySuffixes).toContain("/state/node_modules/root-dep/fixture.sqlite");
-        expect(entrySuffixes).toContain("/state/npm/projects/demo/node_modules/dep/fixture.sqlite");
+        for (const managedRoot of ["dev", "git", "npm", "npm-runtime", "tools"]) {
+          expect(
+            entrySuffixes.some(
+              (entry) =>
+                entry === `/state/${managedRoot}` || entry.startsWith(`/state/${managedRoot}/`),
+            ),
+            managedRoot,
+          ).toBe(false);
+        }
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
