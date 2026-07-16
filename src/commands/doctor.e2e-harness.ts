@@ -313,11 +313,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       accountIds: {},
       hasLegacy: false,
     },
-    execApprovals: {
-      sourcePath: "/tmp/state/exec-approvals.legacy.json",
-      targetPath: "/tmp/state/exec-approvals.json",
-      hasLegacy: false,
-    },
     channelPlans: {
       hasLegacy: false,
       plans: [],
