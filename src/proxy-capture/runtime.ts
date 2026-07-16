@@ -110,7 +110,7 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
   "session",
 ];
 
-function parseDeclaredCaptureContentLength(raw: string | null | undefined): number | undefined {
+function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigint | undefined {
   if (raw === null || raw === undefined) {
     return undefined;
   }
@@ -118,8 +118,7 @@ function parseDeclaredCaptureContentLength(raw: string | null | undefined): numb
   if (!/^\d+$/.test(trimmed)) {
     return undefined;
   }
-  const declaredLength = Number(trimmed);
-  return Number.isSafeInteger(declaredLength) ? declaredLength : undefined;
+  return BigInt(trimmed);
 }
 
 // Runtime capture records HTTP/fetch and websocket events into the SQLite store,
@@ -581,7 +580,10 @@ export function captureHttpExchange(
       ? params.response.headers.get("content-length")
       : undefined,
   );
-  if (declaredLength !== undefined && declaredLength > MAX_CAPTURED_RESPONSE_BODY_BYTES) {
+  if (
+    declaredLength !== undefined &&
+    declaredLength > BigInt(MAX_CAPTURED_RESPONSE_BODY_BYTES)
+  ) {
     recordResponseMetadataOnly("too-large");
     return;
   }

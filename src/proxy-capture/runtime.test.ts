@@ -405,6 +405,32 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
+  it("skips capturing decimal Content-Length values above the safe integer range", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.openai.com/v1/files/huge",
+        method: "GET",
+        response: new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-length": "9007199254740993",
+          },
+        }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
+    expect(response).not.toHaveProperty("dataText");
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
   it("streams non-decimal Content-Length values through the body cap", async () => {
     initializeDebugProxyCapture("test", settings, deps);
     captureHttpExchange(
