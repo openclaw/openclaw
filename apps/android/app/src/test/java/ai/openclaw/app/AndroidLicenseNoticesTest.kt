@@ -38,6 +38,7 @@ class AndroidLicenseNoticesTest {
       listOf(
         "AndroidX Room",
         "AndroidX Wear Compose",
+        "AndroidX Wear Input",
         "Bouncy Castle Provider",
         "Coil",
         "CommonMark Java",

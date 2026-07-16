@@ -8024,6 +8024,16 @@
       "translated": "시작 중…"
     },
     {
+      "id": "native.android.32d12d11c78103a6",
+      "source": "Current session",
+      "translated": "현재 세션"
+    },
+    {
+      "id": "native.android.f046fd499c8bf63a",
+      "source": "Session",
+      "translated": "세션"
+    },
+    {
       "id": "native.android.f392ee2d50d6b7ce",
       "source": "ask OpenClaw $prompt",
       "translated": "OpenClaw에 $prompt 요청"

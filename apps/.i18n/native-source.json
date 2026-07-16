@@ -12834,6 +12834,22 @@
       "id": "native.android.eef69ee3eb23cc1b"
     },
     {
+      "kind": "conditional-branch",
+      "line": 150,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/wear/NodeRuntimeWearConversationSource.kt",
+      "source": "Current session",
+      "surface": "android",
+      "id": "native.android.32d12d11c78103a6"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 150,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/wear/NodeRuntimeWearConversationSource.kt",
+      "source": "Session",
+      "surface": "android",
+      "id": "native.android.f046fd499c8bf63a"
+    },
+    {
       "kind": "resource-item",
       "line": 3,
       "path": "apps/android/app/src/main/res/values/assistant.xml",

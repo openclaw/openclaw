@@ -1061,6 +1061,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Sending…" to R.string.native_b8ed5279e897be5d,
     "Sent — confirming delivery…" to R.string.native_6ea82f807eb2e4a3,
     "Server error" to R.string.native_dfe0c2e802b1ff63,
+    "Session" to R.string.native_6959b4159575d8dd,
     "Session Activity" to R.string.native_ff4d6b7484fbfc1f,
     "Session History" to R.string.native_edeead3f1961f9b8,
     "Session Search" to R.string.native_5a7a1c2ec168fbbf,

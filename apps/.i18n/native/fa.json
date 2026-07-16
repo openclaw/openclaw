@@ -8024,6 +8024,16 @@
       "translated": "در حال راه‌اندازی…"
     },
     {
+      "id": "native.android.32d12d11c78103a6",
+      "source": "Current session",
+      "translated": "نشست فعلی"
+    },
+    {
+      "id": "native.android.f046fd499c8bf63a",
+      "source": "Session",
+      "translated": "نشست"
+    },
+    {
       "id": "native.android.f392ee2d50d6b7ce",
       "source": "ask OpenClaw $prompt",
       "translated": "از OpenClaw بپرس $prompt"
