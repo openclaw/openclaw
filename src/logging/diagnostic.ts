@@ -902,6 +902,9 @@ export function logSessionStateChange(
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  // Natural session transition clears the noop-recovery cooldown so the
+  // heartbeat re-evaluates the new processing generation on its own terms.
+  state.lastNoopRecoveryAtMs = undefined;
   if (params.state === "processing" && prevState !== "processing") {
     state.activeQueuedTurn = state.queueDepth > 0;
   }
@@ -948,6 +951,7 @@ export function markDiagnosticSessionProgress(params: SessionRef) {
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  state.lastNoopRecoveryAtMs = undefined;
   markActivity();
 }
 
@@ -1333,6 +1337,18 @@ export function startDiagnosticHeartbeat(
           abortThresholdMs: stuckSessionAbortMs,
         });
         if (!classification || shouldDeferRecovery) {
+          continue;
+        }
+        // Defer recovery for sessions that recently returned noop/no_active_work
+        // so repeated heartbeat ticks do not keep attempting fruitless recovery
+        // while a session transitions to a new processing generation.
+        if (
+          state.lastNoopRecoveryAtMs &&
+          recoveryObservationNow - state.lastNoopRecoveryAtMs < stuckSessionWarnMs
+        ) {
+          diag.debug(
+            `heartbeat: deferring recovery for ${state.sessionKey ?? state.sessionId ?? "unknown"}: last noop recovery ${Math.round((recoveryObservationNow - state.lastNoopRecoveryAtMs) / 1000)}s ago`,
+          );
           continue;
         }
         const activeAbortEligible =

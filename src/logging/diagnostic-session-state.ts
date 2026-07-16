@@ -10,6 +10,11 @@ export type SessionState = {
   generation?: number;
   lastStuckWarnAgeMs?: number;
   lastLongRunningWarnAgeMs?: number;
+  /** When recovery last returned noop/no_active_work, the heartbeat defers
+   *  the next attempt until the session transitions naturally (generation
+   *  bump via logSessionStateChange or queue activity). Cleared when the
+   *  session makes progress via markDiagnosticSessionProgress. */
+  lastNoopRecoveryAtMs?: number;
   state: SessionStateValue;
   queueDepth: number;
   activeQueuedTurn?: boolean;

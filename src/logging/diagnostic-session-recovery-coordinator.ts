@@ -153,6 +153,14 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  // When recovery found no active work, mark the cooldown so the heartbeat
+  // loop defers the next attempt until the session transitions naturally.
+  // Must be set after the idle transition above so the cooldown persists.
+  if (params.outcome.status === "noop" && params.outcome.reason === "no_active_work") {
+    state.lastNoopRecoveryAtMs = Date.now();
+  } else {
+    state.lastNoopRecoveryAtMs = undefined;
+  }
   const preserveQueuedIdleWork =
     params.request.expectedState === "idle" && recoveryOutcomeHasQueuedLaneWork(params.outcome);
   state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)

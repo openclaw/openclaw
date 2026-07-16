@@ -722,6 +722,41 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoveryRequests.map((event) => event.ageMs)).toEqual([60_000, 90_000]);
   });
 
+  it("defers subsequent heartbeat recovery after noop/no_active_work outcome", () => {
+    const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    vi.setSystemTime(0);
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 90_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    // Bypass the automatic clearing in logSessionStateChange: directly mark
+    // the session as having returned noop/no_active_work at the exact moment
+    // it became stuck, so the heartbeat defers rather than retrying recovery.
+    const state = getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" });
+    state.lastNoopRecoveryAtMs = 90_000;
+
+    // Advance past stuckSessionWarnMs (90s) + one heartbeat interval (30s).
+    // Tick 4 at 120s: ageMs=120_000 > 90_000 → stuck, but
+    // 120_000 - 90_000 = 30_000 < 90_000 → cooldown active → deferred.
+    vi.advanceTimersByTime(121_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+
+    // Advance two more ticks (60s) so the cooldown expires.
+    // Tick 5 at 150s: 150_000 - 90_000 = 60_000 < 90_000 → deferred.
+    // Tick 6 at 180s: 180_000 - 90_000 = 90_000, not < 90_000 → recovery.
+    vi.advanceTimersByTime(60_000);
+    expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+  });
+
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
