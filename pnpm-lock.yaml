@@ -438,6 +438,9 @@ importers:
       google-auth-library:
         specifier: 10.9.0
         version: 10.9.0
+      undici:
+        specifier: 8.5.0
+        version: 8.5.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

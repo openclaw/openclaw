@@ -1,4 +1,6 @@
 // Anthropic Vertex tests cover stream runtime plugin behavior.
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
@@ -171,7 +173,7 @@ describe("createAnthropicVertexStreamFn", () => {
     });
   });
 
-  it("uses native fetch for file-backed ADC without mutating the global window", () => {
+  it("uses provider-local proxy-aware fetch without mutating the global window", async () => {
     const { deps, anthropicVertexCtorMock, googleAuthCtorMock, googleAuthClient } =
       createStreamDeps();
     const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -181,9 +183,54 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(googleAuthCtorMock).toHaveBeenCalledWith({
       scopes: ["https://www.googleapis.com/auth/cloud-platform"],
       clientOptions: {
-        transporterOptions: { fetchImplementation: globalThis.fetch },
+        transporterOptions: { fetchImplementation: expect.any(Function) },
       },
     });
+    const authOptions = googleAuthCtorMock.mock.calls[0]?.[0] as
+      | {
+          clientOptions?: {
+            transporterOptions?: { fetchImplementation?: typeof globalThis.fetch };
+          };
+        }
+      | undefined;
+    const fetchImplementation = authOptions?.clientOptions?.transporterOptions?.fetchImplementation;
+    expect(fetchImplementation).not.toBe(globalThis.fetch);
+
+    let proxyHit = false;
+    const proxy = createServer((_request, response) => {
+      proxyHit = true;
+      response.end("proxied");
+    });
+    proxy.on("connect", (_request, socket) => {
+      proxyHit = true;
+      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      socket.once("data", () => {
+        socket.end("HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nproxied");
+      });
+    });
+    proxy.listen(0, "127.0.0.1");
+    await once(proxy, "listening");
+    const address = proxy.address();
+    if (!address || typeof address === "string" || !fetchImplementation) {
+      proxy.close();
+      throw new Error("Expected local proxy and Google auth fetch implementation");
+    }
+    const proxyUrl = `http://127.0.0.1:${address.port}`;
+    vi.stubEnv("HTTP_PROXY", proxyUrl);
+    vi.stubEnv("http_proxy", proxyUrl);
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
+    try {
+      const response = await fetchImplementation("http://vertex-token.invalid/token", {
+        agent: {},
+      } as never);
+      expect(await response.text()).toBe("proxied");
+      expect(proxyHit).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      proxy.close();
+      await once(proxy, "close");
+    }
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
       googleAuth: googleAuthClient,
       projectId: "vertex-project",

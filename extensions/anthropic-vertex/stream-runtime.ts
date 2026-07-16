@@ -22,9 +22,25 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
 
 const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+
+// Proxy settings are process-stable. Reuse one dispatcher so auth requests do
+// not leak sockets while avoiding gaxios's broken node-fetch dynamic import.
+let googleAuthDispatcher: EnvHttpProxyAgent | undefined;
+
+const googleAuthFetch: typeof globalThis.fetch = (input, init) => {
+  googleAuthDispatcher ??= new EnvHttpProxyAgent();
+  const fetchInit = { ...init } as Parameters<typeof undiciFetch>[1] & { agent?: unknown };
+  delete fetchInit.agent;
+  fetchInit.dispatcher = googleAuthDispatcher;
+  return undiciFetch(
+    input as Parameters<typeof undiciFetch>[0],
+    fetchInit,
+  ) as unknown as ReturnType<typeof globalThis.fetch>;
+};
 
 type AnthropicVertexTransportOptions = ProviderStreamOptions & {
   client?: unknown;
@@ -141,12 +157,12 @@ export function createAnthropicVertexStreamFn(
   baseURL?: string,
   deps: AnthropicVertexStreamDeps = defaultAnthropicVertexStreamDeps,
 ): StreamFn {
-  // GoogleAuth carries clientOptions into file-backed ADC clients. Keep native
-  // fetch provider-local; a window shim changes browser detection process-wide.
+  // GoogleAuth carries clientOptions into file-backed ADC clients. Keep the
+  // proxy-aware transport provider-local; a window shim changes detection globally.
   const googleAuth = new deps.GoogleAuth({
     scopes: [GOOGLE_CLOUD_PLATFORM_SCOPE],
     clientOptions: {
-      transporterOptions: { fetchImplementation: globalThis.fetch },
+      transporterOptions: { fetchImplementation: googleAuthFetch },
     },
   });
   const client = new deps.AnthropicVertex({
