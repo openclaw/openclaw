@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/baseten-provider",
-  "version": "2026.7.2",
+  "version": "2026.7.2-beta.2",
   "description": "OpenClaw Baseten provider plugin.",
   "repository": {
     "type": "git",
@@ -18,13 +18,13 @@
       "clawhubSpec": "clawhub:@openclaw/baseten-provider",
       "npmSpec": "@openclaw/baseten-provider",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.7.2"
+      "minHostVersion": ">=2026.7.2-beta.2"
     },
     "compat": {
-      "pluginApi": ">=2026.7.2"
+      "pluginApi": ">=2026.7.2-beta.2"
     },
     "build": {
-      "openclawVersion": "2026.7.2",
+      "openclawVersion": "2026.7.2-beta.2",
       "bundledDist": false
     },
     "release": {

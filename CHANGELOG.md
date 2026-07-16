@@ -2,7 +2,16 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
+## 2026.7.2
+
+### Highlights
+
+- **Remote coding sessions:** run Control UI sessions on cloud workers, open Codex and Claude catalog sessions in terminals on their owning hosts, and resume OpenCode and Pi sessions directly in a terminal. (#107670, #107086, #107200)
+- **Native automation and nodes:** bring Automations parity to mobile, add foreground Voice Wake on Android, and expose camera, location, and notification capabilities from headless Linux nodes. (#106355, #107081, #107193)
+- **Safer channel operation:** prevent Telegram durable-ingress loss after restarts, keep Signal stop and approval controls responsive during active turns, and stop channel allowlists from granting owner access. (#107288, #107422, #107403) Thanks @obviyus, @arduano, and @yetval.
+- **Guided Control UI setup:** configure model providers from Settings, onboard channels through a guided setup page, and choose images and models while creating sessions. (#106490, #106469, #107358) Thanks @alexandre-leng and @fuller-stack-dev.
+- **Gateway and session recovery:** prevent restart admission from wedging the Gateway, recover reply sessions after finalization stalls, and keep one-shot cron jobs enabled through lifecycle claim races. (#107339, #106792, #107236) Thanks @obviyus, @joshavant, @charliemeyer2000, and @SL4N.
+- **Install and packaging:** add Linux deb and AppImage bundles with Gateway guidance, publish them from stable main-based releases, and let Windows installs continue immediately after winget adds Node.js. (#106533, #106891, #106862)
 
 ### Changes
 
@@ -39,6 +48,20 @@ Docs: https://docs.openclaw.ai
 - **Gateway TTS playback:** add an operator-scoped `tts.speak` RPC that returns configured-provider speech as inline whole-clip audio for remote clients. (#100708, #100770)
 - **Workboard dispatch cap:** add a request-scoped `--max-starts` override while preserving the default cap, sequential starts, and one-card-per-owner guard. (#100174) Thanks @souvikDevloper.
 - **Plugin install provenance warnings:** require explicit `--force` acknowledgement for arbitrary executable plugin sources in CLI and chat installs, keep trusted ClawHub, bundled, official-catalog, and tracked-update flows frictionless, and restrict Crestodian installs to trusted sources. (#102197) Thanks @jesse-merhi.
+- **Cloud workers:** add session placement, dispatch, and worker-turn routing for remote session execution. (#106332)
+- **Paired-node coding agents:** discover OpenCode and Pi sessions and continue Codex and Claude catalog sessions through streaming CLI agent runs. (#106941, #106927, #105833)
+- **Catalog sessions:** create eligible catalog sessions directly from the Control UI sidebar. (#105810) Thanks @fuller-stack-dev.
+- **Managed worktrees:** configure cleanup limits by count and total size from Settings. (#106224)
+- **Cron history:** serve scheduled-run history from the task ledger. (#106392)
+- **Coding-agent memory:** import Codex and Claude Code memory into the Control UI. (#106406)
+- **MCP isolation:** scope MCP server connections to their requesting session. (#106359) Thanks @obviyus.
+- **Discord voice:** notify agents when voice-channel participants change. (#107004)
+- **Codex usage:** show the signed-in account email alongside app-server usage windows. (#106500)
+- **Skill Workshop:** scan prior session history for conservative, reviewable skill ideas. (#106766)
+- **Task previews:** show the latest tasks from the running-tasks status row. (#107297)
+- **Session changes:** show the active branch and local changed-file state in Control UI sessions. (#106835)
+- **Channel progress:** reserve progress drafts for long-running work and use the model's own preamble as the status headline. (#106026)
+- **Codex CLI:** bump the bundled plugin to Codex CLI 0.144.4.
 
 ### Fixes
 
@@ -296,37 +319,6 @@ Docs: https://docs.openclaw.ai
 - **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi.
 - **Media-store remote downloads:** bound response-header waits and stalled bodies, close abandoned redirect and error responses, and remove partial temp files so hung sources cannot pin callers. (#104624) Thanks @hugenshen.
 - **Cron llama.cpp tool schemas:** keep the model-facing cron declaration schema compatible with llama.cpp while retaining gateway and runtime nonblank validation. Fixes #107449. (#108360) Thanks @lee-xydt.
-
-## 2026.7.2
-
-### Highlights
-
-- **Remote coding sessions:** run Control UI sessions on cloud workers, open Codex and Claude catalog sessions in terminals on their owning hosts, and resume OpenCode and Pi sessions directly in a terminal. (#107670, #107086, #107200)
-- **Native automation and nodes:** bring Automations parity to mobile, add foreground Voice Wake on Android, and expose camera, location, and notification capabilities from headless Linux nodes. (#106355, #107081, #107193)
-- **Safer channel operation:** prevent Telegram durable-ingress loss after restarts, keep Signal stop and approval controls responsive during active turns, and stop channel allowlists from granting owner access. (#107288, #107422, #107403) Thanks @obviyus, @arduano, and @yetval.
-- **Guided Control UI setup:** configure model providers from Settings, onboard channels through a guided setup page, and choose images and models while creating sessions. (#106490, #106469, #107358) Thanks @alexandre-leng and @fuller-stack-dev.
-- **Gateway and session recovery:** prevent restart admission from wedging the Gateway, recover reply sessions after finalization stalls, and keep one-shot cron jobs enabled through lifecycle claim races. (#107339, #106792, #107236) Thanks @obviyus, @joshavant, @charliemeyer2000, and @SL4N.
-- **Install and packaging:** add Linux deb and AppImage bundles with Gateway guidance, publish them from stable main-based releases, and let Windows installs continue immediately after winget adds Node.js. (#106533, #106891, #106862)
-
-### Changes
-
-- **Cloud workers:** add session placement, dispatch, and worker-turn routing for remote session execution. (#106332)
-- **Paired-node coding agents:** discover OpenCode and Pi sessions and continue Codex and Claude catalog sessions through streaming CLI agent runs. (#106941, #106927, #105833)
-- **Catalog sessions:** create eligible catalog sessions directly from the Control UI sidebar. (#105810) Thanks @fuller-stack-dev.
-- **Managed worktrees:** configure cleanup limits by count and total size from Settings. (#106224)
-- **Cron history:** serve scheduled-run history from the task ledger. (#106392)
-- **Coding-agent memory:** import Codex and Claude Code memory into the Control UI. (#106406)
-- **MCP isolation:** scope MCP server connections to their requesting session. (#106359) Thanks @obviyus.
-- **Discord voice:** notify agents when voice-channel participants change. (#107004)
-- **Codex usage:** show the signed-in account email alongside app-server usage windows. (#106500)
-- **Skill Workshop:** scan prior session history for conservative, reviewable skill ideas. (#106766)
-- **Task previews:** show the latest tasks from the running-tasks status row. (#107297)
-- **Session changes:** show the active branch and local changed-file state in Control UI sessions. (#106835)
-- **Channel progress:** reserve progress drafts for long-running work and use the model's own preamble as the status headline. (#106026)
-- **Codex CLI:** bump the bundled plugin to Codex CLI 0.144.4.
-
-### Fixes
-
 - **Terminal sessions:** preserve early keystrokes, enable paired-node terminal actions, authorize paired-node catalog reads, recover after stale Control UI connections, and keep slow clients attached under heavy output. (#107214, #107361, #107410, #107419, #107348) Thanks @vincentkoc and @zw-xysk.
 - **Control UI configuration:** auto-save validated edits, restore autosave gates, show unapplied-restart state, and keep normal content scrolling and selection behavior. (#107458, #107477, #107577, #107349)
 - **Signal recovery:** reconnect after stalled container handshakes, prevent overlapping daemons during restart, and preserve username targets during phone normalization. (#107386, #107409, #107365) Thanks @hugenshen, @ZHOUKAILIAN, @UberKitten, and @ly-wang19.
