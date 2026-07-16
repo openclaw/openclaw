@@ -99,7 +99,7 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const config = readGradiumProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
-      const apiKey = config.apiKey || process.env.GRADIUM_API_KEY;
+      const apiKey = config.apiKey || trimToUndefined(process.env.GRADIUM_API_KEY);
       if (!apiKey) {
         throw new Error("Gradium API key missing");
       }
@@ -124,7 +124,7 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     synthesizeTelephony: async (req) => {
       const config = readGradiumProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
-      const apiKey = config.apiKey || process.env.GRADIUM_API_KEY;
+      const apiKey = config.apiKey || trimToUndefined(process.env.GRADIUM_API_KEY);
       if (!apiKey) {
         throw new Error("Gradium API key missing");
       }

@@ -213,4 +213,26 @@ describe("gradium speech provider", () => {
       }
     }
   });
+
+  it("throws when GRADIUM_API_KEY is whitespace only", async () => {
+    const original = process.env.GRADIUM_API_KEY;
+    try {
+      process.env.GRADIUM_API_KEY = "   ";
+      await expect(
+        provider.synthesize({
+          text: "test",
+          cfg: {} as never,
+          providerConfig: {},
+          target: "audio-file",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("Gradium API key missing");
+    } finally {
+      if (original === undefined) {
+        delete process.env.GRADIUM_API_KEY;
+      } else {
+        process.env.GRADIUM_API_KEY = original;
+      }
+    }
+  });
 });
