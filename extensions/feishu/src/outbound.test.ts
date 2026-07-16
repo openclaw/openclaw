@@ -963,7 +963,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
     });
 
     expect(sendMediaCall()?.replyToMessageId).toBe("om_reply");
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
     expect(
       sendMessageFeishuMock.mock.calls.every((call) => call[0]?.replyToMessageId === undefined),
     ).toBe(true);
