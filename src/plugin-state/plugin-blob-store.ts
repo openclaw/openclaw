@@ -38,15 +38,8 @@ export type {
   OpenBlobStoreOptions,
   PluginBlobEntry,
   PluginBlobEntryInfo,
-  PluginBlobOverflowPolicy,
   PluginBlobStore,
 } from "./plugin-blob-store.types.js";
-export { PluginBlobStoreError } from "./plugin-blob-store.types.js";
-export {
-  MAX_PLUGIN_BLOB_BYTES_PER_ENTRY,
-  MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN,
-  MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN,
-} from "./plugin-blob-store.sqlite.js";
 
 type BlobStoreOptionSignature = {
   maxEntries: number;
@@ -163,10 +156,10 @@ function assertConsistentOptions(
   }
 }
 
-function prepareBlob<TMetadata>(params: {
+function prepareBlob(params: {
   key: string;
   bytes: Uint8Array;
-  metadata: TMetadata;
+  metadata: unknown;
   maxBytesPerEntry: number;
   defaultTtlMs?: number;
   opts?: { ttlMs?: number };
@@ -194,13 +187,13 @@ function prepareBlob<TMetadata>(params: {
   };
 }
 
-function parseMetadata<TMetadata>(
+function parseMetadata(
   raw: string,
   operation: PluginBlobStoreOperation,
   env?: NodeJS.ProcessEnv,
-): TMetadata {
+): unknown {
   try {
-    return JSON.parse(raw) as TMetadata;
+    return JSON.parse(raw) as unknown;
   } catch (error) {
     throw new PluginBlobStoreError("Plugin blob entry contains corrupt metadata JSON.", {
       code: "PLUGIN_BLOB_CORRUPT",
@@ -219,7 +212,7 @@ function storedInfoToEntryInfo<TMetadata>(
   const expiresAt = normalizeSqliteNumber(row.expires_at);
   return {
     key: row.entry_key,
-    metadata: parseMetadata<TMetadata>(row.metadata_json, operation, env),
+    metadata: parseMetadata(row.metadata_json, operation, env) as TMetadata,
     sizeBytes: Number(row.size_bytes),
     createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
     ...(expiresAt != null ? { expiresAt } : {}),
@@ -338,7 +331,7 @@ export function createPluginBlobStore<TMetadata>(
         namespace,
         key: validateKey(key, "sweep"),
         validateMetadataJson: (raw) => {
-          parseMetadata<TMetadata>(raw, "sweep", env);
+          parseMetadata(raw, "sweep", env);
         },
         ...(env ? { env } : {}),
       });
@@ -349,7 +342,7 @@ export function createPluginBlobStore<TMetadata>(
         pluginId,
         namespace,
         validateMetadataJson: (raw) => {
-          parseMetadata<TMetadata>(raw, "sweep", env);
+          parseMetadata(raw, "sweep", env);
         },
         ...(env ? { env } : {}),
       }).map((row) => storedInfoToEntryInfo<TMetadata>(row, "sweep", env));
@@ -360,7 +353,7 @@ export function createPluginBlobStore<TMetadata>(
   };
 }
 
-/** Test-only named alias used by the public plugin-state test runtime. */
+/** Test-only named factory exported by the plugin-state test runtime. */
 export const createPluginBlobStoreForTests = createPluginBlobStore;
 
 /** Resets facade signatures and the shared state database handle for tests. */

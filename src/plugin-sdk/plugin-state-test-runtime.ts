@@ -7,7 +7,7 @@ export {
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 export {
-  createPluginBlobStore as createPluginBlobStoreForTests,
+  createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
 } from "../plugin-state/plugin-blob-store.js";
 export { createChannelIngressQueue as createChannelIngressQueueForTests } from "../channels/message/ingress-queue.js";

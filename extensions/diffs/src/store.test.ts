@@ -315,7 +315,9 @@ describe("createDiffsHttpHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(Buffer.from(res.body as Uint8Array).toString("utf8")).toBe("<html>viewer</html>");
+    expect(Buffer.from(res.body as unknown as Uint8Array).toString("utf8")).toBe(
+      "<html>viewer</html>",
+    );
     expect(res.getHeader("content-security-policy")).toContain("default-src 'none'");
     expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
@@ -453,7 +455,9 @@ describe("createDiffsHttpHandler", () => {
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(expectedStatusCode);
       if (expectedStatusCode === 200) {
-        expect(Buffer.from(res.body as Uint8Array).toString("utf8")).toBe("<html>viewer</html>");
+        expect(Buffer.from(res.body as unknown as Uint8Array).toString("utf8")).toBe(
+          "<html>viewer</html>",
+        );
       }
     },
   );

@@ -46,14 +46,14 @@ type CreateStandaloneFileArtifactParams = {
   context?: DiffArtifactContext;
 };
 
-export type DiffStandaloneFileArtifact = {
+type DiffStandaloneFileArtifact = {
   id: string;
   filePath: string;
   expiresAt: string;
   context?: DiffArtifactContext;
 };
 
-export type DiffAuthorizedViewer = {
+type DiffAuthorizedViewer = {
   artifact: DiffArtifactMeta;
   html: Uint8Array;
 };

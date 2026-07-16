@@ -1,13 +1,13 @@
 // Shared validation for plugin-owned keyed JSON and blob stores.
-export const MAX_PLUGIN_STORE_NAMESPACE_BYTES = 128;
-export const MAX_PLUGIN_STORE_KEY_BYTES = 512;
-export const MAX_PLUGIN_STORE_JSON_BYTES = 65_536;
-export const MAX_PLUGIN_STORE_JSON_DEPTH = 64;
+const MAX_PLUGIN_STORE_NAMESPACE_BYTES = 128;
+const MAX_PLUGIN_STORE_KEY_BYTES = 512;
+const MAX_PLUGIN_STORE_JSON_BYTES = 65_536;
+const MAX_PLUGIN_STORE_JSON_DEPTH = 64;
 
 const NAMESPACE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/iu;
 const textEncoder = new TextEncoder();
 
-export type PluginStoreValidationErrors = {
+type PluginStoreValidationErrors = {
   invalid(message: string): Error;
   limit(message: string): Error;
 };
@@ -77,10 +77,11 @@ export function validateOptionalPluginStoreTtlMs(params: {
   label: string;
   errors: PluginStoreValidationErrors;
 }): number | undefined {
-  if (params.value == null) {
+  const value = params.value;
+  if (value == null) {
     return undefined;
   }
-  return validatePluginStorePositiveInteger(params);
+  return validatePluginStorePositiveInteger({ ...params, value });
 }
 
 function assertPlainJsonValue(
