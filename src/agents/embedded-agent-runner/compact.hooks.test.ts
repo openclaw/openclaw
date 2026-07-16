@@ -344,9 +344,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("reuses the matching logical writer lock during direct compaction", async () => {
-    const withSessionWriteLock = vi.fn(
-      async <T>(run: () => Promise<T> | T): Promise<T> => await run(),
-    );
+    const withSessionWriteLockCall = vi.fn();
+    const withSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> => {
+      withSessionWriteLockCall();
+      return await run();
+    };
 
     const result = await withOwnedSessionTranscriptWrites(
       {
@@ -358,7 +360,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
 
     expect(result).toMatchObject({ ok: true, compacted: true });
-    expect(withSessionWriteLock).toHaveBeenCalledOnce();
+    expect(withSessionWriteLockCall).toHaveBeenCalledOnce();
     expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
   });
 
