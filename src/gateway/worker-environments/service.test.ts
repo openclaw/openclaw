@@ -575,6 +575,7 @@ describe("worker environment service", () => {
     expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
       ...binding,
       liveSeq: 1,
+      workspaceResultPending: true,
     });
   });
 
@@ -705,6 +706,7 @@ describe("worker environment service", () => {
       ownerEpoch: identity.ownerEpoch,
       runId: identity.runId,
       liveSeq: 0,
+      workspaceResultPending: true,
     });
 
     await expect(
@@ -817,6 +819,7 @@ describe("worker environment service", () => {
           ownerEpoch: identity.ownerEpoch,
           runId: identity.runId,
           liveSeq: 1,
+          workspaceResultPending: true,
         },
       ],
     ]);
@@ -1157,6 +1160,26 @@ describe("worker environment service", () => {
         "Session session-owned is already attached to worker environment worker-session-owner",
     });
     expect(store.get(secondId)).toMatchObject({ state: "ready", attachedSessionIds: [] });
+  });
+
+  it("requires session reclaim before operator destruction of an attached worker", async () => {
+    const environmentId = "worker-session-reclaim";
+    seedReady(environmentId);
+    const workerService = createService(createProvider());
+    await workerService.attachSession({
+      environmentId,
+      ownerEpoch: 1,
+      sessionId: "session-reclaim",
+    });
+
+    await expect(workerService.destroyUnattached(environmentId)).rejects.toMatchObject({
+      code: "invalid_state",
+      message: "Attached cloud workers must be stopped through sessions.reclaim",
+    });
+    expect(store.get(environmentId)).toMatchObject({
+      state: "attached",
+      attachedSessionIds: ["session-reclaim"],
+    });
   });
 
   it("stops the tunnel after live binding rollback", async () => {
@@ -2450,3 +2473,4 @@ describe("worker environment service", () => {
     } satisfies Partial<WorkerEnvironmentServiceError>);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

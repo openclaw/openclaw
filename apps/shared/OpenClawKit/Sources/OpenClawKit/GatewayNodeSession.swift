@@ -685,13 +685,6 @@ public actor GatewayNodeSession {
         return serverMethods.contains(method)
     }
 
-    public func currentMainSessionKey(
-        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) -> String?
-    {
-        guard self.isCurrentRoute(expectedRoute), self.channel != nil else { return nil }
-        return self.mainSessionKey
-    }
-
     public func waitForCurrentMainSessionKey(
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) async -> String?
     {
@@ -1323,7 +1316,7 @@ extension GatewayNodeSession {
         }
 
         let receiptID = UUID()
-        let task = Task {
+        let task = Task { [self] in
             await Self.invokeWithTimeout(
                 request: request,
                 timeoutMs: timeoutMs,
@@ -1543,13 +1536,7 @@ extension GatewayNodeSession {
                 NSLocalizedDescriptionKey: "paramsJSON not UTF-8",
             ])
         }
-        let raw = try JSONSerialization.jsonObject(with: data)
-        guard let dict = raw as? [String: Any] else {
-            return nil
-        }
-        return dict.reduce(into: [:]) { acc, entry in
-            acc[entry.key] = AnyCodable(entry.value)
-        }
+        return try JSONDecoder().decode([String: AnyCodable].self, from: data)
     }
 
     private func broadcastServerEvent(_ evt: EventFrame) {

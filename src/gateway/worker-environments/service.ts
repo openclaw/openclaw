@@ -175,6 +175,7 @@ export type WorkerSessionPlacementGate = {
     binding: WorkerPlacementTurnBinding & {
       transcriptSeq?: number;
       liveSeq?: number;
+      workspaceResultPending?: boolean;
     },
   ): void;
 };
@@ -901,7 +902,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     });
   };
 
-  const destroy = async (environmentId: string) => {
+  const destroy = async (
+    environmentId: string,
+    destroyOptions: { requireUnattached?: boolean } = {},
+  ) => {
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
@@ -912,6 +916,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       if (inState(record, "destroyed", "failed", "orphaned")) {
         return record;
+      }
+      if (destroyOptions.requireUnattached && record.attachedSessionIds.length > 0) {
+        throw serviceError(
+          "invalid_state",
+          "Attached cloud workers must be stopped through sessions.reclaim",
+        );
       }
       record = store.requestDestroy({ environmentId, state: record.state });
       if (record.state === "requested") {
@@ -1316,6 +1326,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       options.placementStore?.updateAckCursors({
         ...placement,
         liveSeq: result.result.ackedSeq,
+        ...(isTerminalLiveEvent(request) ? { workspaceResultPending: true } : {}),
       });
       recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
     }
@@ -1428,6 +1439,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     create: async (profileId: string, idempotencyKey: string) =>
       project(await create(profileId, idempotencyKey)),
     destroy: async (environmentId: string) => project(await destroy(environmentId)),
+    destroyUnattached: async (environmentId: string) =>
+      project(await destroy(environmentId, { requireUnattached: true })),
     admitWorker: async (admission: WorkerConnectParams["admission"]) => {
       if (stopping) {
         return { ok: false, reason: "environment-unavailable" } as const;
@@ -1550,3 +1563,4 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 }
 
 export type WorkerEnvironmentService = ReturnType<typeof createWorkerEnvironmentService>;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

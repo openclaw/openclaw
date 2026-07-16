@@ -36,7 +36,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error("timed out waiting for condition");
@@ -103,7 +103,11 @@ async function waitForChildExit(
       child.once("exit", (status, signal) => resolve({ status, signal }));
     }),
     new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("timed out waiting for child exit")), timeoutMs);
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for child exit")),
+        timeoutMs,
+      );
+      timer.unref();
     }),
   ]);
 }

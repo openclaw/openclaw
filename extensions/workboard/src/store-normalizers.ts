@@ -1337,3 +1337,4 @@ export function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMeta
   }
   return next;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

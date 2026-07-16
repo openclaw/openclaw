@@ -1133,3 +1133,4 @@ describe("gateway server sessions", () => {
     expect(loadSessionEntry({ agentId: "ops", sessionKey: "main", storePath })).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

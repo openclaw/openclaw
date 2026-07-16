@@ -11,16 +11,19 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,6 +36,7 @@ const worktreeScript = join(repoRoot, "scripts/pr-lib/worktree.sh");
 const lockRef = "refs/openclaw/pr-operation-locks/42";
 const detachedChildren = new WeakSet<ChildProcess>();
 const goneProcessGroups = new Set<number>();
+let templateRepo = "";
 
 // Direct preload affects only the supervisor; operation fixtures keep real clocks.
 // The source assertions below pin the production safety durations being accelerated.
@@ -62,18 +66,33 @@ function spawnDetached(command: string, args: readonly string[], options: SpawnO
   return child;
 }
 
-function createRepo(nestedName?: string) {
-  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
-  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
-  if (nestedName) {
-    mkdirSync(dir);
-  }
+function createTemplateRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-operation-lock-template-"));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   execFileSync("git", ["config", "user.name", "OpenClaw Test"], { cwd: dir });
   execFileSync("git", ["config", "user.email", "test@openclaw.invalid"], { cwd: dir });
   writeFileSync(join(dir, "base.txt"), "base\n");
   execFileSync("git", ["add", "base.txt"], { cwd: dir });
   execFileSync("git", ["commit", "-qm", "base"], { cwd: dir });
+  return dir;
+}
+
+beforeAll(() => {
+  templateRepo = createTemplateRepo();
+});
+
+afterAll(() => {
+  rmSync(templateRepo, { force: true, recursive: true });
+});
+
+function createRepo(nestedName?: string) {
+  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
+  const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
+  if (nestedName) {
+    mkdirSync(dir);
+  }
+  // Preserve per-test Git isolation without paying five setup processes per fixture.
+  cpSync(templateRepo, dir, { recursive: true });
   return dir;
 }
 
@@ -270,7 +289,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
     if (predicate()) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   return false;
 }
@@ -982,6 +1001,27 @@ describePosix("scripts/pr per-PR operation lock", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
+
+  it("reports the child exit code when retaining a failed operation", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-operation.sh", [
+      "acquire_pr_operation_lock 42",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+    expect(refExists(repoDir)).toBe(false);
   });
 
   it("retains the exact owner when supervisor release cannot take the ref lock", async () => {
@@ -1421,6 +1461,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       expect(processGroupExists(operationPgid)).toBe(false);
       expect(result.stderr).toContain("process group remained active after wrapper exit");
+      expect(result.stderr).toContain(`surviving processes in group ${operationPgid}`);
+      expect(result.stderr).toMatch(/^\s+\d+ \d+ sleep$/mu);
+      expect(result.stderr).toContain("process group appears empty at report time");
       expect(result.stderr).toContain(
         `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
       );

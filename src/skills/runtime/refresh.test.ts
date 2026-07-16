@@ -38,6 +38,7 @@ const watchMock = vi.fn(() => {
 });
 
 let refreshModule: typeof import("./refresh.js");
+let refreshTestSupport: typeof import("./refresh.test-support.js");
 
 vi.mock("chokidar", () => ({
   default: { watch: watchMock },
@@ -50,6 +51,7 @@ vi.mock("../loading/plugin-skills.js", () => ({
 describe("ensureSkillsWatcher", () => {
   beforeAll(async () => {
     refreshModule = await import("./refresh.js");
+    refreshTestSupport = await import("./refresh.test-support.js");
   });
 
   beforeEach(() => {
@@ -59,7 +61,7 @@ describe("ensureSkillsWatcher", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    await refreshModule.resetSkillsRefreshForTest();
+    await refreshTestSupport.resetSkillsRefreshForTest();
   });
 
   it("watches skill roots and filters non-skill churn", async () => {
