@@ -221,8 +221,6 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   parentId?: string | null;
   /** Optional finalizer that runs after duplicate detection but before persistence. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  /** Atomically updates a keyed existing row instead of appending a second message. */
-  replaceExistingMessage?: (existing: TMessage, candidate: TMessage) => TMessage | undefined;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
 };
@@ -230,8 +228,6 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 export type TranscriptMessageAppendResult<TMessage> = {
   /** False when idempotency lookup found an existing transcript message. */
   appended: boolean;
-  /** True when an existing idempotent row was updated in place. */
-  updated?: boolean;
   /** Redacted message payload as persisted or replayed from the transcript. */
   message: TMessage;
   /** Existing or newly generated transcript message id. */

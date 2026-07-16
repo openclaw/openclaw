@@ -56,21 +56,19 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
 }
 
 export function buildExpectedTranscriptTurnSessionPatch(params: {
-  appendedMessages: readonly { appended: boolean; updated?: boolean }[];
+  appendedMessages: readonly { appended: boolean }[];
   currentEntry: SessionEntry;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionFile: string;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   touchSessionEntry?: boolean;
 }): Partial<SessionEntry> {
-  const mutatedCount = params.appendedMessages.filter(
-    (message) => message.appended || message.updated === true,
-  ).length;
+  const appendedCount = params.appendedMessages.filter((message) => message.appended).length;
   const acceptedMessage =
-    mutatedCount > 0 ||
+    appendedCount > 0 ||
     (params.expectedSessionState !== undefined &&
       params.appendedMessages.some((message) => !message.appended));
-  const touchUpdatedAt = params.touchSessionEntry === true && mutatedCount > 0 ? Date.now() : 0;
+  const touchUpdatedAt = params.touchSessionEntry === true && appendedCount > 0 ? Date.now() : 0;
   const restartRecoveryTerminalRunIds = params.sessionLifecyclePatch?.restartRecoveryTerminalRunIds
     ? mergeRestartRecoveryTerminalRunIds(
         params.currentEntry.restartRecoveryTerminalRunIds,

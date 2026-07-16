@@ -49,7 +49,6 @@ import {
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
-  replaceTranscriptMessageByEventIdInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
@@ -524,7 +523,11 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return resolveExistingSqliteTranscriptMessage(database, resolved, options, existing);
+      return {
+        appended: false,
+        message: existing.message as TMessage,
+        messageId: existing.messageId,
+      };
     }
   }
 
@@ -563,7 +566,11 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
       options.idempotencyLookup,
     );
     if (existing) {
-      return resolveExistingSqliteTranscriptMessage(database, resolved, options, existing);
+      return {
+        appended: false,
+        message: existing.message as TMessage,
+        messageId: existing.messageId,
+      };
     }
   }
   if (!appended) {
@@ -583,44 +590,6 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
     appended: true,
     message: finalMessage,
     messageId,
-  };
-}
-
-function resolveExistingSqliteTranscriptMessage<TMessage>(
-  database: OpenClawAgentDatabase,
-  resolved: ResolvedTranscriptScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
-  existing: { messageId: string; message: unknown },
-): TranscriptMessageAppendResult<TMessage> {
-  if (!options.replaceExistingMessage) {
-    return {
-      appended: false,
-      message: existing.message as TMessage,
-      messageId: existing.messageId,
-    };
-  }
-  const candidate = options.prepareMessageAfterIdempotencyCheck
-    ? options.prepareMessageAfterIdempotencyCheck(options.message)
-    : options.message;
-  const replacement =
-    candidate === undefined
-      ? undefined
-      : options.replaceExistingMessage(existing.message as TMessage, candidate);
-  const updated =
-    replacement === undefined
-      ? undefined
-      : replaceTranscriptMessageByEventIdInTransaction(
-          database,
-          resolved,
-          existing.messageId,
-          replacement,
-          options,
-        );
-  return {
-    appended: false,
-    ...(updated !== undefined ? { updated: true } : {}),
-    message: updated ?? (existing.message as TMessage),
-    messageId: existing.messageId,
   };
 }
 

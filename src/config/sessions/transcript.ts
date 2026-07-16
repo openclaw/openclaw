@@ -81,7 +81,6 @@ type InternalSessionTranscriptDeliveryMirror =
     };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
-  openclawDeliveryMirror?: InternalSessionTranscriptDeliveryMirror;
   role: "assistant";
 };
 
@@ -584,8 +583,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     const identifiedDeliveryMirror =
       Boolean(explicitIdempotencyKey) && isIdentifiedDeliveryMirror(params.message);
     let latestEquivalentAssistantId: string | undefined;
-    // Identified delivery mirrors dedupe only by key so same-text sends with
-    // different transport identities remain separate rows.
+    // Identified delivery mirrors, including suppressed finals, dedupe only by
+    // key so same-text markers from different source ids remain separate rows.
     const turn = await persistSessionTranscriptTurn(
       {
         sessionId: currentEntry.sessionId,
