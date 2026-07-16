@@ -4,6 +4,7 @@ import {
   createReefOwnerNoticeHandler,
   processReefInboxEntriesInOrder,
   ReefReceiptNotifier,
+  type ReefOwnerNotice,
 } from "./owner-notice.js";
 import type { InboxEntry, ReefDeliveryRejection } from "./types.js";
 
@@ -20,8 +21,12 @@ describe("createReefOwnerNoticeHandler", () => {
     const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.routing.resolveAgentRoute).mockReturnValue({
       agentId: "main",
+      channel: "reef",
       accountId: "default",
       sessionKey: "agent:main:reef:direct:alice",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
     });
     vi.mocked(runtime.system.enqueueSystemEvent).mockReturnValue(true);
     const notify = createReefOwnerNoticeHandler({
@@ -117,7 +122,7 @@ describe("processReefInboxEntriesInOrder", () => {
 
 describe("ReefReceiptNotifier", () => {
   it("wakes once per peer cooldown and tells later retries to stop", async () => {
-    const notify = vi.fn(async () => {});
+    const notify = vi.fn(async (_notice: ReefOwnerNotice) => {});
     const complete = vi.fn();
     let now = 10_000;
     const notifier = new ReefReceiptNotifier(notify, complete, {
