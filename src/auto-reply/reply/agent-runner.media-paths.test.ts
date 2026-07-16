@@ -485,6 +485,31 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
+  it("defers the complete image turn when the active runtime cannot preserve images", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "image_input_unsupported",
+      gatewayHealth: "live",
+    }));
+    const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
+    const followupRun = createMockFollowupRun({ prompt: "inspect this" });
+    followupRun.images = images;
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        followupRun,
+      }),
+    );
+
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock.mock.calls[0]?.[1]).toBe(followupRun);
+  });
+
   it("latches audio only after the active reply operation accepts the steer", async () => {
     const operation = createRegisteredReplyOperation({
       sessionKey: "agent:main:whatsapp:direct:chat-1",

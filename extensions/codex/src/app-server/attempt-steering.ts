@@ -25,12 +25,19 @@ export function createCodexSteeringQueue(params: {
   client: CodexAppServerClient;
   threadId: string;
   turnId: string;
-  answerPendingUserInput: (text: string) => boolean;
+  claimPendingUserInput: () =>
+    | {
+        answer: (text: string) => boolean;
+        cancel: () => boolean;
+      }
+    | undefined;
   signal: AbortSignal;
 }) {
-  type PendingSteerMessage = {
-    text: string;
+  type SteerMessage = {
+    text?: string;
     images?: EmbeddedRunAttemptParams["images"];
+  };
+  type PendingSteerMessage = SteerMessage & {
     resolve: () => void;
     reject: (error: unknown) => void;
   };
@@ -45,7 +52,7 @@ export function createCodexSteeringQueue(params: {
     }
   };
 
-  const sendMessages = async (messages: PendingSteerMessage[]) => {
+  const sendMessages = async (messages: SteerMessage[]) => {
     if (messages.length === 0) {
       return;
     }
@@ -59,15 +66,19 @@ export function createCodexSteeringQueue(params: {
     });
   };
 
-  const enqueueSend = (messages: PendingSteerMessage[]) => {
+  const enqueueSend = (messages: SteerMessage[]) => {
     const send = sendChain.then(() => sendMessages(messages));
-    sendChain = send.catch((error: unknown) => {
+    // A rejected steer means this active turn can no longer accept queued input.
+    // Keep the chain rejected so later messages fall back in order instead of
+    // overtaking the failed message with another turn/steer request.
+    sendChain = send;
+    void send.catch((error: unknown) => {
       embeddedAgentLog.debug("codex app-server queued steer failed", { error });
     });
     return send;
   };
 
-  const flushBatch = () => {
+  const flushBatch = (): Promise<void> => {
     clearBatchTimer();
     const items = batchedMessages;
     batchedMessages = [];
@@ -87,22 +98,46 @@ export function createCodexSteeringQueue(params: {
     return send;
   };
 
+  const flushBatchDetached = () => {
+    void flushBatch().catch(() => undefined);
+  };
+
   return {
     async queue(text: string, options?: CodexSteeringQueueOptions) {
-      if (!options?.images?.length && params.answerPendingUserInput(text)) {
+      const pendingUserInput = params.claimPendingUserInput();
+      if (pendingUserInput) {
+        if (!options?.images?.length) {
+          pendingUserInput.answer(text);
+          return;
+        }
+        // request_user_input blocks the active turn, and its response cannot carry
+        // images. Queue the complete user message first, then cancel the prompt.
+        flushBatchDetached();
+        try {
+          await enqueueSend([{ text, images: options.images }]);
+        } finally {
+          // A rejected steer falls back to a normal follow-up. Release the blocked
+          // turn without partially consuming the user's text in either outcome.
+          pendingUserInput.cancel();
+        }
         return;
       }
       return await new Promise<void>((resolve, reject) => {
-        batchedMessages.push({ text, images: options?.images, resolve, reject });
+        batchedMessages.push({
+          text,
+          images: options?.images,
+          resolve,
+          reject,
+        });
         clearBatchTimer();
         const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
         if (debounceMs === 0) {
-          void flushBatch().catch(() => undefined);
+          flushBatchDetached();
           return;
         }
         batchTimer = setTimeout(() => {
           batchTimer = undefined;
-          void flushBatch().catch(() => undefined);
+          flushBatchDetached();
         }, debounceMs);
       });
     },

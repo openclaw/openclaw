@@ -4,7 +4,7 @@ import type { CodexUserInput } from "./protocol.js";
 
 /** Builds ordered Codex user input for both new turns and same-turn steering. */
 export function buildCodexUserInput(
-  text: string,
+  text: string | undefined,
   images?: EmbeddedRunAttemptParams["images"],
 ): CodexUserInput[] {
   const imageInputs = (images ?? []).map((image): CodexUserInput => {
@@ -17,5 +17,7 @@ export function buildCodexUserInput(
           text_elements: [],
         };
   });
-  return [{ type: "text", text, text_elements: [] }, ...imageInputs];
+  const textInput: CodexUserInput[] =
+    text === undefined ? [] : [{ type: "text", text, text_elements: [] }];
+  return [...textInput, ...imageInputs];
 }
