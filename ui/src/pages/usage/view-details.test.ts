@@ -65,6 +65,12 @@ function mount(
     selectedDays?: string[];
     timeZone?: "local" | "utc";
   } = {},
+  errors: {
+    timeSeries?: string;
+    sessionLogs?: string;
+    onRetryTimeSeries?: () => void;
+    onRetrySessionLogs?: () => void;
+  } = {},
 ) {
   const container = document.createElement("div");
   render(
@@ -72,6 +78,8 @@ function mount(
       session(),
       { points },
       false,
+      errors.timeSeries ?? null,
+      errors.onRetryTimeSeries ?? vi.fn(),
       "per-turn",
       vi.fn(),
       breakdownMode,
@@ -85,6 +93,8 @@ function mount(
       filters.timeZone ?? "local",
       [],
       false,
+      errors.sessionLogs ?? null,
+      errors.onRetrySessionLogs ?? vi.fn(),
       false,
       vi.fn(),
       { roles: [], tools: [], hasTools: false, query: "" },
@@ -260,5 +270,32 @@ describe("renderSessionDetailPanel filtered usage", () => {
       null,
     );
     expect(container.textContent).not.toContain("Invalid Date");
+  });
+
+  it("renders independent retry actions for detail request failures", () => {
+    const onRetryTimeSeries = vi.fn();
+    const onRetrySessionLogs = vi.fn();
+    const container = mount([], null, null, "total", {}, {
+      timeSeries: "timeline unavailable",
+      sessionLogs: "logs unavailable",
+      onRetryTimeSeries,
+      onRetrySessionLogs,
+    });
+
+    const timelineError = container.querySelector<HTMLElement>(".usage-detail-error--timeline");
+    const conversationError = container.querySelector<HTMLElement>(
+      ".usage-detail-error--conversation",
+    );
+    expect(timelineError?.textContent).toContain(
+      "Could not load usage over time: timeline unavailable",
+    );
+    expect(conversationError?.textContent).toContain(
+      "Could not load conversation: logs unavailable",
+    );
+
+    timelineError?.querySelector("button")?.click();
+    conversationError?.querySelector("button")?.click();
+    expect(onRetryTimeSeries).toHaveBeenCalledOnce();
+    expect(onRetrySessionLogs).toHaveBeenCalledOnce();
   });
 });
