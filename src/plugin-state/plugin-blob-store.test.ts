@@ -105,6 +105,86 @@ describe("plugin blob store", () => {
     });
   });
 
+  it("counts expired rows toward physical limits without evicting cleanup metadata", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_500);
+    await withOpenClawTestState({ label: "plugin-blob-expired-quota" }, async (state) => {
+      const rejectingStore = createPluginBlobStore<{ path: string }>(
+        "diffs",
+        options(state.env, { maxEntries: 1, overflowPolicy: "reject-new" }),
+      );
+      await rejectingStore.register(
+        "expired",
+        new Uint8Array([1]),
+        { path: "reject-old" },
+        { ttlMs: 10 },
+      );
+      vi.setSystemTime(2_511);
+
+      await expect(
+        rejectingStore.register("fresh", new Uint8Array([2]), { path: "reject-new" }),
+      ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
+      await expect(rejectingStore.deleteExpiredKey("expired")).resolves.toMatchObject({
+        metadata: { path: "reject-old" },
+      });
+      await expect(
+        rejectingStore.register("fresh", new Uint8Array([2]), { path: "reject-new" }),
+      ).resolves.toBeUndefined();
+
+      const evictingStore = createPluginBlobStore<{ path: string }>(
+        "diffs",
+        options(state.env, {
+          namespace: "evicting",
+          maxEntries: 1,
+          overflowPolicy: "evict-oldest",
+        }),
+      );
+      await evictingStore.register(
+        "expired",
+        new Uint8Array([3]),
+        { path: "evict-old" },
+        { ttlMs: 10 },
+      );
+      vi.setSystemTime(2_522);
+
+      await expect(
+        evictingStore.register("fresh", new Uint8Array([4]), { path: "evict-new" }),
+      ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
+      await expect(evictingStore.deleteExpiredKey("expired")).resolves.toMatchObject({
+        metadata: { path: "evict-old" },
+      });
+
+      const replacingStore = createPluginBlobStore<{ path: string }>(
+        "diffs",
+        options(state.env, {
+          namespace: "replacing",
+          maxBytesPerEntry: 10,
+          maxBytesPerNamespace: 10,
+          overflowPolicy: "evict-oldest",
+        }),
+      );
+      await replacingStore.register(
+        "expired",
+        new Uint8Array(5),
+        { path: "replace-old" },
+        { ttlMs: 10 },
+      );
+      await replacingStore.register("target", new Uint8Array(4), { path: "target-old" });
+      vi.setSystemTime(2_533);
+
+      await expect(
+        replacingStore.register("target", new Uint8Array(6), { path: "target-new" }),
+      ).rejects.toMatchObject({ code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
+      await expect(replacingStore.lookup("target")).resolves.toMatchObject({
+        metadata: { path: "target-old" },
+        sizeBytes: 4,
+      });
+      await expect(replacingStore.deleteExpiredKey("expired")).resolves.toMatchObject({
+        metadata: { path: "replace-old" },
+      });
+    });
+  });
+
   it("validates hard limits and consistent namespace options", async () => {
     await withOpenClawTestState({ label: "plugin-blob-validation" }, async (state) => {
       const store = createPluginBlobStore("diffs", options(state.env, { maxBytesPerEntry: 2 }));
@@ -179,6 +259,24 @@ describe("plugin blob store", () => {
         metadata: { path: "new" },
         bytes: new Uint8Array([2]),
       });
+    });
+  });
+
+  it("lets explicit register overwrite an expired key", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(4_500);
+    await withOpenClawTestState({ label: "plugin-blob-expired-overwrite" }, async (state) => {
+      const store = createPluginBlobStore<{ version: string }>("diffs", options(state.env));
+      await store.register("stable", new Uint8Array([1]), { version: "old" }, { ttlMs: 10 });
+
+      vi.setSystemTime(4_511);
+      await store.register("stable", new Uint8Array([2]), { version: "new" });
+
+      await expect(store.lookup("stable")).resolves.toMatchObject({
+        metadata: { version: "new" },
+        bytes: new Uint8Array([2]),
+      });
+      await expect(store.deleteExpiredKey("stable")).resolves.toBeUndefined();
     });
   });
 

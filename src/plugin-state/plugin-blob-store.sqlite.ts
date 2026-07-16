@@ -175,7 +175,7 @@ function selectExpiredKeyInfo(
 
 function selectLiveDescriptors(
   db: DatabaseSync,
-  params: { pluginId: string; now: number; namespace?: string },
+  params: { pluginId: string; now: number; namespace?: string; excludeKey?: string },
 ): BlobDescriptor[] {
   let query = kysely(db)
     .selectFrom("plugin_blob_entries")
@@ -186,8 +186,43 @@ function selectLiveDescriptors(
   if (params.namespace !== undefined) {
     query = query.where("namespace", "=", params.namespace);
   }
+  if (params.excludeKey !== undefined) {
+    query = query.where("entry_key", "!=", params.excludeKey);
+  }
   return executeSqliteQuerySync(db, query.orderBy("created_at", "asc").orderBy("entry_key", "asc"))
     .rows;
+}
+
+function selectStoredDescriptors(
+  db: DatabaseSync,
+  params: { pluginId: string; namespace?: string },
+): BlobDescriptor[] {
+  let query = kysely(db)
+    .selectFrom("plugin_blob_entries")
+    .select(["entry_key", "namespace", "created_at"])
+    .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
+    .where("plugin_id", "=", params.pluginId);
+  if (params.namespace !== undefined) {
+    query = query.where("namespace", "=", params.namespace);
+  }
+  return executeSqliteQuerySync(db, query.orderBy("created_at", "asc").orderBy("entry_key", "asc"))
+    .rows;
+}
+
+function selectStoredKeyDescriptor(
+  db: DatabaseSync,
+  params: { pluginId: string; namespace: string; key: string },
+): BlobDescriptor | undefined {
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    kysely(db)
+      .selectFrom("plugin_blob_entries")
+      .select(["entry_key", "namespace", "created_at"])
+      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("entry_key", "=", params.key),
+  );
 }
 
 function deleteKey(
@@ -257,28 +292,27 @@ function limitError(message: string, env?: NodeJS.ProcessEnv): PluginBlobStoreEr
 function assertProjectedLimits(params: {
   db: DatabaseSync;
   write: BlobWriteParams;
-  now: number;
-  existing?: PluginBlobStoredEntry;
+  existing?: BlobDescriptor;
 }): void {
-  const namespaceRows = selectLiveDescriptors(params.db, {
+  // Expired rows remain physically stored until their owner claims cleanup
+  // metadata, so hard storage fuses must count them even though reads hide them.
+  const namespaceRows = selectStoredDescriptors(params.db, {
     pluginId: params.write.pluginId,
     namespace: params.write.namespace,
-    now: params.now,
   });
-  const pluginRows = selectLiveDescriptors(params.db, {
+  const pluginRows = selectStoredDescriptors(params.db, {
     pluginId: params.write.pluginId,
-    now: params.now,
   });
   const previousBytes = params.existing ? Number(params.existing.size_bytes) : 0;
   const rowDelta = params.existing ? 0 : 1;
   if (namespaceRows.length + rowDelta > params.write.maxEntries) {
-    throw limitError("Plugin blob namespace reached its live row limit.", params.write.env);
+    throw limitError("Plugin blob namespace reached its stored row limit.", params.write.env);
   }
   if (
     totalBytes(namespaceRows) - previousBytes + params.write.bytes.byteLength >
     params.write.maxBytesPerNamespace
   ) {
-    throw limitError("Plugin blob namespace reached its live byte limit.", params.write.env);
+    throw limitError("Plugin blob namespace reached its stored byte limit.", params.write.env);
   }
   if (pluginRows.length + rowDelta > MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN) {
     throw limitError("Plugin blob store reached its per-plugin row limit.", params.write.env);
@@ -296,23 +330,27 @@ function deleteOldestUntilWithinLimits(params: {
   write: BlobWriteParams;
   now: number;
 }): void {
-  const namespaceRows = selectLiveDescriptors(params.db, {
+  const namespaceRows = selectStoredDescriptors(params.db, {
     pluginId: params.write.pluginId,
     namespace: params.write.namespace,
-    now: params.now,
   });
   let namespaceCount = namespaceRows.length;
   let namespaceBytes = totalBytes(namespaceRows);
   const namespaceKeysToDelete: string[] = [];
-  for (const row of namespaceRows) {
+  // Owner-managed expired rows are not eviction candidates: deleting one would
+  // lose metadata for an external artifact that still needs cleanup.
+  const namespaceCandidates = selectLiveDescriptors(params.db, {
+    pluginId: params.write.pluginId,
+    namespace: params.write.namespace,
+    now: params.now,
+    excludeKey: params.write.key,
+  });
+  for (const row of namespaceCandidates) {
     if (
       namespaceCount <= params.write.maxEntries &&
       namespaceBytes <= params.write.maxBytesPerNamespace
     ) {
       break;
-    }
-    if (row.entry_key === params.write.key) {
-      continue;
     }
     namespaceKeysToDelete.push(row.entry_key);
     namespaceCount -= 1;
@@ -333,27 +371,26 @@ function deleteOldestUntilWithinLimits(params: {
     keys: namespaceKeysToDelete,
   });
 
-  const pluginRows = selectLiveDescriptors(params.db, {
+  const pluginRows = selectStoredDescriptors(params.db, {
     pluginId: params.write.pluginId,
-    now: params.now,
   });
   let pluginCount = pluginRows.length;
   let pluginBytes = totalBytes(pluginRows);
-  const candidates = selectLiveDescriptors(params.db, {
+  // Global hard-cap accounting includes every namespace, but this namespace's
+  // live rows are the only entries its overflow policy may safely evict.
+  const liveNamespaceCandidates = selectLiveDescriptors(params.db, {
     pluginId: params.write.pluginId,
     namespace: params.write.namespace,
     now: params.now,
+    excludeKey: params.write.key,
   });
   const pluginKeysToDelete: string[] = [];
-  for (const row of candidates) {
+  for (const row of liveNamespaceCandidates) {
     if (
       pluginCount <= MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN &&
       pluginBytes <= MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN
     ) {
       break;
-    }
-    if (row.entry_key === params.write.key) {
-      continue;
     }
     pluginKeysToDelete.push(row.entry_key);
     pluginCount -= 1;
@@ -424,9 +461,9 @@ function writeBlob(params: BlobWriteParams, ifAbsent: boolean): boolean {
           // them as occupied so stable-key reuse cannot discard cleanup metadata.
           return false;
         }
-        const existing = selectLiveBlob(db, { ...params, now });
+        const existing = selectStoredKeyDescriptor(db, params);
         if (params.overflowPolicy === "reject-new") {
-          assertProjectedLimits({ db, write: params, now, existing });
+          assertProjectedLimits({ db, write: params, existing });
         }
         upsertBlob(db, params, now);
         if (params.overflowPolicy === "evict-oldest") {
