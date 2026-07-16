@@ -3995,6 +3995,43 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toStrictEqual([]);
   });
 
+  it("reports transport-normalized text only after identified delivery", async () => {
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: "m-normalized",
+      roomId: "!room:example",
+      text,
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sanitizeText: ({ text }) => `[safe] ${text}`,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+    const deliveredPayloads: Array<{ text: string; mediaUrls: string[] }> = [];
+
+    await deliverOutboundPayloadsInternal({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
+    });
+
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "[safe] hello" }));
+    expect(deliveredPayloads).toEqual([{ text: "[safe] hello", mediaUrls: [] }]);
+  });
+
   it("preserves fenced blocks for markdown chunkers in newline mode", async () => {
     const chunker = vi.fn((text: string) => (text ? [text] : []));
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({

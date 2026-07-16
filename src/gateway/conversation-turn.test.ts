@@ -35,7 +35,7 @@ function sentResult(
     to: conversation.target,
     handledBy: "core",
     payload: {},
-    sentText: "hello molty",
+    deliveredText: "hello molty",
     sendResult: {
       channel: "reef",
       to: conversation.target,

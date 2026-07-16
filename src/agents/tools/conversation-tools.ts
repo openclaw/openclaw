@@ -211,7 +211,8 @@ export function createConversationsSendTool(
         deps,
         context,
         conversation,
-        message: sent.deliveredMessage,
+        message,
+        ...(sent.deliveredMessage ? { deliveredMessage: sent.deliveredMessage } : {}),
         turnId,
         outboundMessageId: sent.messageId,
       });

@@ -32,6 +32,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
   projectOutboundPayloadPlanForMirror,
+  type NormalizedOutboundPayload,
 } from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
@@ -94,6 +95,8 @@ type MessageSendParams = {
   /** @internal Use the active adapter directly when already executing inside the Gateway. */
   gatewayOwnedDelivery?: boolean;
   mirror?: OutboundMirror;
+  /** @internal Reports the effective payload only after an identified direct send. */
+  onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   abortSignal?: AbortSignal;
   silent?: boolean;
   parseMode?: "HTML";
@@ -427,6 +430,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaAccess: params.mediaAccess,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       preparedMessageId: params.preparedMessageId,
+      ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
       mirror: params.mirror
         ? {
             ...params.mirror,

@@ -192,6 +192,7 @@ describe("conversation tools", () => {
           messageId: "reef-outbound-1",
           replay: "backing-session",
         },
+        deliveryMirrorUpdateMode: "marker-only",
       }),
     );
   });
@@ -299,7 +300,7 @@ describe("conversation tools", () => {
     const deps = createDeps();
     deps.runMessageAction.mockResolvedValueOnce({
       ...sentResult(),
-      sentText: "[Peer] hello there",
+      deliveredText: "[Peer] hello there",
     });
 
     await createConversationsSendTool({ agentId: "main", config: {} }, deps).execute("send", {
@@ -310,6 +311,7 @@ describe("conversation tools", () => {
     expect(deps.appendAssistantMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "[Peer] hello there",
+        deliveryMirrorUpdateMode: "replace",
       }),
     );
   });

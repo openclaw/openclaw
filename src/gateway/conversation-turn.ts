@@ -144,7 +144,8 @@ export async function runGatewayConversationTurn(
       deps,
       context,
       conversation,
-      message: sent.deliveredMessage,
+      message: params.message,
+      ...(sent.deliveredMessage ? { deliveredMessage: sent.deliveredMessage } : {}),
       turnId: pending.id,
       outboundMessageId: sent.messageId,
     });

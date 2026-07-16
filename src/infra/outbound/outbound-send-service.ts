@@ -26,7 +26,7 @@ import type { GatewayClientMode, GatewayClientName } from "../../utils/message-c
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
-import type { OutboundSendDeps } from "./deliver.js";
+import type { NormalizedOutboundPayload, OutboundSendDeps } from "./deliver.js";
 import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
@@ -124,8 +124,9 @@ async function sendCoreMessage(params: {
   threadId?: string | number;
   queuePolicy: NonNullable<SendMessageParams["queuePolicy"]>;
   payloads?: SendMessageParams["payloads"];
-}): Promise<MessageSendResult> {
-  return await sendMessage({
+}): Promise<{ result: MessageSendResult; deliveredText?: string }> {
+  const deliveredPayloads: NormalizedOutboundPayload[] = [];
+  const result = await sendMessage({
     cfg: params.ctx.cfg,
     to: params.to,
     content: params.message,
@@ -162,7 +163,22 @@ async function sendCoreMessage(params: {
     mediaAccess: params.ctx.mediaAccess,
     preparedMessageId: params.ctx.preparedMessageId,
     gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
+    onDeliveredPayload: (payload) => deliveredPayloads.push(payload),
   });
+  const deliveredText =
+    result.deliveryStatus === "sent" &&
+    deliveredPayloads.every(
+      (payload) => payload.mediaUrls.length === 0 && payload.audioAsVoice !== true,
+    )
+      ? deliveredPayloads
+          .map((payload) => payload.text)
+          .filter((text) => text.trim())
+          .join("\n")
+      : "";
+  return {
+    result,
+    ...(deliveredText ? { deliveredText } : {}),
+  };
 }
 
 async function tryHandleWithPluginAction(params: {
@@ -299,6 +315,8 @@ export async function executeSendAction(params: {
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
+  /** Exact text handed to the direct transport after core normalization and hooks. */
+  deliveredText?: string;
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
@@ -344,7 +362,7 @@ export async function executeSendAction(params: {
     // Prepared payloads and portable presentations need core delivery so queueing,
     // presentation rendering/adaptation, hooks, and mirrors stay uniform. The legacy
     // gateway `send` method accepts text/media only, so materialize its fallback here.
-    const result = await sendCoreMessage({
+    const delivery = await sendCoreMessage({
       ...params,
       message,
       queuePolicy,
@@ -353,8 +371,9 @@ export async function executeSendAction(params: {
 
     return {
       handledBy: "core",
-      payload: result,
-      sendResult: result,
+      payload: delivery.result,
+      ...(delivery.deliveredText ? { deliveredText: delivery.deliveredText } : {}),
+      sendResult: delivery.result,
     };
   }
 
@@ -412,15 +431,16 @@ export async function executeSendAction(params: {
   }
 
   throwIfAborted(params.ctx.abortSignal);
-  const result = await sendCoreMessage({
+  const delivery = await sendCoreMessage({
     ...params,
     queuePolicy,
   });
 
   return {
     handledBy: "core",
-    payload: result,
-    sendResult: result,
+    payload: delivery.result,
+    ...(delivery.deliveredText ? { deliveredText: delivery.deliveredText } : {}),
+    sendResult: delivery.result,
   };
 }
 

@@ -756,6 +756,8 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  /** @internal Reports the effective payload only after an identified platform send. */
+  onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
   /** @internal Runs after each identified platform result, before further fallible work. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
@@ -2219,14 +2221,27 @@ async function deliverOutboundPayloadsCore(
     }
   }
   const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
-  const recordDeliveredMirrorPayload = (
+  const recordDeliveredPayload = (
     payloadSummary: NormalizedOutboundPayload,
     deliveredResults: readonly OutboundDeliveryResult[],
   ): void => {
-    if (!params.mirror || deliveredResults.length === 0) {
+    if (deliveredResults.length === 0) {
       return;
     }
-    deliveredMirrorPayloads.push(payloadSummary);
+    // Post-send observers are bookkeeping only. Never turn an identified
+    // platform delivery into a retryable failure if an observer misbehaves.
+    try {
+      params.onDeliveredPayload?.(payloadSummary);
+    } catch (error) {
+      log.warn("Outbound delivered-payload observer failed after platform send.", {
+        channel,
+        to,
+        error: formatErrorMessage(error),
+      });
+    }
+    if (params.mirror) {
+      deliveredMirrorPayloads.push(payloadSummary);
+    }
   };
   const hookRunner = getGlobalHookRunner();
   // Canonical session key forwarded to internal lifecycle hooks
@@ -2451,7 +2466,7 @@ async function deliverOutboundPayloadsCore(
           status: "sent",
           results: deliveredResults,
         });
-        recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+        recordDeliveredPayload(payloadSummary, deliveredResults);
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
           payload: effectivePayload,
@@ -2492,7 +2507,7 @@ async function deliverOutboundPayloadsCore(
             status: "sent",
             results: deliveredResults,
           });
-          recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+          recordDeliveredPayload(payloadSummary, deliveredResults);
         } else {
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -2549,7 +2564,10 @@ async function deliverOutboundPayloadsCore(
             status: "sent",
             results: deliveredResults,
           });
-          recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+          recordDeliveredPayload(
+            { ...payloadSummary, text: fallbackText, mediaUrls: [] },
+            deliveredResults,
+          );
         } else {
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -2615,7 +2633,7 @@ async function deliverOutboundPayloadsCore(
           status: "sent",
           results: deliveredResults,
         });
-        recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
+        recordDeliveredPayload(payloadSummary, deliveredResults);
       } else {
         recordPayloadOutcome(
           suppressedPayloadOutcome({

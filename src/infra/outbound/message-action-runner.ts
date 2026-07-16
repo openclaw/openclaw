@@ -191,8 +191,8 @@ export type MessageActionRunResult =
       to: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
-      /** Exact text after prefixes, cross-context markers, and send-time normalization. */
-      sentText?: string;
+      /** Exact text handed to the direct transport after core normalization and hooks. */
+      deliveredText?: string;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;
       dryRun: boolean;
@@ -1395,7 +1395,6 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       to,
       handledBy: "plugin",
       payload,
-      sentText: sendPayload.message,
       dryRun,
     }),
   });
@@ -1490,7 +1489,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     to,
     handledBy: send.handledBy,
     payload: send.payload,
-    sentText: sendPayload.message,
+    ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),
     toolResult: send.toolResult,
     sendResult: send.sendResult,
     dryRun,

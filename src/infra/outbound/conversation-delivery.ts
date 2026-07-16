@@ -74,7 +74,7 @@ export async function sendConversationMessage(params: {
   preparedMessageId?: string;
   gatewayOwnedDelivery?: boolean;
   signal?: AbortSignal;
-}): Promise<{ deliveredMessage: string; messageId?: string }> {
+}): Promise<{ deliveredMessage?: string; messageId?: string }> {
   const idempotencyKey = `conversation-outbound:${params.turnId}`;
   const pendingMirror = buildConversationDeliveryMirror({
     context: params.context,
@@ -146,7 +146,7 @@ export async function sendConversationMessage(params: {
     throw new Error("Conversation delivery was only prepared; no message was sent");
   }
   return {
-    deliveredMessage: action.sentText ?? params.message,
+    ...(action.deliveredText ? { deliveredMessage: action.deliveredText } : {}),
     messageId: readMessageIdFromActionResult(action),
   };
 }
@@ -156,6 +156,7 @@ export async function recordConversationDelivery(params: {
   context: ConversationDeliveryContext;
   conversation: ConversationRecord;
   message: string;
+  deliveredMessage?: string;
   turnId: string;
   outboundMessageId?: string;
 }): Promise<boolean> {
@@ -168,15 +169,17 @@ export async function recordConversationDelivery(params: {
       status: "delivered",
       ...(params.outboundMessageId ? { messageId: params.outboundMessageId } : {}),
     });
+    // Only direct core delivery can report post-normalization text exactly.
+    // Unknown plugin/gateway text keeps the durable intent and upgrades only its marker.
     const result = await params.deps.appendAssistantMessage({
       agentId: params.context.agentId,
       sessionKey: params.conversation.sessionKey,
       expectedSessionId: params.conversation.sessionId,
       idempotencyKey: `conversation-outbound:${params.turnId}`,
       config: params.context.config,
-      text: params.message,
+      text: params.deliveredMessage ?? params.message,
       deliveryMirror,
-      deliveryMirrorUpdateMode: "replace",
+      deliveryMirrorUpdateMode: params.deliveredMessage ? "replace" : "marker-only",
       beforeMessageWrite: (hookParams) => {
         const nextMessage = params.deps.beforeMessageWrite(hookParams);
         if (!nextMessage) {
