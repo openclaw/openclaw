@@ -2,33 +2,34 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+type AnthropicCatalogModel = {
+  id?: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: string[];
+  mediaInput?: {
+    image?: {
+      maxSidePx?: number;
+      preferredSidePx?: number;
+      tokenMode?: string;
+    };
+  };
+  contextWindow?: number;
+  maxTokens?: number;
+  cost?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+  thinkingLevelMap?: Record<string, string | null>;
+};
+
 type AnthropicManifest = {
   modelCatalog?: {
     providers?: {
-      anthropic?: {
-        models?: Array<{
-          id?: string;
-          name?: string;
-          reasoning?: boolean;
-          input?: string[];
-          mediaInput?: {
-            image?: {
-              maxSidePx?: number;
-              preferredSidePx?: number;
-              tokenMode?: string;
-            };
-          };
-          contextWindow?: number;
-          maxTokens?: number;
-          cost?: {
-            input?: number;
-            output?: number;
-            cacheRead?: number;
-            cacheWrite?: number;
-          };
-          thinkingLevelMap?: Record<string, string | null>;
-        }>;
-      };
+      anthropic?: { models?: AnthropicCatalogModel[] };
+      "claude-cli"?: { models?: AnthropicCatalogModel[] };
     };
     discovery?: Record<string, string>;
   };

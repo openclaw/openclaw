@@ -307,6 +307,34 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it.each([
+    ["anthropic", "claude-opus-4-7"],
+    ["anthropic", "claude-sonnet-4-6"],
+    ["anthropic", "claude-opus-4-6"],
+    ["claude-cli", "claude-opus-4-7"],
+    ["claude-cli", "claude-sonnet-4-6"],
+    ["claude-cli", "claude-opus-4-6"],
+  ])("resolves the corrected %s/%s context window", (provider, model) => {
+    resetContextWindowCacheForTest();
+    try {
+      MODEL_CONTEXT_TOKEN_CACHE.set(model, 200_000);
+      MODEL_CONTEXT_TOKEN_CACHE.set(
+        providerContextTokenCacheKey(provider, model),
+        ANTHROPIC_CONTEXT_1M_TOKENS,
+      );
+
+      expect(
+        resolveContextTokensForModel({
+          provider,
+          model,
+          allowAsyncLoad: false,
+        }),
+      ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+    } finally {
+      resetContextWindowCacheForTest();
+    }
+  });
+
   it("can exclude unscoped cache entries from provider-owned lookup", () => {
     resetContextWindowCacheForTest();
     try {
