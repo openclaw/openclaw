@@ -19,7 +19,10 @@ describe("OpenClaw Docker E2E scripts", () => {
     expect(source).toContain("verifySetupInference");
     expect(source).toContain("runSystemAgent");
     expect(source).toContain("runPackagedOneShot(message, command.approve)");
-    expect(source).not.toContain('"--modern"');
+    expect(source).toContain('"--modern"');
+    expect(source).toContain(
+      "modern compatibility entrypoint did not expose OpenClaw after activation",
+    );
     expect(source).toContain("const PACKAGED_CLI_TIMEOUT_MS = 60_000");
     expect(source).toContain("inference activation did not send the live model probe");
     expect(source).toContain("function resolveDefaultModel(config: OpenClawConfig)");

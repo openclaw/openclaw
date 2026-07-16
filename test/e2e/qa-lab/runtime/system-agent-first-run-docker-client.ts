@@ -264,6 +264,18 @@ async function main() {
     "inference activation did not send the live model probe",
   );
 
+  const modern = await runPackagedCli([
+    "onboard",
+    "--modern",
+    "--non-interactive",
+    "--accept-risk",
+    "--json",
+  ]);
+  assert(
+    modern.code === 0 && `${modern.stdout}\n${modern.stderr}`.includes(activation.modelRef),
+    "modern compatibility entrypoint did not expose OpenClaw after activation",
+  );
+
   // An unrelated ambient channel credential must not alter the requested setup.
   setEnvValue(spec.telegramEnv, spec.telegramToken);
   setEnvValue(DISCORD_CREDENTIAL_ENV, DISCORD_CREDENTIAL_FIXTURE);
