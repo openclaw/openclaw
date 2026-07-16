@@ -7,19 +7,21 @@ import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
-} from "../../agents/subagent-registry.js";
+} from "../../agents/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
-import { resetDetachedTaskLifecycleRuntimeForTests } from "../../tasks/detached-task-runtime.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskRegistryForTests,
+} from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { agentHandlers } from "./agent.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 export const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -325,7 +327,7 @@ export const makeContext = (): GatewayRequestContext =>
     getRuntimeConfig: () => mocks.loadConfigReturn,
   }) as unknown as GatewayRequestContext;
 
-export type AgentHandler = NonNullable<typeof agentHandlers.agent>;
+type AgentHandler = NonNullable<typeof agentHandlers.agent>;
 
 export type AgentHandlerArgs = Parameters<AgentHandler>[0];
 
@@ -333,21 +335,21 @@ export type AgentParams = AgentHandlerArgs["params"];
 
 export type AgentCommandCall = Record<string, unknown>;
 
-export type AgentIdentityGetHandler = NonNullable<(typeof agentHandlers)["agent.identity.get"]>;
+type AgentIdentityGetHandler = NonNullable<(typeof agentHandlers)["agent.identity.get"]>;
 
-export type AgentIdentityGetHandlerArgs = Parameters<AgentIdentityGetHandler>[0];
+type AgentIdentityGetHandlerArgs = Parameters<AgentIdentityGetHandler>[0];
 
-export type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
+type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
 
-export const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 
-export let dateOnlyFakeClockActive = false;
+let dateOnlyFakeClockActive = false;
 
 export function setDateOnlyFakeClockActive(active: boolean): void {
   dateOnlyFakeClockActive = active;
 }
 
-export function waitForRealTimer(ms: number) {
+function waitForRealTimer(ms: number) {
   return new Promise<void>((resolve) => {
     realSetTimeout(resolve, ms);
   });
@@ -437,20 +439,22 @@ export async function flushScheduledDispatchStep() {
   await Promise.resolve();
 }
 
-export async function waitForAcceptedRunDispatch(respond: ReturnType<typeof vi.fn>) {
+async function waitForAcceptedRunDispatch(params: {
+  respond: ReturnType<typeof vi.fn>;
+  commandCallCount: number;
+}) {
+  const { respond } = params;
   const accepted = respond.mock.calls.some(([ok, payload]) => {
     return ok === true && (payload as { status?: string } | undefined)?.status === "accepted";
   });
   if (!accepted) {
     return;
   }
-
-  const commandCallCount = mocks.agentCommand.mock.calls.length;
   const respondCallCount = respond.mock.calls.length;
   for (let attempt = 0; attempt < 50; attempt++) {
     await flushScheduledDispatchStep();
     if (
-      mocks.agentCommand.mock.calls.length > commandCallCount ||
+      mocks.agentCommand.mock.calls.length > params.commandCallCount ||
       respond.mock.calls.length > respondCallCount
     ) {
       return;
@@ -482,20 +486,20 @@ export function buildExistingMainStoreEntry(overrides: Record<string, unknown> =
   };
 }
 
-export type SessionStoreFixture = Record<string, Record<string, unknown>>;
+type SessionStoreFixture = Record<string, Record<string, unknown>>;
 
-export type SessionEntryTargetFixture = {
+type SessionEntryTargetFixture = {
   canonicalKey: string;
   storeKeys: string[];
 };
 
-export function cloneSessionStoreFixtureEntry(
+function cloneSessionStoreFixtureEntry(
   entry: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   return entry ? structuredClone(entry) : undefined;
 }
 
-export function selectFreshestTargetFixtureEntry(
+function selectFreshestTargetFixtureEntry(
   store: SessionStoreFixture,
   target: SessionEntryTargetFixture,
 ): { entry: Record<string, unknown>; key: string } | undefined {
@@ -516,7 +520,7 @@ export function selectFreshestTargetFixtureEntry(
   return freshest;
 }
 
-export function resetSessionAccessorMocks() {
+function resetSessionAccessorMocks() {
   mocks.readTranscriptStatsSync.mockReset().mockReturnValue({
     eventCount: 0,
     maxSeq: 0,
@@ -684,7 +688,7 @@ export async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
   return requireValue(capturedEntry, "updated session entry missing");
 }
 
-export function readLastAgentCommandCall(): AgentCommandCall | undefined {
+function readLastAgentCommandCall(): AgentCommandCall | undefined {
   const calls = mocks.agentCommand.mock.calls;
   const call = calls[calls.length - 1];
   return call?.[0] as AgentCommandCall | undefined;
@@ -863,6 +867,7 @@ export async function invokeAgent(
   },
 ) {
   const respond = options?.respond ?? vi.fn();
+  const commandCallCount = mocks.agentCommand.mock.calls.length;
   // Most cases only need to cross the accepted-ack timer; keep tests that own
   // timer semantics on their explicit clock while avoiding a real sleep here.
   const ownsDispatchTimers = options?.flushDispatch !== false && !vi.isFakeTimers();
@@ -882,7 +887,7 @@ export async function invokeAgent(
       },
     );
     if (options?.flushDispatch !== false) {
-      await waitForAcceptedRunDispatch(respond);
+      await waitForAcceptedRunDispatch({ respond, commandCallCount });
     }
   } finally {
     if (ownsDispatchTimers) {
@@ -919,7 +924,7 @@ export async function invokeAgentIdentityGet(
   return respond;
 }
 
-export function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
   }
@@ -964,7 +969,7 @@ export const describe0AfterEach0 = () => {
   vi.useRealTimers();
 };
 
-export function resetIntegrationState() {
+function resetIntegrationState() {
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetTaskRegistryForTests();

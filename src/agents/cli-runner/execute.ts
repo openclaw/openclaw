@@ -48,6 +48,7 @@ import {
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliPlanUpdate,
   type CliStreamingDelta,
   type CliThinkingDelta,
   type CliThinkingProgress,
@@ -187,7 +188,7 @@ function buildCliMcpCaptureKey(context: PreparedCliRunContext): string | undefin
 }
 
 /** Overrides process/event dependencies for CLI runner execution tests. */
-export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
+function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
 }
 
@@ -330,7 +331,7 @@ function formatCliSessionReuseLogState(reusableSession: CliReusableSession): str
 }
 
 /** Builds the compact execution summary logged before a CLI backend run. */
-export function buildCliExecLogLine(params: {
+function buildCliExecLogLine(params: {
   provider: string;
   model: string;
   promptChars: number;
@@ -355,7 +356,7 @@ export function buildCliExecLogLine(params: {
 }
 
 /** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
-export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
+function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliAuthEnvKeys(process.env);
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
   const childKeySet = new Set(childKeys);
@@ -372,6 +373,16 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
     `runtimeChild=${formatCliEnvKeyList(runtimeChildKeys)}`,
     `runtimeCleared=${formatCliEnvKeyList(runtimeClearedKeys)}`,
   ].join(" ");
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerExecuteTestApi")] = {
+    buildCliEnvAuthLog,
+    buildCliExecLogLine,
+    setCliRunnerExecuteTestDeps: (overrides: Record<string, unknown>) => {
+      setCliRunnerExecuteTestDeps(overrides as Partial<typeof executeDeps>);
+    },
+  };
 }
 
 /** Executes a prepared CLI run context and returns normalized CLI output. */
@@ -1503,6 +1514,22 @@ export async function executePreparedCliRun(
             data: { progressTokens },
           });
         };
+        const emitCliPlanUpdate = ({ steps }: CliPlanUpdate) => {
+          observedCliActivity = true;
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "plan",
+            data: {
+              phase: "update",
+              title: "Plan updated",
+              source: "codex-exec",
+              steps,
+            },
+          });
+        };
         if (useManagedClaudeLiveSession) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -1568,6 +1595,7 @@ export async function executePreparedCliRun(
                 onAssistantDelta: emitCliAssistantDelta,
                 onThinkingDelta: emitCliThinkingDelta,
                 onThinkingProgress: emitCliThinkingProgress,
+                onPlanUpdate: emitCliPlanUpdate,
                 onToolUseStart: emitParsedToolUseStart,
                 onToolResult: emitParsedToolResult,
                 onCommentaryText:

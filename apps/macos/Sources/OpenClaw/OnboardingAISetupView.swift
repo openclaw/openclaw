@@ -109,7 +109,7 @@ struct OnboardingAISetupView: View {
                     .font(.callout.weight(.semibold))
                 Text(self.model.waitingForPendingActivationDeadline
                     ? "OpenClaw will check again before changing any inference settings."
-                    : "Checking for Claude Code, Codex, Gemini, and saved API keys.")
+                    : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -137,11 +137,15 @@ struct OnboardingAISetupView: View {
             self.noCandidatesIntro
         }
 
+        if !self.model.unavailableCandidates.isEmpty {
+            self.unavailableCandidatesSection
+        }
+
         if let detectError = model.detectError {
             OnboardingErrorCard(
                 title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
-                    : "Couldn’t check this Mac for AI accounts",
+                    : "Couldn’t check this Gateway for AI access",
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
@@ -246,12 +250,12 @@ struct OnboardingAISetupView: View {
 
     private var noCandidatesIntro: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("No AI accounts found on this Mac")
+            Text("No usable AI access found on this Gateway")
                 .font(.headline)
             Text(
                 "That’s fine — you can connect one with an API key or token. " +
-                    "If you use Claude Code, Codex, or the Gemini CLI on this Mac, " +
-                    "sign in there first and hit “Check again”.")
+                    "You can also sign in to Claude Code or Codex, or start Ollama or LM Studio " +
+                    "with a suitable model, then hit “Check again”.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -260,6 +264,28 @@ struct OnboardingAISetupView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var unavailableCandidatesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Detected, but not auto-tested")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(self.model.unavailableCandidates) { candidate in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(candidate.label) — \(candidate.detail)")
+                            .font(.caption.weight(.semibold))
+                        Text(candidate.reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .padding(.vertical, 4)
     }
@@ -392,29 +418,14 @@ struct OnboardingAISetupView: View {
                     self.model.retryFromScratch()
                 }
             }
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                if self.model.candidates.isEmpty || self.model.showManualEntry {
-                    self.manualForm
-                } else {
-                    Button {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.model.showManualEntry = true
-                        }
-                    } label: {
-                        Label("Connect with an API key or token instead…", systemImage: "key")
-                            .font(.callout)
-                    }
-                    .buttonStyle(.link)
-                    .disabled(self.model.isBusy)
-                }
-            }
+        } else if self.model.candidates.isEmpty || self.model.showManualEntry {
+            self.manualForm
         }
     }
 
     @ViewBuilder
     private var providerAuthSection: some View {
-        if !self.model.authOptions.isEmpty {
+        if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sign in with a provider")
                     .font(.headline)
@@ -428,6 +439,9 @@ struct OnboardingAISetupView: View {
                 let more = self.model.authOptions.filter { !$0.featured }
                 ForEach(featured) { option in
                     self.providerAuthRow(option)
+                }
+                if !self.model.manualProviders.isEmpty {
+                    self.apiKeysRow
                 }
                 if !more.isEmpty {
                     DisclosureGroup("More sign-in options") {
@@ -447,6 +461,34 @@ struct OnboardingAISetupView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color(NSColor.controlBackgroundColor)))
         }
+    }
+
+    private var apiKeysRow: some View {
+        Button {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                self.model.showManualEntry = true
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "key.fill")
+                    .font(.title3)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("API Keys")
+                        .font(.callout.weight(.semibold))
+                    Text("Connect with an API key or token")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Text("Connect")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(self.model.isBusy)
+        .openClawSelectableRowChrome(selected: self.model.showManualEntry)
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {

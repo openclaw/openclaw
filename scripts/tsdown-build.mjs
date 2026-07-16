@@ -859,8 +859,14 @@ if (isMainModule()) {
   cleanTsdownOutputRoots();
   const invocations = resolveTsdownBuildInvocations({ args: args.forwardedArgs });
   let result;
-  for (const invocation of invocations) {
+  for (const [index, invocation] of invocations.entries()) {
+    const startedAt = performance.now();
     result = await runTsdownBuildInvocation(invocation);
+    // Per-invocation timing separates the AI-declarations pass from the main
+    // graph in CI logs; the combined step is otherwise a single opaque cost.
+    console.log(
+      `[tsdown-build] invocation ${index + 1}/${invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+    );
     if (result.status !== 0 || result.hasIneffectiveDynamicImport || result.fatalUnresolvedImport) {
       break;
     }

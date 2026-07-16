@@ -476,12 +476,19 @@ export async function handlePendingApprovalRequest<
         });
       }
     }
+    const internalApprovalSubscriberCount = suppressDelivery
+      ? 0
+      : (params.context.approvalEvents?.publishRequested(
+          params.approvalKind ?? "exec",
+          params.requestEvent,
+        ) ?? 0);
 
     const hasApprovalClients = suppressDelivery
       ? false
       : approvalClientConnIds !== null
-        ? approvalClientConnIds.size > 0
-        : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
+        ? approvalClientConnIds.size > 0 || internalApprovalSubscriberCount > 0
+        : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false) ||
+          internalApprovalSubscriberCount > 0;
     const deliveredResult = suppressDelivery ? false : params.deliverRequest();
     const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
     // A turn-source route can approve without an active approval client, so keep
@@ -602,6 +609,7 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     snapshot: ExecApprovalRecord<TPayload>;
   }) => boolean;
   resolvedEventName: string;
+  approvalKind?: "exec" | "plugin";
   buildResolvedEvent: (params: {
     approvalId: string;
     decision: ExecApprovalDecision;
@@ -736,6 +744,10 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
   } else {
     params.context.broadcast(params.resolvedEventName, resolvedEvent, { dropIfSlow: true });
   }
+  params.context.approvalEvents?.publishResolved(
+    params.approvalKind ?? (params.resolvedEventName.startsWith("plugin.") ? "plugin" : "exec"),
+    resolvedEvent as never,
+  );
 
   const followUps = [
     params.forwardResolved

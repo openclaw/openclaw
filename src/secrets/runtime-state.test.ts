@@ -9,8 +9,8 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   noteRuntimeAuthProfileStorePersistedMutation,
   setRuntimeAuthProfileStoreSnapshot,
-  testing as runtimeSnapshotsTesting,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import { testing as runtimeSnapshotsTesting } from "../agents/auth-profiles/runtime-snapshots.test-support.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,

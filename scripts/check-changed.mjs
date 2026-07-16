@@ -43,6 +43,8 @@ const PLUGIN_SDK_API_BASELINE_PATH_RE =
   /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
   /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mjs|sync-plugin-sdk-exports\.mjs|lib\/plugin-sdk-(?:declaration-budget\.mjs|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json)))/u;
+const DEPRECATION_HYGIENE_PATH_RE =
+  /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mjs$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
@@ -311,6 +313,13 @@ export function shouldRunPluginSdkSurfaceChecks(paths) {
   );
 }
 
+/** Returns whether changed files can alter deprecated API or plugin-boundary results. */
+export function shouldRunDeprecationHygieneChecks(paths) {
+  return paths.some((changedPath) =>
+    DEPRECATION_HYGIENE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
   return paths.some((changedPath) =>
     CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
@@ -461,6 +470,12 @@ export function createChangedCheckPlan(result, options = {}) {
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
     add("Plugin SDK surface budget", ["plugin-sdk:surface:check"]);
+  }
+  if (result.lanes.all || shouldRunDeprecationHygieneChecks(result.paths)) {
+    add("deprecated API usage", ["check:deprecated-api-usage"]);
+    // After 2026-07-24, lapsed compatibility windows intentionally fail this gate
+    // until their scheduled deletion PRs land.
+    add("plugin boundaries", ["plugins:boundary-report:ci"]);
   }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(

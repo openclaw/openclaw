@@ -73,7 +73,6 @@ export const terminalPanelStyles = css`
   .tp-tabs::part(nav) {
     display: flex;
     align-items: stretch;
-    gap: 1px;
   }
   .tp-tabs::part(body) {
     display: none;
@@ -85,7 +84,7 @@ export const terminalPanelStyles = css`
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 0 10px;
+    padding: 0 4px 0 10px;
     height: 36px;
     color: var(--muted, #8a919e);
     white-space: nowrap;
@@ -106,6 +105,9 @@ export const terminalPanelStyles = css`
   .tp-tab.is-exited::part(base) {
     opacity: 0.55;
   }
+  .tp-tab.is-connecting .tp-tab__icon {
+    animation: tp-pulse 1.2s ease-in-out infinite;
+  }
   .tp-tab__icon {
     display: inline-flex;
     color: var(--accent, #4ec9a8);
@@ -120,24 +122,62 @@ export const terminalPanelStyles = css`
     font-size: 11px;
     color: var(--muted, #8a919e);
   }
+  /* Each close button sits right after its tab in the nav slot; the pair is
+     styled as one surface (shared hover background, shared active underline)
+     while the X keeps its own inner highlight. */
   .tp-tab__close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
+    align-self: stretch;
+    flex: 0 0 auto;
+    width: 24px;
+    margin-right: 1px;
+    padding: 0 4px 0 0;
     opacity: 0;
     border: none;
+    border-bottom: 2px solid transparent;
     background: transparent;
-    color: inherit;
-    border-radius: 4px;
-    padding: 0;
+    color: var(--muted, #8a919e);
+    transition:
+      color 0.12s ease,
+      background 0.12s ease,
+      opacity 0.12s ease;
   }
-  .tp-tab:hover + .tp-tab__close,
-  .tp-tab[active] + .tp-tab__close,
+  .tp-tab__close-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+  }
+  :where(.tp-tab:hover, .tp-tab[active]) + .tp-tab__close,
   .tp-tab__close:hover,
   .tp-tab__close:focus-visible {
-    opacity: 0.7;
+    opacity: 1;
+  }
+  .tp-tab:hover + .tp-tab__close,
+  .tp-tab__close:hover,
+  .tp-tab__close:focus-visible {
+    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
+  }
+  /* Back-propagate hover from the X to its tab so the pair lights up together. */
+  .tp-tab:has(+ .tp-tab__close:hover)::part(base),
+  .tp-tab:has(+ .tp-tab__close:focus-visible)::part(base) {
+    color: var(--text, #d7dae0);
+    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
+  }
+  .tp-tab[active] + .tp-tab__close {
+    border-bottom-color: var(--accent, #ff5c5c);
+  }
+  .tp-tab__close:hover,
+  .tp-tab__close:focus-visible {
+    color: var(--text, #d7dae0);
+  }
+  .tp-tab__close:hover .tp-tab__close-box,
+  .tp-tab__close:focus-visible .tp-tab__close-box {
+    background: color-mix(in srgb, var(--text, #d7dae0) 14%, transparent);
   }
   .tp-new,
   .tp-icon {
@@ -155,7 +195,6 @@ export const terminalPanelStyles = css`
   .tp-new {
     align-self: center;
   }
-  .tp-tab__close:hover,
   .tp-new:hover,
   .tp-icon:hover {
     background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
@@ -264,8 +303,30 @@ export const terminalPanelStyles = css`
   .tp-host {
     position: absolute;
     inset: 0;
+    z-index: 0;
     padding: 6px 8px;
     caret-color: transparent;
+  }
+  .tp-connecting {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--muted, #8a919e);
+    background: color-mix(in srgb, var(--bg, #0e1015) 88%, transparent);
+    font-size: 12px;
+    pointer-events: none;
+  }
+  .tp-connecting__spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid color-mix(in srgb, var(--accent, #ff5c5c) 24%, transparent);
+    border-top-color: var(--accent, #ff5c5c);
+    border-radius: 50%;
+    animation: tp-spin 0.8s linear infinite;
   }
   .tp-empty,
   .tp-error {
@@ -275,5 +336,21 @@ export const terminalPanelStyles = css`
   }
   .tp-error {
     color: var(--danger, #ff6b6b);
+  }
+  @keyframes tp-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes tp-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tp-connecting__spinner,
+    .tp-tab.is-connecting .tp-tab__icon {
+      animation: none;
+    }
   }
 `;

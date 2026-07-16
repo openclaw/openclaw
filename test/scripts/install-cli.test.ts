@@ -41,6 +41,27 @@ function linkRequiredShellTools(bin: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("bounds stalled curl downloads and propagates timeout failures", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      curl() {
+        printf 'curl=%s\n' "$*"
+        return 28
+      }
+      DOWNLOADER=curl
+      set +e
+      download_file "https://example.invalid/node.tar.gz" "/tmp/node.tar.gz"
+      printf 'status=%s\n' "$?"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
+    expect(result.stdout).not.toContain("--connect-timeout");
+    expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
+    expect(result.stdout).toContain("status=28");
+  });
+
   it("does not clean an unrelated legacy checkout during the default npm install", () => {
     const main = script.slice(script.indexOf("\nmain() {"));
     expect(main).not.toContain("cleanup_legacy_submodules");

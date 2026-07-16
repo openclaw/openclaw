@@ -42,6 +42,17 @@ describe("full-release-validation-at-sha", () => {
     });
   });
 
+  it("accepts documented -f assignments after the option separator", () => {
+    expect(
+      parseArgs(["--", "-f", "release_profile=full", "-fmode=linux", "provider=anthropic"]).inputs,
+    ).toMatchObject({
+      mode: "linux",
+      provider: "anthropic",
+      release_profile: "full",
+    });
+    expect(() => parseArgs(["--", "-f"])).toThrow("-f requires a value");
+  });
+
   it("infers the release profile from the target package version", () => {
     const readVersion = (version: string) => () => JSON.stringify({ version });
 

@@ -143,6 +143,57 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("native");
   });
 
+  it("classifies Anthropic-native structured failover errors", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    for (const providerId of ["anthropic", "claude-cli"]) {
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "",
+          errorType: "rate_limit_error",
+        }),
+      ).toBe("rate_limit");
+      expect(
+        provider.classifyFailoverReason?.({
+          provider: providerId,
+          errorMessage: "",
+          errorType: "api_error",
+        }),
+      ).toBe("server_error");
+    }
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        errorType: "rate_limit_error",
+        code: "API_ERROR",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        code: "RATE_LIMIT_ERROR",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        code: "API_ERROR",
+      }),
+    ).toBe("server_error");
+    expect(
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        errorMessage: "",
+        errorType: "UNKNOWN_ERROR",
+        code: "INSUFFICIENT_QUOTA",
+      }),
+    ).toBeUndefined();
+  });
+
   it("owns replay policy for Claude transports", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 

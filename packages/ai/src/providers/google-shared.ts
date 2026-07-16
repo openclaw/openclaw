@@ -92,7 +92,7 @@ function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boole
  * a signature from being overwritten with `undefined` within the same streamed block.
  * @internal Directly tested provider implementation detail.
  */
-export function retainThoughtSignature(
+function retainThoughtSignature(
   existing: string | undefined,
   incoming: string | undefined,
 ): string | undefined {
@@ -129,7 +129,7 @@ function resolveThoughtSignature(
  * Models via Google APIs that require explicit tool call IDs in function calls/responses.
  * @internal Directly tested provider implementation detail.
  */
-export function requiresToolCallId(modelId: string): boolean {
+function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
 
@@ -396,7 +396,7 @@ export function convertTools(
  * Map tool choice string to Gemini FunctionCallingConfigMode.
  * @internal Directly tested provider implementation detail.
  */
-export function mapToolChoice(choice: string): FunctionCallingConfigMode {
+function mapToolChoice(choice: string): FunctionCallingConfigMode {
   switch (choice) {
     case "auto":
       return FunctionCallingConfigMode.AUTO;
@@ -604,7 +604,7 @@ export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
 }
 
 /** @internal Directly tested provider implementation detail. */
-export function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
+function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemma-?4/.test(model.id.toLowerCase());
 }
 
@@ -701,7 +701,7 @@ function getGoogleBudget<T extends GoogleApiType>(
  * Map Gemini FinishReason to our StopReason.
  * @internal Directly tested provider implementation detail.
  */
-export function mapStopReason(reason: FinishReason): StopReason {
+function mapStopReason(reason: FinishReason): StopReason {
   switch (reason) {
     case FinishReason.STOP:
       return "stop";

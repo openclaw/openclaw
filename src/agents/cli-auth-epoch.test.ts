@@ -6,12 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
-  resetCliAuthEpochTestDeps,
   resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
   resolveCliRuntimeOwnerFingerprint,
-  setCliAuthEpochTestDeps,
 } from "./cli-auth-epoch.js";
+import {
+  resetCliAuthEpochTestDeps,
+  setCliAuthEpochTestDeps,
+} from "./cli-auth-epoch.test-support.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
 describe("resolveCliAuthEpoch", () => {
