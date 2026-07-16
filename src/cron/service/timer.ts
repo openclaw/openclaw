@@ -132,6 +132,14 @@ type TimedCronRunOutcome = CronRunOutcome &
     triggerEval?: CronTriggerEvalOutcome;
   };
 
+type CronJobRunResult = CronRunOutcome &
+  Pick<CronRunTelemetry, "provider"> & {
+    deliveryError?: string;
+    delivered?: boolean;
+    startedAt: number;
+    endedAt: number;
+  };
+
 export type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
@@ -709,17 +717,7 @@ function resolveDeliveryState(params: {
 export function applyJobResult(
   state: CronServiceState,
   job: CronJob,
-  result: {
-    status: CronRunStatus;
-    error?: string;
-    executionStarted?: boolean;
-    deliveryError?: string;
-    diagnostics?: CronRunOutcome["diagnostics"];
-    delivered?: boolean;
-    provider?: string;
-    startedAt: number;
-    endedAt: number;
-  },
+  result: CronJobRunResult,
   opts?: {
     // Preserve recurring "every" anchors for manual force runs.
     preserveSchedule?: boolean;
@@ -1141,17 +1139,7 @@ function applyOutcomeToStoredJob(
     if (result.status === "ok") {
       // A manual/queued run may finish after the job was removed. Preserve the
       // successful run-history state without resurrecting the job in the store.
-      applyJobResult(state, result.job, {
-        status: result.status,
-        error: result.error,
-        executionStarted: result.executionStarted,
-        deliveryError: result.deliveryError,
-        diagnostics: result.diagnostics,
-        delivered: result.delivered,
-        provider: result.provider,
-        startedAt: result.startedAt,
-        endedAt: result.endedAt,
-      });
+      applyJobResult(state, result.job, result);
       emitJobFinished(state, result.job, result, result.startedAt);
       state.deps.log.info(
         { jobId: result.jobId },
@@ -1179,17 +1167,7 @@ function applyOutcomeToStoredJob(
     return undefined;
   }
 
-  const shouldDelete = applyJobResult(state, job, {
-    status: result.status,
-    error: result.error,
-    executionStarted: result.executionStarted,
-    deliveryError: result.deliveryError,
-    diagnostics: result.diagnostics,
-    delivered: result.delivered,
-    provider: result.provider,
-    startedAt: result.startedAt,
-    endedAt: result.endedAt,
-  });
+  const shouldDelete = applyJobResult(state, job, result);
   applyTriggerRunResult(job, result);
   state.pendingCatchupDeferralJobIds.delete(job.id);
 

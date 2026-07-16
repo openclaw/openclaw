@@ -2024,6 +2024,8 @@ describe("ci workflow guards", () => {
       expect(installStep.run).toContain(
         "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip",
       );
+      expect(installStep.run).toContain("--connect-timeout 10 --max-time 120");
+      expect(installStep.run).toContain("--retry 3 --retry-max-time 120");
       expect(installStep.run).toContain(
         'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
       );
@@ -2084,6 +2086,19 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain('throw "git fetch timed out after 30 seconds"');
     expect(workflow).not.toContain(
       'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+    );
+  });
+
+  it("bounds Mantis Slack runner IP discovery", () => {
+    const workflow = parse(
+      readFileSync(".github/workflows/mantis-slack-desktop-smoke.yml", "utf8"),
+    ) as { jobs: { run_slack_desktop: { steps: WorkflowStep[] } } };
+    const runStep = workflow.jobs.run_slack_desktop.steps.find(
+      (step) => step.name === "Run Slack desktop scenario",
+    );
+
+    expect(runStep?.run).toContain(
+      "curl -fsS --connect-timeout 5 --max-time 15 --retry 2 https://checkip.amazonaws.com",
     );
   });
 

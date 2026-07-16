@@ -128,6 +128,11 @@ export function hasMediaPayload(
   return isRecord(block) && typeof block.data === "string" && block.data.trim().length > 0;
 }
 
+/** Image metadata alone is not an attachment; provider emitters need inline bytes. */
+export function isImageWithMediaPayload<T>(block: T): block is T & { type: "image"; data: string } {
+  return isRecord(block) && block.type === "image" && hasMediaPayload(block);
+}
+
 export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
   let hasImage = false;
   let hasAudio = false;

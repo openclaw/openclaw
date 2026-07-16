@@ -258,6 +258,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
+      includeDerivedTitles: true,
       force: true,
     });
   };
