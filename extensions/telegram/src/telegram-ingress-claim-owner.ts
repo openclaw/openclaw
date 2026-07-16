@@ -11,6 +11,7 @@ import type {
 // Liveness default: a claim older than its lease is never live-owner protected,
 // so recovery can reclaim it even when the owner process still exists.
 const TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS = 30 * 60 * 1000;
+const TELEGRAM_PROCESS_START_TIME_LOOKUP_TIMEOUT_MS = 1_000;
 
 type TelegramSpooledClaimLivenessOptions = {
   maxAgeMs?: number;
@@ -27,11 +28,13 @@ function readProcessStartTime(pid: number): number | null {
   }
   if (process.platform === "darwin") {
     try {
+      // This runs during module initialization, so a stuck ps must not block Telegram startup.
       const startedAt = childProcess
         .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
           encoding: "utf8",
           env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
           stdio: ["ignore", "pipe", "ignore"],
+          timeout: TELEGRAM_PROCESS_START_TIME_LOOKUP_TIMEOUT_MS,
         })
         .trim();
       const startedAtMs = Date.parse(`${startedAt} UTC`);
