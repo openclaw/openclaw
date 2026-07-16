@@ -1,11 +1,9 @@
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
-import {
-  createSlackPresenceMonitor,
-  hasSlackPresenceEventsEnabled,
-  SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS,
-} from "./presence-monitor.js";
+import { createSlackPresenceMonitor, hasSlackPresenceEventsEnabled } from "./presence-monitor.js";
+
+const AUTO_MAX_PARTICIPANTS = 8;
 
 function createCooldownStore(): PluginStateSyncKeyedStore<number> {
   const values = new Map<string, number>();
@@ -195,7 +193,7 @@ describe("Slack presence monitor", () => {
       wake: vi.fn(),
     });
     monitor.observe(createPrepared({ userId: "UTOP", channelId: "C1", channelType: "channel" }));
-    for (let index = 0; index <= SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS; index += 1) {
+    for (let index = 0; index <= AUTO_MAX_PARTICIPANTS; index += 1) {
       monitor.observe(
         createPrepared({
           userId: `U${index}`,
@@ -229,21 +227,21 @@ describe("Slack presence monitor", () => {
         mode: "on",
       }),
     );
-    for (let index = 0; index <= SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS; index += 1) {
+    for (let index = 0; index <= AUTO_MAX_PARTICIPANTS; index += 1) {
       monitor.observe(
         createPrepared({
           userId: `U${index}`,
           channelId: "C2",
           channelType: "channel",
           threadId: "2.000",
-          mode: index === SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS ? "on" : "auto",
+          mode: index === AUTO_MAX_PARTICIPANTS ? "on" : "auto",
         }),
       );
     }
 
     await monitor.pollOnce();
 
-    expect(getPresence).toHaveBeenCalledTimes(SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS + 2);
+    expect(getPresence).toHaveBeenCalledTimes(AUTO_MAX_PARTICIPANTS + 2);
   });
 
   it("seeds again after all eligible targets expire", async () => {

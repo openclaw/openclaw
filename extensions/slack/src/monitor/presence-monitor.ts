@@ -7,9 +7,9 @@ import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 
 export const SLACK_PRESENCE_GREETING_COOLDOWN_MS = 8 * 60 * 60 * 1000;
-export const SLACK_PRESENCE_POLL_INTERVAL_MS = 60_000;
-export const SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS = 8;
-export const SLACK_PRESENCE_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
+const SLACK_PRESENCE_POLL_INTERVAL_MS = 60_000;
+const SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS = 8;
+const SLACK_PRESENCE_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 const SLACK_PRESENCE_MAX_POLLS_PER_INTERVAL = 45;
 const SLACK_PRESENCE_MAX_TARGETS = 2_000;
 
@@ -32,7 +32,7 @@ type PresenceTarget = {
 
 type SlackPresenceClient = Pick<WebClient["users"], "getPresence">;
 
-export type SlackPresenceMonitor = {
+type SlackPresenceMonitor = {
   observe: (prepared: PreparedSlackMessage) => void;
   pollOnce: () => Promise<void>;
   start: () => void;
