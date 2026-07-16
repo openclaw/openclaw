@@ -42,7 +42,7 @@ export type LoopState = {
 
 /** Session-scoped loop state storage */
 const loopStates = new Map<string, LoopState | null>();
-let stateChangeHistory: Array<{
+const stateChangeHistory: Array<{
   timestamp: string;
   sessionKey?: string;
   action: string;
@@ -92,11 +92,15 @@ function resolveSessionKey(): string {
       | undefined;
     if (als) {
       const stored = als.getStore();
-      if (stored && typeof stored === "string") return stored;
+      if (stored && typeof stored === "string") {
+        return stored;
+      }
     }
   } catch {}
   // 2) Fallback to environment (used by isolated runs)
-  if (process.env.OPENCLAW_SESSION_KEY) return process.env.OPENCLAW_SESSION_KEY;
+  if (process.env.OPENCLAW_SESSION_KEY) {
+    return process.env.OPENCLAW_SESSION_KEY;
+  }
   // 3) Single-session default
   return "default";
 }
@@ -110,7 +114,9 @@ function logStateChange(action: string, details?: unknown): void {
     details,
   });
   // Keep last 100 entries total
-  while (stateChangeHistory.length > 100) stateChangeHistory.shift();
+  while (stateChangeHistory.length > 100) {
+    stateChangeHistory.shift();
+  }
 }
 
 export function getStateChangeHistory(): Array<{
@@ -126,13 +132,17 @@ export function getStateChangeHistory(): Array<{
 export function getLoopState(): LoopState | null {
   const key = resolveSessionKey();
   const state = loopStates.get(key);
-  if (state !== undefined) return state;
+  if (state !== undefined) {
+    return state;
+  }
   // Fallback: if only one session state exists, return it regardless of key.
   // This handles TUI → agent tool calls where ALS context may differ.
   const entries = Array.from(loopStates.entries()).filter(([, v]) => v !== null) as Array<
     [string, LoopState]
   >;
-  if (entries.length === 1) return entries[0]![1];
+  if (entries.length === 1) {
+    return entries[0]![1];
+  }
   return null;
 }
 
@@ -422,12 +432,12 @@ export function createLoopUpdateTool(): AnyAgentTool {
 
         // Store subtasks from plan phase
         if (subtasks && Array.isArray(subtasks) && subtasks.length > 0) {
-          state.subtasks = subtasks.map((s) => ({
-            ...s,
-            status: "pending" as const,
-            worktreePath: undefined,
-            result: undefined,
-          }));
+          state.subtasks = subtasks.map((s) => {
+            s.status = "pending" as const;
+            s.worktreePath = undefined;
+            s.result = undefined;
+            return s;
+          });
         }
 
         return jsonResult({
@@ -493,7 +503,9 @@ export function createLoopUpdateTool(): AnyAgentTool {
 /** Computes next phase based on current phase and transition rules */
 function computeNextPhase(currentPhase: LoopPhase): LoopPhase | null {
   const idx = LOOP_PHASE_ORDER.indexOf(currentPhase);
-  if (idx === -1) return null;
+  if (idx === -1) {
+    return null;
+  }
   return LOOP_PHASE_ORDER[idx + 1] ?? null;
 }
 
@@ -596,7 +608,9 @@ export function validateSubtaskDependencies(subtasks: LoopSubtask[]): {
       cycle.push(...path.slice(cycleStart), id);
       return true; // cycle detected
     }
-    if (visited.has(id)) return false;
+    if (visited.has(id)) {
+      return false;
+    }
 
     visited.add(id);
     recStack.add(id);
@@ -605,7 +619,9 @@ export function validateSubtaskDependencies(subtasks: LoopSubtask[]): {
     const subtask = subtasks.find((s) => s.id === id);
     if (subtask) {
       for (const dep of subtask.dependencies) {
-        if (dfs(dep, [...path])) return true;
+        if (dfs(dep, [...path])) {
+          return true;
+        }
       }
     }
 
@@ -615,7 +631,9 @@ export function validateSubtaskDependencies(subtasks: LoopSubtask[]): {
 
   for (const s of subtasks) {
     if (!visited.has(s.id)) {
-      if (dfs(s.id, [])) break;
+      if (dfs(s.id, [])) {
+        break;
+      }
     }
   }
 
@@ -628,20 +646,32 @@ export function checkForDeadlocks(state: LoopState): {
   blockedSubtasks?: string[];
 } {
   const pending = state.subtasks.filter((s) => s.status === "pending");
-  if (pending.length === 0) return { deadlocked: false };
+  if (pending.length === 0) {
+    return { deadlocked: false };
+  }
 
   // Check if any pending subtask can eventually complete
   const canComplete = (subtask: LoopSubtask, visited: Set<string> = new Set()): boolean => {
-    if (visited.has(subtask.id)) return false; // cycle
+    if (visited.has(subtask.id)) {
+      return false;
+    } // cycle
     visited.add(subtask.id);
 
-    if (subtask.dependencies.length === 0) return true;
+    if (subtask.dependencies.length === 0) {
+      return true;
+    }
 
     return subtask.dependencies.every((depId) => {
       const dep = state.subtasks.find((s) => s.id === depId);
-      if (!dep) return false; // missing dep
-      if (dep.status === "complete") return true;
-      if (dep.status === "failed" || dep.status === "skipped") return false;
+      if (!dep) {
+        return false;
+      } // missing dep
+      if (dep.status === "complete") {
+        return true;
+      }
+      if (dep.status === "failed" || dep.status === "skipped") {
+        return false;
+      }
       return canComplete(dep, visited);
     });
   };

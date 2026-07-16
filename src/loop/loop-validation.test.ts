@@ -65,28 +65,6 @@ function makeSubtask(overrides: Partial<LoopSubtask> = {}): LoopSubtask {
   };
 }
 
-/** Creates a subtask as the loop_update tool would (with the minimal structure). */
-function makeToolSubtask(
-  overrides: Partial<{
-    id: string;
-    name: string;
-    description: string;
-    acceptanceCriteria: string[];
-    dependencies: string[];
-    parallelizable: boolean;
-  }> = {},
-) {
-  return {
-    id: "tool-sub-1",
-    name: "Tool Subtask",
-    description: "Created via loop_update tool",
-    acceptanceCriteria: ["works"],
-    dependencies: [],
-    parallelizable: false,
-    ...overrides,
-  };
-}
-
 /** Creates a base loop state for tool tests. */
 function makeBaseState(overrides: Record<string, unknown> = {}) {
   return {
@@ -343,11 +321,6 @@ describe("5. Prompt builders", () => {
     description: "Initialize Express server with routes",
     acceptanceCriteria: ["Listening on port 3000", "GET /health returns 200"],
   });
-  const subtasks: LoopSubtask[] = [
-    subtask,
-    makeSubtask({ id: "s2", name: "Add middleware", parallelizable: true }),
-  ];
-
   it("buildAnalyzePrompt references task name and instructs analysis", () => {
     const prompt = buildAnalyzePrompt(task);
     expect(prompt).toContain(task);

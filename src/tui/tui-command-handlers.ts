@@ -1,4 +1,5 @@
 // Implements TUI slash command handlers and backend action dispatch.
+// oxlint-disable no-underscore-dangle — _onRunEnd is from TuiStateAccess interface
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
@@ -605,7 +606,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           const s = getLoopState();
           const limit = parsedLoop.tokenBudget;
           const used = s?.tokenUsage ?? 0;
-          if (!limit) return true; // unlimited
+          if (!limit) {
+            return true;
+          } // unlimited
           if (used >= limit) {
             chatLog.addSystem(`/loop: ⛔ Token budget (${limit}) exhausted — stopping`);
             state.loopState = null;
@@ -648,7 +651,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           // 2. Poll sessions.get until assistant response appears
           const deadline = Date.now() + subTimeoutMs;
           while (Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, 2_000));
+            await new Promise<void>((r) => {
+              setTimeout(r, 2_000);
+            });
 
             try {
               const getResult: Record<string, unknown> = await callGateway({
@@ -657,7 +662,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
                 timeoutMs: 10_000,
               });
 
-              if (!getResult) continue;
+              if (!getResult) {
+                continue;
+              }
 
               const msgs = getResult.messages as
                 | Array<{ role: string; content?: string }>
@@ -678,7 +685,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
                     timeoutMs: 10_000,
                   }).catch(() => {});
 
-                  if (parsed) return parsed;
+                  if (parsed) {
+                    return parsed;
+                  }
 
                   // No structured markers — heuristic fallback
                   const likelyPassed =
@@ -810,20 +819,31 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         };
 
         // ── Phase 1: Analyze ───────────────────────────────────────
-        let phaseSummary = await runPhase("analyze", buildAnalyzePrompt(loopTask), 0);
-        if (!state.loopState) break;
+        const phaseSummary = await runPhase("analyze", buildAnalyzePrompt(loopTask), 0);
+        if (!state.loopState) {
+          break;
+        }
 
         // ── Phase 2: Plan ──────────────────────────────────────────
-        phaseSummary = await runPhase("plan", buildPlanPrompt(loopTask, phaseSummary), 1);
-        if (!state.loopState) break;
+        if (!checkBudget()) {
+          break;
+        }
+        await runPhase("plan", buildPlanPrompt(loopTask, phaseSummary), 1);
+        if (!state.loopState) {
+          break;
+        }
 
         // Budget check after plan phase — tokenUsage was incremented inside runPhase
-        if (!checkBudget()) break;
+        if (!checkBudget()) {
+          break;
+        }
 
         // ── Phase 3: Execute — per-subtask mini-loop ───────────────
         // Read subtasks from module state (set by loop_update during plan phase)
         const moduleState = getLoopState();
-        if (!state.loopState) break;
+        if (!state.loopState) {
+          break;
+        }
         const subtaskList = moduleState?.subtasks ?? [];
         const serialTasks = subtaskList.filter((s) => !s.parallelizable);
         const parallelTasks = subtaskList.filter((s) => s.parallelizable);
@@ -837,15 +857,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           tui.requestRender();
 
           for (const subtask of serialTasks) {
-            if (!state.loopState) break;
-            let maxFixAttempts = 3;
+            if (!state.loopState) {
+              break;
+            }
+            const maxFixAttempts = 3;
             let attempt = 0;
 
             while (attempt < maxFixAttempts && state.loopState) {
               // ── Execute subtask ──────────────────────────────────
               const execPrompt = buildSerialExecutePrompt(subtask, loopTask);
               const execDir = getPhaseDir(loopDir, "execute", 3);
-              if (loopDir) writePhasePrompt(execDir, execPrompt).catch(() => {});
+              if (loopDir) {
+                writePhasePrompt(execDir, execPrompt).catch(() => {});
+              }
 
               state.loopState.currentPhase = "execute";
               const execState =
@@ -863,7 +887,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
               try {
                 // Check budget before executing
-                if (!checkBudget()) break;
+                if (!checkBudget()) {
+                  break;
+                }
                 const execWait = createPhaseWait(SUBTASK_TIMEOUT);
                 await sendMessage(execPrompt);
                 await execWait;
@@ -876,10 +902,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
                 break;
               }
               incrementTokenUsage();
-              if (!state.loopState) break;
+              if (!state.loopState) {
+                break;
+              }
 
-              if (loopDir)
+              if (loopDir) {
                 writePhaseResult(execDir, getLoopState()?.phaseResult ?? {}).catch(() => {});
+              }
 
               // ── Verify subtask (independent sub-agent) ──────────────
               const verifyPrompt = buildSpawnedVerifyPrompt(subtask);
@@ -888,14 +917,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               state.loopState.currentPhase = "verify";
               tui.requestRender();
 
-              if (loopDir) writePhasePrompt(verifyDir, verifyPrompt).catch(() => {});
+              if (loopDir) {
+                writePhasePrompt(verifyDir, verifyPrompt).catch(() => {});
+              }
 
               // Check budget before verifying
-              if (!checkBudget()) break;
+              if (!checkBudget()) {
+                break;
+              }
 
               const verifyResult = await spawnVerifySession(verifyPrompt, SUBTASK_TIMEOUT);
-              if (loopDir && verifyResult)
+              if (loopDir && verifyResult) {
                 writePhaseResult(verifyDir, verifyResult).catch(() => {});
+              }
 
               if (verifyResult === null) {
                 chatLog.addSystem(`/loop: ⚠️ Verify "${subtask.name}" sub-agent did not respond`);
@@ -924,11 +958,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               tui.requestRender();
 
               const fixDir = getPhaseDir(loopDir, "execute", 3);
-              if (loopDir) writePhasePrompt(fixDir, fixPrompt).catch(() => {});
+              if (loopDir) {
+                writePhasePrompt(fixDir, fixPrompt).catch(() => {});
+              }
 
               try {
                 // Check budget before fixing
-                if (!checkBudget()) break;
+                if (!checkBudget()) {
+                  break;
+                }
                 const fixWait = createPhaseWait(SUBTASK_TIMEOUT);
                 await sendMessage(fixPrompt);
                 await fixWait;
@@ -968,7 +1006,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
             const dispatchPrompt = buildParallelDispatchPrompt(parallelTasks, loopTask);
             const execDir = getPhaseDir(loopDir, "execute", 3);
-            if (loopDir) writePhasePrompt(execDir, dispatchPrompt).catch(() => {});
+            if (loopDir) {
+              writePhasePrompt(execDir, dispatchPrompt).catch(() => {});
+            }
 
             try {
               const dispatchWait = createPhaseWait(300_000);
@@ -990,18 +1030,23 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             tui.requestRender();
 
             for (const subtask of parallelTasks) {
-              if (!state.loopState) break;
+              if (!state.loopState) {
+                break;
+              }
 
               const verifyPrompt = buildSpawnedVerifyPrompt(subtask);
               const verifyDir = getPhaseDir(loopDir, "verify", 4);
-              if (loopDir) writePhasePrompt(verifyDir, verifyPrompt).catch(() => {});
+              if (loopDir) {
+                writePhasePrompt(verifyDir, verifyPrompt).catch(() => {});
+              }
 
               state.loopState.currentPhase = "verify";
               tui.requestRender();
 
               const parallelResult = await spawnVerifySession(verifyPrompt, SUBTASK_TIMEOUT);
-              if (loopDir && parallelResult)
+              if (loopDir && parallelResult) {
                 writePhaseResult(verifyDir, parallelResult).catch(() => {});
+              }
 
               if (parallelResult === null) {
                 chatLog.addSystem(`/loop: ⚠️ "${subtask.name}" (parallel) verification timed out`);
@@ -1040,7 +1085,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
           const reportPrompt = buildReportPrompt(loopTask, finalSubtasks);
           const reportDir = getPhaseDir(loopDir, "report", 5);
-          if (loopDir) writePhasePrompt(reportDir, reportPrompt).catch(() => {});
+          if (loopDir) {
+            writePhasePrompt(reportDir, reportPrompt).catch(() => {});
+          }
 
           state.loopState.currentPhase = "report";
           const reportState =

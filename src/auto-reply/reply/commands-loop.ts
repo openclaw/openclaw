@@ -36,15 +36,15 @@ export function parseLoopCommand(raw: string): {
     flagArgs.push({ key: match[1]!, raw: match[2]! });
   }
 
-  for (const { key, raw } of flagArgs) {
+  for (const { key, raw: rawValue } of flagArgs) {
     if (key === "max-iterations") {
-      const parsed = parseInt(raw, 10);
+      const parsed = Number.parseInt(rawValue, 10);
       if (!Number.isNaN(parsed) && parsed > 0 && parsed <= 100) {
         maxIterations = parsed;
       }
     }
     if (key === "budget") {
-      const parsed = parseInt(raw, 10);
+      const parsed = Number.parseInt(rawValue, 10);
       if (!Number.isNaN(parsed) && parsed > 0) {
         tokenBudget = parsed;
       }
@@ -324,7 +324,9 @@ export function buildReportPrompt(task: string, subtasks?: LoopSubtask[]): strin
 /** Parses the verdict from a spawned verifier agent response text. */
 export function parseSpawnedVerdict(text: string): { passed: boolean; summary: string } | null {
   const verdictMatch = text.match(/---VERDICT---\s*\n\s*passed:\s*(true|false)/i);
-  if (!verdictMatch) return null;
+  if (!verdictMatch) {
+    return null;
+  }
   const passed = verdictMatch[1]!.toLowerCase() === "true";
   const summaryMatch = text.match(/---SUMMARY---\s*\n([\s\S]*?)(?:\n```|$)/);
   const summary = summaryMatch ? summaryMatch[1]!.trim() : "";

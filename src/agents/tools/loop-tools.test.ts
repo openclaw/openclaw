@@ -194,9 +194,9 @@ describe("loop tools", () => {
         result: "Created the endpoint",
       });
 
-      const state = getLoopState();
-      expect(state?.subtasks[0].status).toBe("complete");
-      expect(state?.subtasks[0].result).toBe("Created the endpoint");
+      const state = getLoopState()!;
+      expect(state.subtasks[0].status).toBe("complete");
+      expect(state.subtasks[0].result).toBe("Created the endpoint");
     });
 
     it("returns error for unknown action", async () => {
