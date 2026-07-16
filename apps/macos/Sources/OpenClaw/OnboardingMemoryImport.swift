@@ -268,73 +268,14 @@ final class OnboardingMemoryImportModel {
 
         var providers = self.applyingProviders
         for index in providers.indices where selectedIds.contains(providers[index].providerId) {
-            guard self.isCurrent(token) else { return }
-            guard await gateway.isCurrentServerLease(lease) else {
-                self.finishStaleLease(token: token, applyingProviders: providers)
-                return
-            }
-            guard self.isCurrent(token) else { return }
-            guard let fingerprint = providers[index].planFingerprint else {
-                providers[index].inlineError = "The Gateway did not return a usable import plan. Try planning again."
-                continue
-            }
-            let providerId = providers[index].providerId
-            let idempotencyKey = self.applyIdempotencyKeys[providerId] ?? UUID().uuidString
-            self.applyIdempotencyKeys[providerId] = idempotencyKey
-            do {
-                let data = try await gateway.request(
-                    method: "migrations.memory.apply",
-                    params: [
-                        "idempotencyKey": AnyCodable(idempotencyKey),
-                        "agentId": AnyCodable(agentId),
-                        "providerId": AnyCodable(providerId),
-                        "planFingerprint": AnyCodable(fingerprint),
-                        "itemIds": AnyCodable(providers[index].plannedItemIds),
-                        "overwrite": AnyCodable(false),
-                    ],
-                    timeoutMs: 120_000,
-                    ifCurrentServerLease: lease)
-                guard self.isCurrent(token) else { return }
-                guard await gateway.isCurrentServerLease(lease) else {
-                    self.finishStaleLease(token: token, applyingProviders: providers)
-                    return
-                }
-                guard self.isCurrent(token) else { return }
-                let result = try JSONDecoder().decode(MigrationsMemoryApplyResult.self, from: data)
-                guard result.providerid == providerId else {
-                    throw OnboardingMemoryImportError.unexpectedApplyProvider
-                }
-                self.applyIdempotencyKeys.removeValue(forKey: providerId)
-                providers[index].selected = false
-                providers[index].result = Self.mergeResult(
-                    providers[index].result,
-                    providerId: providerId,
-                    label: providers[index].label,
-                    summary: result.summary)
-                // Conflicts mean selected items were skipped after planning (a
-                // target appeared mid-apply); they need a replan, not "done".
-                let incomplete = result.summary.errors + result.summary.conflicts
-                providers[index].requiresReplan = incomplete > 0
-                providers[index].appliedPlanFingerprint = incomplete == 0 ? fingerprint : nil
-                providers[index].inlineError = incomplete > 0
-                    ? "\(incomplete) \(Self.memoryNoun(incomplete)) could not be imported."
-                    : nil
-            } catch {
-                guard self.isCurrent(token) else { return }
-                guard await gateway.isCurrentServerLease(lease) else {
-                    self.finishStaleLease(token: token, applyingProviders: providers)
-                    return
-                }
-                guard self.isCurrent(token) else { return }
-                // A Gateway rejection is definitive. Transport and decode
-                // failures are ambiguous, so a retry must reuse the same key.
-                if error is GatewayResponseError {
-                    self.applyIdempotencyKeys.removeValue(forKey: providerId)
-                    providers[index].selected = false
-                    providers[index].requiresReplan = true
-                }
-                providers[index].inlineError = error.localizedDescription
-            }
+            let outcome = await self.applyOne(
+                at: index,
+                providers: &providers,
+                gateway: gateway,
+                agentId: agentId,
+                lease: lease,
+                token: token)
+            guard outcome == .continueBatch else { return }
         }
 
         guard self.isCurrent(token) else { return }
@@ -354,6 +295,102 @@ final class OnboardingMemoryImportModel {
             self.applyIdempotencyKeys = [:]
             self.phase = .done(results)
         }
+    }
+
+    private enum ApplyBatchOutcome {
+        case continueBatch
+        case abort
+    }
+
+    /// Applies one provider's planned items; mutates its row in place. `.abort`
+    /// means the operation token or server lease went stale mid-flight.
+    private func applyOne(
+        at index: Int,
+        providers: inout [Provider],
+        gateway: GatewayConnection,
+        agentId: String,
+        lease: GatewayConnection.ServerLease,
+        token: UUID) async -> ApplyBatchOutcome
+    {
+        guard self.isCurrent(token) else { return .abort }
+        guard await gateway.isCurrentServerLease(lease) else {
+            self.finishStaleLease(token: token, applyingProviders: providers)
+            return .abort
+        }
+        guard self.isCurrent(token) else { return .abort }
+        guard let fingerprint = providers[index].planFingerprint else {
+            providers[index].inlineError = "The Gateway did not return a usable import plan. Try planning again."
+            return .continueBatch
+        }
+        let providerId = providers[index].providerId
+        let idempotencyKey = self.applyIdempotencyKeys[providerId] ?? UUID().uuidString
+        self.applyIdempotencyKeys[providerId] = idempotencyKey
+        do {
+            let data = try await gateway.request(
+                method: "migrations.memory.apply",
+                params: [
+                    "idempotencyKey": AnyCodable(idempotencyKey),
+                    "agentId": AnyCodable(agentId),
+                    "providerId": AnyCodable(providerId),
+                    "planFingerprint": AnyCodable(fingerprint),
+                    "itemIds": AnyCodable(providers[index].plannedItemIds),
+                    "overwrite": AnyCodable(false),
+                ],
+                timeoutMs: 120_000,
+                ifCurrentServerLease: lease)
+            guard self.isCurrent(token) else { return .abort }
+            guard await gateway.isCurrentServerLease(lease) else {
+                self.finishStaleLease(token: token, applyingProviders: providers)
+                return .abort
+            }
+            guard self.isCurrent(token) else { return .abort }
+            let result = try JSONDecoder().decode(MigrationsMemoryApplyResult.self, from: data)
+            guard result.providerid == providerId else {
+                throw OnboardingMemoryImportError.unexpectedApplyProvider
+            }
+            self.applyIdempotencyKeys.removeValue(forKey: providerId)
+            Self.recordApplyResult(
+                &providers[index],
+                summary: result.summary,
+                fingerprint: fingerprint)
+        } catch {
+            guard self.isCurrent(token) else { return .abort }
+            guard await gateway.isCurrentServerLease(lease) else {
+                self.finishStaleLease(token: token, applyingProviders: providers)
+                return .abort
+            }
+            guard self.isCurrent(token) else { return .abort }
+            // A Gateway rejection is definitive. Transport and decode
+            // failures are ambiguous, so a retry must reuse the same key.
+            if error is GatewayResponseError {
+                self.applyIdempotencyKeys.removeValue(forKey: providerId)
+                providers[index].selected = false
+                providers[index].requiresReplan = true
+            }
+            providers[index].inlineError = error.localizedDescription
+        }
+        return .continueBatch
+    }
+
+    /// Conflicts mean selected items were skipped after planning (a target
+    /// appeared mid-apply); they need a replan, not "done".
+    private static func recordApplyResult(
+        _ provider: inout Provider,
+        summary: MemoryMigrationSummary,
+        fingerprint: String)
+    {
+        provider.selected = false
+        provider.result = self.mergeResult(
+            provider.result,
+            providerId: provider.providerId,
+            label: provider.label,
+            summary: summary)
+        let incomplete = summary.errors + summary.conflicts
+        provider.requiresReplan = incomplete > 0
+        provider.appliedPlanFingerprint = incomplete == 0 ? fingerprint : nil
+        provider.inlineError = incomplete > 0
+            ? "\(incomplete) \(Self.memoryNoun(incomplete)) could not be imported."
+            : nil
     }
 
     private func beginPlanning() -> UUID? {

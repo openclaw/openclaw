@@ -136,16 +136,7 @@ extension OnboardingView {
                 .curious
             }
         case .memory:
-            switch snapshot.memoryPhase {
-            case .planning, .applying:
-                .thinking
-            case .failed:
-                .sad
-            case .done:
-                .happy
-            case .idle, .offer, .empty:
-                .curious
-            }
+            self.memoryImportMood(for: snapshot.memoryPhase)
         case .permissions:
             snapshot.allPermissionsGranted ? .happy : .curious
         case .chat:
@@ -158,7 +149,20 @@ extension OnboardingView {
     static func mascotAccessory(for page: MascotPage) -> OpenClawMascotAccessory {
         switch page {
         case .ready: .gradCap
-        case .welcome, .connection, .cli, .ai, .permissions, .chat: .none
+        case .welcome, .connection, .cli, .ai, .memory, .permissions, .chat: .none
+        }
+    }
+
+    static func memoryImportMood(for phase: OnboardingMemoryImportModel.Phase) -> OpenClawMascotMood {
+        switch phase {
+        case .planning, .applying:
+            .thinking
+        case .failed:
+            .sad
+        case .done:
+            .happy
+        case .idle, .offer, .empty:
+            .curious
         }
     }
 }

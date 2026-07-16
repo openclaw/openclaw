@@ -203,9 +203,11 @@ describe("runGuidedOnboarding", () => {
         config: persistedConfig,
       });
     const prompter = createWizardPrompter();
-    const runSetupMemoryImportStep = vi.fn(async ({ prompter }: { prompter: WizardPrompter }) => {
-      await prompter.note("Codex — /source/codex (1 memories)", "Memories found");
-    });
+    const runSetupMemoryImportStep = vi.fn(
+      async ({ prompter: stepPrompter }: { prompter: WizardPrompter }) => {
+        await stepPrompter.note("Codex — /source/codex (1 memories)", "Memories found");
+      },
+    );
     const deps = setupDeps({ prompter, runSetupMemoryImportStep });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
