@@ -1,4 +1,4 @@
-// Onboard helper tests cover workspace setup, control UI links, and gateway reachability probes.
+// Onboard helper tests cover workspace setup, state cleanup, control UI links, and gateway probes.
 import * as fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -86,6 +86,8 @@ const mocks = vi.hoisted(() => ({
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   resolveAdvertisedLanHost: vi.fn<() => Promise<string | null>>(async () => null),
   probeGateway: vi.fn(),
+  deleteWorkspaceState: vi.fn(),
+  prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
 }));
 
 vi.mock("../infra/fs-safe.js", () => ({
@@ -106,6 +108,14 @@ vi.mock("../infra/advertised-lan-host.js", () => ({
 
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
+}));
+
+vi.mock("../agents/workspace-state-store.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/workspace-state-store.js")>(
+    "../agents/workspace-state-store.js",
+  )),
+  deleteWorkspaceState: mocks.deleteWorkspaceState,
+  prepareWorkspaceStateDeletion: mocks.prepareWorkspaceStateDeletion,
 }));
 
 afterEach(() => {
@@ -140,7 +150,6 @@ describe("handleReset", () => {
     const profileCredentialsDir = path.join(profileStateDir, "credentials");
     const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
     const workspaceDir = path.join(profileStateDir, "workspace");
-    const workspaceAttestationPath = `${workspaceDir}.attested`;
     const defaultCredentialsDir = path.join(defaultStateDir, "credentials");
 
     fs.mkdirSync(profileCredentialsDir, { recursive: true });
@@ -148,10 +157,6 @@ describe("handleReset", () => {
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.mkdirSync(defaultCredentialsDir, { recursive: true });
     fs.writeFileSync(profileConfigPath, "{}\n");
-    fs.writeFileSync(
-      workspaceAttestationPath,
-      `openclaw-workspace-attestation:v1\n${new Date().toISOString()}\n`,
-    );
 
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
     const expectedTrashedPaths = [
@@ -159,7 +164,6 @@ describe("handleReset", () => {
       profileCredentialsDir,
       profileSessionsDir,
       workspaceDir,
-      workspaceAttestationPath,
     ].map(expectedTrashSourcePath);
     const expectedDefaultCredentialsDir = expectedTrashSourcePath(defaultCredentialsDir);
 
@@ -181,25 +185,28 @@ describe("handleReset", () => {
     const trashedPaths = mocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
     expect(trashedPaths).toEqual(expectedTrashedPaths);
     expect(trashedPaths).not.toContain(expectedDefaultCredentialsDir);
+    expect(mocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
   });
 
-  it("does not trash an unowned sibling attestation path during full reset", async () => {
+  it("retains workspace state when workspace removal fails", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
     const profileStateDir = path.join(homeDir, ".openclaw-work");
     const profileConfigPath = path.join(profileStateDir, "openclaw.json");
     const profileCredentialsDir = path.join(profileStateDir, "credentials");
     const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
     const workspaceDir = path.join(profileStateDir, "workspace");
-    const workspaceAttestationPath = `${workspaceDir}.attested`;
 
     fs.mkdirSync(profileCredentialsDir, { recursive: true });
     fs.mkdirSync(profileSessionsDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.writeFileSync(profileConfigPath, "{}\n");
-    fs.writeFileSync(workspaceAttestationPath, "external data\n");
 
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-    const unownedAttestationTrashPath = expectedTrashSourcePath(workspaceAttestationPath);
+    mocks.movePathToTrash
+      .mockResolvedValueOnce("config.trashed")
+      .mockResolvedValueOnce("credentials.trashed")
+      .mockResolvedValueOnce("sessions.trashed")
+      .mockRejectedValueOnce(new Error("trash unavailable"));
 
     try {
       await withEnvAsync(
@@ -216,53 +223,8 @@ describe("handleReset", () => {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
 
-    const trashedPaths = mocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
-    expect(trashedPaths).not.toContain(unownedAttestationTrashPath);
+    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
-
-  it.skipIf(process.platform === "win32")(
-    "does not abort full reset for an unreadable legacy attestation path",
-    async () => {
-      const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
-      const profileStateDir = path.join(homeDir, ".openclaw-work");
-      const profileConfigPath = path.join(profileStateDir, "openclaw.json");
-      const profileCredentialsDir = path.join(profileStateDir, "credentials");
-      const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
-      const workspaceDir = path.join(profileStateDir, "workspace");
-      const workspaceAttestationPath = `${workspaceDir}.attested`;
-
-      fs.mkdirSync(profileCredentialsDir, { recursive: true });
-      fs.mkdirSync(profileSessionsDir, { recursive: true });
-      fs.mkdirSync(workspaceDir, { recursive: true });
-      fs.writeFileSync(profileConfigPath, "{}\n");
-      fs.writeFileSync(workspaceAttestationPath, "external data\n", { mode: 0o000 });
-      fs.chmodSync(workspaceAttestationPath, 0o000);
-
-      const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-      const unreadableAttestationTrashPath = expectedTrashSourcePath(workspaceAttestationPath);
-
-      try {
-        await withEnvAsync(
-          {
-            HOME: homeDir,
-            OPENCLAW_HOME: homeDir,
-            OPENCLAW_PROFILE: "work",
-            OPENCLAW_STATE_DIR: profileStateDir,
-            OPENCLAW_CONFIG_PATH: profileConfigPath,
-          },
-          async () => {
-            await expect(handleReset("full", workspaceDir, runtime)).resolves.toBeUndefined();
-          },
-        );
-      } finally {
-        fs.chmodSync(workspaceAttestationPath, 0o600);
-        fs.rmSync(homeDir, { recursive: true, force: true });
-      }
-
-      const trashedPaths = mocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
-      expect(trashedPaths).not.toContain(unreadableAttestationTrashPath);
-    },
-  );
 });
 
 describe("moveToTrash", () => {
@@ -307,6 +269,24 @@ describe("moveToTrash", () => {
 
     expect(mocks.movePathToTrash).toHaveBeenCalledWith(targetPath, {
       allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
+    });
+  });
+
+  it("moves a dangling symlink instead of treating it as already removed", async () => {
+    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-dangling-link-"));
+    const targetPath = path.join(testRoot, "workspace-link");
+    fs.symlinkSync(path.join(testRoot, "missing-target"), targetPath, "dir");
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+    const sourcePath = expectedTrashSourcePath(targetPath);
+
+    try {
+      await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
+    } finally {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
+      allowedRoots: [path.dirname(sourcePath)],
     });
   });
 

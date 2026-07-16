@@ -89,7 +89,10 @@ const legacyStorePatterns = [
   /\bacp\/event-ledger\.json\b/u,
   /\bcache\/[^"'`]*\.json\b/u,
   /\bagents\/[^"'`]+\/agent\/(?:auth|models)\.json\b/u,
-  /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|workspace-state)\.json\b/u,
+  /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|(?:openclaw-)?workspace-state)\.json\b/u,
+  // Dynamic template spans resolve to `*`, so the start alternative also
+  // catches `${workspaceKey}.attested` and `${workspaceDir}.attested`.
+  /(?:^|[/\\])[^/\\"'`]+\.attested\b/u,
   /\btui\/last-session\.json\b/u,
   /\bcommitments\/commitments\.json\b/u,
   /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
@@ -116,6 +119,7 @@ const allowedRuntimeMigrationPaths = [
   "src/infra/state-migrations.commitments.ts",
   "src/infra/state-migrations.managed-outgoing-images.ts",
   "src/infra/state-migrations.apns.ts",
+  "src/infra/state-migrations.workspace-setup.ts",
   "src/infra/state-migrations.web-push.ts",
   "src/infra/state-migrations.node-host.ts",
   "src/infra/state-migrations.subagent-registry.ts",
