@@ -18,6 +18,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { enqueueRun, run, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
+import { runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const opsRegressionFixtures = setupCronRegressionFixtures({
@@ -33,6 +34,70 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
+  it.each(["manual", "scheduled", "startup"] as const)(
+    "does not start a %s run when stop wins the activation write",
+    async (trigger) => {
+      const store = opsRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+      const job = createDueIsolatedJob({
+        id: `stopped-during-${trigger}-activation`,
+        nowMs: dueAt,
+        nextRunAtMs: trigger === "manual" ? dueAt + 3_600_000 : dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      let now = dueAt;
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+      const realSave = cronStoreModule.saveCronJobsStore;
+      let reservationPersisted = false;
+      const saveSpy = vi
+        .spyOn(cronStoreModule, "saveCronJobsStore")
+        .mockImplementation(async (storePath, nextStore, opts) => {
+          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
+            .runningAtMs;
+          await realSave(storePath, nextStore, opts);
+          if (!reservationPersisted && runningAtMs === dueAt) {
+            reservationPersisted = true;
+            now = dueAt + 1;
+          } else if (reservationPersisted && runningAtMs === dueAt + 1) {
+            stop(state);
+          }
+        });
+
+      try {
+        if (trigger === "manual") {
+          await expect(run(state, job.id, "force")).resolves.toEqual({
+            ok: true,
+            ran: false,
+            reason: "stopped",
+          });
+        } else if (trigger === "scheduled") {
+          await onTimer(state);
+        } else {
+          await runMissedJobs(state);
+        }
+      } finally {
+        saveSpy.mockRestore();
+      }
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+      expect(
+        (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
+          .runningAtMs,
+      ).toBeUndefined();
+    },
+  );
+
   it("rechecks a queued manual run after the job is disabled", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);

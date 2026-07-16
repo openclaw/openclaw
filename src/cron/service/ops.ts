@@ -1016,6 +1016,16 @@ async function activatePreparedManualRun(
       await releasePreparedManualReservation(state, prepared);
       throw error;
     }
+    if (state.stopped || state.restartRecoveryPending) {
+      delete job.state.runningAtMs;
+      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationAt);
+      await persist(state);
+      return {
+        ok: true,
+        ran: false,
+        reason: state.stopped ? "stopped" : "restart-recovery-pending",
+      } as const;
+    }
     releaseQueuedCronRun(state, prepared.jobId, prepared.reservationAt);
     emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
     const taskRunId = tryCreateCronTaskRun({

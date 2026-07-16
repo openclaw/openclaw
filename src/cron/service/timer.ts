@@ -1554,6 +1554,13 @@ async function onAdmittedTimer(state: CronServiceState) {
                 releaseQueuedCronRun(state, due.id, due.reservedAtMs);
                 throw error;
               }
+              if (state.stopped || state.restartRecoveryPending) {
+                stopAdmittingDueJobs = true;
+                delete job.state.runningAtMs;
+                releaseQueuedCronRun(state, due.id, due.reservedAtMs);
+                await persist(state);
+                return undefined;
+              }
               releaseQueuedCronRun(state, due.id, due.reservedAtMs);
               return { ...due, job, startedAt };
             });
@@ -2014,6 +2021,12 @@ async function executeStartupCatchupPlan(
             job.state.runningAtMs = candidate.reservedAtMs;
             releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
             throw error;
+          }
+          if (state.stopped || state.restartRecoveryPending) {
+            delete job.state.runningAtMs;
+            releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
+            await persist(state);
+            return undefined;
           }
           releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
           return { ...candidate, job, startedAt };
