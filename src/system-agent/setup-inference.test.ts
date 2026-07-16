@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
   readAuthProfileStoreForTest,
@@ -32,6 +31,7 @@ import {
 import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
 import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
@@ -40,12 +40,14 @@ import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.
 import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
+  type BoundVerifySetupInferenceResult,
   detectSetupInference,
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
   resolvePersistentApplyInference,
-  verifySetupInference,
-  verifySetupInferenceConfig,
+  type VerifySetupInferenceResult,
+  verifySetupInference as verifySetupInferenceImpl,
+  verifySetupInferenceConfig as verifySetupInferenceConfigImpl,
 } from "./setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
@@ -114,14 +116,45 @@ const testCodexRuntimeArtifact = {
   id: "codex-app-server",
   fingerprint: "codex-runtime-v1",
 } as const;
+const suiteTempRootTracker = createSuiteTempRootTracker({
+  prefix: "setup-inference-test-",
+});
+
+beforeAll(async () => {
+  await suiteTempRootTracker.setup();
+});
+
+afterAll(async () => {
+  await suiteTempRootTracker.cleanup();
+});
+
+async function makeTempDir(): Promise<string> {
+  return await suiteTempRootTracker.make("case");
+}
+
+const deferSuiteTempDirCleanup = async () => {};
+
+function withSuiteTempDirs<
+  T extends NonNullable<Parameters<typeof activateSetupInferenceImpl>[0]["deps"]>,
+>(input: T | undefined): T {
+  // Keep operation dirs real and unique; only their routine cleanup moves to suite teardown.
+  const deps = Object.create(
+    Object.getPrototypeOf(input ?? {}),
+    Object.getOwnPropertyDescriptors(input ?? {}),
+  ) as T;
+  if (!deps.createTempDir) {
+    deps.createTempDir = makeTempDir;
+  }
+  if (deps.createTempDir === makeTempDir && !deps.removeTempDir) {
+    deps.removeTempDir = deferSuiteTempDirCleanup;
+  }
+  return deps;
+}
 
 async function activateSetupInference(
   params: Parameters<typeof activateSetupInferenceImpl>[0],
 ): ReturnType<typeof activateSetupInferenceImpl> {
-  const deps = Object.create(
-    Object.getPrototypeOf(params.deps ?? {}),
-    Object.getOwnPropertyDescriptors(params.deps ?? {}),
-  ) as NonNullable<typeof params.deps>;
+  const deps = withSuiteTempDirs(params.deps);
   const ownerPluginArtifacts = { ownerPluginIds: [], ownerPluginArtifacts: [] } as const;
   const usesRealOwnerBinding =
     params.deps?.createSystemAgentVerifiedInferenceBinding ===
@@ -148,8 +181,30 @@ async function activateSetupInference(
   });
 }
 
-async function makeTempDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "setup-inference-test-"));
+type TestVerifySetupInferenceParams = Omit<
+  Parameters<typeof verifySetupInferenceImpl>[0],
+  "bindSession"
+>;
+
+function verifySetupInference(
+  params: TestVerifySetupInferenceParams & { bindSession: true },
+): Promise<BoundVerifySetupInferenceResult>;
+function verifySetupInference(
+  params: TestVerifySetupInferenceParams & { bindSession?: false },
+): Promise<VerifySetupInferenceResult>;
+function verifySetupInference(
+  params: TestVerifySetupInferenceParams & { bindSession?: boolean },
+): Promise<VerifySetupInferenceResult | BoundVerifySetupInferenceResult> {
+  return verifySetupInferenceImpl({
+    ...params,
+    deps: withSuiteTempDirs(params.deps),
+  } as never);
+}
+
+async function verifySetupInferenceConfig(
+  params: Parameters<typeof verifySetupInferenceConfigImpl>[0],
+): ReturnType<typeof verifySetupInferenceConfigImpl> {
+  return verifySetupInferenceConfigImpl({ ...params, deps: withSuiteTempDirs(params.deps) });
 }
 
 type SuccessfulRunParams = {
