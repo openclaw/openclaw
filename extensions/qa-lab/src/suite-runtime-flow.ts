@@ -22,6 +22,7 @@ import {
   reportsDiscoveryScopeLeak,
   reportsMissingDiscoveryFiles,
 } from "./discovery-eval.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
@@ -132,7 +133,7 @@ type QaSuiteStep = {
 
 type QaSuiteScenarioResult = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: Array<{
     name: string;
     status: "pass" | "fail" | "skip";
@@ -162,6 +163,10 @@ export async function runQaSuiteScenarioSteps(
       });
     } catch (error) {
       const details = formatQaErrorMessage(error);
+      if (error instanceof QaSuiteScenarioSkipError) {
+        stepResults.push({ name: step.name, status: "skip", details });
+        return { name, status: "skip", steps: stepResults, details };
+      }
       if (process.env.OPENCLAW_QA_DEBUG === "1") {
         console.error(`[qa-suite] fail scenario="${name}" step="${step.name}" details=${details}`);
       }
@@ -336,7 +341,10 @@ export function createQaSuiteScenarioStepRunner(
             config: execution.config ?? {},
             gateway: env.gateway,
             outputDir: env.outputDir,
+            primaryModel: env.primaryModel,
             timeoutMs: execution.timeoutMs ?? deps.liveTurnTimeoutMs(env, 60_000),
+            waitForConfigRestartSettle: async (options) =>
+              await waitForConfigRestartSettle(env, options?.restartDelayMs, options?.timeoutMs),
           });
           if (prepared) {
             Object.assign(vars, prepared);

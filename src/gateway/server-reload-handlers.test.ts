@@ -3,13 +3,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
-import {
-  addSession,
-  markBackgrounded,
-  markExited,
-  resetProcessRegistryForTests,
-} from "../agents/bash-process-registry.js";
+import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import {

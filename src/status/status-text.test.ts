@@ -216,13 +216,17 @@ describe("session status cost line", () => {
           outputCost: 0.23,
           cacheReadCost: 0,
           cacheWriteCost: 0,
-          missingCostEntries: 1,
+          missingCostEntries: 12,
+          missingCostByModel: {
+            "openai/gpt-5.6-sol": 10,
+            "openai-codex/gpt-5.5": 2,
+          },
         },
       ],
     });
 
     await expect(appendSessionCostLine(null, {}, "main", sessionEntry)).resolves.toBe(
-      "💵 cost partial · 456k tok (today)",
+      "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
     );
   });
 });

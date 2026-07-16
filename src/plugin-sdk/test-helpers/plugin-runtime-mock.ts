@@ -657,6 +657,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             [],
           ) as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
+        removeAllowFromStoreEntry: vi.fn().mockResolvedValue({
+          changed: false,
+          allowFrom: [],
+        }) as unknown as PluginRuntime["channel"]["pairing"]["removeAllowFromStoreEntry"],
         upsertPairingRequest: vi.fn().mockResolvedValue({
           code: "TESTCODE",
           created: true,

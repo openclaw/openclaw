@@ -56,7 +56,20 @@ describe("CI changed Node test plan", () => {
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.ts"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["extensions/qa-lab/src/ci-smoke-plan.ts"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["src/infra/retry.ts"])).toBe(false);
+    // Inside the packaged CLI's import graph -> the smoke scenarios can see it.
+    expect(hasQaSmokeAffectingChange(["src/infra/retry.ts"])).toBe(true);
+    // Smoke drives matrix + telegram; other channel plugins are invisible to it.
+    expect(hasQaSmokeAffectingChange(["extensions/telegram/src/index.ts"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
+    expect(hasQaSmokeAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
+    expect(hasQaSmokeAffectingChange(["test/scripts/ci-node-test-plan.test.ts"])).toBe(false);
+    // The QA lane's own orchestration must not be able to skip the lane.
+    expect(hasQaSmokeAffectingChange([".github/workflows/ci.yml"])).toBe(true);
+    expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(true);
+    expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
+    // Deleted source files cannot be graphed; fail safe to running QA smoke.
+    expect(hasQaSmokeAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
   });
 
   it("fails safe to the full plan for broad changes", () => {

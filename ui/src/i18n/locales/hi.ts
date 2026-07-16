@@ -652,6 +652,8 @@ export const hi: TranslationMap = {
     archiveSession: "सत्र संग्रहीत करें",
     archiveSessionCount: "{count} को आर्काइव करें",
     restoreSession: "सत्र बहाल करें",
+    stopCloudWorker: "क्लाउड वर्कर रोकें…",
+    stopCloudWorkerConfirm: '"{session}" के लिए क्लाउड वर्कर रोकें?',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "{count} को हटाएँ…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

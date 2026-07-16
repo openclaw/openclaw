@@ -89,7 +89,7 @@ describe("plugin gateway gauntlet helpers", () => {
       if (await predicate()) {
         return;
       }
-      await delay(25);
+      await delay(5);
     }
     throw new Error("condition was not met before timeout");
   }

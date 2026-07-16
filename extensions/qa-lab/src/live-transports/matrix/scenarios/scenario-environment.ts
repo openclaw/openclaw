@@ -51,7 +51,7 @@ async function patchGatewayConfig(params: {
       throw new Error("Matrix QA config patch requires config.get hash");
     }
     try {
-      await params.gateway.call(
+      return (await params.gateway.call(
         "config.patch",
         {
           raw: JSON.stringify(params.patch, null, 2),
@@ -60,8 +60,7 @@ async function patchGatewayConfig(params: {
           restartDelayMs: params.restartDelayMs ?? 0,
         },
         { timeoutMs: 60_000 },
-      );
-      return;
+      )) as { noop?: boolean };
     } catch (error) {
       if (attempt === 0 && isStaleConfigPatchError(error)) {
         continue;
@@ -69,6 +68,7 @@ async function patchGatewayConfig(params: {
       throw error;
     }
   }
+  throw new Error("Matrix QA config patch exhausted retries");
 }
 
 async function waitForMatrixAccountReady(params: {
@@ -148,11 +148,17 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       sutUserId: params.provisioning.sut.userId,
       topology: params.provisioning.topology,
     });
-    await patchGatewayConfig({
+    const patchResult = await patchGatewayConfig({
       gateway: input.gateway,
       patch: gatewayConfig as Record<string, unknown>,
       replacePaths: ["channels.matrix", "messages", "agents.defaults", "tools"],
     });
+    if (patchResult.noop !== true) {
+      await input.waitForConfigRestartSettle({
+        restartDelayMs: 0,
+        timeoutMs: input.timeoutMs,
+      });
+    }
     await waitForMatrixAccountReady({
       accountId: params.accountId,
       gateway: input.gateway,
@@ -179,7 +185,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       gatewayCall: async (
         method: string,
         callParams?: Record<string, unknown>,
-        opts?: { timeoutMs?: number },
+        opts?: { expectFinal?: boolean; timeoutMs?: number },
       ) => await input.gateway.call(method, callParams ?? {}, opts),
       outputDir: input.outputDir,
       registrationToken: params.harness.registrationToken,
@@ -243,13 +249,14 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       patchGatewayConfig: async (
         patch: Record<string, unknown>,
         opts?: { replacePaths?: string[]; restartDelayMs?: number },
-      ) =>
+      ) => {
         await patchGatewayConfig({
           gateway: input.gateway,
           patch,
           replacePaths: opts?.replacePaths,
           restartDelayMs: opts?.restartDelayMs,
-        }),
+        });
+      },
       readGatewayAccountStartAt: async (accountId: string) =>
         (await readMatrixAccountStatuses(input.gateway)).find(
           (account) => account.accountId === accountId,

@@ -28,7 +28,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { collectAnthropicApiKeys } from "../agents/live-auth-keys.js";
+import { collectProviderApiKeys } from "../agents/live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "../agents/live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
@@ -2984,15 +2984,30 @@ function sessionMessagesAfterNextUserTurn(
   expectedUserText?: string,
 ): unknown[] {
   const nextUserOffset = messages.slice(baselineMessageCount).findIndex((message) => {
+    const actualUserText = extractTranscriptMessageText(message);
     return (
       (message as { role?: unknown } | null | undefined)?.role === "user" &&
-      (expectedUserText === undefined || extractTranscriptMessageText(message) === expectedUserText)
+      (expectedUserText === undefined || matchesLiveProbeUserText(actualUserText, expectedUserText))
     );
   });
   if (nextUserOffset < 0) {
     return [];
   }
   return messages.slice(baselineMessageCount + nextUserOffset + 1);
+}
+
+function matchesLiveProbeUserText(actual: string, expected: string): boolean {
+  if (actual === expected) {
+    return true;
+  }
+  const markerIndex = expected.indexOf(`${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_`);
+  if (markerIndex < 0) {
+    return false;
+  }
+  const nonceSuffix = expected.slice(markerIndex + ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL.length);
+  // The embedded Anthropic runtime scrubs the refusal trigger before persisting it.
+  // Its random suffix survives and still uniquely owns this live probe turn.
+  return /^_[a-f0-9]{32}$/.test(nonceSuffix) && actual.endsWith(nonceSuffix);
 }
 
 function sessionAssistantEntriesForLiveProbe(
@@ -3099,7 +3114,8 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   sessionKey: string;
   thinkingLevel: string;
 }): Promise<void> {
-  const { listSubagentRunsForRequester } = await import("../agents/subagent-registry.js");
+  const { listSubagentRunsForRequester } =
+    await import("../agents/subagent-registry.test-helpers.js");
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
   );
@@ -3296,6 +3312,20 @@ describe("latestAssistantTextAfterBaseline", () => {
       ),
     );
     expect(latestTerminalAssistantTextAfterBaseline(secondEntries, 0)).toBe("second-a second-b");
+  });
+
+  it("correlates Anthropic refusal probes after the runtime scrubs their trigger", () => {
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const expected = `Reply with ok. ${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_${nonce}`;
+    const scrubbed = `Reply with ok. ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_${nonce}`;
+
+    expect(matchesLiveProbeUserText(scrubbed, expected)).toBe(true);
+    expect(
+      matchesLiveProbeUserText(
+        "Reply with ok. ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_ffffffffffffffffffffffffffffffff",
+        expected,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -4629,7 +4659,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     logProgress(
       `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s agent-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS / 1_000))}s agent-wait=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s transcript-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS / 1_000))}s`,
     );
-    const anthropicKeys = collectAnthropicApiKeys();
+    const anthropicKeys = process.env.ANTHROPIC_OAUTH_TOKEN?.trim()
+      ? []
+      : collectProviderApiKeys("anthropic");
     if (anthropicKeys.length > 0) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
       logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
