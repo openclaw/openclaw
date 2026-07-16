@@ -63,10 +63,10 @@ export function createCodexTestToolTerminalObserver(): NonNullable<
       } else if (unresolved.size === 0) {
         nonMutatingFailure = failure;
       }
-    } else if (mutation.mutatingAction) {
-      unresolved.delete(key);
     } else if (unresolved.size === 0) {
       nonMutatingFailure = undefined;
+    } else if (mutation.mutatingAction) {
+      unresolved.delete(key);
     }
     const lastToolError = [...unresolved.values()].at(-1) ?? nonMutatingFailure;
     return {

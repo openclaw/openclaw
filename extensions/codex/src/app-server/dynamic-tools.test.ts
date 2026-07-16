@@ -3342,14 +3342,17 @@ describe("createCodexDynamicToolBridge", () => {
       hookContext: { runId },
     });
 
-    const result = bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId,
-      namespace: null,
-      tool: "message",
-      arguments: { action: "send", target: "channel:original", text: "hello" },
-    });
+    const result = bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId,
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", target: "channel:original", text: "hello" },
+      },
+      { retainExecutionSnapshot: true },
+    );
     await vi.waitFor(() => expect(middleware).toHaveBeenCalledOnce());
 
     expect(bridge.consumeToolExecutionSnapshot?.(callId)).toEqual({
@@ -3358,9 +3361,111 @@ describe("createCodexDynamicToolBridge", () => {
         target: "channel:adjusted",
         text: "hello",
       },
+      executionStarted: true,
     });
     releaseMiddleware?.();
     await result;
+    expect(bridge.consumeToolExecutionSnapshot?.(callId)).toBeUndefined();
+  });
+
+  it("retains a blocked pre-execution boundary while result middleware is pending", async () => {
+    const runId = "run-blocked-middleware";
+    const callId = "call-blocked-middleware";
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: vi.fn(async () => ({ block: true, blockReason: "blocked by policy" })),
+        },
+      ]),
+    );
+    let releaseMiddleware: (() => void) | undefined;
+    const middlewareGate = new Promise<void>((resolve) => {
+      releaseMiddleware = resolve;
+    });
+    const registry = createEmptyPluginRegistry();
+    const middleware = vi.fn(async (event: { result: AgentToolResult<unknown> }) => {
+      await middlewareGate;
+      return { result: event.result };
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "delayed",
+      pluginName: "Delayed",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const execute = vi.fn(async () => textToolResult("should not run"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message", execute })],
+      signal: new AbortController().signal,
+      hookContext: { runId },
+    });
+
+    const result = bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId,
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "blocked" },
+      },
+      { retainExecutionSnapshot: true },
+    );
+    await vi.waitFor(() => expect(middleware).toHaveBeenCalledOnce());
+
+    expect(bridge.consumeToolExecutionSnapshot?.(callId)).toEqual({
+      executedArguments: { action: "send", text: "blocked" },
+      executionStarted: false,
+    });
+    expect(execute).not.toHaveBeenCalled();
+    releaseMiddleware?.();
+    await result;
+    expect(bridge.consumeToolExecutionSnapshot?.(callId)).toBeUndefined();
+  });
+
+  it("does not recreate a retained snapshot after its timeout owner consumes it", async () => {
+    const runId = "run-late-abort";
+    const callId = "call-late-abort";
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: vi.fn(async () => ({ params: { target: "channel:adjusted" } })),
+        },
+      ]),
+    );
+    const execute = vi.fn(
+      async (_callId: string, _args: unknown, signal?: AbortSignal) =>
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message", execute })],
+      signal: new AbortController().signal,
+      hookContext: { runId },
+    });
+    const controller = new AbortController();
+    const result = bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId,
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", target: "channel:original", text: "hello" },
+      },
+      { signal: controller.signal, retainExecutionSnapshot: true },
+    );
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+
+    controller.abort(new Error("tool timed out"));
+    expect(bridge.consumeToolExecutionSnapshot?.(callId)).toBeUndefined();
+    await expect(result).resolves.toMatchObject({ success: false });
     expect(bridge.consumeToolExecutionSnapshot?.(callId)).toBeUndefined();
   });
 

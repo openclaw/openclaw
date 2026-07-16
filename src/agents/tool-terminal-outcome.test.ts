@@ -3,6 +3,7 @@ import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   preExecutionBlockedToolCallIds,
+  recordToolExecutionStarted,
   recordToolExecutionTracked,
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
@@ -69,6 +70,31 @@ describe("tool terminal outcome observer", () => {
     expect(adjustedParamsByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }))).toEqual({
       action: "send",
       to: "channel:adjusted",
+    });
+  });
+
+  it("resolves active wrapper truth when a racing runtime omits conservative facts", () => {
+    const runId = "run-racing-timeout";
+    const toolCallId = "call-racing-timeout";
+    recordToolExecutionStarted(toolCallId, runId);
+    adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), {
+      action: "send",
+      to: "channel:adjusted",
+    });
+
+    const resolution = createToolTerminalObserver(runId)({
+      toolCallId,
+      toolName: "message",
+      arguments: { action: "send", to: "channel:original" },
+      outcome: "failure",
+      failure: { error: "timed out during execution" },
+    });
+
+    expect(resolution).toMatchObject({
+      executionStarted: true,
+      executedArguments: { action: "send", to: "channel:adjusted" },
+      sideEffectEvidence: true,
+      lastToolError: { mutatingAction: true },
     });
   });
 

@@ -156,16 +156,22 @@ export async function handleDynamicToolCallWithTimeout(params: {
   // Timeout or run abort can win while a tool ignores cancellation. Keep the
   // private observer terminal result exactly once across those competing paths.
   let didNotifyAgentToolResult = false;
+  const conservativeRaceResponses = new WeakSet<CodexDynamicToolRuntimeResponse>();
   const finalizeTerminal = (response: CodexDynamicToolRuntimeResponse) => {
     const executionSnapshot = params.toolBridge.consumeToolExecutionSnapshot?.(params.call.callId);
+    // The host observer owns active wrapper state. A bridge snapshot is only needed
+    // after that wrapper settles while result post-processing remains pending.
+    const observedExecutionStarted =
+      executionSnapshot?.executionStarted ??
+      (conservativeRaceResponses.has(response) ? undefined : response.executionStarted);
     const terminalResolution = params.observeToolTerminal?.({
       toolCallId: params.call.callId,
       toolName: params.call.tool,
       arguments:
         response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
-      ...(response.executionStarted !== undefined
-        ? { executionStarted: response.executionStarted }
+      ...(observedExecutionStarted !== undefined
+        ? { executionStarted: observedExecutionStarted }
         : {}),
       outcome: response.success ? "success" : "failure",
       ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
@@ -177,12 +183,15 @@ export async function handleDynamicToolCallWithTimeout(params: {
   const createFailedAfterPossibleDispatch = (
     message: string,
     terminalReason: CodexDynamicToolDiagnosticTerminalReason,
-  ) =>
-    createFailedDynamicToolResponse(message, {
+  ) => {
+    const response = createFailedDynamicToolResponse(message, {
       executionStarted: true,
       sideEffectEvidence: true,
       terminalReason,
     });
+    conservativeRaceResponses.add(response);
+    return response;
+  };
   const notifyAgentToolResult = (
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentToolResult"]>>[0],
   ) => {
@@ -267,6 +276,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
         signal: controller.signal,
         onAgentToolResult: notifyAgentToolResult,
         toolCallOrdinal: params.toolCallOrdinal,
+        retainExecutionSnapshot: true,
       }),
       abortPromise,
       timeoutPromise,

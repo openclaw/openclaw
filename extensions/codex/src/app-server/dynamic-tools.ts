@@ -348,12 +348,13 @@ export type CodexDynamicToolBridge = {
       signal?: AbortSignal;
       onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
       toolCallOrdinal?: number;
+      retainExecutionSnapshot?: boolean;
     },
   ) => Promise<CodexDynamicToolRuntimeResponse>;
-  /** Consume in-flight arguments retained while post-execution processing is incomplete. */
+  /** Consume exact boundary evidence retained while post-execution processing is incomplete. */
   consumeToolExecutionSnapshot?: (
     toolCallId: string,
-  ) => { executedArguments: Record<string, unknown> } | undefined;
+  ) => { executedArguments: Record<string, unknown>; executionStarted: boolean } | undefined;
   telemetry: {
     didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
@@ -481,7 +482,16 @@ export function createCodexDynamicToolBridge(params: {
   };
   const legacyExtensionRunner =
     createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
-  const executionSnapshots = new Map<string, { executedArguments: Record<string, unknown> }>();
+  type ExecutionSnapshot = {
+    executedArguments: Record<string, unknown>;
+    executionStarted: boolean;
+  };
+  type ExecutionSnapshotState = {
+    consumed: boolean;
+    retainAfterCompletion: boolean;
+    snapshot?: ExecutionSnapshot;
+  };
+  const executionSnapshotStates = new Map<string, ExecutionSnapshotState>();
   const directToolNames = new Set([
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
@@ -499,9 +509,12 @@ export function createCodexDynamicToolBridge(params: {
     }),
     telemetry,
     consumeToolExecutionSnapshot: (toolCallId) => {
-      const snapshot = executionSnapshots.get(toolCallId);
-      executionSnapshots.delete(toolCallId);
-      return snapshot;
+      const state = executionSnapshotStates.get(toolCallId);
+      executionSnapshotStates.delete(toolCallId);
+      if (state) {
+        state.consumed = true;
+      }
+      return state?.snapshot;
     },
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
@@ -538,8 +551,16 @@ export function createCodexDynamicToolBridge(params: {
       let didDispatchExecution = false;
       let executionPrevented = false;
       let executedArgs = structuredClone(args);
+      const executionSnapshotState: ExecutionSnapshotState = {
+        consumed: false,
+        retainAfterCompletion: options?.retainExecutionSnapshot === true,
+      };
+      executionSnapshotStates.set(call.callId, executionSnapshotState);
       const captureExecutionBoundary = () => {
         didStartExecution ||= didDispatchExecution;
+        executionPrevented =
+          executionPrevented ||
+          consumePreExecutionBlockedToolCall(call.callId, toolResultHookContext.runId);
         const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
           call.callId,
           toolResultHookContext.runId,
@@ -547,11 +568,14 @@ export function createCodexDynamicToolBridge(params: {
         if (isRecord(adjustedExecutedArgs)) {
           executedArgs = adjustedExecutedArgs;
         }
-        // Outer timeouts can win while result middleware is still pending. Carry the
-        // executed identity forward so terminal policy does not fall back to raw args.
-        executionSnapshots.set(call.callId, {
-          executedArguments: structuredClone(executedArgs),
-        });
+        // Consumption detaches this invocation from the bridge map immediately. The
+        // closure-local flag prevents late completion from republishing stale evidence.
+        if (!executionSnapshotState.consumed) {
+          executionSnapshotState.snapshot = {
+            executedArguments: structuredClone(executedArgs),
+            executionStarted: didStartExecution && !executionPrevented,
+          };
+        }
       };
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
@@ -570,10 +594,6 @@ export function createCodexDynamicToolBridge(params: {
         didDispatchExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         captureExecutionBoundary();
-        executionPrevented = consumePreExecutionBlockedToolCall(
-          call.callId,
-          toolResultHookContext.runId,
-        );
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
@@ -833,7 +853,12 @@ export function createCodexDynamicToolBridge(params: {
           },
         );
       } finally {
-        executionSnapshots.delete(call.callId);
+        if (
+          executionSnapshotStates.get(call.callId) === executionSnapshotState &&
+          (executionSnapshotState.consumed || !executionSnapshotState.retainAfterCompletion)
+        ) {
+          executionSnapshotStates.delete(call.callId);
+        }
         consumeAdjustedParamsForToolCall(call.callId, toolResultHookContext.runId);
       }
     },

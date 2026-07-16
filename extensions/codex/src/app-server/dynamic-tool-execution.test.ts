@@ -387,6 +387,65 @@ describe("dynamic tool execution helpers", () => {
     );
   });
 
+  it("delegates an unpublished abort boundary to the terminal observer", async () => {
+    vi.useFakeTimers();
+    const observeToolTerminal = vi.fn(() => ({
+      executionStarted: false,
+      executedArguments: {
+        action: "send",
+        target: "channel:adjusted",
+        text: "hello",
+      },
+      sideEffectEvidence: false,
+    }));
+    const response = handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-abort-aware-timeout",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", target: "channel:original", text: "hello" },
+      },
+      toolBridge: {
+        handleToolCall: vi.fn((_call, options) => {
+          expect(options?.retainExecutionSnapshot).toBe(true);
+          return new Promise<never>((_resolve, reject) => {
+            options?.signal?.addEventListener(
+              "abort",
+              () => {
+                reject(options.signal?.reason);
+              },
+              { once: true },
+            );
+          });
+        }),
+        consumeToolExecutionSnapshot: vi.fn(() => undefined),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+      observeToolTerminal,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(response).resolves.toMatchObject({ executionStarted: false, success: false });
+    expect(observeToolTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arguments: { action: "send", target: "channel:original", text: "hello" },
+        outcome: "failure",
+      }),
+    );
+    expect(observeToolTerminal.mock.calls[0]?.[0]).not.toHaveProperty("executionStarted");
+    await expect(response).resolves.toMatchObject({
+      executedArguments: {
+        action: "send",
+        target: "channel:adjusted",
+        text: "hello",
+      },
+    });
+  });
+
   it("uses a conservative dispatched fallback without a terminal observer", async () => {
     vi.useFakeTimers();
     const response = handleDynamicToolCallWithTimeout({

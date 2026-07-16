@@ -255,7 +255,9 @@ export class CodexToolProgressProjection {
     meta?: string;
     status: ReturnType<typeof itemStatus>;
   }): void {
-    const actionFingerprint = nativeToolActionFingerprint(params.item);
+    const executionStarted = params.status !== "blocked";
+    const mutatingAction = executionStarted && isMutatingNativeToolItem(params.item);
+    const actionFingerprint = mutatingAction ? nativeToolActionFingerprint(params.item) : undefined;
     const isFailure = isNonSuccessItemStatus(params.status);
     const error = isFailure
       ? itemToolError(params.item, params.status, this.output.textByItem)
@@ -265,11 +267,12 @@ export class CodexToolProgressProjection {
       toolName: params.name,
       arguments: itemToolArgs(params.item),
       ...(params.meta ? { meta: params.meta } : {}),
+      executionStarted,
       outcome: isFailure ? "failure" : "success",
       ...(isFailure ? { failure: error ? { error } : {} } : {}),
       nativeMutation: {
-        mutatingAction: isMutatingNativeToolItem(params.item),
-        replaySafe: !isMutatingNativeToolItem(params.item),
+        mutatingAction,
+        replaySafe: !mutatingAction,
         ...(actionFingerprint ? { actionFingerprint } : {}),
       },
     });
@@ -282,7 +285,7 @@ export class CodexToolProgressProjection {
         toolName: params.name,
         ...(params.meta ? { meta: params.meta } : {}),
         ...(error ? { error } : {}),
-        ...(isMutatingNativeToolItem(params.item) ? { mutatingAction: true } : {}),
+        ...(mutatingAction ? { mutatingAction: true } : {}),
         ...(actionFingerprint ? { actionFingerprint } : {}),
       };
     } else if (this.lastNativeToolError?.mutatingAction !== true) {
