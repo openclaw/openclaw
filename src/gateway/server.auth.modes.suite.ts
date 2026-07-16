@@ -214,31 +214,42 @@ export function registerAuthModesSuite(): void {
       expect(health.ok).toBe(true);
       ws.close();
     });
+  });
 
-    test("requires the shared token when layered tailscale auth is enabled", async () => {
-      testState.gatewayAuth = {
-        mode: "token",
-        token: "secret",
-        allowTailscale: true,
-        requireTailscaleSharedSecret: true,
-      };
+  describe("layered tailscale auth", () => {
+    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let port: number;
+    const tailscaleOrigin = "https://layered-gateway.tailnet.ts.net";
 
-      const withoutToken = await openTailscaleWs(port);
-      const rejected = await connectReq(withoutToken, {
-        skipDefaultAuth: true,
-        device: null,
+    beforeAll(async () => {
+      testState.gatewayAuth = undefined;
+      testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
+      const { replaceConfigFile } = await import("../config/config.js");
+      await replaceConfigFile({
+        nextConfig: {
+          gateway: {
+            auth: { mode: "token", token: "secret", allowTailscale: true },
+            controlUi: testState.gatewayControlUi,
+          },
+        },
+        afterWrite: { mode: "auto" },
       });
-      expect(rejected.ok).toBe(false);
-      expect(rejected.error?.message ?? "").toContain("unauthorized");
-      withoutToken.close();
+      port = await getFreePort();
+      server = await startGatewayServer(port);
+    });
 
-      const withToken = await openTailscaleWs(port);
-      const accepted = await connectReq(withToken, {
-        token: "secret",
-        device: null,
-      });
-      expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
-      withToken.close();
+    beforeEach(() => {
+      testState.gatewayAuth = undefined;
+      testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
+      testTailscaleWhois.value = { login: "peter", name: "Peter" };
+    });
+
+    afterEach(() => {
+      testTailscaleWhois.value = null;
+    });
+
+    afterAll(async () => {
+      await server.close();
     });
 
     test("disconnects a tokenless tailscale session when config.patch enables layered auth", async () => {
@@ -270,6 +281,25 @@ export function registerAuthModesSuite(): void {
         code: 4001,
         reason: "gateway auth changed",
       });
+    });
+
+    test("requires the shared token when layered tailscale auth is enabled", async () => {
+      const withoutToken = await openTailscaleWs(port);
+      const rejected = await connectReq(withoutToken, {
+        skipDefaultAuth: true,
+        device: null,
+      });
+      expect(rejected.ok).toBe(false);
+      expect(rejected.error?.message ?? "").toContain("unauthorized");
+      withoutToken.close();
+
+      const withToken = await openTailscaleWs(port);
+      const accepted = await connectReq(withToken, {
+        token: "secret",
+        device: null,
+      });
+      expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
+      withToken.close();
     });
   });
 }
