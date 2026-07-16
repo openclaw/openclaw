@@ -588,6 +588,3 @@ export const testing = {
   ingressDiagnosticChannel,
   emitIngressModelUsageDiagnostic,
 };
-
-/** @deprecated Use `testing`. */
-export { testing as __testing };

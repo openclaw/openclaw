@@ -1128,6 +1128,7 @@ jobs:
           curl --fail --location --silent --show-error \
             --retry 2 \
             --retry-all-errors \
+            --connect-timeout 10 \
             --max-time 120 \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \

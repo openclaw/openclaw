@@ -5,6 +5,7 @@ import type { ApplicationContext } from "./app/context.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
+import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
@@ -14,6 +15,7 @@ import { page as debugPage } from "./pages/debug/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
+import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
@@ -44,10 +46,12 @@ const APP_ROUTE_TREE = [
   newSessionPage,
   activityPage,
   agentsPage,
+  approvalsPage,
   channelsPage,
   connectionPage,
   aboutPage,
   ...configPages,
+  modelSetupPage,
   modelProvidersPage,
   memoryImportPage,
   profilePage,

@@ -224,25 +224,40 @@ private fun projectMessage(element: JsonElement?): JsonObject? {
 
 private fun projectContent(content: JsonElement?): JsonElement? =
   when (content) {
-    is JsonPrimitive -> content.contentOrNull?.let { JsonPrimitive(it.takeCodePoints(MAX_EVENT_TEXT_CHARS)) }
+    is JsonPrimitive -> content.contentOrNull?.let { JsonPrimitive(it.takeUtf8Bytes(MAX_PROJECTED_CONTENT_BYTES)) }
     is JsonArray ->
       buildJsonArray {
+        var remainingBytes = MAX_PROJECTED_CONTENT_BYTES
+        var partCount = 0
         for (part in content) {
-          when (part) {
-            is JsonPrimitive -> part.contentOrNull?.let { add(JsonPrimitive(it.takeCodePoints(MAX_EVENT_TEXT_CHARS))) }
-            is JsonObject -> {
-              val text = part.stringOrNull("text") ?: continue
-              val type = part.stringOrNull("type")
-              if (type != null && type != "text") continue
-              add(
-                buildJsonObject {
-                  put("type", "text")
-                  put("text", text.takeCodePoints(MAX_EVENT_TEXT_CHARS))
-                },
-              )
-            }
-            else -> Unit
+          if (remainingBytes == 0 || partCount == MAX_PROJECTED_CONTENT_PARTS) break
+          val text =
+            when (part) {
+              is JsonPrimitive -> part.contentOrNull
+              is JsonObject -> {
+                val type = part.stringOrNull("type")
+                if (type != null && type != "text") continue
+                part.stringOrNull("text")
+              }
+              else -> null
+            } ?: continue
+          val projectedText = text.takeUtf8Bytes(remainingBytes)
+          if (projectedText.isEmpty() && text.isNotEmpty()) break
+
+          // The Wear transport has one byte ceiling for the complete event. Bound text across
+          // all parts so a terminal event remains encodable and can still carry its final state.
+          if (part is JsonObject) {
+            add(
+              buildJsonObject {
+                put("type", "text")
+                put("text", projectedText)
+              },
+            )
+          } else {
+            add(JsonPrimitive(projectedText))
           }
+          remainingBytes -= projectedText.toByteArray(Charsets.UTF_8).size
+          partCount += 1
         }
       }
     else -> null
@@ -339,9 +354,32 @@ private fun String.takeCodePoints(maxCodePoints: Int): String {
   return substring(0, offsetByCodePoints(0, maxCodePoints))
 }
 
+private fun String.takeUtf8Bytes(maxBytes: Int): String {
+  var end = 0
+  var usedBytes = 0
+  while (end < length) {
+    val codePoint = codePointAt(end)
+    val charCount = Character.charCount(codePoint)
+    val byteCount =
+      when {
+        codePoint <= 0x7f -> 1
+        codePoint <= 0x7ff -> 2
+        codePoint <= 0xffff -> 3
+        else -> 4
+      }
+    if (usedBytes + byteCount > maxBytes) break
+    usedBytes += byteCount
+    end += charCount
+  }
+  if (end == length) return this
+  return substring(0, end)
+}
+
 private const val MAX_SESSION_KEY_CHARS = 512
 private const val MAX_RUN_ID_CHARS = 128
 private const val MAX_IDEMPOTENCY_KEY_CHARS = 128
 private const val MAX_SESSION_LABEL_CHARS = 200
 private const val MAX_EVENT_TEXT_CHARS = 2_000
+private const val MAX_PROJECTED_CONTENT_BYTES = 1_024
+private const val MAX_PROJECTED_CONTENT_PARTS = 20
 private const val MAX_ERROR_MESSAGE_CHARS = 300

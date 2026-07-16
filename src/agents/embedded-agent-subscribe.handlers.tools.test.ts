@@ -372,7 +372,86 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(200)}…`);
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${"x".repeat(200)}…`);
+  });
+
+  it("keeps read warning args previews on UTF-16 boundaries", async () => {
+    const { ctx, warn } = createTestContext();
+    const emoji = "😀";
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(200)}${emoji}tail`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${"x".repeat(200)}…`);
+    expect(argsPreview).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("marks astral-only read warning args previews as truncated", async () => {
+    const { ctx, warn } = createTestContext();
+    const emoji = "😀";
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-astral-args",
+      args: emoji.repeat(101),
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${emoji.repeat(100)}…`);
+    expect(argsPreview).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("does not scan visible preview content beyond the raw warning bound", async () => {
+    const { ctx, warn } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-bounded-args",
+      args: `${" ".repeat(200)}hidden`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta).not.toHaveProperty("argsPreview");
+  });
+
+  it("does not split surrogate pairs when bounding read warning preview", async () => {
+    const { ctx, warn } = createTestContext();
+
+    // Whitespace collapsing must not let a surrogate half from the raw cap survive sanitization.
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(198)}  🎉`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(198)}…`);
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {

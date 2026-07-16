@@ -350,14 +350,22 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     if (dock) {
       this.dock = dock;
     }
-    if (detail?.catalog || detail?.open === true) {
+    if (detail?.open === false) {
+      this.closePanel();
+      return;
+    }
+    if (detail?.terminalSessionId || detail?.catalog || detail?.open === true) {
       if (!this.available) {
         return;
       }
       this.open = true;
       this.syncLayoutReservation();
       this.persistLayout();
-      void (detail.catalog ? this.openCatalogSession(detail.catalog) : this.restoreSessions());
+      void (detail.terminalSessionId
+        ? this.openRequestedSession(detail.terminalSessionId)
+        : detail.catalog
+          ? this.openCatalogSession(detail.catalog)
+          : this.restoreSessions());
       return;
     }
     this.toggle();
@@ -395,6 +403,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     );
   }
 
+  private async openRequestedSession(sessionId: string): Promise<void> {
+    await this.enqueueAttachSession(sessionId, true);
+  }
+
   private async reattachPersistedSessions(): Promise<void> {
     const operation = this.captureTerminalOperation();
     if (!operation || this.tabs.length > 0) {
@@ -409,9 +421,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         if (!this.isTerminalOperationCurrent(operation)) {
           return;
         }
-        const known = new Set(listed.map((session) => session.sessionId));
+        const known = new Map(listed.map((session) => [session.sessionId, session]));
         for (const sessionId of persisted.filter((id) => known.has(id))) {
-          await this.attachSession(sessionId, operation);
+          await this.attachSession(
+            sessionId,
+            operation,
+            known.get(sessionId)?.owner?.startsWith("agent:") === true,
+          );
           if (!this.isTerminalOperationCurrent(operation)) {
             return;
           }
@@ -474,8 +490,15 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  private async attachPickedSession(sessionId: string): Promise<void> {
+  private async attachPickedSession(
+    sessionId: string,
+    owner: TerminalSessionInfo["owner"],
+  ): Promise<void> {
     this.sessionPickerOpen = false;
+    await this.enqueueAttachSession(sessionId, owner?.startsWith("agent:") === true);
+  }
+
+  private async enqueueAttachSession(sessionId: string, agentOwned: boolean): Promise<void> {
     await this.bootQueue.enqueue(async () => {
       const existing = this.tabs.find((tab) => tab.gatewaySessionId === sessionId);
       if (existing) {
@@ -489,7 +512,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.booting = true;
       this.errorText = null;
       try {
-        const attached = await this.attachSession(sessionId, operation);
+        const attached = await this.attachSession(sessionId, operation, agentOwned);
         if (!attached && this.isTerminalOperationCurrent(operation)) {
           this.errorText = t("terminal.attachFailed");
         }
@@ -577,6 +600,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       shell: "",
       agentId: null,
       cwd: null,
+      agentOwned: false,
       controller,
       host,
       status: "connecting",
@@ -628,12 +652,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private adoptSession(
     tab: TerminalTabState,
     result: { sessionId: string; shell: string; agentId: string; cwd: string; title?: string },
+    agentOwned = false,
   ): void {
     tab.gatewaySessionId = result.sessionId;
     tab.shellName = result.title ?? shellBasename(result.shell);
     tab.shell = result.shell;
     tab.agentId = result.agentId;
     tab.cwd = result.cwd;
+    tab.agentOwned = agentOwned;
     // Libterminal observes layout before the Gateway session exists. Resync the
     // current grid now so a resize during the open/attach RPC is not lost.
     const { cols, rows } = tab.controller.terminal;
@@ -722,7 +748,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   /** Reattaches one persisted session; returns false when it is gone. */
-  private async attachSession(sessionId: string, operation: TerminalOperation): Promise<boolean> {
+  private async attachSession(
+    sessionId: string,
+    operation: TerminalOperation,
+    agentOwned = false,
+  ): Promise<boolean> {
     let createdTab: TerminalTabState | undefined;
     try {
       const boot = await this.bootTab(operation);
@@ -740,7 +770,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         }
         return false;
       }
-      this.adoptSession(boot.tab, result);
+      this.adoptSession(boot.tab, result, agentOwned);
       return true;
     } catch {
       // Session expired between list and attach (reaper race) or an older
@@ -1021,7 +1051,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
               ),
               onToggle: () => this.toggleSessionPicker(),
               onRefresh: () => void this.refreshSessionPicker(),
-              onAttach: (sessionId) => void this.attachPickedSession(sessionId),
+              onAttach: (sessionId, owner) => void this.attachPickedSession(sessionId, owner),
             }),
             onDock: (dock) => this.setDock(dock),
             onHide: () => this.closePanel(),

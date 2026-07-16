@@ -18,9 +18,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.util.concurrent.atomic.AtomicLong
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+import java.util.concurrent.Executor
 
 internal fun interface WearMessageSender {
   suspend fun send(
@@ -40,7 +38,7 @@ internal class GoogleWearMessageSender(
     path: String,
     data: ByteArray,
   ) {
-    messageClient.sendMessage(nodeId, path, data).await()
+    messageClient.sendMessage(nodeId, path, data).awaitWearTask()
   }
 }
 
@@ -50,8 +48,10 @@ internal class WearProxyBridge(
   private val handleRequest: suspend (WearMessage.Request) -> WearMessage.Response,
 ) {
   private val peerLock = Any()
-  private val peers = LinkedHashSet<String>()
-  private val sequence = AtomicLong()
+  private val peers = LinkedHashMap<String, Long>()
+  private var peerGeneration = 0L
+  private val eventPublishLock = Any()
+  private var sequence = 0L
 
   // One bounded consumer preserves event order. DROP_OLDEST becomes a visible sequence
   // gap, so the watch can recover from chat.history instead of applying stale deltas.
@@ -75,10 +75,10 @@ internal class WearProxyBridge(
     val request =
       (WearProtocolCodec.decode(data) as? WearDecodeResult.Success)
         ?.message as? WearMessage.Request ?: return
-    rememberPeer(sourceNodeId)
+    val peer = rememberPeer(sourceNodeId)
     val response = handleRequest(request)
     val encoded = encodeResponse(response)
-    sendToPeer(sourceNodeId, WearProtocol.RESPONSE_PATH, encoded)
+    sendToPeer(peer, WearProtocol.RESPONSE_PATH, encoded)
   }
 
   fun publishConnection(
@@ -103,13 +103,18 @@ internal class WearProxyBridge(
     payload: JsonElement,
   ) {
     if (!hasPeers()) return
-    events.trySend(
-      WearMessage.Event(
-        sequence = sequence.incrementAndGet(),
-        event = type,
-        payload = payload,
-      ),
-    )
+    // Sequence allocation and channel insertion are one ordered operation. Splitting them lets
+    // concurrent connection/chat callbacks enqueue N+1 before N and manufacture a false gap.
+    synchronized(eventPublishLock) {
+      sequence += 1
+      events.trySend(
+        WearMessage.Event(
+          sequence = sequence,
+          event = type,
+          payload = payload,
+        ),
+      )
+    }
   }
 
   private suspend fun sendEvent(event: WearMessage.Event) {
@@ -120,12 +125,12 @@ internal class WearProxyBridge(
   }
 
   private suspend fun sendToPeer(
-    peer: String,
+    peer: PeerRegistration,
     path: String,
     data: ByteArray,
   ) {
     try {
-      sender.send(peer, path, data)
+      sender.send(peer.nodeId, path, data)
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
@@ -145,23 +150,31 @@ internal class WearProxyBridge(
         )
       }
 
-  private fun rememberPeer(nodeId: String) {
+  private fun rememberPeer(nodeId: String): PeerRegistration =
     synchronized(peerLock) {
+      peerGeneration += 1
       peers.remove(nodeId)
-      peers.add(nodeId)
+      peers[nodeId] = peerGeneration
       while (peers.size > MAX_PEERS) {
-        peers.remove(peers.first())
+        peers.remove(peers.keys.first())
       }
+      PeerRegistration(nodeId = nodeId, generation = peerGeneration)
     }
-  }
 
-  private fun forgetPeer(nodeId: String) {
-    synchronized(peerLock) { peers.remove(nodeId) }
+  private fun forgetPeer(peer: PeerRegistration) {
+    synchronized(peerLock) {
+      // An older event send may fail after a new request refreshed the same watch. Remove only
+      // the registration that owned this send, or the successful request would lose its events.
+      if (peers[peer.nodeId] == peer.generation) peers.remove(peer.nodeId)
+    }
   }
 
   private fun hasPeers(): Boolean = synchronized(peerLock) { peers.isNotEmpty() }
 
-  private fun peerSnapshot(): List<String> = synchronized(peerLock) { peers.toList() }
+  private fun peerSnapshot(): List<PeerRegistration> =
+    synchronized(peerLock) {
+      peers.map { (nodeId, generation) -> PeerRegistration(nodeId = nodeId, generation = generation) }
+    }
 
   internal fun peerCountForTests(): Int = synchronized(peerLock) { peers.size }
 
@@ -171,8 +184,27 @@ internal class WearProxyBridge(
   }
 }
 
-private suspend fun <T> Task<T>.await(): T =
+private data class PeerRegistration(
+  val nodeId: String,
+  val generation: Long,
+)
+
+internal class WearTaskCanceledException : IllegalStateException("Wear message task was canceled")
+
+private val directTaskExecutor = Executor(Runnable::run)
+
+internal suspend fun <T> Task<T>.awaitWearTask(): T =
   suspendCancellableCoroutine { continuation ->
-    addOnSuccessListener { value -> continuation.resume(value) }
-    addOnFailureListener { error -> continuation.resumeWithException(error) }
+    addOnSuccessListener(directTaskExecutor) { value ->
+      continuation.tryResume(value)?.let(continuation::completeResume)
+    }
+    addOnFailureListener(directTaskExecutor) { error ->
+      continuation.tryResumeWithException(error)?.let(continuation::completeResume)
+    }
+    // Google Tasks do not invoke failure listeners for cancellation. Treat the Task's canceled
+    // state as a send failure; cancellation of the calling coroutine remains owned by the
+    // cancellable continuation and is still propagated as CancellationException.
+    addOnCanceledListener(directTaskExecutor) {
+      continuation.tryResumeWithException(WearTaskCanceledException())?.let(continuation::completeResume)
+    }
   }

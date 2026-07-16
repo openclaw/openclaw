@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocolCodec
 import ai.openclaw.wear.shared.WearRpcMethod
@@ -7,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -261,6 +263,66 @@ class WearProxyControllerTest {
         .jsonPrimitive
         .content
         .toBoolean(),
+    )
+  }
+
+  @Test
+  fun chatEventBoundsAggregateContentAndPreservesTerminalState() {
+    val payload =
+      checkNotNull(
+        projectWearChatEvent(
+          buildJsonObject {
+            put("runId", "run-1")
+            put("state", "final")
+            put(
+              "message",
+              buildJsonObject {
+                put("role", "assistant")
+                put(
+                  "content",
+                  buildJsonArray {
+                    repeat(100) {
+                      add(
+                        buildJsonObject {
+                          put("type", "text")
+                          put("text", "😀".repeat(2_000))
+                        },
+                      )
+                    }
+                  },
+                )
+              },
+            )
+          },
+        ),
+      )
+
+    assertEquals("final", payload.getValue("state").jsonPrimitive.content)
+    val content =
+      payload
+        .getValue("message")
+        .jsonObject
+        .getValue("content")
+        .jsonArray
+    val projectedBytes =
+      content.sumOf { part ->
+        part.jsonObject
+          .getValue("text")
+          .jsonPrimitive.content
+          .toByteArray(Charsets.UTF_8)
+          .size
+      }
+    assertTrue(projectedBytes <= 1_024)
+    assertTrue(content.size < 100)
+    assertTrue(
+      WearProtocolCodec
+        .encode(
+          WearMessage.Event(
+            sequence = 1,
+            event = WearEventType.Chat,
+            payload = payload,
+          ),
+        ).isNotEmpty(),
     )
   }
 

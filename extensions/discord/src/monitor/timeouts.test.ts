@@ -1,6 +1,7 @@
 // Discord tests cover timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mergeAbortSignals as publicApiMergeAbortSignals } from "../../api.js";
 import {
   isAbortError as runtimeApiIsAbortError,
   mergeAbortSignals as runtimeApiMergeAbortSignals,
@@ -26,7 +27,8 @@ afterEach(() => {
 });
 
 describe("discord monitor timeouts", () => {
-  it("keeps deprecated timeout helpers on the runtime api compatibility surface", () => {
+  it("keeps deprecated timeout helpers on shipped compatibility surfaces", () => {
+    expect(publicApiMergeAbortSignals).toBe(mergeAbortSignals);
     expect(runtimeApiIsAbortError).toBe(isAbortError);
     expect(runtimeApiMergeAbortSignals).toBe(mergeAbortSignals);
     expect(runtimeApiNormalizeDiscordInboundWorkerTimeoutMs).toBe(

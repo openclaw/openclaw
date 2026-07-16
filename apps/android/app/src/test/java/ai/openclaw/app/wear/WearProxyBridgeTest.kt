@@ -6,7 +6,9 @@ import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearProtocolCodec
 import ai.openclaw.wear.shared.WearRpcMethod
+import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -86,6 +88,14 @@ class WearProxyBridgeTest {
     }
 
   @Test
+  fun canceledGoogleTaskResumesAsSendFailure() =
+    runTest {
+      val failure = runCatching { Tasks.forCanceled<Int>().awaitWearTask() }.exceptionOrNull()
+
+      assertTrue(failure is WearTaskCanceledException)
+    }
+
+  @Test
   fun eventQueuePreservesSequenceAndBoundsPeers() =
     runTest {
       val sent = mutableListOf<SentWearMessage>()
@@ -123,6 +133,43 @@ class WearProxyBridgeTest {
       val payload = checkNotNull(chat.payload).jsonObject
       assertEquals(setOf("runId", "sessionKey", "seq", "state", "deltaText"), payload.keys)
       assertEquals("hello", payload.getValue("deltaText").jsonPrimitive.content)
+    }
+
+  @Test
+  fun staleEventFailureDoesNotRemoveRefreshedPeer() =
+    runTest {
+      val eventStarted = CompletableDeferred<Unit>()
+      val releaseEvent = CompletableDeferred<Unit>()
+      val sent = mutableListOf<SentWearMessage>()
+      var failFirstEvent = true
+      val bridge =
+        WearProxyBridge(
+          scope = backgroundScope,
+          sender =
+            WearMessageSender { nodeId, path, data ->
+              if (path == WearProtocol.EVENT_PATH && failFirstEvent) {
+                failFirstEvent = false
+                eventStarted.complete(Unit)
+                releaseEvent.await()
+                error("stale send failed")
+              }
+              sent += SentWearMessage(nodeId, path, data)
+            },
+          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+        )
+      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
+
+      bridge.publishConnection(connected = true, status = "Connected")
+      eventStarted.await()
+      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-2")))
+      releaseEvent.complete(Unit)
+      runCurrent()
+
+      bridge.publishConnection(connected = false, status = "Offline")
+      runCurrent()
+
+      assertEquals(1, bridge.peerCountForTests())
+      assertEquals(1, sent.count { it.path == WearProtocol.EVENT_PATH })
     }
 
   private fun request(requestId: String): WearMessage.Request = WearMessage.Request(requestId = requestId, method = WearRpcMethod.ProxyStatus)

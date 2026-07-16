@@ -82,8 +82,6 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
   skipChannels?: boolean;
-  /** @deprecated Legacy alias for `skipChannels`. */
-  skipProviders?: boolean;
   skipSkills?: boolean;
   skipBootstrap?: boolean;
   skipSearch?: boolean;

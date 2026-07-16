@@ -84,10 +84,10 @@ every later turn remains on that connection with native auth and provider
 configuration. Disabled supervision or binding/connection drift fails closed
 rather than switching to the ordinary agent-home harness.
 
-The original CLI or VS Code source remains eligible for both catalogs. The
-canonical branch is a native Codex thread, but its source kind is `appServer`;
-native clients may filter that source kind, so its appearance in Codex Desktop
-is not guaranteed.
+The original CLI, VS Code, Atlas, or ChatGPT source remains eligible for both
+catalogs. The canonical branch is a native Codex thread, but its source kind is
+`appServer`; native clients may filter that source kind, so its appearance in
+Codex Desktop is not guaranteed.
 
 Active sources cannot start a new branch or be archived; an existing supervised
 Chat can still be opened. `notLoaded` means activity is unknown, not idle;

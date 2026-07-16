@@ -19,6 +19,7 @@ import {
 } from "./config-schema.js";
 import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
+import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
@@ -26,8 +27,8 @@ import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./st
 import {
   ReefInboxConnection,
   ReefTransportClient,
-  type WebSocketLike,
   abortableSleep,
+  createReefWebSocket,
 } from "./transport.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
@@ -197,6 +198,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         },
       });
       const onIngress = async (message: ReefIngressMessage) => {
+        const dispatchContent = resolveReefInboundDispatchContent(message);
         const budget = autonomyBudget(message.autonomy);
         const loop = recordChannelBotPairLoopAndCheckSuppression({
           scopeId: "reef:default",
@@ -223,15 +225,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           senderAddress: `reef:${message.peer}`,
           recipientAddress: `reef:${ctx.account.config.handle}`,
           conversationLabel: `@${message.peer}'s agent`,
-          rawBody: message.text,
-          bodyForAgent: `${message.provenance}\n\n<reef-message>${message.text}</reef-message>`,
+          ...dispatchContent,
           messageId: message.id,
           commandAuthorized: false,
-          extraContext: {
-            ReefProvenance: message.provenance,
-            ReefEnvelopeId: message.id,
-            SenderIsBot: true,
-          },
           deliver: async (payload) => {
             const text =
               payload && typeof payload === "object" && "text" in payload
@@ -292,11 +288,10 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       };
       await reconcile();
       ctx.setStatus({ accountId: "default", running: true, connected: false });
-      const socketFactory = (url: string) => new WebSocket(url) as unknown as WebSocketLike;
       const inbox = new ReefInboxConnection(
         transport,
         (entries) => flow.processEntries(entries),
-        socketFactory,
+        createReefWebSocket,
         (state) => {
           if (ctx.abortSignal.aborted) {
             return;

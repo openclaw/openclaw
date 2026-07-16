@@ -10,6 +10,7 @@ import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
+import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import {
   classifyPortListener,
   formatPortDiagnostics,
@@ -20,8 +21,9 @@ import {
   hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
-import { killProcessTree } from "../../process/kill-tree.js";
 import { sleep } from "../../utils.js";
+import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
+export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
 
 const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
@@ -245,6 +247,7 @@ async function confirmGatewayReachable(params: {
   includeHealthDetails?: boolean;
   auth?: GatewayRestartProbeAuth;
   env?: NodeJS.ProcessEnv;
+  allowDeviceIdentityRequired?: boolean;
 }): Promise<GatewayReachability> {
   const token = normalizeOptionalString(params.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN);
   const password = normalizeOptionalString(
@@ -260,6 +263,9 @@ async function confirmGatewayReachable(params: {
   const reachedGateway =
     probe.ok ||
     looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
+    (params.allowDeviceIdentityRequired === true &&
+      probe.close?.code === 1008 &&
+      normalizeLowercaseStringOrEmpty(probe.close.reason) === "device identity required") ||
     (probe.connectLatencyMs != null &&
       probe.server?.version != null &&
       probe.auth.capability === "connected_no_operator_scope");
@@ -296,6 +302,7 @@ async function resolveGatewayRestartProbeAuth(
 async function inspectGatewayPortHealth(params: {
   port: number;
   auth?: GatewayRestartProbeAuth;
+  expectedListenerPid?: number;
 }): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
@@ -312,12 +319,23 @@ async function inspectGatewayPortHealth(params: {
 
   let healthy = false;
   if (portUsage.status === "busy") {
+    const expectedListenerPid = params.expectedListenerPid;
+    const listenerOwnershipVerified =
+      expectedListenerPid !== undefined &&
+      portUsage.listeners.length > 0 &&
+      portUsage.listeners.every((listener) =>
+        listenerOwnedByRuntimePid({
+          listener,
+          runtimePid: expectedListenerPid,
+        }),
+      );
     try {
       healthy = (
         await confirmGatewayReachable({
           port: params.port,
           auth: params.auth,
           env: process.env,
+          allowDeviceIdentityRequired: listenerOwnershipVerified,
         })
       ).reachable;
     } catch {
@@ -633,25 +651,67 @@ export async function waitForGatewayHealthyListener(params: {
   port: number;
   attempts?: number;
   delayMs?: number;
+  previousLockIdentity?: GatewayLockIdentity;
+  waitIndefinitelyForPreviousOwner?: boolean;
 }): Promise<GatewayPortHealthSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
+  const previousLockIdentity = params.previousLockIdentity;
 
   const probeAuth = await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined);
-  let snapshot = await inspectGatewayPortHealth({
-    port: params.port,
-    auth: probeAuth,
-  });
+  let snapshot: GatewayPortHealthSnapshot = previousLockIdentity
+    ? {
+        portUsage: {
+          port: params.port,
+          status: "unknown",
+          listeners: [],
+          hints: [],
+          errors: [
+            `Previous gateway lock owner ${previousLockIdentity.ownerId ?? previousLockIdentity.pid} is still active.`,
+          ],
+        },
+        healthy: false,
+      }
+    : await inspectGatewayPortHealth({
+        port: params.port,
+        auth: probeAuth,
+      });
 
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (snapshot.healthy) {
+  let attempt = 0;
+  let expectedListenerPid: number | undefined;
+  if (previousLockIdentity) {
+    const replacement = await waitForGatewayLockReplacement({
+      previousLockIdentity,
+      attempts,
+      delayMs,
+      waitIndefinitelyForPreviousOwner: params.waitIndefinitelyForPreviousOwner === true,
+    });
+    if (replacement.status === "timeout") {
       return snapshot;
     }
+    attempt = replacement.attemptsUsed;
+    expectedListenerPid = replacement.lockIdentity.pid;
+    snapshot = await inspectGatewayPortHealth({
+      port: params.port,
+      auth: probeAuth,
+      expectedListenerPid,
+    });
+  }
+
+  if (snapshot.healthy) {
+    return snapshot;
+  }
+  while (attempt < attempts) {
+    attempt += 1;
     await sleep(delayMs);
     snapshot = await inspectGatewayPortHealth({
       port: params.port,
       auth: probeAuth,
+      expectedListenerPid,
     });
+    if (snapshot.healthy) {
+      return snapshot;
+    }
   }
 
   return snapshot;
@@ -713,17 +773,4 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
 
 export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
   return renderPortUsageDiagnostics(snapshot);
-}
-
-export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
-  const targets = Array.from(
-    new Set(pids.filter((pid): pid is number => Number.isFinite(pid) && pid > 0)),
-  );
-  for (const pid of targets) {
-    killProcessTree(pid, { graceMs: 300 });
-  }
-  if (targets.length > 0) {
-    await sleep(500);
-  }
-  return targets;
 }

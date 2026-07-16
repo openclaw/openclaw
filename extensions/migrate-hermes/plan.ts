@@ -20,6 +20,7 @@ import {
   findHermesModelProviderDependency,
   HERMES_REASON_MODEL_PROVIDER_CONFLICT,
 } from "./items.js";
+import { buildHermesMemoryPlan, isMemoryOnlyMigration } from "./memory.js";
 import { resolveCurrentModelRef, resolveHermesModelRef } from "./model.js";
 import { buildSecretItems } from "./secrets.js";
 import { buildSkillItems } from "./skills.js";
@@ -54,6 +55,9 @@ async function addFileItem(params: {
 
 export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<MigrationPlan> {
   const source = await discoverHermesSource(ctx.source);
+  if (isMemoryOnlyMigration(ctx)) {
+    return await buildHermesMemoryPlan(ctx, source);
+  }
   if (!hasHermesSource(source)) {
     throw new Error(
       `Hermes state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,

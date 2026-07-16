@@ -257,6 +257,27 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
   });
 
+  it("flags runtime writes to retired workspace setup and attestation sidecars", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(workspaceDir, "openclaw-workspace-state.json"), "{}\\n");
+        await fs.writeFile(path.join(workspaceDir, ".openclaw", "workspace-state.json"), "{}\\n");
+        await fs.writeFile(path.join(stateDir, "workspace-attestations", \`\${workspaceKey}.attested\`), "ok\\n");
+        await fs.writeFile(\`\${workspaceDir}.attested\`, "ok\\n");
+      `,
+      "src/agents/workspace-sidecar-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+      { kind: "legacy store filesystem write", line: 6 },
+      { kind: "legacy store filesystem write", line: 7 },
+    ]);
+  });
+
   it("flags runtime writes to the retired subagent JSON registry", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -8564,6 +8585,19 @@ describe("check-database-first-legacy-stores", () => {
         await fs.writeFile("sessions.json", "{}\\n", "utf8");
       `,
       "src/commands/doctor/cron/legacy-store-migration.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("allows the workspace Doctor migration owner to claim legacy sidecars", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        await fs.rename("openclaw-workspace-state.json", "openclaw-workspace-state.json.doctor-importing");
+        await fs.rename("workspace.attested", "workspace.attested.doctor-importing");
+      `,
+      "src/infra/state-migrations.workspace-setup.ts",
     );
 
     expect(violations).toEqual([]);

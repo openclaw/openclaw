@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -31,6 +32,19 @@ export type SidebarRecentSession = {
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
   unread: boolean;
+  spawnedBy?: string;
+  status?: SessionRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+  runtimeSampledAt?: number;
+  childSessionKeys: readonly string[];
+  children: readonly SidebarRecentSession[];
+  isChild: boolean;
+  loadingChildren: boolean;
+  containsActiveDescendant: boolean;
+  runningChildCount: number;
+  failedChildCount: number;
 };
 
 export type SidebarSessionMenuState = {

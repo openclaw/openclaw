@@ -168,6 +168,12 @@ export const icons = {
       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   `,
+  shieldCheck: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  `,
 
   // UI icons
   menu: html`
