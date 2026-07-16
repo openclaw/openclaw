@@ -59,16 +59,12 @@ async function processDiscordQueuedMessage(params: {
 }
 
 function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
-  try {
-    // Skipped jobs never reach processDiscordMessage's finally block.
-    // Clean carried typing here before reopening the replay key for retry.
-    params.job.runtime.replyTypingFeedback?.onCleanup?.();
-  } finally {
-    for (const claim of params.job.replayClaims ?? []) {
-      claim.release({
-        error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
-      });
-    }
+  // Typing feedback is created inside processing after admission, so skipped
+  // jobs only carry replay claims that need reopening for a later retry.
+  for (const claim of params.job.replayClaims ?? []) {
+    claim.release({
+      error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
+    });
   }
 }
 
