@@ -181,7 +181,9 @@ export const reefSetupWizard = {
             { cause: error },
           );
         }
-        effectiveRequestPolicy = existing.request_policy;
+        effectiveRequestPolicy = ReefChannelConfigSchema.shape.requestPolicy.parse(
+          existing.request_policy,
+        );
       }
       finalizeReefIdentityBinding(runtime, reservation);
     } catch (error) {
