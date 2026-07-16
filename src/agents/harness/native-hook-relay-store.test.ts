@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   deleteNativeHookRelayBridgeRecordIfOwned,
@@ -15,16 +15,16 @@ import {
 let testRoot = "";
 let primaryStateDbPath = "";
 let secondaryStateDbPath = "";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
-  testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-hook-relay-store-"));
+  testRoot = tempDirs.make("openclaw-native-hook-relay-store-");
   primaryStateDbPath = path.join(testRoot, "primary.sqlite");
   secondaryStateDbPath = path.join(testRoot, "secondary.sqlite");
 });
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  fs.rmSync(testRoot, { recursive: true, force: true });
 });
 
 function bridgeRecord(

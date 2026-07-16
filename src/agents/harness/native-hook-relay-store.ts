@@ -19,7 +19,7 @@ export type NativeHookRelayBridgeRecord = {
   expiresAtMs: number;
 };
 
-export type NativeHookRelayBridgePruneResult = {
+type NativeHookRelayBridgePruneResult = {
   relayId: string;
   pid: number;
   reason: "dead-pid" | "expired";
