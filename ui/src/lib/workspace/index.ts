@@ -416,6 +416,7 @@ export async function loadWorkspace(
     state.error = null;
     notify(state);
   }
+  let staleDocumentApplied = false;
   try {
     const payload = await client.request("workspaces.get", {});
     const workspace = normalizeWorkspace(
@@ -423,12 +424,18 @@ export async function loadWorkspace(
       // (a bare payload is tolerated for forward-compat).
       isRecord(payload) && "doc" in payload ? payload.doc : payload,
     );
+    const currentVersion = state.workspace?.workspaceVersion;
     if (generation !== state.loadGeneration) {
-      // A stale response must not apply or clear navigation intent captured by a
-      // later load generation.
+      // Request generation owns navigation and status, but workspaceVersion owns
+      // document freshness when handlers complete out of order.
+      if (currentVersion === undefined || workspace.workspaceVersion > currentVersion) {
+        state.workspace = workspace;
+        state.activeSlug = resolveActiveSlug(workspace, state.activeSlug);
+        state.loaded = true;
+        staleDocumentApplied = true;
+      }
       return;
     }
-    const currentVersion = state.workspace?.workspaceVersion;
     if (currentVersion !== undefined && workspace.workspaceVersion < currentVersion) {
       if (state.workspace && intent?.activeSlugRevision === state.activeSlugRevision) {
         applyActiveWorkspaceSlug(state, state.workspace, intent.slug);
@@ -459,7 +466,7 @@ export async function loadWorkspace(
     }
   } finally {
     const isCurrent = generation === state.loadGeneration;
-    let shouldNotify = isCurrent;
+    let shouldNotify = isCurrent || staleDocumentApplied;
     if (state.loadingGeneration === generation || (isCurrent && state.loadingGeneration !== null)) {
       // A current silent completion supersedes any older foreground owner; keep
       // no spinner tied to a response that can only finish stale.

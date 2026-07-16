@@ -107,6 +107,39 @@ describe("loadWorkspace", () => {
     expect(state.workspace?.tabs[0]?.title).toBe("Newest");
   });
 
+  it("accepts a higher workspace version from an older request without restoring its navigation", async () => {
+    const state = getWorkspaceState({});
+    state.workspace = sampleWorkspace();
+    state.activeSlug = "main";
+    const resolveRequests: Array<(value: unknown) => void> = [];
+    const client = mockClient({
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveRequests.push(resolve);
+          }),
+      ) as never,
+    });
+
+    const olderLoad = loadWorkspace(state, client, { requestedSlug: "archive" });
+    const newerLoad = loadWorkspace(state, client, { requestedSlug: null });
+
+    resolveRequests[1]?.({
+      doc: sampleWorkspace({ workspaceVersion: 4 }),
+      workspaceVersion: 4,
+    });
+    await newerLoad;
+
+    const highestVersion = sampleWorkspace({ workspaceVersion: 5 });
+    expectDefined(highestVersion.tabs[0], "highest-version tab").title = "Latest";
+    resolveRequests[0]?.({ doc: highestVersion, workspaceVersion: 5 });
+    await olderLoad;
+
+    expect(state.workspace?.workspaceVersion).toBe(5);
+    expect(state.workspace?.tabs[0]?.title).toBe("Latest");
+    expect(state.activeSlug).toBe("main");
+  });
+
   it("preserves requested navigation when a silent reload supersedes it", async () => {
     const state = getWorkspaceState({});
     const resolveRequests: Array<(value: unknown) => void> = [];
