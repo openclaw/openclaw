@@ -10,7 +10,7 @@ name = "openclaw-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = "2.6.3"
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 base64 = "0.22.1"
