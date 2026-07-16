@@ -50,7 +50,7 @@ export async function putNostrProfile(params: {
       body: JSON.stringify(params.values),
       signal: controller.signal,
     });
-    const data = (await response.json().catch((error) => {
+    const data = (await response.json().catch((error: unknown) => {
       // If the deadline fired while the response body was still streaming,
       // propagate the abort/timeout instead of swallowing it as a parse failure.
       if (error === controller.signal.reason || controller.signal.aborted) {
@@ -88,7 +88,7 @@ export async function importNostrProfile(params: {
       body: JSON.stringify({ autoMerge: true }),
       signal: controller.signal,
     });
-    const data = (await response.json().catch((error) => {
+    const data = (await response.json().catch((error: unknown) => {
       // If the deadline fired while the response body was still streaming,
       // propagate the abort/timeout instead of swallowing it as a parse failure.
       if (error === controller.signal.reason || controller.signal.aborted) {
