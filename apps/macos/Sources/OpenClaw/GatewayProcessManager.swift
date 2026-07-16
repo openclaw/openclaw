@@ -65,6 +65,9 @@ final class GatewayProcessManager {
     private var launchAgentEnableCurrentRequest: LaunchAgentEnableRequest?
     private var launchAgentEnablePendingRequest: LaunchAgentEnableRequest?
     private var launchAgentReadinessFailure: LaunchAgentReadinessFailure?
+    /// Async readiness audits may outlive stop/restart. Only the current generation may publish
+    /// their failure state or retain a PID for a later repair.
+    private var gatewayStartGeneration: UInt64 = 0
     #if DEBUG
     private var testingConnection: GatewayConnection?
     private var testingSkipControlChannelRefresh = false
@@ -183,21 +186,22 @@ final class GatewayProcessManager {
             port: request.port)
     }
 
-    private func recordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
+    private func resolveLaunchAgentReadinessFailure(
+        port: Int,
+        startingPID: Int32?) async -> LaunchAgentReadinessFailure?
+    {
         guard let startingPID,
               let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port),
               pid == startingPID
         else {
-            self.launchAgentReadinessFailure = nil
-            return
+            return nil
         }
         // A stable launchd PID that owns the port can still have a wedged health RPC. A listener
         // owned by anyone else is protected and surfaced through the attach path instead.
         if let listener = await PortGuardian.shared.describe(port: port), listener.pid != pid {
-            self.launchAgentReadinessFailure = nil
-            return
+            return nil
         }
-        self.launchAgentReadinessFailure = LaunchAgentReadinessFailure(port: port, pid: pid)
+        return LaunchAgentReadinessFailure(port: port, pid: pid)
     }
 
     func startIfNeeded() {
@@ -216,6 +220,8 @@ final class GatewayProcessManager {
             break
         }
         self.status = .starting
+        self.gatewayStartGeneration &+= 1
+        let startGeneration = self.gatewayStartGeneration
         self.logger.debug("gateway start requested")
 
         // First try to latch onto an already-running gateway to avoid spawning a duplicate.
@@ -224,11 +230,12 @@ final class GatewayProcessManager {
             if await self.attachExistingGatewayIfAvailable() {
                 return
             }
-            await self.enableLaunchdGateway()
+            await self.enableLaunchdGateway(startGeneration: startGeneration)
         }
     }
 
     func stop() {
+        self.gatewayStartGeneration &+= 1
         self.desiredActive = false
         self.existingGatewayDetails = nil
         self.lastFailureReason = nil
@@ -404,7 +411,7 @@ final class GatewayProcessManager {
         return lower.contains("unauthorized") || lower.contains("auth")
     }
 
-    private func enableLaunchdGateway() async {
+    private func enableLaunchdGateway(startGeneration: UInt64) async {
         self.existingGatewayDetails = nil
         let resolution = await Task.detached(priority: .utility) {
             GatewayEnvironment.resolveGatewayCommand()
@@ -465,7 +472,24 @@ final class GatewayProcessManager {
 
         // Only a PID that survived this entire readiness cycle may be replaced later. launchd can
         // restart the service while polling; that replacement needs its own full startup chance.
-        await self.recordLaunchAgentReadinessFailure(port: port, startingPID: readinessPID)
+        await self.finishLaunchAgentReadinessFailure(
+            port: port,
+            startingPID: readinessPID,
+            startGeneration: startGeneration)
+    }
+
+    private func finishLaunchAgentReadinessFailure(
+        port: Int,
+        startingPID: Int32?,
+        startGeneration: UInt64) async
+    {
+        let failure = await self.resolveLaunchAgentReadinessFailure(
+            port: port,
+            startingPID: startingPID)
+        guard self.desiredActive, self.gatewayStartGeneration == startGeneration else {
+            return
+        }
+        self.launchAgentReadinessFailure = failure
         self.status = .failed("Gateway did not start in time")
         self.lastFailureReason = "launchd start timeout"
         self.logger.warning("gateway start timed out")
@@ -582,11 +606,30 @@ extension GatewayProcessManager {
     }
 
     func _testRecordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
-        await self.recordLaunchAgentReadinessFailure(port: port, startingPID: startingPID)
+        self.launchAgentReadinessFailure = await self.resolveLaunchAgentReadinessFailure(
+            port: port,
+            startingPID: startingPID)
+    }
+
+    func _testFinishLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
+        let startGeneration = self.gatewayStartGeneration
+        await self.finishLaunchAgentReadinessFailure(
+            port: port,
+            startingPID: startingPID,
+            startGeneration: startGeneration)
     }
 
     func _testClearLaunchAgentReadinessFailure() {
         self.launchAgentReadinessFailure = nil
+    }
+
+    func _testHasLaunchAgentReadinessFailure() -> Bool {
+        self.launchAgentReadinessFailure != nil
+    }
+
+    func _testBeginGatewayStartGeneration() {
+        self.desiredActive = true
+        self.gatewayStartGeneration &+= 1
     }
 
     func _testPendingLaunchAgentPort() -> Int? {

@@ -271,6 +271,122 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `stop wins while a readiness failure audit is pending`() async throws {
+        let port = 19089
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        try await self.withLocalGatewayConfig {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                """
+                {"ok":true,"service":{
+                  "loaded":true,
+                  "runtime":{"status":"running","pid":4242},
+                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
+                  "configAudit":{"ok":true,"issues":[]}
+                }}
+                """)
+            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(100_000_000)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared.setTestingDesiredActive(false)
+                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
+            }
+
+            let manager = GatewayProcessManager.shared
+            manager.setTestingDesiredActive(true)
+            let finish = Task { @MainActor in
+                await manager._testFinishLaunchAgentReadinessFailure(
+                    port: port,
+                    startingPID: 4242)
+            }
+            for _ in 0..<100 {
+                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "status" })
+                {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .contains(where: { $0.first == "status" }))
+
+            manager.stop()
+            await finish.value
+            try? await Task.sleep(nanoseconds: 150_000_000)
+
+            #expect(manager.status == .stopped)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+        }
+    }
+
+    @Test func `stale readiness audit cannot clear a restarted generation`() async throws {
+        let port = 19090
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        try await self.withLocalGatewayConfig {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                """
+                {"ok":true,"service":{
+                  "loaded":true,
+                  "runtime":{"status":"running","pid":4242},
+                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
+                  "configAudit":{"ok":true,"issues":[]}
+                }}
+                """)
+            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(200_000_000)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared.setTestingDesiredActive(false)
+                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
+            }
+
+            let manager = GatewayProcessManager.shared
+            manager.setTestingDesiredActive(true)
+            let staleFinish = Task { @MainActor in
+                await manager._testFinishLaunchAgentReadinessFailure(
+                    port: port,
+                    startingPID: 4242)
+            }
+            for _ in 0..<100 {
+                if GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(where: { $0.first == "status" })
+                {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .contains(where: { $0.first == "status" }))
+
+            GatewayLaunchAgentManager.setTestingDaemonCommandDelayNanoseconds(0)
+            manager.stop()
+            manager._testBeginGatewayStartGeneration()
+            await manager._testFinishLaunchAgentReadinessFailure(
+                port: port,
+                startingPID: 4242)
+            #expect(manager._testHasLaunchAgentReadinessFailure())
+
+            await staleFinish.value
+
+            #expect(manager.status == .failed("Gateway did not start in time"))
+            #expect(manager._testHasLaunchAgentReadinessFailure())
+        }
+    }
+
     @Test func `repairs a stable launch agent PID with a wedged listener`() async throws {
         let port = 19087
         let marker = FileManager.default.temporaryDirectory
