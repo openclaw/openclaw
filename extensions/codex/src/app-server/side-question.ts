@@ -18,7 +18,6 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
@@ -89,6 +88,7 @@ import {
 import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabilities.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import {
@@ -288,6 +288,7 @@ export async function runCodexAppServerSideQuestion(
   const clientOptions = {
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
+    authRequirement: preparedRuntimeAuth.plan.modelRoute?.authRequirement,
     ...(startupPreparedAuth
       ? { preparedAuth: startupPreparedAuth }
       : { authProfileId: connection.clientAuthProfileId }),
@@ -551,6 +552,7 @@ export async function runCodexAppServerSideQuestion(
             appServer.turnCompletionIdleTimeoutMs,
             SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
           ),
+          loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           signal: runAbortController.signal,
           onPreToolUseFailure: (failure) => {
             if (nativePreToolUseFailureFallbackActive) {
@@ -572,6 +574,7 @@ export async function runCodexAppServerSideQuestion(
           events: nativeHookRelayEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
+          loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
         })
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
@@ -779,6 +782,7 @@ function registerCodexSideNativeHookRelay(params: {
   channelId?: string;
   requestTimeoutMs: number;
   completionTimeoutMs: number;
+  loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
 }): NativeHookRelayRegistrationHandle | undefined {
@@ -794,6 +798,7 @@ function registerCodexSideNativeHookRelay(params: {
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents: params.events,
+    preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexSideNativeHookRelayTtlMs({
       explicitTtlMs: params.options.ttlMs,
       requestTimeoutMs: params.requestTimeoutMs,

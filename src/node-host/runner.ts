@@ -15,7 +15,7 @@ import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
-import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -179,24 +179,23 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  const config = await ensureNodeHostConfig();
-  const nodeId = opts.nodeId?.trim() || config.nodeId;
-  if (nodeId !== config.nodeId) {
-    config.nodeId = nodeId;
-  }
-  const displayName =
-    opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
-  config.displayName = displayName;
-
-  const gateway: NodeHostGatewayConfig = {
+  const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
     tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
     contextPath: opts.gatewayContextPath,
   };
-  config.gateway = gateway;
-  await saveNodeHostConfig(config);
+  const fallbackDisplayName = await getMachineDisplayName();
+  const config = await configureNodeHost({
+    nodeId: opts.nodeId,
+    displayName: opts.displayName,
+    fallbackDisplayName,
+    gateway: plannedGateway,
+  });
+  const nodeId = config.nodeId;
+  const displayName = config.displayName ?? fallbackDisplayName;
+  const gateway = config.gateway ?? plannedGateway;
 
   const cfg = getRuntimeConfig();
   const preparedRuntime = await prepareNodeHostRuntime({

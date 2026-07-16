@@ -139,6 +139,8 @@ type RegisterNativeHookRelayParams = {
   runId: string;
   channelId?: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
+  /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
+  preToolUseLoopDetection?: boolean;
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
@@ -255,6 +257,7 @@ type NativeHookRelaySharedState = {
 
 type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
+  preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
 };
 
@@ -449,6 +452,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
+    preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
     expiresAtMs,
     preToolUseFailureProjections: new Map(),
     ...(params.signal ? { signal: params.signal } : {}),
@@ -598,8 +602,10 @@ export function buildNativeHookRelayCommand(params: {
   ]);
 }
 
-function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayRegistration): boolean {
-  if (!registration.sessionKey) {
+function nativePreToolUseMayRunLoopDetection(
+  registration: ActiveNativeHookRelayRegistration,
+): boolean {
+  if (!registration.preToolUseLoopDetection || !registration.sessionKey) {
     return false;
   }
   const loopDetection = resolveToolLoopDetectionConfig({
@@ -610,7 +616,7 @@ function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayRegist
 }
 
 function nativeHookRelayEventHasLocalWork(
-  registration: NativeHookRelayRegistration,
+  registration: ActiveNativeHookRelayRegistration,
   event: NativeHookRelayEvent,
 ): boolean {
   if (event === "pre_tool_use") {

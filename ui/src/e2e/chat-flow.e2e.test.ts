@@ -18,7 +18,8 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 let server: ControlUiE2eServer;
-const contextBrowsers = new WeakMap<BrowserContext, Browser>();
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 const openBrowserContexts = new Set<BrowserContext>();
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -47,7 +48,7 @@ async function waitForRequests(
       return requests;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
@@ -140,26 +141,14 @@ async function scrollChatThreadToTop(page: Page): Promise<void> {
 }
 
 async function newBrowserContext(options: Parameters<Browser["newContext"]>[0]) {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  let context: BrowserContext | undefined;
-  try {
-    context = await browser.newContext(options);
-    contextBrowsers.set(context, browser);
-    openBrowserContexts.add(context);
-    return context;
-  } catch (error) {
-    await context?.close().catch(() => {});
-    await browser.close().catch(() => {});
-    throw error;
-  }
+  const context = await browser.newContext(options);
+  openBrowserContexts.add(context);
+  return context;
 }
 
 async function closeBrowserContext(context: BrowserContext): Promise<void> {
-  const browser = contextBrowsers.get(context);
   openBrowserContexts.delete(context);
-  contextBrowsers.delete(context);
   await context.close().catch(() => {});
-  await browser?.close().catch(() => {});
 }
 
 async function closeOpenBrowserContexts(): Promise<void> {
@@ -237,11 +226,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
     await closeOpenBrowserContexts();
+    await browser?.close();
     await server?.close();
   });
 

@@ -32,11 +32,8 @@ import {
 import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import {
-  cleanupSystemAgentSession,
-  createSystemAgentSession,
-  runSystemAgentTurnWithDeps,
-} from "./agent-turn.js";
+import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
+import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
@@ -1712,11 +1709,17 @@ describe("activateSetupInference", () => {
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
   });
 
-  it("runs provider OAuth interactively and persists it only after the live probe", async () => {
+  it("persists provider OAuth when runtime defaults are absent from source config", async () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "agent");
     const initialConfig = {
       agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    const runtimeConfig = {
+      agents: {
+        ...initialConfig.agents,
+        defaults: { models: { "openai/gpt-5.4": {} } },
+      },
     } satisfies OpenClawConfig;
     resolveAgentDir(initialConfig, "main");
     const runAuth = vi.fn(async () => ({
@@ -1733,6 +1736,9 @@ describe("activateSetupInference", () => {
         },
       ],
       defaultModel: "openai/gpt-5.5",
+      configPatch: {
+        agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
+      },
     }));
     const provider: ProviderPlugin = {
       id: "openai",
@@ -1744,7 +1750,7 @@ describe("activateSetupInference", () => {
       async (params: SuccessfulRunParams & { authProfileId?: string }) =>
         successfulRun("openai", "gpt-5.5", params),
     );
-    const configHarness = createConfigTransformHarness(initialConfig);
+    const configHarness = createConfigTransformHarness(initialConfig, runtimeConfig);
 
     try {
       const result = await activateSetupInference({
@@ -1762,7 +1768,7 @@ describe("activateSetupInference", () => {
             issues: [],
             config: initialConfig,
             sourceConfig: initialConfig,
-            runtimeConfig: initialConfig,
+            runtimeConfig,
           })) as never,
           resolvePluginProviders: () => [provider],
           resolveManifestProviderAuthChoice: () => ({

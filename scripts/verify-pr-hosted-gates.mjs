@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { execPlainGh } from "./lib/plain-gh.mjs";
+import { execGhApiRead } from "./lib/plain-gh.mjs";
 
 export const SCHEDULED_HOSTED_WORKFLOWS = [
   "Blacksmith Testbox",
@@ -412,7 +412,7 @@ export function workflowRunQueryPaths(repo, { sha, recentSha, headBranch }, page
 function loadWorkflowRunsForQuery(queryForPage) {
   const loadPage = (page) =>
     parseWorkflowRunPage(
-      execPlainGh(["api", queryForPage(page)], {
+      execGhApiRead(queryForPage(page), {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }),
@@ -446,11 +446,8 @@ export function compareCommitPageCount(totalCommits) {
 function loadPullRequestCommitShas(repo, { baseSha, headSha }) {
   const loadPage = (page) =>
     JSON.parse(
-      execPlainGh(
-        [
-          "api",
-          `repos/${repo}/compare/${baseSha}...${headSha}?per_page=${COMPARE_COMMITS_PAGE_SIZE}&page=${page}`,
-        ],
+      execGhApiRead(
+        `repos/${repo}/compare/${baseSha}...${headSha}?per_page=${COMPARE_COMMITS_PAGE_SIZE}&page=${page}`,
         {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
@@ -482,7 +479,7 @@ function loadPullRequestCommitShas(repo, { baseSha, headSha }) {
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const pullRequest = JSON.parse(
-    execPlainGh(["api", `repos/${args.repo}/pulls/${args.pr}`], {
+    execGhApiRead(`repos/${args.repo}/pulls/${args.pr}`, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     }),

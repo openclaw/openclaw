@@ -50,6 +50,24 @@ export function renderTerminalPanelTabs(params: {
   onClose: (id: string) => void;
   onNew: () => void;
 }) {
+  const newButton = (slotted: boolean) => html`
+    <button
+      slot=${slotted ? "nav" : nothing}
+      class="tp-new"
+      type="button"
+      ?disabled=${params.booting}
+      title=${t("terminal.newSession")}
+      aria-label=${t("terminal.newSession")}
+      @click=${params.onNew}
+    >
+      ${PLUS_GLYPH}
+    </button>
+  `;
+  if (params.tabs.length === 0) {
+    // Web Awesome 3.10 dereferences its first tab when an empty group becomes
+    // visible. Keep the new-session control outside the group until one exists.
+    return newButton(false);
+  }
   return html`
     <wa-tab-group
       class="tp-tabs"
@@ -80,21 +98,11 @@ export function renderTerminalPanelTabs(params: {
             aria-label=${`${t("terminal.closeSession")}: ${terminalTabLabel(tab)}`}
             @click=${() => params.onClose(tab.id)}
           >
-            ${CLOSE_GLYPH}
+            <span class="tp-tab__close-box">${CLOSE_GLYPH}</span>
           </button>
         `;
       })}
-      <button
-        slot="nav"
-        class="tp-new"
-        type="button"
-        ?disabled=${params.booting}
-        title=${t("terminal.newSession")}
-        aria-label=${t("terminal.newSession")}
-        @click=${params.onNew}
-      >
-        ${PLUS_GLYPH}
-      </button>
+      ${newButton(true)}
     </wa-tab-group>
   `;
 }

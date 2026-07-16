@@ -89,7 +89,7 @@ describe("plugin gateway gauntlet helpers", () => {
       if (await predicate()) {
         return;
       }
-      await delay(25);
+      await delay(5);
     }
     throw new Error("condition was not met before timeout");
   }
@@ -709,7 +709,7 @@ const grandchildScript = [
   "  setTimeout(() => {",
   "    fs.writeFileSync(process.argv[3], 'drained');",
   "    process.exit(0);",
-  "  }, 50);",
+  "  }, 20);",
   "});",
   "fs.writeFileSync(process.argv[2], 'ready');",
   "setInterval(() => {}, 1000);",
@@ -731,7 +731,7 @@ setInterval(() => {}, 1000);
         args: [scriptPath, readyPath, drainedPath],
         label: "timeout-leader-drain",
         phase: "probe",
-        timeoutKillGraceMs: 1_000,
+        timeoutKillGraceMs: 200,
         timeoutMs: 500,
         timeMode: "none",
       });
@@ -953,19 +953,19 @@ const promise = runMeasuredCommandLive({
   )}, ${JSON.stringify(leaderExitedPath)}],
   label: "timeout-parent-termination",
   phase: "probe",
-  timeoutKillGraceMs: 250,
+  timeoutKillGraceMs: 150,
   timeoutMs: 200,
   timeMode: "none",
 });
 for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
           leaderExitedPath,
         )}); attempt += 1) {
-  await delay(25);
+  await delay(10);
 }
 if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
   process.exit(2);
 }
-await delay(50);
+await delay(20);
 process.kill(process.pid, "SIGTERM");
 await promise;
 process.exit(7);
@@ -1067,7 +1067,7 @@ process.exit(7);
           "const marker = process.argv[1];",
           "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
-          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 5);",
+          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 1);",
         ].join(""),
         markerPath,
       ],
@@ -1083,7 +1083,7 @@ process.exit(7);
     expect(row.wallMs).toBeLessThan(5_000);
     const afterReturn = await fs.readFile(markerPath, "utf8");
     await new Promise((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, 30);
     });
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });

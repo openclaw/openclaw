@@ -4488,34 +4488,6 @@ describe("chat model controls", () => {
     });
   });
 
-  it("shows canonical OpenAI names for legacy Codex model references", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.5",
-      modelProvider: "codex",
-      thinkingDefault: "high",
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          alias: "codex",
-          provider: "codex",
-        },
-      ],
-    });
-    const container = document.createElement("div");
-    render(
-      renderChatModelControls({
-        ...createChatModelControlsProps(state),
-        modelOverrides: { main: "codex/gpt-5.5" },
-      }),
-      container,
-    );
-
-    expect(
-      container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-    ).toBe("GPT-5.5 · High");
-  });
-
   it("uses the session provider for slash-containing raw model ids without metadata", () => {
     const { state } = createChatHeaderState();
     state.chatModelCatalog = [

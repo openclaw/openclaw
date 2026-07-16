@@ -72,7 +72,6 @@ const rawSqliteAllowPathGroups = {
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
-    "src/agents/subagent-registry.store.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",

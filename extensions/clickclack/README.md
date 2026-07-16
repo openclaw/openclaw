@@ -8,6 +8,22 @@ Official OpenClaw channel plugin for ClickClack.
 openclaw plugins install @openclaw/clickclack
 ```
 
+## Setup
+
+```sh
+openclaw channels add clickclack \
+  --base-url https://clickclack.example.com \
+  --token ccb_... \
+  --workspace default
+openclaw gateway
+```
+
+Run `openclaw onboard` for guided setup. The workspace value can be a
+`wsp_...` id, slug, or display name.
+
+For the default account only, `--use-env` reads `CLICKCLACK_BOT_TOKEN`; config
+storage is the normal setup path.
+
 ## Command menus
 
 ClickClack command menus are enabled by default. At gateway startup, the
