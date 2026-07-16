@@ -307,7 +307,7 @@ export async function handleAgentExecutionError(params: {
               timeoutMs: OVERLOAD_RETRY_NOTICE_DELIVERY_TIMEOUT_MS,
             });
           })
-          .catch((noticeError) => {
+          .catch((noticeError: unknown) => {
             logVerbose(`overload retry notice delivery failed (non-fatal): ${String(noticeError)}`);
           });
         params.overloadRetryState.noticeDelivery = Promise.race([
