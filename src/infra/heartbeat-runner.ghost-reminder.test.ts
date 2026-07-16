@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -9,11 +10,13 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { HEARTBEAT_SKIP_CRON_IN_PROGRESS } from "./heartbeat-wake.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
   resetSystemEventsForTest();
+  resetCronActiveJobs();
 });
 
 afterEach(() => {
@@ -183,6 +186,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
     enqueue: (sessionKey: string) => void;
     target?: "telegram" | "none";
     isolatedSession?: boolean;
+    source?: "cron";
+    intent?: "immediate";
+    activeCronJobId?: string;
+    owningCronJobId?: string;
   }): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
@@ -204,15 +211,29 @@ describe("Ghost reminder bug (issue #13317)", () => {
           isolatedSession: params.isolatedSession,
         });
         params.enqueue(sessionKey);
-        const result = await runHeartbeatOnce({
-          cfg,
-          agentId: "main",
-          reason: params.reason,
-          deps: {
-            getReplyFromConfig: getReplySpy,
-            telegram: sendTelegram,
-          },
-        });
+        const activeCronMarker = params.activeCronJobId
+          ? markCronJobActive(params.activeCronJobId)
+          : undefined;
+        let result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
+        try {
+          result = await runHeartbeatOnce({
+            cfg,
+            agentId: "main",
+            reason: params.reason,
+            source: params.source,
+            intent: params.intent,
+            ...(params.source ? { sessionKey } : {}),
+            ...(params.owningCronJobId ? { owningCronJobId: params.owningCronJobId } : {}),
+            deps: {
+              getReplyFromConfig: getReplySpy,
+              telegram: sendTelegram,
+            },
+          });
+        } finally {
+          if (params.activeCronJobId && activeCronMarker) {
+            clearCronJobActive(params.activeCronJobId, activeCronMarker);
+          }
+        }
         const calledCtx =
           getReplySpy.mock.calls.length === 0 ? null : getFirstReplyContext(getReplySpy);
         return {
@@ -288,6 +309,69 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
     expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
     expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("delivers a targeted cron event while its owning job is active (#105257)", async () => {
+    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-active-job-",
+      replyText: "Handled the reminder",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      activeCronJobId: "nightly-report",
+      owningCronJobId: "nightly-report",
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expectCronEventPrompt(calledCtx, "Reminder: Send the nightly report");
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+  });
+
+  it("still blocks an owning cron wake while an unrelated job is active (#105257)", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-unrelated-active-job-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      activeCronJobId: "different-job",
+      owningCronJobId: "nightly-report",
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
+  });
+
+  it("still blocks a cron wake that claims no owning job while a job is active (#105257)", async () => {
+    const { result, replyCallCount } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-unowned-wake-",
+      replyText: "must not run",
+      reason: "cron:nightly-report",
+      source: "cron",
+      intent: "immediate",
+      activeCronJobId: "nightly-report",
+      enqueue: (key) => {
+        enqueueSystemEvent("Reminder: Send the nightly report", {
+          sessionKey: key,
+          contextKey: "cron:nightly-report",
+        });
+      },
+    });
+
+    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
+    expect(replyCallCount).toBe(0);
   });
 
   it("drains inspected cron events after a successful run so later heartbeats do not replay them", async () => {

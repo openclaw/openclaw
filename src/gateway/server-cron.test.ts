@@ -1015,6 +1015,10 @@ describe("buildGatewayCronService", () => {
       );
       expect(heartbeatRun.agentId).toBe("main");
       expect(heartbeatRun.sessionKey).toBe("global");
+      // The adapter rebuilds this options object field-by-field, so a dropped
+      // owningCronJobId would silently restore the #105257 self-block: the field is
+      // optional, so nothing but this assertion fails when it goes missing.
+      expect(heartbeatRun.owningCronJobId).toBe(job.id);
       expect(heartbeatRun.heartbeat).toEqual({
         target: "last",
         to: undefined,

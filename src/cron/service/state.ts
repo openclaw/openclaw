@@ -125,6 +125,8 @@ export type CronServiceDeps = {
     reason?: string;
     agentId?: string;
     sessionKey?: string;
+    /** Cron job id whose own active marker must not block its awaited wake. */
+    owningCronJobId?: string;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;

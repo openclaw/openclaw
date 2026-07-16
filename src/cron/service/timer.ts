@@ -2572,6 +2572,7 @@ async function executeMainSessionCronJob(
         reason,
         agentId: job.agentId,
         sessionKey: cronRunSessionKey,
+        owningCronJobId: job.id,
         heartbeat: { target: "last" },
       });
       if (abortSignal?.aborted) {
@@ -2585,7 +2586,11 @@ async function executeMainSessionCronJob(
         break;
       }
       if (heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
-        // The active cron marker blocks direct wake-now until this job returns.
+        // Reached only when something OTHER than this job is busy: a concurrent cron
+        // run's marker, or cron-lane pressure. The owning job's own marker no longer
+        // lands here (#105257). Hand off to the targeted async requeue instead of
+        // waiting in place -- two concurrent jobs would otherwise deadlock on each
+        // other's markers, which are not cleared until finalization.
         state.deps.requestHeartbeat({
           source: "cron",
           intent: "immediate",

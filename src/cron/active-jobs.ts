@@ -144,6 +144,25 @@ export function hasActiveCronJobs() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
 }
 
+/**
+ * Returns whether any cron run other than `jobId` is active. A job's own marker must
+ * not block its own synchronous wake, but every other job's marker still must: cron
+ * runs concurrently (cron.maxConcurrentRuns), so discounting all markers would let one
+ * job's wake execute while an unrelated job is mid-run.
+ */
+export function hasActiveCronJobsExcept(jobId: string) {
+  if (!jobId) {
+    return hasActiveCronJobs();
+  }
+  const state = getCronActiveJobState();
+  for (const marker of state.activeJobs.values()) {
+    if (marker.jobId !== jobId && isMarkerActiveInGeneration(marker, state.generation)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Returns the number of active cron runs in this process. */
 export function getActiveCronJobCount() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState());
