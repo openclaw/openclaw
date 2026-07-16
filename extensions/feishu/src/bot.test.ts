@@ -7,11 +7,11 @@ import type {
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseMergeForwardContent } from "./bot-content.js";
 import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage } from "./bot.js";
+import { handleFeishuMessage, runFeishuDispatchWithSessionInitRetry } from "./bot.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -4591,4 +4591,131 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     expect(secondCall.processingClaim?.commit).toBeTypeOf("function");
   });
 });
+
+describe("runFeishuDispatchWithSessionInitRetry", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns the dispatch result on the first attempt when it succeeds", async () => {
+    const dispatch = vi.fn().mockResolvedValue("ok");
+    const log = vi.fn();
+
+    const result = await runFeishuDispatchWithSessionInitRetry(dispatch, {
+      log,
+      accountId: "test",
+    });
+
+    expect(result).toBe("ok");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("rethrows non-conflict errors immediately", async () => {
+    const error = new Error("network failure");
+    const dispatch = vi.fn().mockRejectedValue(error);
+    const log = vi.fn();
+
+    await expect(
+      runFeishuDispatchWithSessionInitRetry(dispatch, { log, accountId: "test" }),
+    ).rejects.toThrow("network failure");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("retries with backoff when dispatch fails with session init conflict and succeeds on the next attempt", async () => {
+    const conflictError = new Error("reply session initialization conflicted for test-key");
+    const dispatch = vi.fn().mockRejectedValueOnce(conflictError).mockResolvedValue("delivered");
+    const log = vi.fn();
+    const promise = runFeishuDispatchWithSessionInitRetry(dispatch, { log, accountId: "test" });
+    promise.catch(() => {}); // Suppress unhandled rejection during timer advance
+
+    // The first retry delay is 250ms.
+    await vi.advanceTimersByTimeAsync(250);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+
+    await expect(promise).resolves.toBe("delivered");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("retrying in 250ms (retry 1/4)"));
+  });
+
+  it("exhausts all retries and throws the last conflict error when every attempt fails", async () => {
+    const conflictError = new Error("reply session initialization conflicted for test-key");
+    const dispatch = vi.fn().mockRejectedValue(conflictError);
+    const log = vi.fn();
+    // Catch the rejection immediately so it doesn't become an unhandled rejection
+    // when time is advanced and the promise rejects synchronously.
+    let captured: unknown;
+    const promise = runFeishuDispatchWithSessionInitRetry(dispatch, {
+      log,
+      accountId: "test",
+    }).catch((e) => {
+      captured = e;
+    });
+
+    // Advance through all retry delays: 250 + 500 + 1000 + 2000 = 3750ms
+    await vi.advanceTimersByTimeAsync(3800);
+    await promise;
+
+    expect(captured).toBeInstanceOf(Error);
+    expect((captured as Error).message).toContain("reply session initialization conflicted");
+    // Total 1 initial + 4 retry attempts = 5
+    expect(dispatch).toHaveBeenCalledTimes(5);
+    expect(log).toHaveBeenCalledTimes(4);
+  });
+
+  it("rethrows immediately when a non-conflict error occurs during retry", async () => {
+    const conflictError = new Error("reply session initialization conflicted for test-key");
+    const networkError = new Error("timeout");
+    const dispatch = vi
+      .fn()
+      .mockRejectedValueOnce(conflictError)
+      .mockRejectedValueOnce(networkError);
+    const log = vi.fn();
+    let captured: unknown;
+    const promise = runFeishuDispatchWithSessionInitRetry(dispatch, {
+      log,
+      accountId: "test",
+    }).catch((e) => {
+      captured = e;
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    await promise;
+    expect(captured).toBeInstanceOf(Error);
+    expect((captured as Error).message).toBe("timeout");
+    // The first retry attempt failed with a network error (not conflict), so no further retries.
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs retry progress with correct attempt numbering", async () => {
+    const conflictError = new Error("reply session initialization conflicted for test-key");
+    const dispatch = vi.fn().mockRejectedValue(conflictError);
+    const log = vi.fn();
+    let captured: unknown;
+    const promise = runFeishuDispatchWithSessionInitRetry(dispatch, {
+      log,
+      accountId: "test",
+    }).catch((e) => {
+      captured = e;
+    });
+
+    // Advance through all retries
+    await vi.advanceTimersByTimeAsync(3800);
+    await promise;
+    expect(captured).toBeInstanceOf(Error);
+
+    expect(log).toHaveBeenCalledTimes(4);
+    expect(log).toHaveBeenNthCalledWith(1, expect.stringContaining("(retry 1/4)"));
+    expect(log).toHaveBeenNthCalledWith(2, expect.stringContaining("(retry 2/4)"));
+    expect(log).toHaveBeenNthCalledWith(3, expect.stringContaining("(retry 3/4)"));
+    expect(log).toHaveBeenNthCalledWith(4, expect.stringContaining("(retry 4/4)"));
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

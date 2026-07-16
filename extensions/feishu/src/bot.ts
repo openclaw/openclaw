@@ -83,6 +83,51 @@ import {
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const FEISHU_REPLY_SESSION_INIT_CONFLICT_MAX_RETRIES = 4;
+const FEISHU_REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
+
+function isFeishuReplySessionInitConflictError(error: unknown): boolean {
+  const message = String(error);
+  return message.includes("reply session initialization conflicted for");
+}
+
+export async function runFeishuDispatchWithSessionInitRetry<T>(
+  dispatch: () => Promise<T>,
+  deps: { log: (msg: string) => void; accountId: string },
+): Promise<T> {
+  // First attempt — no retry delay needed.
+  try {
+    return await dispatch();
+  } catch (err) {
+    if (!isFeishuReplySessionInitConflictError(err)) {
+      throw err;
+    }
+  }
+  // Backed-off retries for session-init conflicts only.
+  let lastError: unknown;
+  for (
+    let retryIndex = 0;
+    retryIndex < FEISHU_REPLY_SESSION_INIT_CONFLICT_MAX_RETRIES;
+    retryIndex += 1
+  ) {
+    const delayMs = FEISHU_REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS[retryIndex];
+    deps.log(
+      `feishu[${deps.accountId}]: reply session init conflict, retrying in ${delayMs}ms (retry ${retryIndex + 1}/${FEISHU_REPLY_SESSION_INIT_CONFLICT_MAX_RETRIES})`,
+    );
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+    try {
+      return await dispatch();
+    } catch (err) {
+      lastError = err;
+      if (!isFeishuReplySessionInitConflictError(err)) {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
 
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
@@ -1623,64 +1668,69 @@ export async function handleFeishuMessage(params: {
         });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const turnResult = await core.channel.inbound.run({
-        channel: "feishu",
-        accountId: route.accountId,
-        raw: ctx,
-        adapter: {
-          ingest: () => ({
-            id: ctx.messageId,
-            timestamp: messageCreateTimeMs,
-            rawText: ctx.content,
-            textForAgent: ctxPayload.BodyForAgent,
-            textForCommands: ctxPayload.CommandBody,
-            raw: ctx,
-          }),
-          resolveTurn: () => ({
-            channel: "feishu",
-            accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
-            ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
-            record: {
-              updateLastRoute: buildFeishuInboundLastRouteUpdate({
-                sessionKey: route.sessionKey,
-                accountId: route.accountId,
-              }),
-              onRecordError: (err) => {
-                log(
-                  `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
-                );
-              },
-            },
-            history: {
-              isGroup,
-              historyKey,
-              historyMap: chatHistories,
-              limit: historyLimit,
-            },
-            onPreDispatchFailure: () =>
-              core.channel.reply.settleReplyDispatcher({
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
-              }),
-            runDispatch: () =>
-              core.channel.reply.withReplyDispatcher({
-                dispatcher,
-                onSettled: () => {
-                  markDispatchIdle();
+      const runSingleDispatch = () =>
+        core.channel.inbound.run({
+          channel: "feishu",
+          accountId: route.accountId,
+          raw: ctx,
+          adapter: {
+            ingest: () => ({
+              id: ctx.messageId,
+              timestamp: messageCreateTimeMs,
+              rawText: ctx.content,
+              textForAgent: ctxPayload.BodyForAgent,
+              textForCommands: ctxPayload.CommandBody,
+              raw: ctx,
+            }),
+            resolveTurn: () => ({
+              channel: "feishu",
+              accountId: route.accountId,
+              routeSessionKey: route.sessionKey,
+              storePath,
+              ctxPayload,
+              recordInboundSession: core.channel.session.recordInboundSession,
+              record: {
+                updateLastRoute: buildFeishuInboundLastRouteUpdate({
+                  sessionKey: route.sessionKey,
+                  accountId: route.accountId,
+                }),
+                onRecordError: (err) => {
+                  log(
+                    `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
+                  );
                 },
-                run: () =>
-                  core.channel.reply.dispatchReplyFromConfig({
-                    ctx: ctxPayload,
-                    cfg: effectiveCfg,
-                    dispatcher,
-                    replyOptions,
-                  }),
-              }),
-          }),
-        },
+              },
+              history: {
+                isGroup,
+                historyKey,
+                historyMap: chatHistories,
+                limit: historyLimit,
+              },
+              onPreDispatchFailure: () =>
+                core.channel.reply.settleReplyDispatcher({
+                  dispatcher,
+                  onSettled: () => markDispatchIdle(),
+                }),
+              runDispatch: () =>
+                core.channel.reply.withReplyDispatcher({
+                  dispatcher,
+                  onSettled: () => {
+                    markDispatchIdle();
+                  },
+                  run: () =>
+                    core.channel.reply.dispatchReplyFromConfig({
+                      ctx: ctxPayload,
+                      cfg: effectiveCfg,
+                      dispatcher,
+                      replyOptions,
+                    }),
+                }),
+            }),
+          },
+        });
+      const turnResult = await runFeishuDispatchWithSessionInitRetry(runSingleDispatch, {
+        log,
+        accountId: account.accountId,
       });
       if (!turnResult.dispatched) {
         return;
