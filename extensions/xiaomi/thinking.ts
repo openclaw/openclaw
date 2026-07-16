@@ -8,7 +8,7 @@ function isMiMoReasoningModelId(modelId: string): boolean {
   return MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase());
 }
 
-export function isMiMoProviderId(providerId: unknown): boolean {
+function isMiMoProviderId(providerId: unknown): boolean {
   return providerId === XIAOMI_PROVIDER_ID || providerId === XIAOMI_TOKEN_PLAN_PROVIDER_ID;
 }
 
