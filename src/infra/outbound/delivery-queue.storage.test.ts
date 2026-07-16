@@ -359,6 +359,15 @@ describe("delivery-queue storage", () => {
   });
 
   describe("queue media custody", () => {
+    it("can retain artifacts while an active recovery attempt owns them", async () => {
+      const acked = await enqueueSpoolDelivery("0");
+
+      await ackDelivery(acked.id, tmpDir(), { retainSpoolArtifacts: true });
+
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      await expect(fs.stat(acked.artifact)).resolves.toBeDefined();
+    });
+
     it("releases artifacts after every terminal queue transition", async () => {
       const acked = await enqueueSpoolDelivery("1");
       await ackDelivery(acked.id, tmpDir());

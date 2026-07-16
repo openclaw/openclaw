@@ -14,9 +14,9 @@ export const DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME = "outbound-media-staging";
 type MediaStageEntry = DeliveryQueueEntryState & { artifacts: string[] };
 type OutboundMediaEntry = DeliveryQueueEntryState & { payloads: ReplyPayload[] };
 
-/** Register planned artifacts before any file becomes visible to the sweeper. */
-export function createDeliveryQueueMediaStage(
+function createDeliveryQueueMediaRetention(
   artifacts: readonly string[],
+  entryKind: "outbound-media-stage" | "outbound-media-recovery-lease",
   stateDir?: string,
 ): string {
   const id = generateSecureUuid();
@@ -29,7 +29,7 @@ export function createDeliveryQueueMediaStage(
   const inserted = upsertDeliveryQueueEntry({
     queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
     entry,
-    metadata: { entryKind: "outbound-media-stage" },
+    metadata: { entryKind },
     stateDir,
     insertOnly: true,
   });
@@ -39,12 +39,36 @@ export function createDeliveryQueueMediaStage(
   return id;
 }
 
+/** Register planned artifacts before any file becomes visible to the sweeper. */
+export function createDeliveryQueueMediaStage(
+  artifacts: readonly string[],
+  stateDir?: string,
+): string {
+  return createDeliveryQueueMediaRetention(artifacts, "outbound-media-stage", stateDir);
+}
+
+/** Keep queue-owned artifacts visible to GC while a recovered send is active. */
+export function createDeliveryQueueMediaRecoveryLease(
+  artifacts: readonly string[],
+  stateDir?: string,
+): string {
+  return createDeliveryQueueMediaRetention(artifacts, "outbound-media-recovery-lease", stateDir);
+}
+
 /** Cancel a stage that will never publish an outbound queue row. */
 export function cancelDeliveryQueueMediaStage(id: string | undefined, stateDir?: string): void {
   if (!id) {
     return;
   }
   deleteDeliveryQueueEntry(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, id, stateDir);
+}
+
+/** Release an active recovery lease after its adapter attempt settles. */
+export function cancelDeliveryQueueMediaRecoveryLease(
+  id: string | undefined,
+  stateDir?: string,
+): void {
+  cancelDeliveryQueueMediaStage(id, stateDir);
 }
 
 /**

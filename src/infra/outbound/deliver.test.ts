@@ -4371,6 +4371,30 @@ describe("deliverOutboundPayloads", () => {
     expect(JSON.stringify(events)).not.toContain("provider rejected send");
   });
 
+  it("retains queue media when recovery acks before adapter I/O", async () => {
+    queueMocks.markDeliveryPlatformSendAttemptStarted.mockRejectedValueOnce(
+      new Error("pre-send marker offline"),
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "best_effort",
+      skipQueue: true,
+      deliveryQueueId: "recovery-queue-id",
+      deliveryQueueStateDir: "/queue-state",
+    });
+
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("recovery-queue-id", "/queue-state", {
+      retainSpoolArtifacts: true,
+    });
+    expect(sendMatrix).toHaveBeenCalledOnce();
+  });
+
   it("writes raw payloads to the queue before normalization", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-raw", roomId: "!room:example" });
     const rawPayloads: DeliverOutboundPayload[] = [

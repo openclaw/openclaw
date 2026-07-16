@@ -169,14 +169,25 @@ function loadEntrySpoolPaths(id: string, stateDir: string | undefined): string[]
   return entry ? collectEntrySpoolPaths(entry.payloads, stateDir) : [];
 }
 
+type AckDeliveryOptions = {
+  /** Caller holds a GC-visible recovery lease until its active adapter settles. */
+  retainSpoolArtifacts?: boolean;
+};
+
 /** Remove a successfully delivered entry from the queue. */
-export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
+export async function ackDelivery(
+  id: string,
+  stateDir?: string,
+  options?: AckDeliveryOptions,
+): Promise<void> {
   // Read the media references before the row goes, then unlink only after the
   // delete commits. A crash in between leaves an orphan for the retention sweep;
   // unlinking first could strip media from a row that still has to replay.
   const spoolPaths = loadEntrySpoolPaths(id, stateDir);
   deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
-  await releaseSpoolArtifacts(spoolPaths, stateDir);
+  if (!options?.retainSpoolArtifacts) {
+    await releaseSpoolArtifacts(spoolPaths, stateDir);
+  }
 }
 
 /** Update a queue entry after a failed delivery attempt. */

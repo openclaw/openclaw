@@ -676,6 +676,7 @@ async function persistQueuedPreSendState(params: {
   queuePolicy: OutboundDeliveryQueuePolicy;
   stateDir?: string;
   route: PlatformSendRoute;
+  retainSpoolArtifacts?: boolean;
 }): Promise<QueuedPreSendState> {
   try {
     await markDeliveryPlatformSendAttemptStarted(params.queueId, params.stateDir, {
@@ -691,7 +692,11 @@ async function persistQueuedPreSendState(params: {
     );
     // If the pre-send marker is unavailable, remove the intent before crossing
     // the platform boundary. An ack failure aborts the send, leaving safe retry state.
-    await ackDelivery(params.queueId, params.stateDir);
+    if (params.retainSpoolArtifacts) {
+      await ackDelivery(params.queueId, params.stateDir, { retainSpoolArtifacts: true });
+    } else {
+      await ackDelivery(params.queueId, params.stateDir);
+    }
     return "acked";
   }
 }
@@ -1605,6 +1610,9 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           queuePolicy: platformQueuePolicy,
           stateDir: platformQueueStateDir,
           route,
+          // Recovery sends read queue-owned media. Removing the row prevents a
+          // duplicate replay, but the active adapter still needs the files.
+          retainSpoolArtifacts: queueId === null && params.deliveryQueueId !== undefined,
         });
         if (queueId && queuedPreSendState === "acked") {
           queuedPostSendState = "acked";
