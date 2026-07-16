@@ -6,6 +6,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function responseWithText(text: string, init?: ResponseInit): Response {
+  return new Response(text, init);
+}
+
 describe("QA Lab dashboard HTTP", () => {
   it("gives every API request a fresh 30 second deadline", async () => {
     const controllers = [new AbortController(), new AbortController(), new AbortController()];
@@ -75,5 +79,52 @@ describe("QA Lab dashboard HTTP", () => {
     timeoutController.abort(new DOMException("request deadline exceeded", "TimeoutError"));
 
     await expect(request).rejects.toMatchObject({ name: "TimeoutError" });
+  });
+
+  it("fails closed on non-JSON success responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        responseWithText("not json", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      ),
+    );
+
+    await expect(getJson("/api/bootstrap")).rejects.toThrow(
+      /\/api\/bootstrap: expected JSON response/,
+    );
+  });
+
+  it("fails closed on empty JSON success responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        responseWithText("", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(getJsonNoStore("/api/snapshot")).rejects.toThrow(
+      /\/api\/snapshot: empty JSON response/,
+    );
+  });
+
+  it("keeps API error bodies bounded and readable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        responseWithText(JSON.stringify({ error: "boom" }), {
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(postJson("/api/runner/start", { scenario: "baseline" })).rejects.toThrow("boom");
   });
 });
