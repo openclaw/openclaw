@@ -1019,6 +1019,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
     } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     const settledToolResults = [
+      toolUseAssistant,
       { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
     ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"];
     mockedClassifyFailoverReason.mockReturnValue(null);
@@ -1071,6 +1072,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         messagesSnapshot: [
+          toolUseAssistant,
           { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
         ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
         lastAssistant: toolUseAssistant,
@@ -1125,6 +1127,44 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("tool-use terminal turn lacked a final answer");
   });
 
+  it("ignores stale prior-turn tool results with colliding ids", async () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [],
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        // A completed result from a PRIOR turn reusing the same id sits before
+        // the terminal assistant; it must not prove the new batch dispatched.
+        messagesSnapshot: [
+          { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+          toolUseAssistant,
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-use-terminal-stale-prior-result",
+    });
+
+    for (let call = 0; call < mockedRunEmbeddedAttempt.mock.calls.length; call += 1) {
+      expect(runAttemptCall(call).prompt).not.toContain(TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION);
+    }
+    expectNoWarnMessageWith("tool-use terminal turn lacked a final answer");
+  });
+
   it("does not claim completion when only part of a multi-tool request dispatched", async () => {
     const toolUseAssistant = {
       role: "assistant",
@@ -1143,6 +1183,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         toolMetas: [{ toolName: "write", meta: "path=a.txt" }],
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         messagesSnapshot: [
+          toolUseAssistant,
           { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
         ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
         lastAssistant: toolUseAssistant,

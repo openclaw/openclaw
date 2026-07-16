@@ -233,6 +233,62 @@ describe("applyExtraParamsToAgent Moonshot", () => {
     expect(expectDefined(messages[0], "messages[0] test invariant").reasoning_content).toBe("");
   });
 
+  it("forces Kimi K3 max reasoning while preserving pinned tool choice", () => {
+    const pinnedToolChoice = { type: "function", function: { name: "read" } };
+    const payload = runExtraParamsPayloadCase({
+      provider: "moonshot",
+      modelId: "kimi-k3",
+      thinkingLevel: "off",
+      payload: {
+        model: "kimi-k3",
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              { id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
+            ],
+          },
+        ],
+      },
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "moonshot/kimi-k3": {
+                params: {
+                  thinking: { type: "disabled", keep: "all" },
+                  extra_body: {
+                    thinking: { type: "disabled", keep: "all" },
+                    reasoningEffort: "low",
+                    reasoning_effort: "low",
+                    tool_choice: pinnedToolChoice,
+                    temperature: 0,
+                    top_p: 0.5,
+                    n: 2,
+                    presence_penalty: 1,
+                    frequency_penalty: 1,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoningEffort");
+    expect(payload.reasoning_effort).toBe("max");
+    expect(payload.tool_choice).toEqual(pinnedToolChoice);
+    expect(payload).not.toHaveProperty("temperature");
+    expect(payload).not.toHaveProperty("top_p");
+    expect(payload).not.toHaveProperty("n");
+    expect(payload).not.toHaveProperty("presence_penalty");
+    expect(payload).not.toHaveProperty("frequency_penalty");
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    expect(expectDefined(messages[0], "messages[0] test invariant").reasoning_content).toBe("");
+  });
+
   it("repairs only missing assistant tool-call reasoning_content when thinking is enabled", () => {
     const payload = runExtraParamsPayloadCase({
       provider: "moonshot",

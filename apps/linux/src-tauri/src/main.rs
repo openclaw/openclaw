@@ -4,6 +4,7 @@ mod cli;
 mod discovery;
 mod gateway;
 mod installer;
+mod notify;
 mod tray;
 mod updater;
 
@@ -16,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State, Url, WebviewWindow};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
@@ -30,6 +32,52 @@ struct BuildInfo {
 fn is_release_version(version: &str) -> bool {
     // The committed 0.1.0 version identifies branch builds; release builds are stamped by CI.
     version != "0.1.0"
+}
+
+// The openclaw:// URL contract is deliberately tiny and handled entirely in
+// Rust: `openclaw://dashboard` opens/connects the dashboard; anything else
+// just focuses the app. New routes are added to this enum — the renderer
+// (which is often navigated away to the remote dashboard) never sees URLs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeepLinkRoute {
+    Dashboard,
+    FocusOnly,
+}
+
+fn deep_link_route(url: &Url) -> DeepLinkRoute {
+    if url.scheme() == "openclaw" && url.host_str() == Some("dashboard") {
+        DeepLinkRoute::Dashboard
+    } else {
+        DeepLinkRoute::FocusOnly
+    }
+}
+
+fn handle_deep_links(app: &AppHandle, urls: Vec<Url>) {
+    for url in urls {
+        match deep_link_route(&url) {
+            DeepLinkRoute::Dashboard => {
+                let desktop = app.state::<DesktopState>();
+                tray::open_dashboard(app, desktop.inner());
+            }
+            DeepLinkRoute::FocusOnly => tray::show_window(app),
+        }
+    }
+}
+
+#[cfg(test)]
+mod deep_link_tests {
+    use super::{deep_link_route, DeepLinkRoute, Url};
+
+    #[test]
+    fn dashboard_route_matches_only_the_openclaw_dashboard_host() {
+        let dashboard = Url::parse("openclaw://dashboard/ignored?source=test").unwrap();
+        let other = Url::parse("openclaw://settings/dashboard").unwrap();
+        let other_scheme = Url::parse("https://dashboard/").unwrap();
+
+        assert_eq!(deep_link_route(&dashboard), DeepLinkRoute::Dashboard);
+        assert_eq!(deep_link_route(&other), DeepLinkRoute::FocusOnly);
+        assert_eq!(deep_link_route(&other_scheme), DeepLinkRoute::FocusOnly);
+    }
 }
 
 #[derive(Default)]
@@ -571,11 +619,25 @@ async fn gateway_action(
 }
 
 fn main() {
-    let builder = tauri::Builder::default();
-    let builder = builder
+    // Single-instance must run first so it can pass deep-link argv to the primary process.
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_window(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&["canvas"])
+                .build(),
+        );
     #[cfg(target_os = "linux")]
     let builder = canvas::register_protocol(builder);
 
@@ -585,6 +647,18 @@ fn main() {
             .expect("tauri.conf.json must define the main window");
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
+        let deep_link_app = app.handle().clone();
+        app.deep_link().on_open_url(move |event| {
+            handle_deep_links(&deep_link_app, event.urls());
+        });
+        if let Some(urls) = app.deep_link().get_current()? {
+            handle_deep_links(app.handle(), urls);
+        }
+        #[cfg(any(target_os = "linux", all(debug_assertions, target_os = "windows")))]
+        if let Err(error) = app.deep_link().register_all() {
+            eprintln!("Deep-link registration unavailable: {error}");
+        }
+
         app.manage(discovery::GatewayDiscovery::default());
         app.manage(updater::UpdaterState::default());
         #[cfg(target_os = "linux")]

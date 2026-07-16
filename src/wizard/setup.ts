@@ -568,7 +568,7 @@ async function runSetupWizardOnce(
   }
 
   prompter.disableBackNavigation?.();
-  if (opts.skipChannels ?? opts.skipProviders) {
+  if (opts.skipChannels) {
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");

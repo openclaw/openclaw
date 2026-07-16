@@ -1025,6 +1025,49 @@ describe("inspectGatewayRestart", () => {
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { listenerPid: 4300, healthy: true },
+    { listenerPid: 4400, healthy: false },
+  ])(
+    "accepts device identity policy close only for the verified replacement listener",
+    async ({ listenerPid, healthy }) => {
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: listenerPid, commandLine: "openclaw-gateway" }],
+        hints: [],
+      });
+      probeGateway.mockResolvedValue({
+        ok: false,
+        close: { code: 1008, reason: "device identity required" },
+      });
+      const previousLockIdentity = {
+        pid: 4200,
+        ownerId: "gateway-owner-old",
+        createdAt: "2026-07-16T12:00:00.000Z",
+        port: 18789,
+      };
+      readActiveGatewayLockIdentity.mockResolvedValueOnce(previousLockIdentity).mockResolvedValue({
+        ...previousLockIdentity,
+        pid: 4300,
+        ownerId: "gateway-owner-new",
+        createdAt: "2026-07-16T12:00:01.000Z",
+      });
+
+      const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+      const snapshot = await waitForGatewayHealthyListener({
+        port: 18789,
+        previousLockIdentity,
+        attempts: 1,
+        delayMs: 500,
+      });
+
+      expect(snapshot.healthy).toBe(healthy);
+      expect(inspectPortUsage).toHaveBeenCalledTimes(1);
+      expect(probeGateway).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("bounds replacement health after an indefinite previous-owner wait", async () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,

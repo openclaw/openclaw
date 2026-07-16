@@ -169,14 +169,6 @@ export type InteractiveReplyTextBlock = {
 };
 
 /**
- * @deprecated Use MessagePresentationButtonsBlock.
- */
-type InteractiveReplyButtonsBlock = {
-  type: "buttons";
-  buttons: InteractiveReplyButton[];
-};
-
-/**
  * @deprecated Use MessagePresentationSelectBlock.
  */
 export type InteractiveReplySelectBlock = {
@@ -190,7 +182,7 @@ export type InteractiveReplySelectBlock = {
  */
 export type InteractiveReplyBlock =
   | InteractiveReplyTextBlock
-  | InteractiveReplyButtonsBlock
+  | MessagePresentationButtonsBlock
   | InteractiveReplySelectBlock;
 
 /**

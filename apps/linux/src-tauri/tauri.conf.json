@@ -7,6 +7,11 @@
     "frontendDist": "../ui"
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["openclaw"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDODJFMzU1QTQ0MUMwNkYKUldSdndFR2tWZU9DVE9RYnlIcHFoNG1xUlQzUlloa0plQmZjY0dPbHpjWlEzWFozdmt0cHBlY2gK",
       "endpoints": [

@@ -162,9 +162,6 @@ export function setModelCatalogImportForTest(loader?: () => Promise<AgentDiscove
   importAgentDiscovery = loader ?? defaultImportAgentDiscovery;
 }
 
-/** @deprecated Use `setModelCatalogImportForTest`. */
-export { setModelCatalogImportForTest as __setModelCatalogImportForTest };
-
 function catalogEntryDedupeKey(provider: string, id: string): string {
   const normalizedProvider = normalizeProviderId(provider);
   return normalizeLowercaseStringOrEmpty(modelKey(normalizedProvider, id));

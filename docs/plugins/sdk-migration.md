@@ -339,27 +339,23 @@ SDK.
 
   <Step title="Migrate channel route helpers">
     New channel route code uses `openclaw/plugin-sdk/channel-route`. The older
-    route-key and comparable-target names remain as compatibility aliases:
+    route-key names remain as compatibility aliases:
 
     | Old helper | Modern helper |
     | --- | --- |
     | `channelRouteIdentityKey(...)` | `channelRouteDedupeKey(...)` |
     | `channelRouteKey(...)` | `channelRouteCompactKey(...)` |
-    | `ComparableChannelTarget` | `ChannelRouteParsedTarget` |
-    | `comparableChannelTargetsMatch(...)` | `channelRouteTargetsMatchExact(...)` |
-    | `comparableChannelTargetsShareRoute(...)` | `channelRouteTargetsShareConversation(...)` |
 
     The modern route helpers normalize `{ channel, to, accountId, threadId }`
     consistently across native approvals, reply suppression, inbound dedupe,
     cron delivery, and session routing.
 
-    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget`, the
-    parser-backed loaded-route helpers (`parseExplicitTargetForLoadedChannel`,
-    `resolveRouteTargetForLoadedChannel`), or
-    `resolveChannelRouteTargetWithParser(...)` from `plugin-sdk/channel-route` -
-    those are deprecated and remain only for older plugins. New channel
-    plugins should use `messaging.targetResolver.resolveTarget(...)` for
-    target-id normalization and directory-miss fallback,
+    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
+    `resolveChannelRouteTargetWithParser(...)` from
+    `plugin-sdk/channel-route` - those are deprecated and remain only for older
+    plugins. New channel plugins should use
+    `messaging.targetResolver.resolveTarget(...)` for target-id normalization
+    and directory-miss fallback,
     `messaging.inferTargetChatType(...)` when core needs an early peer kind,
     and `messaging.resolveOutboundSessionRoute(...)` for provider-native
     session and thread identity.
