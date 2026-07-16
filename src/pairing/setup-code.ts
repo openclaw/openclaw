@@ -37,11 +37,28 @@ import {
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
 
-type PairingSetupPayload = {
-  url: string;
-  urls?: string[];
-  bootstrapToken: string;
-};
+type PairingSetupPayload =
+  | {
+      url: string;
+      urls?: string[];
+      bootstrapToken: string;
+      token?: never;
+      password?: never;
+    }
+  | {
+      url: string;
+      urls?: string[];
+      bootstrapToken?: never;
+      token: string;
+      password?: never;
+    }
+  | {
+      url: string;
+      urls?: string[];
+      bootstrapToken?: never;
+      token?: never;
+      password: string;
+    };
 
 type PairingSetupAccess = "full" | "limited" | "node";
 
@@ -63,6 +80,7 @@ type ResolvePairingSetupOptions = {
   publicUrl?: string;
   preferRemoteUrl?: boolean;
   forceSecure?: boolean;
+  credentialMode?: "bootstrap" | "direct";
   bootstrapProfile?: DeviceBootstrapProfileInput;
   pairingBaseDir?: string;
   runCommandWithTimeout?: PairingSetupCommandRunner;
@@ -193,8 +211,10 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   return describeSecureMobilePairingFix(source);
 }
 
-type ResolveAuthLabelResult = {
+type ResolveAuthResult = {
   label?: "token" | "password";
+  token?: string;
+  password?: string;
   error?: string;
 };
 
@@ -279,10 +299,7 @@ function pickTailnetIPv4(
   return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
 }
 
-function resolvePairingSetupAuthLabel(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): ResolveAuthLabelResult {
+function resolvePairingSetupAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthResult {
   const mode = cfg.gateway?.auth?.mode;
   const defaults = cfg.secrets?.defaults;
   const tokenRef = resolveSecretInputRef({
@@ -305,19 +322,19 @@ function resolvePairingSetupAuthLabel(
     if (!password) {
       return { error: "Gateway auth is set to password, but no password is configured." };
     }
-    return { label: "password" };
+    return { label: "password", password };
   }
   if (mode === "token") {
     if (!token) {
       return { error: "Gateway auth is set to token, but no token is configured." };
     }
-    return { label: "token" };
+    return { label: "token", token };
   }
   if (token) {
-    return { label: "token" };
+    return { label: "token", token };
   }
   if (password) {
-    return { label: "password" };
+    return { label: "password", password };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
 }
@@ -422,9 +439,9 @@ export async function resolvePairingSetupFromConfig(
     hasTokenCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN)),
     hasPasswordCandidate: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
-  const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
-  if (authLabel.error) {
-    return { ok: false, error: authLabel.error };
+  const auth = resolvePairingSetupAuth(cfgForAuth, env);
+  if (auth.error) {
+    return { ok: false, error: auth.error };
   }
   const urlResult = await resolveGatewayUrl(cfgForAuth, {
     env,
@@ -443,7 +460,7 @@ export async function resolvePairingSetupFromConfig(
     return { ok: false, error: mobilePairingUrlError };
   }
 
-  if (!authLabel.label) {
+  if (!auth.label) {
     return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
@@ -460,6 +477,36 @@ export async function resolvePairingSetupFromConfig(
     }
   }
   const uniqueUrls = [...new Set(urls)].slice(0, PAIRING_SETUP_MAX_URLS);
+  if (options.credentialMode === "direct") {
+    if (uniqueUrls.some((url) => !isFullAccessMobilePairingUrl(url))) {
+      return {
+        ok: false,
+        error:
+          "Direct credential setup requires wss:// (or same-host loopback) because the setup code contains a long-lived gateway credential.",
+      };
+    }
+    const directCredential =
+      auth.label === "token" && auth.token
+        ? { token: auth.token }
+        : auth.label === "password" && auth.password
+          ? { password: auth.password }
+          : null;
+    if (!directCredential) {
+      return { ok: false, error: "Gateway auth credential could not be resolved." };
+    }
+    return {
+      ok: true,
+      payload: {
+        url: urlResult.url,
+        ...(uniqueUrls.length > 1 ? { urls: uniqueUrls } : {}),
+        ...directCredential,
+      },
+      authLabel: auth.label,
+      urlSource: urlResult.source ?? "unknown",
+      access: "full",
+      accessDowngraded: false,
+    };
+  }
   const requestedBootstrapProfile =
     options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
   const accessDowngraded =
@@ -486,7 +533,7 @@ export async function resolvePairingSetupFromConfig(
         })
       ).token,
     },
-    authLabel: authLabel.label,
+    authLabel: auth.label,
     urlSource: urlResult.source ?? "unknown",
     access: resolvePairingSetupAccess(issuedBootstrapProfile),
     accessDowngraded,

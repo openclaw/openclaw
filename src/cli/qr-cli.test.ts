@@ -344,6 +344,44 @@ describe("registerQrCli", () => {
     expectLoggedLocalSetupCode();
   });
 
+  it("emits a direct credential setup code for legacy iOS clients", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "gateway-token" },
+      },
+    });
+
+    await runQr(["--setup-code-only", "--legacy-direct-auth"]);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      encodePairingSetupCode({
+        url: "ws://127.0.0.1:18789",
+        token: "gateway-token",
+      }),
+    );
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("long-lived gateway credential");
+  });
+
+  it("rejects limited access with legacy direct authentication", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "gateway-token" },
+      },
+    });
+
+    await expectQrExit(["--legacy-direct-auth", "--limited"]);
+
+    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("cannot be combined with --limited");
+    expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+  });
+
   it("skips local password SecretRef resolution when --token override is provided", async () => {
     loadConfig.mockReturnValue(
       createLocalGatewayConfigWithAuth(

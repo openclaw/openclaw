@@ -165,6 +165,58 @@ describe("pairing setup code", () => {
     expect(resolved.error).toContain(snippet);
   }
 
+  it("can emit a direct token payload for legacy iOS credential handoff compatibility", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      createCustomGatewayConfig({ mode: "token", token: "gateway-token" }),
+      { credentialMode: "direct" },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.payload).toEqual({
+      url: "ws://127.0.0.1:18789",
+      token: "gateway-token",
+    });
+    expect(resolved.access).toBe("full");
+    expect(resolved.accessDowngraded).toBe(false);
+    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("can emit a direct password payload for legacy iOS credential handoff compatibility", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      createCustomGatewayConfig({ mode: "password", password: "gateway-password" }),
+      { credentialMode: "direct" },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.payload).toEqual({
+      url: "ws://127.0.0.1:18789",
+      password: "gateway-password",
+    });
+    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects direct credential payloads over plaintext non-loopback routes", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.1.8",
+          auth: { mode: "token", token: "gateway-token" },
+        },
+      },
+      { credentialMode: "direct" },
+    );
+
+    expectResolvedSetupError(resolved, "Direct credential setup requires wss://");
+    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+  });
+
   async function expectResolvedSetupSuccessCase(params: {
     config: ResolveSetupConfig;
     options?: ResolveSetupOptions;

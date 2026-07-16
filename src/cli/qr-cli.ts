@@ -25,10 +25,13 @@ type QrCliOptions = {
   token?: string;
   password?: string;
   limited?: boolean;
+  legacyDirectAuth?: boolean;
 };
 
 const LIMITED_TRANSPORT_WARNING =
   "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
+const LEGACY_DIRECT_AUTH_WARNING =
+  "Compatibility mode: this setup code contains your long-lived gateway credential. Keep it private and close the terminal after scanning.";
 
 function renderQrAscii(data: string): Promise<string> {
   return renderQrTerminal(data);
@@ -114,6 +117,11 @@ export function registerQrCli(program: Command) {
     .option("--token <token>", "Override gateway token for setup payload")
     .option("--password <password>", "Override gateway password for setup payload")
     .option("--limited", "Pair with limited operator access (omit operator.admin)", false)
+    .option(
+      "--legacy-direct-auth",
+      "Embed the gateway credential for iOS clients affected by bootstrap handoff failures",
+      false,
+    )
     .option("--setup-code-only", "Print only the setup code", false)
     .option("--no-ascii", "Skip ASCII QR rendering")
     .option("--json", "Output JSON", false)
@@ -121,6 +129,9 @@ export function registerQrCli(program: Command) {
       try {
         if (opts.token && opts.password) {
           throw new Error("Use either --token or --password, not both.");
+        }
+        if (opts.legacyDirectAuth && opts.limited) {
+          throw new Error("--legacy-direct-auth cannot be combined with --limited.");
         }
 
         const token = trimToUndefined(opts.token) ?? "";
@@ -205,6 +216,7 @@ export function registerQrCli(program: Command) {
         const resolved = await resolvePairingSetupFromConfig(cfg, {
           publicUrl,
           preferRemoteUrl: wantsRemote,
+          credentialMode: opts.legacyDirectAuth ? "direct" : "bootstrap",
           ...(opts.limited ? { bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE } : {}),
           runCommandWithTimeout: async (argv, runOpts) =>
             await runCommandWithTimeout(argv, {
@@ -217,6 +229,14 @@ export function registerQrCli(program: Command) {
         }
 
         const setupCode = encodePairingSetupCode(resolved.payload);
+        if (opts.legacyDirectAuth) {
+          const message = theme.warn(LEGACY_DIRECT_AUTH_WARNING);
+          if (opts.json || opts.setupCodeOnly) {
+            defaultRuntime.error(message);
+          } else {
+            defaultRuntime.log(message);
+          }
+        }
 
         if (opts.setupCodeOnly) {
           if (resolved.accessDowngraded) {
