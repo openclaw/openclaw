@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
@@ -17,8 +18,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import * as formatDatetime from "./format-time/format-datetime.js";
 import {
-  readSessionCostUsageCacheJson,
-  writeSessionCostUsageCacheJson,
+  readSessionCostUsageRollupRows,
+  writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
   discoverAllSessions,
@@ -677,15 +678,15 @@ describe("session cost usage", () => {
         { interval: 10, timeout: 2_000 },
       );
 
-      const cacheJson = readSessionCostUsageCacheJson("main");
-      const cachedEntry = cacheJson
-        ? (
-            JSON.parse(cacheJson) as {
-              files?: Record<string, { hasUntimestampedTranscriptEntry?: boolean }>;
-            }
-          ).files?.[sessionFile]
+      const cachedEntry = readSessionCostUsageRollupRows("main").find(
+        (row) => row.key === sessionFile,
+      );
+      const cachedRollup = cachedEntry
+        ? (JSON.parse(cachedEntry.valueJson) as {
+            rollup?: { untimestamped?: { totals?: { totalTokens?: number } } };
+          })
         : undefined;
-      expect(cachedEntry?.hasUntimestampedTranscriptEntry).toBe(true);
+      expect(cachedRollup?.rollup?.untimestamped?.totals?.totalTokens).toBe(1_000);
 
       const upperBounded = await loadSessionCostSummariesFromCache({
         sessions: [session],
@@ -726,7 +727,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("rebuilds version 8 caches and preserves the untimestamped marker on append", async () => {
+  it("rebuilds invalid rollups and preserves untimestamped usage on append", async () => {
     const root = await makeSessionCostRoot("cost-cache-v8-untimestamped-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -767,32 +768,25 @@ describe("session cost usage", () => {
         expect(current.cacheStatus.status).toBe("fresh");
       });
 
-      const currentCache = JSON.parse(
-        requireValue(readSessionCostUsageCacheJson("main"), "expected current usage cache"),
-      ) as {
+      const currentRow = requireValue(
+        readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
+        "expected current usage rollup",
+      );
+      const currentRollup = JSON.parse(currentRow.valueJson) as {
         version: number;
-        updatedAt: number;
-        files: Record<
-          string,
-          {
-            hasUntimestampedTranscriptEntry?: boolean;
-            totals: { totalTokens: number };
-            sessionSummary?: { totalTokens: number };
-          }
-        >;
+        rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      currentCache.version = 8;
-      const legacyEntry = requireValue(currentCache.files[sessionFile], "expected cached session");
-      delete legacyEntry.hasUntimestampedTranscriptEntry;
-      legacyEntry.totals.totalTokens = 9_999;
-      if (legacyEntry.sessionSummary) {
-        legacyEntry.sessionSummary.totalTokens = 9_999;
-      }
-      writeSessionCostUsageCacheJson({
-        agentId: "main",
-        valueJson: JSON.stringify(currentCache),
-        updatedAt: currentCache.updatedAt,
-      });
+      currentRollup.version = 0;
+      currentRollup.rollup.untimestamped.totals.totalTokens = 9_999;
+      expect(
+        writeSessionCostUsageRollup({
+          agentId: "main",
+          rollupId: sessionFile,
+          previousValueJson: currentRow.valueJson,
+          valueJson: JSON.stringify(currentRollup),
+          updatedAt: currentRow.updatedAt + 1,
+        }),
+      ).toBe(true);
 
       const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
       await loadSessionCostSummariesFromCache({
@@ -831,14 +825,16 @@ describe("session cost usage", () => {
         expect(appended.summaries[0]?.totalTokens).toBe(25);
       });
 
-      const appendedCache = JSON.parse(
-        requireValue(readSessionCostUsageCacheJson("main"), "expected appended usage cache"),
-      ) as {
+      const appendedRow = requireValue(
+        readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
+        "expected appended usage rollup",
+      );
+      const appendedRollup = JSON.parse(appendedRow.valueJson) as {
         version: number;
-        files: Record<string, { hasUntimestampedTranscriptEntry?: boolean }>;
+        rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      expect(appendedCache.version).toBe(9);
-      expect(appendedCache.files[sessionFile]?.hasUntimestampedTranscriptEntry).toBe(true);
+      expect(appendedRollup.version).toBe(1);
+      expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
 
       const allTime = await loadSessionCostSummariesFromCache({
         sessions: [session],
@@ -849,6 +845,112 @@ describe("session cost usage", () => {
         requestRefresh: false,
       });
       expect(allTime.summaries[0]?.totalTokens).toBe(1_025);
+    });
+  });
+
+  it("increments from the durable byte offset and rebuilds after truncation", async () => {
+    const root = await makeSessionCostRoot("incremental-rollup");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-incremental.jsonl");
+    const assistantEntry = (timestamp: string, totalTokens: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.5",
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+    await fs.writeFile(
+      sessionFile,
+      [
+        assistantEntry("2026-02-05T12:00:00.000Z", 10),
+        assistantEntry("2026-02-05T12:01:00.000Z", 20),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const initial = requireValue(
+        await loadSessionCostSummary({ sessionFile, agentId: "main" }),
+        "expected initial summary",
+      );
+      const fullParse = requireValue(
+        await loadSessionUsageTimeSeries({ sessionFile, agentId: "main", maxPoints: 1_000 }),
+        "expected full parse reference",
+      );
+      expect(initial.totalTokens).toBe(
+        fullParse.points.reduce((total, point) => total + point.totalTokens, 0),
+      );
+
+      const initialRow = requireValue(
+        readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
+        "expected initial rollup",
+      );
+      const initialEntry = JSON.parse(initialRow.valueJson) as {
+        checkpoint: { kind: "jsonl"; parsedOffset: number };
+        parsedRecords: number;
+      };
+      expect(initialEntry.checkpoint.parsedOffset).toBe((await fs.stat(sessionFile)).size);
+      expect(initialEntry.parsedRecords).toBe(2);
+
+      const originalCreateReadStream = nodeFs.createReadStream;
+      const readStarts: number[] = [];
+      vi.spyOn(nodeFs, "createReadStream").mockImplementation(((filePath, options) => {
+        if (filePath === sessionFile && options && typeof options === "object") {
+          readStarts.push(options.start ?? 0);
+        }
+        return originalCreateReadStream(filePath, options);
+      }) as typeof nodeFs.createReadStream);
+      await fs.appendFile(
+        sessionFile,
+        `\n${assistantEntry("2026-02-05T12:02:00.000Z", 5)}`,
+        "utf-8",
+      );
+      const appended = await loadSessionCostSummary({ sessionFile, agentId: "main" });
+      expect(appended?.totalTokens).toBe(35);
+      expect(readStarts).toContain(initialEntry.checkpoint.parsedOffset);
+      vi.restoreAllMocks();
+
+      const completeSize = (await fs.stat(sessionFile)).size;
+      await fs.appendFile(sessionFile, '\n{"type":"message","timestamp":"2026-02-05', "utf-8");
+      expect((await loadSessionCostSummary({ sessionFile, agentId: "main" }))?.totalTokens).toBe(
+        35,
+      );
+      const partialRow = requireValue(
+        readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
+        "expected partial-line rollup",
+      );
+      const partialEntry = JSON.parse(partialRow.valueJson) as {
+        checkpoint: { kind: "jsonl"; parsedOffset: number };
+      };
+      expect(partialEntry.checkpoint.parsedOffset).toBe(completeSize + 1);
+      await fs.appendFile(
+        sessionFile,
+        'T12:03:00.000Z","message":{"role":"assistant","usage":{"input":7,"output":0,"totalTokens":7,"cost":{"total":0.007}}}}',
+        "utf-8",
+      );
+      expect((await loadSessionCostSummary({ sessionFile, agentId: "main" }))?.totalTokens).toBe(
+        42,
+      );
+
+      await fs.writeFile(sessionFile, assistantEntry("2026-02-05T13:00:00.000Z", 11), "utf-8");
+      const rebuilt = await loadSessionCostSummary({ sessionFile, agentId: "main" });
+      expect(rebuilt?.totalTokens).toBe(11);
+      const rebuiltRow = requireValue(
+        readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
+        "expected rebuilt rollup",
+      );
+      const rebuiltEntry = JSON.parse(rebuiltRow.valueJson) as { parsedRecords: number };
+      expect(rebuiltEntry.parsedRecords).toBe(1);
     });
   });
 
@@ -1772,6 +1874,44 @@ describe("session cost usage", () => {
       expect(timeseries?.points[0]?.totalTokens).toBe(10);
       expect(logs).toHaveLength(1);
       expect(logs?.[0]?.content).toContain("archived answer");
+    });
+  });
+
+  it("keeps compressed archive rollup identity stable for direct session queries", async () => {
+    const root = await makeSessionCostRoot("session-compressed-archive");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const encoded = encodeSessionArchiveContent(
+      transcriptText("sess-compressed", {
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
+        },
+      }),
+    );
+    if (!encoded.suffix) {
+      return;
+    }
+    const archivePath = path.join(
+      sessionsDir,
+      `sess-compressed.jsonl.reset.2026-02-12T11-00-00.000Z${encoded.suffix}`,
+    );
+    await fs.writeFile(archivePath, encoded.bytes);
+
+    await withStateDir(root, async () => {
+      const first = await loadSessionCostSummary({
+        sessionId: "sess-compressed",
+        sessionFile: archivePath,
+      });
+      const repeat = await loadSessionCostSummary({
+        sessionId: "sess-compressed",
+        sessionFile: archivePath,
+      });
+
+      expect(first?.totalTokens).toBe(10);
+      expect(repeat?.totalTokens).toBe(10);
     });
   });
 
