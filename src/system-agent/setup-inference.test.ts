@@ -3614,10 +3614,7 @@ describe("activateSetupInference", () => {
     ]);
     expect(transformConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        afterWrite: {
-          mode: "none",
-          reason: "OpenClaw activates verified inference",
-        },
+        afterWrite: { mode: "auto" },
       }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
