@@ -208,6 +208,46 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
       },
     });
   });
+
+  it("materializes inherited entries before adding a named-account override", async () => {
+    const parsedConfig: Record<string, unknown> = {
+      channels: { demo: { allowFrom: ["dm-owner"], accounts: { alt: {} } } },
+    };
+
+    await adapter.applyConfigEdit?.({
+      cfg: parsedConfig as OpenClawConfig,
+      parsedConfig,
+      accountId: "alt",
+      scope: "dm",
+      action: "add",
+      entry: "dm-admin",
+    });
+
+    expect(parsedConfig).toMatchObject({
+      channels: {
+        demo: { accounts: { alt: { allowFrom: ["dm-owner", "dm-admin"] } } },
+      },
+    });
+  });
+
+  it("writes an empty named-account override when removing the last inherited entry", async () => {
+    const parsedConfig: Record<string, unknown> = {
+      channels: { demo: { allowFrom: ["dm-owner"], accounts: { alt: {} } } },
+    };
+
+    await adapter.applyConfigEdit?.({
+      cfg: parsedConfig as OpenClawConfig,
+      parsedConfig,
+      accountId: "alt",
+      scope: "dm",
+      action: "remove",
+      entry: "dm-owner",
+    });
+
+    expect(parsedConfig).toMatchObject({
+      channels: { demo: { accounts: { alt: { allowFrom: [] } } } },
+    });
+  });
 });
 
 describe("buildLegacyDmAccountAllowlistAdapter", () => {

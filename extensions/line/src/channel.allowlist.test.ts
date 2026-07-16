@@ -65,6 +65,46 @@ describe("line allowlist adapter", () => {
     expect(parsedConfig).toMatchObject({ channels: { line: { allowFrom: ["Udave"] } } });
   });
 
+  it("adds a dm allowlist entry under the named LINE account", () => {
+    const parsedConfig: Record<string, unknown> = {
+      channels: {
+        line: {
+          allowFrom: ["Uexisting"],
+          accounts: {
+            support: {},
+          },
+        },
+      },
+    };
+    const result = allowlist?.applyConfigEdit?.({
+      cfg: parsedConfig as OpenClawConfig,
+      parsedConfig,
+      accountId: "support",
+      scope: "dm",
+      action: "add",
+      entry: "Unew",
+    });
+
+    expect(result).toEqual({
+      kind: "ok",
+      changed: true,
+      pathLabel: "channels.line.accounts.support.allowFrom",
+      writeTarget: {
+        kind: "account",
+        scope: { channelId: "line", accountId: "support" },
+      },
+    });
+    expect(parsedConfig).toMatchObject({
+      channels: {
+        line: {
+          accounts: {
+            support: { allowFrom: ["Uexisting", "Unew"] },
+          },
+        },
+      },
+    });
+  });
+
   it("adds a group allowlist entry under channels.line.groupAllowFrom", () => {
     const parsedConfig: Record<string, unknown> = {};
     const result = allowlist?.applyConfigEdit?.({
