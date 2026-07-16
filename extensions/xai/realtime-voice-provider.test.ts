@@ -1580,18 +1580,16 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onReady).toHaveBeenCalledOnce();
   });
 
-  it("cancels a pending reconnect when the bridge closes", async () => {
+  it("cancels a pending reconnect and allows a later explicit connect", async () => {
     vi.useFakeTimers();
-    resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: ["xai", "test"].join("-") });
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: ["xai", "test"].join("-") });
     const provider = buildXaiRealtimeVoiceProvider();
     const onError = vi.fn();
-    const onClose = vi.fn();
     const bridge = provider.createBridge({
       providerConfig: { sessionResumption: true },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onError,
-      onClose,
     });
 
     const connecting = bridge.connect();
@@ -1618,8 +1616,19 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(onError).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onClose).toHaveBeenCalledWith("completed");
+
+    const reconnecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    const reconnectedSocket = requireSocket(1);
+    reconnectedSocket.readyState = FakeWebSocket.OPEN;
+    reconnectedSocket.emit("open");
+    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
+    bridge.close();
   });
 
   it("enables xAI session resumption and reconnects with the created conversation id", async () => {
