@@ -102,7 +102,6 @@ import {
 } from "./cli.runtime.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
-import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
 import { parseSutId, runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import type { QaProviderModeInput } from "./run-config.js";
@@ -1288,8 +1287,7 @@ describe("qa cli runtime", () => {
         }),
       ).rejects.toThrow(`${envKey} must be a positive integer.`);
 
-      expect(runCanonicalLiveScenarios).not.toHaveBeenCalled();
-      expect(runTelegramQaLive).not.toHaveBeenCalled();
+      expect(runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
     },
   );
 
