@@ -107,7 +107,7 @@ function runInstallE2eInstallerFixture(params: {
     { mode: 0o755 },
   );
 
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     CURL_ARGS_PATH: curlArgsPath,
     FAKE_CURL_EXIT: String(params.curlExitCode ?? 0),
