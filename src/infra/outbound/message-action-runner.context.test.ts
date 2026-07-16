@@ -2,7 +2,10 @@
 // decoration behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionContext,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -21,7 +24,9 @@ import {
   workspaceTestPlugin,
 } from "./message-action-runner.test-helpers.js";
 
-const handleWorkspaceAction = vi.fn(async () => jsonResult({ ok: true }));
+const handleWorkspaceAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
+  jsonResult({ ok: true }),
+);
 
 const readWorkspaceTestPlugin: ChannelPlugin = {
   ...workspaceTestPlugin,
@@ -137,6 +142,11 @@ describe("runMessageAction context isolation", () => {
       actionParams: { targets: ["C_TARGET"] },
       expectedError: "Action read requires a target.",
     },
+    {
+      name: "an empty targets array",
+      actionParams: { targets: [] },
+      expectedError: "Action read requires a target.",
+    },
   ])("rejects read with $name before plugin dispatch", async ({ actionParams, expectedError }) => {
     await expect(
       runMessageAction({
@@ -154,6 +164,32 @@ describe("runMessageAction context isolation", () => {
       }),
     ).rejects.toThrow(expectedError);
     expect(handleWorkspaceAction).not.toHaveBeenCalled();
+  });
+
+  it("uses the current conversation for an implicit read", async () => {
+    await runMessageAction({
+      cfg: workspaceConfig,
+      action: "read",
+      params: {},
+      defaultAccountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      dryRun: false,
+    });
+
+    expect(handleWorkspaceAction).toHaveBeenCalledOnce();
+    expect(handleWorkspaceAction.mock.calls[0]?.[0]).toMatchObject({
+      action: "read",
+      params: {
+        channel: "workspace",
+        target: "C12345678",
+        to: "C12345678",
+      },
+    });
   });
 
   afterEach(() => {

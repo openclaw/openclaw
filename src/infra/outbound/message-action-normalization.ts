@@ -32,9 +32,7 @@ export function normalizeMessageActionInput(params: {
     explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";
 
   const explicitTarget = normalizeOptionalString(normalizedArgs.target) ?? "";
-  const hasExplicitTargets =
-    Array.isArray(normalizedArgs.targets) &&
-    normalizedArgs.targets.some((value) => Boolean(normalizeOptionalString(value)));
+  const hasExplicitTargets = Object.hasOwn(normalizedArgs, "targets");
   const hasLegacyTargetFields =
     typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
   const hasLegacyTarget =

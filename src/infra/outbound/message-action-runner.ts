@@ -407,7 +407,7 @@ async function resolveChannel(
     cfg,
     channel: readStringParam(params, "channel"),
     fallbackChannel: toolContext?.currentChannelProvider,
-    rejectUnknownExplicitChannel: action === "read",
+    requireExplicitChannelAvailable: action === "read",
   });
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;

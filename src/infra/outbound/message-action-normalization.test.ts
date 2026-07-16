@@ -302,11 +302,15 @@ describe("normalizeMessageActionInput", () => {
     ).toThrow(/requires a target/);
   });
 
-  it("does not replace read targets with the current conversation", () => {
+  it.each([
+    { name: "a nonempty targets array", targets: ["C_TARGET"] },
+    { name: "an empty targets array", targets: [] },
+    { name: "a malformed targets value", targets: "C_TARGET" },
+  ])("does not replace $name with the current conversation", ({ targets }) => {
     expect(() =>
       normalizeMessageActionInput({
         action: "read",
-        args: { targets: ["C_TARGET"] },
+        args: { targets },
         toolContext: {
           currentChannelId: "C_CURRENT",
           currentChannelProvider: "workspace",
