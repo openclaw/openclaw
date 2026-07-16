@@ -397,6 +397,7 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
               ? undefined
               : Uint8Array.from(requestBody),
           duplex: "half",
+          signal: AbortSignal.timeout(120_000),
         } as RequestInit & { duplex: "half" };
         const upstreamRes = await fetch(upstreamUrl, upstreamInit);
         const responseHeaders: Record<string, string> = {};
@@ -988,6 +989,7 @@ export const testing = {
   readRequestBody,
   resolveAnthropicUpstreamUrl,
   runDirectPrompt,
+  startAnthropicProxy,
   stopGatewayPromptChild,
   summarizeCapture,
   summarizeText,

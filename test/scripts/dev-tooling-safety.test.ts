@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -1199,5 +1200,40 @@ describe("script-specific dev tooling hardening", () => {
         maxBytes,
       ),
     ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+  });
+
+  it("proxies upstream Anthropic requests through a timeout-bounded fetch", async () => {
+    const { testing: promptProbeTesting } = await import("../../scripts/anthropic-prompt-probe.ts");
+    const { startAnthropicProxy } = promptProbeTesting;
+    expect(typeof startAnthropicProxy).toBe("function");
+
+    // Start a stub upstream that the proxy will forward to
+    const upstream = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: "ok" }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => {
+        upstream.off("error", reject);
+        resolve();
+      });
+    });
+    const upstreamAddr = upstream.address();
+    if (!upstreamAddr || typeof upstreamAddr === "string") {
+      throw new Error("upstream did not bind to a TCP port");
+    }
+
+    try {
+      const proxy = await startAnthropicProxy({
+        port: 0,
+        upstreamBaseUrl: `http://127.0.0.1:${upstreamAddr.port}`,
+      });
+      expect(typeof proxy.getLastCapture).toBe("function");
+      expect(typeof proxy.stop).toBe("function");
+      await proxy.stop();
+    } finally {
+      upstream.close();
+    }
   });
 });
