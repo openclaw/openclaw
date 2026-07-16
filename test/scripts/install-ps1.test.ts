@@ -134,6 +134,7 @@ describe("install.ps1 failure handling", () => {
           "$cases = @{",
           "  '3.44.5' = $false",
           "  '3.44.6' = $true",
+          "  '3.46.1' = $false",
           "  '3.50.6' = $false",
           "  '3.50.7' = $true",
           "  '3.51.2' = $false",
@@ -503,6 +504,9 @@ describe("install.ps1 failure handling", () => {
     expect(checkNodeBody).toContain("$sqliteProbe | & $nodePath -");
     expect(checkNodeBody).not.toContain("& $nodePath -e");
     expect(checkNodeBody).toContain("Test-NodeSqliteSupported -Version $sqliteVersion");
+    expect(checkNodeBody).toContain(
+      "SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required",
+    );
     expect(source).toContain("Please install Node.js 24.15+ manually:");
   });
 

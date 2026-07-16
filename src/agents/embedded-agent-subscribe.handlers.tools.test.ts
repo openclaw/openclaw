@@ -375,6 +375,23 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(warnMeta?.argsPreview).toBe(`${"x".repeat(200)}…`);
   });
 
+  it("does not split surrogate pairs when bounding read warning preview", async () => {
+    const { ctx, warn } = createTestContext();
+
+    // Whitespace collapsing must not let a surrogate half from the raw cap survive sanitization.
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(198)}  🎉`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta?.argsPreview).toBe("x".repeat(198));
+  });
+
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
     const { ctx, onBlockReplyFlush } = createTestContext();
     let releaseFlush: (() => void) | undefined;

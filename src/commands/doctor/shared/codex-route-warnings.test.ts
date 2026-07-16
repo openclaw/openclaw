@@ -195,6 +195,65 @@ describe("collectCodexRouteWarnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("warns when legacy openai-codex model refs are in agents.list.*.models maps", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "worker",
+              model: "openai/gpt-5.5",
+              models: {
+                "openai-codex/gpt-5.4": { alias: "legacy" },
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Legacy `codex/*` and `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- agents.list.worker.models.openai-codex/gpt-5.4: openai-codex/gpt-5.4 should become openai/gpt-5.4.",
+        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("repairs legacy openai-codex model refs found only in agents.list.*.models maps", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "worker",
+              model: "anthropic/claude-sonnet-4-6",
+              models: {
+                "openai-codex/gpt-5.4": { alias: "legacy" },
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      [
+        "Repaired Codex model routes:",
+        "- agents.list.worker.models.openai-codex/gpt-5.4: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+      ].join("\n"),
+      'Set agents.list.worker.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
+    ]);
+    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.alias).toBe("legacy");
+    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    expect(result.cfg.agents?.list?.[0]?.models?.["openai-codex/gpt-5.4"]).toBeUndefined();
+  });
+
   it("warns when Codex app-server command includes inline arguments", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {

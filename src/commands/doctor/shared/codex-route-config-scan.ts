@@ -59,7 +59,6 @@ function collectAgentModelRefs(params: {
   agent: unknown;
   path: string;
   runtime?: string;
-  collectModelsMap?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const agent = asMutableRecord(params.agent);
@@ -108,14 +107,12 @@ function collectAgentModelRefs(params: {
     value: asMutableRecord(compaction?.memoryFlush)?.model,
     blockedModelIdentities: params.blockedModelIdentities,
   });
-  if (params.collectModelsMap) {
-    collectModelsMapRefs({
-      hits: params.hits,
-      path: `${params.path}.models`,
-      models: agent.models,
-      blockedModelIdentities: params.blockedModelIdentities,
-    });
-  }
+  collectModelsMapRefs({
+    hits: params.hits,
+    path: `${params.path}.models`,
+    models: agent.models,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
 }
 
 export function collectConfigModelRefs(
@@ -130,7 +127,6 @@ export function collectConfigModelRefs(
     agent: defaults,
     path: "agents.defaults",
     runtime: resolveRuntime({ defaultsRuntime }),
-    collectModelsMap: true,
     blockedModelIdentities,
   });
 
