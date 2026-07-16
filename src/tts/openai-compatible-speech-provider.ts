@@ -15,6 +15,8 @@ import type {
   SpeechProviderOverrides,
 } from "./provider-types.js";
 
+const DEFAULT_BODY_READ_TIMEOUT_MS = 30_000;
+
 type OpenAiCompatibleSpeechProviderBaseConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -394,14 +396,22 @@ export function createOpenAiCompatibleSpeechProvider<
           response,
           options.apiErrorLabel ?? `${options.label} TTS API error`,
         );
+        const errorLabel = options.apiErrorLabel ?? `${options.label} TTS API error`;
+        const bodyTimeoutMs = req.timeoutMs ?? DEFAULT_BODY_READ_TIMEOUT_MS;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const audioData = await Promise.race([
+          readProviderBinaryResponse(response, errorLabel, "audio"),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+              reject(
+                new Error(`${errorLabel}: body read timed out after ${bodyTimeoutMs}ms`),
+              );
+            }, bodyTimeoutMs);
+          }),
+        ]);
+        clearTimeout(timeoutId);
         return {
-          audioBuffer: Buffer.from(
-            await readProviderBinaryResponse(
-              response,
-              options.apiErrorLabel ?? `${options.label} TTS API error`,
-              "audio",
-            ),
-          ),
+          audioBuffer: Buffer.from(audioData),
           outputFormat: responseFormat,
           fileExtension: responseFormatToFileExtension(responseFormat),
           voiceCompatible: options.voiceCompatibleResponseFormats.includes(responseFormat),

@@ -251,4 +251,83 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     ).rejects.toThrow("Demo TTS API error: malformed audio response");
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it("rejects when body read exceeds the synthesis timeout", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
+      release,
+    });
+    vi.stubEnv("DEMO_API_KEY", "sk-env");
+
+    // Make readProviderBinaryResponse hang forever
+    readProviderBinaryResponseMock.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3"],
+      defaultResponseFormat: "mp3",
+      voiceCompatibleResponseFormats: ["mp3"],
+    });
+
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "voice-note",
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow("Demo TTS API error: body read timed out after 50ms");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects when body read exceeds the default timeout", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
+      release,
+    });
+    vi.stubEnv("DEMO_API_KEY", "sk-env");
+
+    // Make readProviderBinaryResponse hang forever
+    readProviderBinaryResponseMock.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3"],
+      defaultResponseFormat: "mp3",
+      voiceCompatibleResponseFormats: ["mp3"],
+    });
+
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "voice-note",
+      }),
+    ).rejects.toThrow("Demo TTS API error: body read timed out after 30000ms");
+    expect(release).toHaveBeenCalledOnce();
+  });
 });
