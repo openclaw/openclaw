@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -17,10 +19,22 @@ type ProfilePageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-function createContext(): ApplicationContext<RouteId> {
+type ProfilePageLifecycle = HTMLElement & {
+  context: ApplicationContext<RouteId>;
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+  costSummary: CostUsageSummary | null;
+  sessionsResult: SessionsUsageResult | null;
+  applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+};
+
+function createContext(
+  client: GatewayBrowserClient | null = null,
+  connected = false,
+): ApplicationContext<RouteId> {
   const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    connected: false,
+    client,
+    connected,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",
@@ -31,8 +45,8 @@ function createContext(): ApplicationContext<RouteId> {
   const subscribe = () => () => undefined;
   return {
     gateway: { snapshot, subscribe },
-    agents: { subscribe },
-    agentIdentity: { subscribe },
+    agents: { subscribe, ensureList: vi.fn(async () => null) },
+    agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
   } as unknown as ApplicationContext<RouteId>;
 }
 
@@ -42,6 +56,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   document.body.replaceChildren();
+  vi.restoreAllMocks();
   await i18n.setLocale("en");
 });
 
@@ -60,4 +75,44 @@ it("refreshes translated copy when the locale changes while mounted", async () =
 
   expect(note?.textContent?.trim()).toBe(t("profilePage.offline"));
   expect(note?.textContent?.trim()).not.toBe(englishNote);
+});
+
+it("keeps settled profile usage across a same-client reconnect", async () => {
+  const request = vi.fn();
+  const client = { request } as unknown as GatewayBrowserClient;
+  const context = createContext(client, true);
+  const page = new ProfilePage() as unknown as ProfilePageLifecycle;
+  page.context = context;
+  page.client = client;
+  page.connected = true;
+  page.costSummary = { totalCost: 1 } as CostUsageSummary;
+  page.sessionsResult = { sessions: [] } as unknown as SessionsUsageResult;
+
+  page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
+  page.applyGatewaySnapshot(context.gateway.snapshot);
+  await Promise.resolve();
+
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("resumes a settling profile cache after a same-client reconnect", async () => {
+  const request = vi.fn(async (method: string) =>
+    method === "sessions.usage" ? { sessions: [] } : { totalCost: 1 },
+  );
+  const client = { request } as unknown as GatewayBrowserClient;
+  const context = createContext(client, true);
+  const page = new ProfilePage() as unknown as ProfilePageLifecycle;
+  page.context = context;
+  page.client = client;
+  page.connected = true;
+  page.costSummary = {
+    totalCost: 1,
+    cacheStatus: { status: "refreshing" },
+  } as CostUsageSummary;
+  page.sessionsResult = { sessions: [] } as unknown as SessionsUsageResult;
+
+  page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
+  page.applyGatewaySnapshot(context.gateway.snapshot);
+
+  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("usage.cost", expect.any(Object)));
 });
