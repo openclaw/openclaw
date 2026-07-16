@@ -87,10 +87,14 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 	inlineRanges = append(inlineRanges, protectedMarkdownLinkRanges(text)...)
 	masked := maskByteRanges(text, inlineRanges, nextPlaceholder, placeholders, mapping)
 
+	return maskByteRanges(masked, markdownListMarkerRanges(masked), nextPlaceholder, placeholders, mapping)
+}
+
+func markdownListMarkerRanges(text string) [][2]int {
 	listRanges := make([][2]int, 0)
 	fenceState := markdownLiteralFenceState{}
 	offset := 0
-	for _, line := range strings.SplitAfter(masked, "\n") {
+	for _, line := range strings.SplitAfter(text, "\n") {
 		insideFence := false
 		if fenceState.delimiter != "" {
 			if continuesMarkdownLiteralFenceContainer(line, fenceState) {
@@ -115,7 +119,16 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		}
 		offset += len(line)
 	}
-	return maskByteRanges(masked, listRanges, nextPlaceholder, placeholders, mapping)
+	return listRanges
+}
+
+func extractMarkdownListMarkerPrefixes(text string) []string {
+	ranges := markdownListMarkerRanges(text)
+	prefixes := make([]string, 0, len(ranges))
+	for _, span := range ranges {
+		prefixes = append(prefixes, text[span[0]:span[1]])
+	}
+	return prefixes
 }
 
 func protectedMarkdownLinkRanges(text string) [][2]int {

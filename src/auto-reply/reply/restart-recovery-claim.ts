@@ -254,6 +254,9 @@ export function createReplyRestartRecoveryClaimController(params: {
           restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryRequestFingerprint: undefined,
+          // Pre-ownership transcript-only claims came from Control UI. Adopt
+          // that owner now so a later pending final stays behind the hook gate.
+          restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
           updatedAt: Date.now(),
         },
         recorder,

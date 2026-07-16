@@ -947,11 +947,13 @@ describe("main-session-restart-recovery", () => {
     ]);
     vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway unavailable"));
 
-    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
-      recovered: 0,
-      failed: 1,
-      skipped: 0,
-    });
+    await expect(recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir })).resolves.toEqual(
+      {
+        recovered: 0,
+        failed: 1,
+        skipped: 0,
+      },
+    );
 
     const firstRecoveryRunId = (
       vi.mocked(callGateway).mock.calls[0]?.[0].params as { idempotencyKey?: unknown } | undefined
@@ -967,11 +969,13 @@ describe("main-session-restart-recovery", () => {
       status: "running",
     });
 
-    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
-      recovered: 1,
-      failed: 0,
-      skipped: 0,
-    });
+    await expect(recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir })).resolves.toEqual(
+      {
+        recovered: 1,
+        failed: 0,
+        skipped: 0,
+      },
+    );
     const runIds = vi
       .mocked(callGateway)
       .mock.calls.map(
@@ -1015,11 +1019,13 @@ describe("main-session-restart-recovery", () => {
         endedAt: Date.now(),
       });
 
-    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
-      recovered: 1,
-      failed: 0,
-      skipped: 0,
-    });
+    await expect(recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir })).resolves.toEqual(
+      {
+        recovered: 1,
+        failed: 0,
+        skipped: 0,
+      },
+    );
 
     expect(firstGatewayParams().idempotencyKey).toBe("recovery-run");
     expect(vi.mocked(callGateway).mock.calls[1]?.[0]).toMatchObject({
@@ -1604,6 +1610,7 @@ describe("main-session-restart-recovery", () => {
       });
 
     scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
       delayMs: 0,
       maxRetries: 2,
       stateDir: tmpDir,
@@ -1809,6 +1816,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await retryRestartAbortedMainSessionRecovery({
       canonicalSessionKey: "agent:main:main",
+      cfg: {},
       expectedRecoveryRunId: "legacy-recovery",
       expectedRecoverySourceRunId: "legacy-source",
       expectedSessionId: "legacy-main-session",
@@ -1859,6 +1867,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const recovery = retryRestartAbortedMainSessionRecovery({
+      cfg: {},
       expectedRecoveryRunId: "recovery-main",
       expectedRecoverySourceRunId: "source-main",
       expectedSessionId: sessionId,
@@ -2250,6 +2259,44 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "do the thing", idempotencyKey: "discord-message-1" },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir })).resolves.toEqual(
+      {
+        recovered: 0,
+        failed: 1,
+        skipped: 0,
+      },
+    );
+
+    expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
+    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
+      method: "message.action",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
+  });
+
+  it("fails a legacy external recovery without source ownership when a hook is active", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:123";
+    runtimePluginMocks.findRestartRecoveryUnsafeReplyHook.mockReturnValue("before_agent_reply");
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "discord-message-1",
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:dm:123",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the legacy thing", idempotencyKey: "discord-message-1" },
     ]);
 
     await expect(recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir })).resolves.toEqual(

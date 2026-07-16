@@ -59,6 +59,8 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   while that hook remains active: a checkpoint cannot prove that the same
   plugin code and configuration loaded after the restart. Handled text and
   silent results are checkpointed separately for deterministic settlement.
+  Durable recovery claims written by older versions have no source-ownership
+  marker, so they receive the same fail-closed hook check during an upgrade.
 - **At shutdown:** during the restart drain, every session with an active run
   is stamped with a recovery marker in the session store before the run is
   aborted.

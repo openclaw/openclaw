@@ -244,6 +244,19 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
   });
 
+  it("flags runtime writes to the retired subagent JSON registry", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "subagents", "runs.json"), "{}\n");
+      `,
+      "src/agents/subagent-registry-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
   it("flags runtime writes to retired skill-upload staging", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

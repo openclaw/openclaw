@@ -1455,14 +1455,12 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
   });
 
-  it("adopts a transcript-only claim and keeps ingress for its pending final", async () => {
+  it("migrates a legacy transcript-only claim before preserving its pending final", async () => {
     const sessionEntry: SessionEntry = {
       abortedLastRun: false,
-      restartRecoveryBeforeAgentReplyState: "admitted",
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
-      restartRecoverySourceIngress: "control-ui",
       sessionId: "session",
       status: "running",
       updatedAt: Date.now(),

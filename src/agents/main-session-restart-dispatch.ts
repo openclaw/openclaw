@@ -58,12 +58,20 @@ export function resolveRestartRecoveryResumeBlockReason(params: {
   sessionKey: string;
 }): string | undefined {
   const beforeAgentReplyState = params.entry.restartRecoveryBeforeAgentReplyState;
+  const sourceIngress = params.entry.restartRecoverySourceIngress;
+  const hasLegacyClaimWithoutOwnership =
+    sourceIngress === undefined &&
+    normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
+  // Durable claims written before source ownership existed may have entered
+  // through a channel or Control UI. Treat those claims as external so an
+  // upgrade cannot bypass a newly active policy or side-effect hook.
   const requiresHookSafetyProof =
+    hasLegacyClaimWithoutOwnership ||
     beforeAgentReplyState === "admitted" ||
     beforeAgentReplyState === "continue" ||
     beforeAgentReplyState === "handled-reply" ||
-    params.entry.restartRecoverySourceIngress === "channel" ||
-    params.entry.restartRecoverySourceIngress === "control-ui";
+    sourceIngress === "channel" ||
+    sourceIngress === "control-ui";
   if (!requiresHookSafetyProof) {
     return undefined;
   }

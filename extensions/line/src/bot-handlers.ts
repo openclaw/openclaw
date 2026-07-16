@@ -3,7 +3,7 @@ import type { webhook } from "@line/bot-sdk";
 import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth-native";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readChannelAllowFromStore,
@@ -314,7 +314,7 @@ async function shouldProcessLineEvent(
     allowFrom: normalizeStringEntries(account.config.allowFrom),
     groupAllowFrom,
     command: {
-      hasControlCommand: shouldComputeCommandAuthorized(rawText, cfg),
+      hasControlCommand: hasControlCommand(rawText, cfg),
       groupOwnerAllowFrom: "none",
     },
   });
