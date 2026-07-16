@@ -37,7 +37,7 @@ const WORKBOARD_ENGINE_MODELS = {
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 
-function engineModel(engine: WorkboardExecutionEngine | null): string | undefined {
+function engineModel(engine: WorkboardExecutionEngine | null | undefined): string | undefined {
   return engine === "codex"
     ? WORKBOARD_ENGINE_MODELS.codex
     : engine === "claude"
