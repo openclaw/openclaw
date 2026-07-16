@@ -102,11 +102,16 @@ function createBacklogEvent(index: number, type = "channel.updated") {
   };
 }
 
-function emitMessageEvent(socket: FakeSocket, index: number) {
+function emitMessageEvent(
+  socket: FakeSocket,
+  index: number,
+  payload: Record<string, unknown> = {},
+) {
+  const event = createBacklogEvent(index, "message.created");
   socket.emit(
     "message",
     Buffer.from(
-      JSON.stringify({ ...createBacklogEvent(index, "message.created"), seq: index + 1 }),
+      JSON.stringify({ ...event, seq: index + 1, payload: { ...event.payload, ...payload } }),
     ),
   );
 }
@@ -316,21 +321,7 @@ describe("ClickClack gateway", () => {
       "[default] skipped malformed ClickClack websocket event",
     );
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          id: "evt-1",
-          cursor: "cursor-1",
-          type: "message.created",
-          workspace_id: "workspace-1",
-          channel_id: "chan-1",
-          seq: 2,
-          created_at: "2026-01-01T00:00:00.000Z",
-          payload: { message_id: "msg-1", author_id: "human-1" },
-        }),
-      ),
-    );
+    emitMessageEvent(socket, 1);
 
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
     expect(mocks.handleClickClackInbound.mock.calls[0]?.[0].access).toEqual({
@@ -362,21 +353,7 @@ describe("ClickClack gateway", () => {
     await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
 
     for (const index of [1, 2]) {
-      firstSocket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            id: `evt-${index}`,
-            cursor: `cursor-${index}`,
-            type: "message.created",
-            workspace_id: "workspace-1",
-            channel_id: "chan-1",
-            seq: index + 1,
-            created_at: "2026-01-01T00:00:00.000Z",
-            payload: { message_id: "msg-1", author_id: "human-1" },
-          }),
-        ),
-      );
+      emitMessageEvent(firstSocket, index);
     }
     firstSocket.emit("close");
 
@@ -481,21 +458,7 @@ describe("ClickClack gateway", () => {
 
     await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          id: "evt-1",
-          cursor: "cursor-1",
-          type: "message.created",
-          workspace_id: "workspace-1",
-          channel_id: "chan-1",
-          seq: 2,
-          created_at: "2026-01-01T00:00:00.000Z",
-          payload: { message_id: "msg-1", author_id: "human-1" },
-        }),
-      ),
-    );
+    emitMessageEvent(socket, 1);
 
     await vi.waitFor(() => expect(mocks.resolveClickClackInboundAccess).toHaveBeenCalledTimes(1));
     expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
@@ -512,25 +475,7 @@ describe("ClickClack gateway", () => {
 
     await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          id: "evt-1",
-          cursor: "cursor-1",
-          type: "message.created",
-          workspace_id: "workspace-1",
-          channel_id: "chan-1",
-          seq: 2,
-          created_at: "2026-01-01T00:00:00.000Z",
-          payload: {
-            message_id: "msg-1",
-            author_id: "human-1",
-            correlation_id: "fakeco.case_1",
-          },
-        }),
-      ),
-    );
+    emitMessageEvent(socket, 1, { correlation_id: "fakeco.case_1" });
 
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
     expect(mocks.createClickClackClient).toHaveBeenLastCalledWith({
@@ -556,25 +501,7 @@ describe("ClickClack gateway", () => {
 
     await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          id: "evt-1",
-          cursor: "cursor-1",
-          type: "message.created",
-          workspace_id: "workspace-1",
-          channel_id: "chan-1",
-          seq: 2,
-          created_at: "2026-01-01T00:00:00.000Z",
-          payload: {
-            message_id: "msg-1",
-            author_id: "human-1",
-            correlation_id: "bad correlation",
-          },
-        }),
-      ),
-    );
+    emitMessageEvent(socket, 1, { correlation_id: "bad correlation" });
 
     await vi.waitFor(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
     expect(mocks.createClickClackClient).toHaveBeenCalledTimes(1);
