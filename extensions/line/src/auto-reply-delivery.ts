@@ -1,6 +1,7 @@
 // Line plugin module implements auto reply delivery behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
@@ -211,8 +212,35 @@ export async function deliverLineAutoReply(params: {
     }
   }
 
-  if (chunks.length > 0) {
-    const hasRichOrMedia = richMessages.length > 0 || mediaMessages.length > 0;
+  const hasRichOrMedia = richMessages.length > 0 || mediaMessages.length > 0;
+  const canRideReplyToken = Boolean(replyToken) && !replyTokenUsed;
+
+  if (hasRichOrMedia && (chunks.length === 0 || canRideReplyToken)) {
+    // A reply token carries five messages for free while push spends the monthly
+    // quota, so bubbles pushed beside token text vanish on a 429.
+    const textMessages: messagingApi.TextMessage[] = chunks.map((chunk) => ({
+      type: "text",
+      text: chunk,
+    }));
+    // LINE hides quick replies as soon as a newer message arrives, so they must
+    // ride the trailing message: the bubbles lead the text when present.
+    const bundled: messagingApi.Message[] = hasQuickReplies
+      ? [...richMessages, ...mediaMessages, ...textMessages]
+      : [...textMessages, ...richMessages, ...mediaMessages];
+    if (hasQuickReplies) {
+      const lastIndex = bundled.length - 1;
+      const target = expectDefined(bundled[lastIndex], "last bundled LINE reply message");
+      bundled[lastIndex] = {
+        ...target,
+        quickReply: deps.createQuickReplyItems(lineData.quickReplies!),
+      };
+    }
+    try {
+      await sendLineMessages(bundled, true);
+    } catch (err) {
+      richMediaError ??= err;
+    }
+  } else if (chunks.length > 0) {
     // Quick replies attach to the trailing message, so when both are present the
     // rich/media bubbles must go out before the quick-reply text. Capture a
     // failure instead of swallowing it: the text still sends below, but a lost
@@ -250,36 +278,23 @@ export async function deliverLineAutoReply(params: {
         richMediaError ??= err;
       }
     }
-  } else {
-    const combined = [...richMessages, ...mediaMessages];
-    if (hasQuickReplies && combined.length === 0) {
-      const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
-        to,
-        chunks: [buildLineQuickReplyFallbackText(lineData.quickReplies)],
-        quickReplies: lineData.quickReplies,
-        replyToken,
-        replyTokenUsed,
-        cfg: params.cfg,
-        accountId,
-        replyMessageLine: replyVisible,
-        pushMessageLine: pushTextVisible,
-        pushTextMessageWithQuickReplies: pushQuickRepliesVisible,
-        createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
-        onReplyError: deps.onReplyError,
-      });
-      replyTokenUsed = nextReplyTokenUsed;
-    } else {
-      if (hasQuickReplies && combined.length > 0) {
-        const quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
-        const targetIndex =
-          replyToken && !replyTokenUsed ? Math.min(4, combined.length - 1) : combined.length - 1;
-        const target = combined[targetIndex] as messagingApi.Message & {
-          quickReply?: messagingApi.QuickReply;
-        };
-        combined[targetIndex] = { ...target, quickReply };
-      }
-      await sendLineMessages(combined, true);
-    }
+  } else if (hasQuickReplies) {
+    // Quick replies with no carrier message of their own.
+    const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
+      to,
+      chunks: [buildLineQuickReplyFallbackText(lineData.quickReplies)],
+      quickReplies: lineData.quickReplies,
+      replyToken,
+      replyTokenUsed,
+      cfg: params.cfg,
+      accountId,
+      replyMessageLine: replyVisible,
+      pushMessageLine: pushTextVisible,
+      pushTextMessageWithQuickReplies: pushQuickRepliesVisible,
+      createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
+      onReplyError: deps.onReplyError,
+    });
+    replyTokenUsed = nextReplyTokenUsed;
   }
 
   if (richMediaError !== undefined) {
