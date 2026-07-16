@@ -329,7 +329,7 @@ export function deleteSessionTranscriptIndexInTransaction(
  * rows, indexes the resolved active branch, and resets the watermark to the
  * same append parent the accessor's next append will resolve.
  */
-export function rebuildSessionTranscriptIndexInTransaction(
+function rebuildSessionTranscriptIndexInTransaction(
   db: DatabaseSync,
   sessionId: string,
   rows: readonly SessionTranscriptProjectionSourceRow[],

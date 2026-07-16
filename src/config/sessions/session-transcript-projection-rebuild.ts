@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { Generated } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -17,12 +18,15 @@ import {
 
 type TranscriptProjectionDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  | "sessions"
-  | "session_transcript_active_events"
-  | "session_transcript_fts"
-  | "session_transcript_index_state"
-  | "transcript_events"
->;
+  "sessions" | "session_transcript_index_state" | "transcript_events"
+> & {
+  session_transcript_active_events: OpenClawAgentKyselyDatabase["session_transcript_active_events"] & {
+    rowid: Generated<number>;
+  };
+  session_transcript_fts: OpenClawAgentKyselyDatabase["session_transcript_fts"] & {
+    rowid: Generated<number>;
+  };
+};
 
 export type TranscriptIndexEntry = {
   messageId: string;
@@ -49,7 +53,7 @@ export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProje
   ftsRows: TranscriptIndexEntry[];
 };
 
-export type ProjectionDeleteChunkResult = {
+type ProjectionDeleteChunkResult = {
   hasMore: boolean;
   owned: boolean;
 };
@@ -58,7 +62,7 @@ function getProjectionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<TranscriptProjectionDatabase>(db);
 }
 
-export function readMessageText(message: unknown): string | undefined {
+function readMessageText(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
   }
@@ -313,24 +317,39 @@ export function deletePreparedSessionTranscriptProjectionChunkInTransaction(
   }
   // Hidden rowid batching is the narrow SQLite primitive that keeps each
   // writer transaction bounded for both ordinary and FTS5 projection rows.
-  const active = db
-    .prepare(
-      `DELETE FROM session_transcript_active_events
-       WHERE rowid IN (
-         SELECT rowid FROM session_transcript_active_events
-         WHERE session_id = ? LIMIT ?
-       )`,
-    )
-    .run(params.sessionId, params.maxRowsPerTable).changes;
-  const fts = db
-    .prepare(
-      `DELETE FROM session_transcript_fts
-       WHERE rowid IN (
-         SELECT rowid FROM session_transcript_fts
-         WHERE session_id = ? LIMIT ?
-       )`,
-    )
-    .run(params.sessionId, params.maxRowsPerTable).changes;
+  const kysely = getProjectionKysely(db);
+  const active = Number(
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("session_transcript_active_events")
+        .where(
+          "rowid",
+          "in",
+          kysely
+            .selectFrom("session_transcript_active_events")
+            .select("rowid")
+            .where("session_id", "=", params.sessionId)
+            .limit(params.maxRowsPerTable),
+        ),
+    ).numAffectedRows ?? 0n,
+  );
+  const fts = Number(
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("session_transcript_fts")
+        .where(
+          "rowid",
+          "in",
+          kysely
+            .selectFrom("session_transcript_fts")
+            .select("rowid")
+            .where("session_id", "=", params.sessionId)
+            .limit(params.maxRowsPerTable),
+        ),
+    ).numAffectedRows ?? 0n,
+  );
   return {
     hasMore: active === params.maxRowsPerTable || fts === params.maxRowsPerTable,
     owned: true,
