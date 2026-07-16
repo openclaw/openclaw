@@ -517,9 +517,9 @@ async function sendFeishuTtsSupplementPayload(params: {
   ctx: FeishuSendPayloadContext;
   payload: FeishuOutboundPayload;
   supplement: NonNullable<ReturnType<typeof getReplyPayloadTtsSupplement>>;
-  sendVisiblePayload?: (replyToId: string | undefined) => ReturnType<
-    NonNullable<ChannelOutboundAdapter["sendText"]>
-  >;
+  sendVisiblePayload?: (
+    replyToId: string | undefined,
+  ) => ReturnType<NonNullable<ChannelOutboundAdapter["sendText"]>>;
 }) {
   const sendMedia = feishuOutbound.sendMedia;
   const sendText = feishuOutbound.sendText;
