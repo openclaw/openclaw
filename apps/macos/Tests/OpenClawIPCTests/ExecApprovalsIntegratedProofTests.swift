@@ -60,7 +60,8 @@ struct ExecApprovalsIntegratedProofTests {
                 approvalDecision: nil)
             let initialEnvelope = try Self.makeEnvelope(token: token, request: initialRequest)
             let promptObservation = PromptObservationRecorder()
-            Self.scheduleAllowOnceResponse(recorder: promptObservation)
+            let promptResponder = Self.scheduleAllowOnceResponse(recorder: promptObservation)
+            defer { promptResponder.invalidate() }
 
             let initialResponse = try await Self.sendEnvelope(
                 socketPath: socketPath,
@@ -134,11 +135,8 @@ struct ExecApprovalsIntegratedProofTests {
         return false
     }
 
-    private static func scheduleAllowOnceResponse(
-        recorder: PromptObservationRecorder,
-        attemptsRemaining: Int = 500)
-    {
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(10)) {
+    private static func scheduleAllowOnceResponse(recorder: PromptObservationRecorder) -> Timer {
+        let timer = Timer(timeInterval: 0.01, repeats: true) { timer in
             MainActor.assumeIsolated {
                 if let alert = ExecApprovalsPromptPresenter.activeAlertForTesting,
                    NSApp.modalWindow === alert.window,
@@ -148,15 +146,18 @@ struct ExecApprovalsIntegratedProofTests {
                         messageText: alert.messageText,
                         informativeText: alert.informativeText,
                         buttonTitles: alert.buttons.map(\.title))
+                    timer.invalidate()
                     button.performClick(nil)
                     return
                 }
-                guard attemptsRemaining > 1 else { return }
-                Self.scheduleAllowOnceResponse(
-                    recorder: recorder,
-                    attemptsRemaining: attemptsRemaining - 1)
+                recorder.attemptsRemaining -= 1
+                if recorder.attemptsRemaining == 0 {
+                    timer.invalidate()
+                }
             }
         }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        return timer
     }
 
     private nonisolated static func makeShortSocketRoot() throws -> URL {
@@ -311,6 +312,7 @@ struct ExecApprovalsIntegratedProofTests {
 
     @MainActor
     private final class PromptObservationRecorder {
+        var attemptsRemaining = 500
         var value: PromptObservation?
     }
 
