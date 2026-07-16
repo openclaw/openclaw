@@ -25,7 +25,10 @@ import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import { projectCodexTokenUsage, type CodexNormalizedTokenUsage } from "./event-projector-usage.js";
+import {
+  normalizeCodexResponseTokenUsage,
+  normalizeCodexThreadTokenUsage,
+} from "./event-projector-usage.js";
 import {
   readCodexErrorNotificationMessage,
   readItem,
@@ -97,7 +100,8 @@ export class CodexAppServerEventProjector {
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
-  private tokenUsage: CodexNormalizedTokenUsage | undefined;
+  private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
+  private responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
   private completedCompactionCount = 0;
 
   constructor(
@@ -264,10 +268,14 @@ export class CodexAppServerEventProjector {
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;
+      case "rawResponse/completed":
+        this.handleRawResponseCompleted(params);
+        break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
+        this.responseUsage = undefined;
         if (params.willRetry === true) {
           break;
         }
@@ -289,6 +297,7 @@ export class CodexAppServerEventProjector {
     const assistantTexts = this.assistantProjection.collectAssistantTexts();
     const reasoningText = this.reasoningProjection.reasoningText();
     const planText = this.reasoningProjection.planText();
+    const projectedUsage = this.responseUsage ?? this.tokenUsage;
     const hasAssistantItemText = this.assistantProjection.hasAssistantItemTextForSynthesis();
     const legacyFailClosed =
       !this.completedTurn || this.completedTurn.status !== "completed" || hasAssistantItemText;
@@ -306,7 +315,7 @@ export class CodexAppServerEventProjector {
       this.promptErrorSource = this.promptErrorSource ?? "prompt";
     }
     const assistantMessageOptions = {
-      tokenUsage: this.tokenUsage,
+      tokenUsage: projectedUsage,
       aborted: this.aborted,
       promptError: this.promptError,
     };
@@ -403,7 +412,7 @@ export class CodexAppServerEventProjector {
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
-      attemptUsage: this.tokenUsage,
+      attemptUsage: projectedUsage,
       replayMetadata: {
         hadPotentialSideEffects,
         replaySafe: !hadPotentialSideEffects,
@@ -442,12 +451,14 @@ export class CodexAppServerEventProjector {
 
   markTimedOut(): void {
     this.aborted = true;
+    this.responseUsage = undefined;
     this.promptError = "codex app-server attempt timed out";
     this.promptErrorSource = "prompt";
   }
 
   markAborted(): void {
     this.aborted = true;
+    this.responseUsage = undefined;
   }
 
   isCompacting(): boolean {
@@ -558,18 +569,22 @@ export class CodexAppServerEventProjector {
   }
 
   private handleTokenUsage(params: JsonObject): void {
-    // v2 ThreadTokenUsageUpdatedNotification: tokenUsage = {total, last, modelContextWindow}.
-    // Keep per-call `last` on attempt/assistant accounting so /usage stays
-    // per-response. Map absolute thread `total` onto contextUsage so session
-    // totalTokensFresh /status can refresh without overwriting per-attempt
-    // fields (#107324).
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-    const total = tokenUsage && isJsonObject(tokenUsage.total) ? tokenUsage.total : undefined;
     const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-    const usage = projectCodexTokenUsage({ last, total });
+    if (!last) {
+      return;
+    }
+    const usage = normalizeCodexThreadTokenUsage(last);
     if (usage) {
       this.tokenUsage = usage;
     }
+  }
+
+  private handleRawResponseCompleted(params: JsonObject): void {
+    const usage = isJsonObject(params.usage) ? params.usage : undefined;
+    // Every provider completion replaces the prior response snapshot. A final
+    // response with missing or malformed usage must leave freshness unknown.
+    this.responseUsage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
@@ -578,6 +593,9 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.completedTurn = turn;
+    if (turn.status !== "completed") {
+      this.responseUsage = undefined;
+    }
     if (turn.status === "failed") {
       const usageLimitMessage = formatCodexUsageLimitErrorMessage({
         message: turn.error?.message,
