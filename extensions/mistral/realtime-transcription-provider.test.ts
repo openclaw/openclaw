@@ -17,17 +17,29 @@ async function createRealtimeServer(onRequest: (url: URL) => void) {
     onRequest(new URL(request.url ?? "/", "http://127.0.0.1"));
     wss.handleUpgrade(request, socket, head, (ws) => {
       clients.add(ws);
-      ws.on("close", () => clients.delete(ws));
+      ws.on("close", () => {
+        clients.delete(ws);
+      });
       ws.send(JSON.stringify({ type: "session.created" }));
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   cleanup = async () => {
     for (const ws of clients) {
       ws.terminate();
     }
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.close(() => {
+        resolve();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
   };
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
 }
