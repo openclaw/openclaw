@@ -105,6 +105,7 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
     const stdout = execFileSync("fuser", args, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
     });
     return parseFuserPidList(stdout).map((pid) => ({ pid }));
   } catch (err: unknown) {
@@ -175,6 +176,7 @@ function listPortListeners(port: number): PortProcess[] {
     try {
       const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
         encoding: "utf-8",
+        timeout: 10_000,
       });
       const listeners = parseWindowsNetstatListeners(out, port);
       const seenPids = new Set<number>();
@@ -196,6 +198,7 @@ function listPortListeners(port: number): PortProcess[] {
     const lsof = resolveLsofCommandSync();
     const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
       encoding: "utf-8",
+      timeout: 10_000,
     });
     return parseLsofOutput(out);
   } catch (err: unknown) {
