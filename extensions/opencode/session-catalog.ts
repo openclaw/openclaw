@@ -259,8 +259,8 @@ async function runOpenCode(args: string[]): Promise<string> {
     }
     target.push(chunk);
   };
-  child.stdout.on("error", (error) => failFromOutputError("stdout", error));
-  child.stderr.on("error", (error) => failFromOutputError("stderr", error));
+  child.stdout.once("error", (error) => failFromOutputError("stdout", error));
+  child.stderr.once("error", (error) => failFromOutputError("stderr", error));
   child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
   child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
   const exitCode = await new Promise<number | null>((resolve, reject) => {
