@@ -9,6 +9,7 @@ import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coer
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -842,22 +843,37 @@ function emitToolBlockedSecurityEvent(params: {
   });
 }
 
-// Once-per-plugin-per-process deprecation signal; the field is ignored at
-// runtime because unresolved approvals always fail closed on timeout.
-const warnedDeprecatedTimeoutBehaviorPluginIds = new Set<string>();
+// Bounded once-per-plugin deprecation signal; the field is ignored at runtime
+// because unresolved approvals always fail closed on timeout.
+const warnedDeprecatedTimeoutBehaviorPluginIds = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 1024,
+});
 
 function warnDeprecatedApprovalTimeoutBehavior(approval: PluginApprovalRequest): void {
   if (approval.timeoutBehavior !== "allow") {
     return;
   }
   const pluginId = approval.pluginId ?? "unknown-plugin";
-  if (warnedDeprecatedTimeoutBehaviorPluginIds.has(pluginId)) {
+  if (warnedDeprecatedTimeoutBehaviorPluginIds.check(pluginId)) {
     return;
   }
-  warnedDeprecatedTimeoutBehaviorPluginIds.add(pluginId);
   log.warn(
     `plugin '${pluginId}' sets deprecated requireApproval.timeoutBehavior:"allow"; the field is ignored and approvals fail closed on timeout (see docs/plugins/plugin-permission-requests.md)`,
   );
+}
+
+/** Test-only seam to reset the deprecation warning cache. */
+export function resetDeprecatedTimeoutBehaviorWarningsForTest(): void {
+  warnedDeprecatedTimeoutBehaviorPluginIds.clear();
+}
+
+/** Test-only seam to trigger the deprecation warning for a plugin id. */
+export function warnDeprecatedApprovalTimeoutBehaviorForTest(pluginId: string): void {
+  warnDeprecatedApprovalTimeoutBehavior({
+    pluginId,
+    timeoutBehavior: "allow",
+  } as PluginApprovalRequest);
 }
 
 function notifyPluginApprovalResolution(
