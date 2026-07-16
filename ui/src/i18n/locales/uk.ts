@@ -27,6 +27,7 @@ export const uk: TranslationMap = {
     close: "Закрити",
     previous: "Попередній",
     next: "Наступний",
+    continue: "Продовжити",
     back: "Назад",
     create: "Створити",
     copy: "Копіювати",
@@ -1867,6 +1868,28 @@ export const uk: TranslationMap = {
     replaceExisting: "Замінити наявні імпортовані дані",
     replaceHint:
       "Ще раз перегляньте конфлікти та збережіть резервні копії елементів перед заміною.",
+  },
+  onboarding: {
+    memoryImport: {
+      title: "Перенесіть із собою пам’ять асистента",
+      body: "OpenClaw виявив пам’ять інших асистентів для програмування. Імпортувати її до робочого простору вашого агента?",
+      plannedCount: "{count} готово до імпорту",
+      alreadyImported: "Уже імпортовано: {count}",
+      sourceUnavailable: "Шлях до джерела недоступний",
+      import: "Імпортувати",
+      skip: "Пропустити",
+      reviewDetails: "Переглянути деталі",
+      importingProvider: "Імпортування…",
+      providerResult: "Перенесено: {migrated}, пропущено: {skipped}",
+      providerIncomplete:
+        "Перенесено: {migrated}, пропущено: {skipped}, помилок: {errors}, конфліктів: {conflicts}",
+      providerError: "Не вдалося імпортувати: {error}",
+      connectionChanged: "Пропущено: підключення до Gateway змінилося під час імпорту",
+      unknownError: "Не вдалося виконати запит",
+      doneTitle: "Імпорт пам’яті завершено",
+      doneBody:
+        "Перенесено: {migrated}, пропущено: {skipped}. Можна продовжити налаштування OpenClaw.",
+    },
   },
   mcpPage: {
     manageServersLink: "Керуйте серверами на сторінці Плагінів.",
