@@ -1601,6 +1601,7 @@ async function onAdmittedTimer(state: CronServiceState) {
     // Skipped mappers must not claim reservations: recovery releases those rows,
     // while already-started jobs drain under the same service-wide cap.
     let completedResults: TimedCronRunOutcome[];
+    let batchExecutionError: unknown;
     try {
       completedResults = await pMap(
         dueJobs,
@@ -1609,114 +1610,122 @@ async function onAdmittedTimer(state: CronServiceState) {
             stopAdmittingDueJobs = true;
             return pMapSkip;
           }
-          const admission = await runWithCronAdmission(state, async () => {
-            const currentDueJob = await locked(state, async () => {
-              await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-              if (stopAdmittingDueJobs || state.stopped || state.restartRecoveryPending) {
-                stopAdmittingDueJobs = true;
-                return undefined;
-              }
-              const job = state.store?.jobs.find((entry) => entry.id === due.id);
-              if (
-                !job ||
-                !isQueuedCronRunReservationCurrent(state, due.id, due.reservationIdentity) ||
-                job.state.runningAtMs !== due.reservedAtMs
-              ) {
+          try {
+            const admission = await runWithCronAdmission(state, async () => {
+              const currentDueJob = await locked(state, async () => {
+                await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+                if (stopAdmittingDueJobs || state.stopped || state.restartRecoveryPending) {
+                  stopAdmittingDueJobs = true;
+                  return undefined;
+                }
+                const job = state.store?.jobs.find((entry) => entry.id === due.id);
+                if (
+                  !job ||
+                  !isQueuedCronRunReservationCurrent(state, due.id, due.reservationIdentity) ||
+                  job.state.runningAtMs !== due.reservedAtMs
+                ) {
+                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+                  return undefined;
+                }
+                const dueProbe = structuredClone(job);
+                delete dueProbe.state.runningAtMs;
+                if (
+                  !isJobEnabled(job) ||
+                  !isRunnableJob({ state, job: dueProbe, nowMs: state.deps.nowMs() })
+                ) {
+                  const rollbackSnapshot = snapshotStoreForRollback(state);
+                  delete job.state.runningAtMs;
+                  await persistOrRestore(state, rollbackSnapshot);
+                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+                  return undefined;
+                }
+                const startedAt = state.deps.nowMs();
+                const previousLastError = job.state.lastError;
+                job.state.runningAtMs = startedAt;
+                job.state.lastError = undefined;
+                try {
+                  await persist(state);
+                } catch (error) {
+                  job.state.runningAtMs = due.reservedAtMs;
+                  job.state.lastError = previousLastError;
+                  throw error;
+                }
+                updateQueuedCronRunReservationMarker(
+                  state,
+                  due.id,
+                  due.reservationIdentity,
+                  startedAt,
+                  previousLastError,
+                );
+                if (state.stopped || state.restartRecoveryPending) {
+                  stopAdmittingDueJobs = true;
+                  job.state.lastError = previousLastError;
+                  const rollbackSnapshot = snapshotStoreForRollback(state);
+                  delete job.state.runningAtMs;
+                  await persistOrRestore(state, rollbackSnapshot);
+                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+                  return undefined;
+                }
                 releaseQueuedCronRun(state, due.id, due.reservationIdentity);
-                return undefined;
-              }
-              const dueProbe = structuredClone(job);
-              delete dueProbe.state.runningAtMs;
-              if (
-                !isJobEnabled(job) ||
-                !isRunnableJob({ state, job: dueProbe, nowMs: state.deps.nowMs() })
-              ) {
-                const rollbackSnapshot = snapshotStoreForRollback(state);
-                delete job.state.runningAtMs;
-                await persistOrRestore(state, rollbackSnapshot);
-                releaseQueuedCronRun(state, due.id, due.reservationIdentity);
-                return undefined;
-              }
-              const startedAt = state.deps.nowMs();
-              const previousLastError = job.state.lastError;
-              job.state.runningAtMs = startedAt;
-              job.state.lastError = undefined;
-              try {
-                await persist(state);
-              } catch (error) {
-                job.state.runningAtMs = due.reservedAtMs;
-                job.state.lastError = previousLastError;
-                throw error;
-              }
-              updateQueuedCronRunReservationMarker(
-                state,
-                due.id,
-                due.reservationIdentity,
-                startedAt,
-                previousLastError,
-              );
-              if (state.stopped || state.restartRecoveryPending) {
-                stopAdmittingDueJobs = true;
-                job.state.lastError = previousLastError;
-                const rollbackSnapshot = snapshotStoreForRollback(state);
-                delete job.state.runningAtMs;
-                await persistOrRestore(state, rollbackSnapshot);
-                releaseQueuedCronRun(state, due.id, due.reservationIdentity);
-                return undefined;
-              }
-              releaseQueuedCronRun(state, due.id, due.reservationIdentity);
-              return { ...due, job, startedAt };
-            });
-            if (!currentDueJob) {
-              return pMapSkip;
-            }
-            claimedIndexes.add(index);
-            const result = await runDueJob(currentDueJob);
-            if (!result.isolatedAgentSetupTimeout) {
-              return result;
-            }
-            let finalizedResults: TimedCronRunOutcome[];
-            try {
-              finalizedResults = await finalizeCompletedResults([result], {
-                clearOnFailure: false,
+                return { ...due, job, startedAt };
               });
-            } catch {
-              return result;
-            }
-            if (!hasSetupTimeoutRecoveryHandler || finalizedResults.length === 0) {
+              if (!currentDueJob) {
+                return pMapSkip;
+              }
+              claimedIndexes.add(index);
+              const result = await runDueJob(currentDueJob);
+              if (!result.isolatedAgentSetupTimeout) {
+                return result;
+              }
+              let finalizedResults: TimedCronRunOutcome[];
+              try {
+                finalizedResults = await finalizeCompletedResults([result], {
+                  clearOnFailure: false,
+                });
+              } catch {
+                return result;
+              }
+              if (!hasSetupTimeoutRecoveryHandler || finalizedResults.length === 0) {
+                return pMapSkip;
+              }
+              if (!setupTimeoutNotified) {
+                setupTimeoutNotified = true;
+                stopAdmittingDueJobs = true;
+                try {
+                  await releaseUnclaimedDueJobReservationsWithRetry();
+                } catch (err) {
+                  reservationReleaseError = err;
+                }
+                maybeNotifyIsolatedAgentSetupTimeout(state, result);
+              }
+              return pMapSkip;
+            });
+            if (admission.kind === "stopped") {
+              stopAdmittingDueJobs = true;
               return pMapSkip;
             }
-            if (!setupTimeoutNotified) {
-              setupTimeoutNotified = true;
-              stopAdmittingDueJobs = true;
-              try {
-                await releaseUnclaimedDueJobReservationsWithRetry();
-              } catch (err) {
-                reservationReleaseError = err;
-              }
-              maybeNotifyIsolatedAgentSetupTimeout(state, result);
-            }
-            return pMapSkip;
-          });
-          if (admission.kind === "stopped") {
+            return admission.value;
+          } catch (error) {
             stopAdmittingDueJobs = true;
+            batchExecutionError ??= error;
             return pMapSkip;
           }
-          return admission.value;
         },
-        { concurrency, stopOnError: true },
+        // Let already-admitted mappers drain so their outcomes can be persisted
+        // even when a sibling activation fails.
+        { concurrency, stopOnError: false },
       );
     } catch (error) {
       await releaseUnclaimedDueJobReservationsWithRetry();
-      throw error;
+      throw error instanceof AggregateError && error.errors.length > 0 ? error.errors[0] : error;
     }
-    if (reservationReleaseError) {
-      throw reservationReleaseError instanceof Error
-        ? reservationReleaseError
-        : new Error(formatErrorMessage(reservationReleaseError));
-    }
+    let postBatchError = reservationReleaseError;
     if (stopAdmittingDueJobs) {
-      await releaseUnclaimedDueJobReservationsWithRetry();
+      try {
+        await releaseUnclaimedDueJobReservationsWithRetry();
+      } catch (error) {
+        postBatchError ??= error;
+      }
     }
 
     if (completedResults.length > 0) {
@@ -1731,6 +1740,16 @@ async function onAdmittedTimer(state: CronServiceState) {
           break;
         }
       }
+    }
+    if (postBatchError) {
+      throw postBatchError instanceof Error
+        ? postBatchError
+        : new Error(formatErrorMessage(postBatchError));
+    }
+    if (batchExecutionError) {
+      throw batchExecutionError instanceof Error
+        ? batchExecutionError
+        : new Error(formatErrorMessage(batchExecutionError));
     }
   } finally {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).

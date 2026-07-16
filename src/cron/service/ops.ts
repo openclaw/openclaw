@@ -956,8 +956,8 @@ async function prepareManualRun(
       preserveWhenDisabled: mode === "force" && !isJobEnabled(job),
     });
     if (state.stopped) {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       const cleanup = async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
         const persistedJob = state.store?.jobs.find((entry) => entry.id === id);
         if (
           typeof persistedJob?.state.runningAtMs !== "number" ||
@@ -1165,6 +1165,28 @@ async function releasePreparedManualReservationWithRetry(
     } catch (error) {
       // No caller owns another retry. Let stale-marker recovery see the
       // durable marker instead of retaining a process-only queued claim.
+      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
+      throw error;
+    }
+  }
+}
+
+async function releasePreparedManualReservationAfterReloadWithRetry(
+  state: CronServiceState,
+  prepared: Extract<PreparedManualRun, { ran: true }>,
+): Promise<void> {
+  const attempt = async () => {
+    await locked(state, async () => {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      await releasePreparedManualReservation(state, prepared);
+    });
+  };
+  try {
+    await attempt();
+  } catch {
+    try {
+      await attempt();
+    } catch (error) {
       releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
       throw error;
     }
@@ -1417,10 +1439,7 @@ export async function run(
     return { ok: true, ran: true } as const;
   });
   if (admission.kind === "stopped") {
-    await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      await releasePreparedManualReservationWithRetry(state, prepared);
-    });
+    await releasePreparedManualReservationAfterReloadWithRetry(state, prepared);
     return { ok: true, ran: false, reason: "stopped" } as const;
   }
   return admission.value;

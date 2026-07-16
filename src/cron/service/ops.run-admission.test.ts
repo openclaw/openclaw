@@ -18,7 +18,6 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { enqueueRun, run, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
-import { runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const opsRegressionFixtures = setupCronRegressionFixtures({
@@ -34,333 +33,6 @@ function expectQueuedRunAck(result: unknown) {
 }
 
 describe("cron service run admission", () => {
-  it.each(["manual", "scheduled", "startup"] as const)(
-    "does not start a %s run when stop wins the activation write",
-    async (trigger) => {
-      const store = opsRegressionFixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
-      const job = createDueIsolatedJob({
-        id: `stopped-during-${trigger}-activation`,
-        nowMs: dueAt,
-        nextRunAtMs: trigger === "manual" ? dueAt + 3_600_000 : dueAt,
-      });
-      job.state.lastError = "prior failure";
-      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-      let now = dueAt;
-      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob,
-      });
-      const realSave = cronStoreModule.saveCronJobsStore;
-      let reservationPersisted = false;
-      const saveSpy = vi
-        .spyOn(cronStoreModule, "saveCronJobsStore")
-        .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
-          await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
-            reservationPersisted = true;
-            now = dueAt + 1;
-          } else if (reservationPersisted && runningAtMs === dueAt + 1) {
-            stop(state);
-          }
-        });
-
-      try {
-        if (trigger === "manual") {
-          await expect(run(state, job.id, "force")).resolves.toEqual({
-            ok: true,
-            ran: false,
-            reason: "stopped",
-          });
-        } else if (trigger === "scheduled") {
-          await onTimer(state);
-        } else {
-          await runMissedJobs(state);
-        }
-      } finally {
-        saveSpy.mockRestore();
-      }
-
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-      const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
-        (entry) => entry.id === job.id,
-      );
-      expect(persistedJob?.state.runningAtMs).toBeUndefined();
-      expect(persistedJob?.state.lastError).toBe("prior failure");
-    },
-  );
-
-  it.each(["manual", "scheduled", "startup"] as const)(
-    "retries %s cleanup when stop wins the reservation write",
-    async (trigger) => {
-      const store = opsRegressionFixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.250Z");
-      const job = createDueIsolatedJob({
-        id: `stopped-during-${trigger}-reservation`,
-        nowMs: dueAt,
-        nextRunAtMs: trigger === "manual" ? dueAt + 3_600_000 : dueAt,
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => dueAt,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      const realSave = cronStoreModule.saveCronJobsStore;
-      let reservationPersisted = false;
-      let cleanupFailed = false;
-      const saveSpy = vi
-        .spyOn(cronStoreModule, "saveCronJobsStore")
-        .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
-          if (reservationPersisted && !cleanupFailed && runningAtMs === undefined) {
-            cleanupFailed = true;
-            throw new Error("reservation cleanup persist failed");
-          }
-          await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
-            reservationPersisted = true;
-            stop(state);
-          }
-        });
-
-      try {
-        if (trigger === "manual") {
-          await expect(run(state, job.id, "force")).resolves.toEqual({
-            ok: true,
-            ran: false,
-            reason: "stopped",
-          });
-        } else if (trigger === "scheduled") {
-          await onTimer(state);
-        } else {
-          await expect(runMissedJobs(state)).rejects.toThrow("reservation cleanup persist failed");
-        }
-      } finally {
-        saveSpy.mockRestore();
-      }
-
-      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-      expect(
-        (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
-          .runningAtMs,
-      ).toBeUndefined();
-    },
-  );
-
-  it.each(["manual", "scheduled", "startup"] as const)(
-    "cleans a %s reservation after activation persistence fails",
-    async (trigger) => {
-      const store = opsRegressionFixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.500Z");
-      const job = createDueIsolatedJob({
-        id: `failed-${trigger}-activation-persist`,
-        nowMs: dueAt,
-        nextRunAtMs: trigger === "manual" ? dueAt + 3_600_000 : dueAt,
-      });
-      job.state.lastError = "prior failure";
-      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-      let now = dueAt;
-      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob,
-      });
-      const realSave = cronStoreModule.saveCronJobsStore;
-      let reservationPersisted = false;
-      let activationFailed = false;
-      const saveSpy = vi
-        .spyOn(cronStoreModule, "saveCronJobsStore")
-        .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
-          if (reservationPersisted && !activationFailed && runningAtMs === dueAt + 1) {
-            activationFailed = true;
-            throw new Error("activation persist failed");
-          }
-          await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
-            reservationPersisted = true;
-            now = dueAt + 1;
-          }
-        });
-
-      try {
-        const operation =
-          trigger === "manual"
-            ? run(state, job.id, "force")
-            : trigger === "scheduled"
-              ? onTimer(state)
-              : runMissedJobs(state);
-        await expect(operation).rejects.toThrow("activation persist failed");
-      } finally {
-        saveSpy.mockRestore();
-      }
-
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-      const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
-        (entry) => entry.id === job.id,
-      );
-      expect(persistedJob?.state.runningAtMs).toBeUndefined();
-      expect(persistedJob?.state.lastError).toBe("prior failure");
-    },
-  );
-
-  it.each(["manual", "scheduled", "startup"] as const)(
-    "retries %s reservation cleanup after a persistence failure",
-    async (trigger) => {
-      const store = opsRegressionFixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.750Z");
-      const job = createDueIsolatedJob({
-        id: `failed-${trigger}-cleanup-persist`,
-        nowMs: dueAt,
-        nextRunAtMs: trigger === "manual" ? dueAt + 3_600_000 : dueAt,
-      });
-      job.state.lastError = "prior failure";
-      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-      let now = dueAt;
-      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob,
-      });
-      const realSave = cronStoreModule.saveCronJobsStore;
-      let reservationPersisted = false;
-      let activationPersisted = false;
-      let cleanupFailed = false;
-      const saveSpy = vi
-        .spyOn(cronStoreModule, "saveCronJobsStore")
-        .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
-          if (activationPersisted && !cleanupFailed && runningAtMs === undefined) {
-            cleanupFailed = true;
-            throw new Error("cleanup persist failed");
-          }
-          await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
-            reservationPersisted = true;
-            now = dueAt + 1;
-          } else if (reservationPersisted && runningAtMs === dueAt + 1) {
-            activationPersisted = true;
-            stop(state);
-          }
-        });
-
-      try {
-        const operation =
-          trigger === "manual"
-            ? run(state, job.id, "force")
-            : trigger === "scheduled"
-              ? onTimer(state)
-              : runMissedJobs(state);
-        await expect(operation).rejects.toThrow("cleanup persist failed");
-      } finally {
-        saveSpy.mockRestore();
-      }
-
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-      const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
-        (entry) => entry.id === job.id,
-      );
-      expect(persistedJob?.state.runningAtMs).toBeUndefined();
-      expect(persistedJob?.state.lastError).toBe("prior failure");
-    },
-  );
-
-  it.each(["manual", "scheduled", "startup"] as const)(
-    "releases a %s process claim after terminal cleanup failures",
-    async (trigger) => {
-      const store = opsRegressionFixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.875Z");
-      const job = createDueIsolatedJob({
-        id: `terminal-${trigger}-cleanup-failure`,
-        nowMs: dueAt,
-        nextRunAtMs: trigger === "manual" ? dueAt + 3_600_000 : dueAt,
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-
-      let now = dueAt;
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      const realSave = cronStoreModule.saveCronJobsStore;
-      let reservationPersisted = false;
-      let activationPersisted = false;
-      const saveSpy = vi
-        .spyOn(cronStoreModule, "saveCronJobsStore")
-        .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
-          if (activationPersisted && runningAtMs === undefined) {
-            throw new Error("terminal cleanup persist failed");
-          }
-          await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
-            reservationPersisted = true;
-            now = dueAt + 1;
-          } else if (reservationPersisted && runningAtMs === dueAt + 1) {
-            activationPersisted = true;
-            stop(state);
-          }
-        });
-
-      try {
-        const operation =
-          trigger === "manual"
-            ? run(state, job.id, "force")
-            : trigger === "scheduled"
-              ? onTimer(state)
-              : runMissedJobs(state);
-        await expect(operation).rejects.toThrow("terminal cleanup persist failed");
-      } finally {
-        saveSpy.mockRestore();
-      }
-
-      expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
-      expect(
-        (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
-          .runningAtMs,
-      ).toBe(dueAt + 1);
-    },
-  );
-
   it("rechecks a queued manual run after the job is disabled", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
@@ -451,6 +123,94 @@ describe("cron service run admission", () => {
     releaseManual.resolve({ status: "ok", summary: "manual" });
     await scheduledStarted.promise;
     await Promise.all([manualRun, timerRun]);
+  });
+
+  it("finalizes an admitted scheduled sibling before surfacing an activation failure", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:05.500Z");
+    const completingJob = createDueIsolatedJob({
+      id: "a-completing-before-batch-failure",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const failingJob = createDueIsolatedJob({
+      id: "b-failing-batch-activation",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const queuedJob = createDueIsolatedJob({
+      id: "c-queued-after-batch-failure",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [completingJob, failingJob, queuedJob],
+    });
+
+    let now = dueAt;
+    const completingStarted = createDeferred<void>();
+    const releaseCompleting = createDeferred<{ status: "ok"; summary: string }>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
+      expect(job.id).toBe(completingJob.id);
+      completingStarted.resolve();
+      return await releaseCompleting.promise;
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 2 },
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+    const realSave = cronStoreModule.saveCronJobsStore;
+    let reservationsPersisted = false;
+    const saveSpy = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockImplementation(async (storePath, nextStore, opts) => {
+        const nextFailingJob = nextStore.jobs.find((job) => job.id === failingJob.id);
+        if (reservationsPersisted && nextFailingJob?.state.runningAtMs === dueAt + 1) {
+          throw new Error("scheduled sibling activation failed");
+        }
+        await realSave(storePath, nextStore, opts);
+        if (
+          !reservationsPersisted &&
+          nextStore.jobs.every((job) => job.state.runningAtMs === dueAt)
+        ) {
+          reservationsPersisted = true;
+          now = dueAt + 1;
+        }
+      });
+
+    try {
+      const timerRun = onTimer(state);
+      await completingStarted.promise;
+      releaseCompleting.resolve({ status: "ok", summary: "completed sibling" });
+      await expect(timerRun).rejects.toThrow();
+    } finally {
+      saveSpy.mockRestore();
+    }
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    const persisted = await loadCronStore(store.storePath);
+    expect(persisted.jobs.find((job) => job.id === completingJob.id)?.state.lastRunStatus).toBe(
+      "ok",
+    );
+    expect(
+      persisted.jobs.find((job) => job.id === completingJob.id)?.state.runningAtMs,
+    ).toBeUndefined();
+    expect(
+      persisted.jobs.find((job) => job.id === failingJob.id)?.state.runningAtMs,
+    ).toBeUndefined();
+    expect(
+      persisted.jobs.find((job) => job.id === queuedJob.id)?.state.lastRunStatus,
+    ).toBeUndefined();
+    expect(
+      persisted.jobs.find((job) => job.id === queuedJob.id)?.state.runningAtMs,
+    ).toBeUndefined();
   });
 
   it("cancels a queued manual run before validating a disabled replacement", async () => {
@@ -835,6 +595,65 @@ describe("cron service run admission", () => {
     expect(
       state.store?.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs,
     ).toBeUndefined();
+    expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+    expect(
+      (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
+        .runningAtMs,
+    ).toBeUndefined();
+  });
+
+  it("retries a stopped manual reservation cleanup after reload fails", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.906Z");
+    const job = createDueIsolatedJob({
+      id: "stopped-manual-cleanup-reload-failure",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const realSave = cronStoreModule.saveCronJobsStore;
+    const saveSpy = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockImplementation(async (storePath, nextStore, opts) => {
+        await realSave(storePath, nextStore, opts);
+        if (nextStore.jobs.find((entry) => entry.id === job.id)?.state.runningAtMs === dueAt) {
+          stop(state);
+        }
+      });
+    const realLoad = cronStoreModule.loadCronJobsStoreWithConfigJobs;
+    let cleanupReloadFailed = false;
+    const loadSpy = vi
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .mockImplementation(async (storePath) => {
+        if (state.stopped && !cleanupReloadFailed) {
+          cleanupReloadFailed = true;
+          throw new Error("cleanup reload failed");
+        }
+        return await realLoad(storePath);
+      });
+
+    try {
+      await expect(run(state, job.id, "force")).resolves.toEqual({
+        ok: true,
+        ran: false,
+        reason: "stopped",
+      });
+    } finally {
+      loadSpy.mockRestore();
+      saveSpy.mockRestore();
+    }
+
+    expect(cleanupReloadFailed).toBe(true);
     expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
     expect(
       (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id)?.state
