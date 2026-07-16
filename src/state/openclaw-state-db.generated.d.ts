@@ -1233,6 +1233,13 @@ export interface WorkspaceSetupState {
   workspace_path: string;
 }
 
+export interface WorktreeProvisionedFileChunks {
+  chunk_index: number;
+  data: Uint8Array;
+  path: string;
+  worktree_id: string;
+}
+
 export interface Worktrees {
   base_ref: string;
   branch: string;
@@ -1242,6 +1249,7 @@ export interface Worktrees {
   owner_id: string | null;
   owner_kind: string;
   path: string;
+  provisioned_paths_json: string | null;
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;
@@ -1336,5 +1344,6 @@ export interface DB {
   worker_workspace_pending_results: WorkerWorkspacePendingResults;
   worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_setup_state: WorkspaceSetupState;
+  worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
   worktrees: Worktrees;
 }

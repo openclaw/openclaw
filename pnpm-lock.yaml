@@ -435,6 +435,12 @@ importers:
       '@anthropic-ai/vertex-sdk':
         specifier: 0.19.0
         version: 0.19.0(zod@4.4.3)
+      google-auth-library:
+        specifier: 10.9.0
+        version: 10.9.0
+      undici:
+        specifier: 8.5.0
+        version: 8.5.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1596,6 +1602,9 @@ importers:
       '@noble/hashes':
         specifier: 2.2.0
         version: 2.2.0
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
       zod:
         specifier: 4.4.3
         version: 4.4.3

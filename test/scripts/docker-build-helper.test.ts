@@ -4348,8 +4348,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
   it("passes installer tag env to bash, not curl", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 
-    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash');
-    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash');
+    expect(runner).toContain('OPENCLAW_BETA=1 bash "$installer"');
+    expect(runner).toContain('OPENCLAW_VERSION="$INSTALL_TAG" bash "$installer"');
     expect(runner).not.toContain('OPENCLAW_BETA=1 curl -fsSL "$INSTALL_URL" | bash');
     expect(runner).not.toContain(
       'OPENCLAW_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash',

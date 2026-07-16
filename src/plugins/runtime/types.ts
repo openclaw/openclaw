@@ -35,6 +35,11 @@ type PluginManagedWorktree = {
 
 type SubagentRunResult = {
   runId: string;
+  runtime?: {
+    harness: string;
+    provider: string;
+    model: string;
+  };
 };
 
 type SubagentWaitParams = {

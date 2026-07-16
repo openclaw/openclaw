@@ -114,6 +114,9 @@ export const pluginSdkDocMetadata = {
   "tool-results": {
     category: "utilities",
   },
+  "widget-html": {
+    category: "utilities",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },
