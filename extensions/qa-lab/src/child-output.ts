@@ -1,5 +1,5 @@
 // Qa Lab plugin module implements child output behavior.
-import { decodeTextPrefix } from "@openclaw/normalization-core";
+import { StringDecoder } from "node:string_decoder";
 
 export const QA_CHILD_STDOUT_MAX_BYTES = 1024 * 1024;
 export const QA_CHILD_STDERR_TAIL_BYTES = 64 * 1024;
@@ -19,6 +19,10 @@ type QaChildOutputTail = {
 
 function toBuffer(chunk: unknown): Buffer {
   return Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+}
+
+function decodeUtf8Prefix(buffer: Buffer, truncated: boolean): string {
+  return truncated ? new StringDecoder("utf8").write(buffer) : buffer.toString("utf8");
 }
 
 function decodeUtf8Tail(buffer: Buffer, truncated: boolean): string {
@@ -59,9 +63,7 @@ export function appendQaChildOutput(capture: QaChildOutputCapture, chunk: unknow
 }
 
 export function readQaChildOutput(capture: QaChildOutputCapture) {
-  return decodeTextPrefix(Buffer.concat(capture.chunks, capture.bytes), {
-    truncated: capture.exceeded,
-  });
+  return decodeUtf8Prefix(Buffer.concat(capture.chunks, capture.bytes), capture.exceeded);
 }
 
 export function createQaChildOutputTail(maxBytes = QA_CHILD_STDERR_TAIL_BYTES) {
