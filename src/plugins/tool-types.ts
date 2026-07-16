@@ -27,6 +27,8 @@ export type OpenClawPluginToolContext = {
   sessionKey?: string;
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  /** Stable host-issued run id for resource ownership; plugins must treat it as opaque. */
+  runId?: string;
   /**
    * Runtime-supplied active model metadata for informational use, diagnostics,
    * and plugin-owned policy decisions. This is not a security boundary against

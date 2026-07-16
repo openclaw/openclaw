@@ -14,12 +14,17 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
 } from "./src/browser-gateway-contract.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
 import { BrowserToolSchema } from "./src/browser-tool.schema.js";
+import {
+  acquireBrowserSessionAccess,
+  claimBrowserSessionOwner,
+} from "./src/browser/session-tab-gate.js";
 import {
   configureSystemProfileImportStateStore,
   type SystemProfileImportState,
@@ -61,6 +66,7 @@ function createLazyBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  runId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -73,6 +79,8 @@ function createLazyBrowserTool(opts?: {
     chatType?: string;
   };
 }): AnyAgentTool {
+  const sessionKey = normalizeLowercaseStringOrEmpty(opts?.agentSessionKey);
+  let ownerClaim: number | undefined;
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -82,9 +90,27 @@ function createLazyBrowserTool(opts?: {
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
-      const tool = createBrowserTool(opts);
-      return await tool.execute(toolCallId, args, signal, onUpdate);
+      ownerClaim ??=
+        sessionKey && opts?.runId ? claimBrowserSessionOwner(sessionKey, opts.runId) : undefined;
+      let hasTrackedTabs = () => false;
+      const releaseSessionAccess = sessionKey
+        ? await acquireBrowserSessionAccess(sessionKey, () => hasTrackedTabs(), signal)
+        : () => {};
+      try {
+        signal?.throwIfAborted();
+        const { createBrowserTool, hasTrackedBrowserSessionTabs } =
+          await loadBrowserRegistrationRuntimeModule();
+        hasTrackedTabs = () => hasTrackedBrowserSessionTabs(sessionKey);
+        signal?.throwIfAborted();
+        const tool = createBrowserTool({
+          ...opts,
+          ...(ownerClaim !== undefined ? { ownerClaim } : {}),
+          sessionAccessAlreadyHeld: true,
+        });
+        return await tool.execute(toolCallId, args, signal, onUpdate);
+      } finally {
+        releaseSessionAccess();
+      }
     },
   };
 }
@@ -93,6 +119,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  runId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -113,6 +140,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
       ? { allowHostControl: ctx.browser.allowHostControl }
       : {}),
     ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
+    ...(ctx.runId ? { runId: ctx.runId } : {}),
     ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
     ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
     ...(ctx.activeModel?.provider || ctx.activeModel?.modelId

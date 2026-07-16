@@ -6,6 +6,7 @@
  */
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
 import { describeBrowserTool } from "./browser-tool-description.js";
+import * as browserToolSession from "./browser-tool-session.js";
 import {
   executeActAction,
   executeConsoleAction,
@@ -90,7 +91,6 @@ const browserToolDeps = {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 };
-
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
   const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
@@ -98,17 +98,12 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   });
   return { targetId, timeoutMs };
 }
-
 function readTargetUrlParam(params: Record<string, unknown>) {
   const targetUrl =
     readStringParam(params, "targetUrl") ??
     readStringParam(params, "url", { required: true, label: "targetUrl" });
   parseBrowserNavigationUrl(targetUrl);
   return targetUrl;
-}
-
-function formatScreenshotShareHint(filePath: string): string {
-  return `[Screenshot saved to ${JSON.stringify(filePath)}. Use this path with the message tool to share the screenshot explicitly.]`;
 }
 
 const SCREENSHOT_SHARE_UNAVAILABLE =
@@ -381,17 +376,14 @@ function usesExistingSessionManageFlow(params: { action: string; profileName?: s
   });
 }
 
-function readToolTimeoutMs(params: Record<string, unknown>) {
-  return readPositiveIntegerParam(params, "timeoutMs", {
-    message: "timeoutMs must be a positive integer.",
-  });
-}
-
 /** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  runId?: string;
+  ownerClaim?: number;
+  sessionAccessAlreadyHeld?: boolean;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -404,6 +396,12 @@ export function createBrowserTool(opts?: {
     chatType?: string;
   };
 }): AnyAgentTool {
+  const ownerClaim =
+    opts?.ownerClaim ??
+    browserToolSession.resolveBrowserSessionOwnerClaim({
+      sessionKey: opts?.agentSessionKey,
+      runId: opts?.runId,
+    });
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -412,12 +410,12 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: browserToolSession.withBrowserSessionAccess(opts ?? {}, async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
-      const requestedTimeoutMs = readToolTimeoutMs(params);
+      const requestedTimeoutMs = browserToolSession.readToolTimeoutMs(params);
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
       const configuredNode = browserToolDeps
         .getRuntimeConfig()
@@ -501,6 +499,7 @@ export function createBrowserTool(opts?: {
           targetId,
           baseUrl,
           profile,
+          ...browserToolSession.buildBrowserSessionTabOwner({ runId: opts?.runId, ownerClaim }),
         });
       };
 
@@ -649,6 +648,7 @@ export function createBrowserTool(opts?: {
             targetId: opened.targetId,
             baseUrl,
             profile,
+            ...browserToolSession.buildBrowserSessionTabOwner({ runId: opts?.runId, ownerClaim }),
           });
           return jsonResult(opened);
         }
@@ -711,6 +711,7 @@ export function createBrowserTool(opts?: {
               targetId,
               baseUrl,
               profile,
+              ...browserToolSession.buildBrowserSessionTabOwner({ runId: opts?.runId, ownerClaim }),
             });
           } else {
             await browserToolDeps.browserAct(
@@ -778,7 +779,7 @@ export function createBrowserTool(opts?: {
               screenshotPath,
               imageSanitization?.maxDimensionPx,
             );
-            shareHint = formatScreenshotShareHint(sharePath);
+            shareHint = browserToolSession.formatScreenshotShareHint(sharePath);
           } catch {
             // Screenshot viewing remains useful when optional outbound staging fails.
           }
@@ -888,13 +889,16 @@ export function createBrowserTool(opts?: {
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           return jsonResult(result);
         }
-        case "console":
-          return await executeConsoleAction({
+        case "console": {
+          const result = await executeConsoleAction({
             input: params,
             baseUrl,
             profile,
             proxyRequest,
           });
+          touchTrackedTab(browserToolSession.resolveConsoleTargetId(result, params.targetId));
+          return result;
+        }
         case "pdf": {
           const targetId = normalizeOptionalString(params.targetId);
           const result = proxyRequest
@@ -1010,7 +1014,7 @@ export function createBrowserTool(opts?: {
         default:
           throw new Error(`Unknown action: ${action}`);
       }
-    },
+    }),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

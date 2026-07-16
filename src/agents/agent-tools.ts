@@ -855,6 +855,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             requesterSenderId: options?.senderId,
             senderIsOwner: options?.senderIsOwner,
             sessionId: options?.sessionId,
+            runId: options?.runId,
             oneShotCliRun: options?.oneShotCliRun,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
@@ -1166,7 +1167,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     agentId,
   });
   options?.recordToolPrepStage?.("deferred-followup-descriptions");
-
   // NOTE: Keep canonical (lowercase) tool names here.
   // shared model runtime's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.

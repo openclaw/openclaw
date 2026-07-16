@@ -179,6 +179,8 @@ const pathValidationMocks = vi.hoisted(() => ({
 }));
 
 const sessionTabRegistryMocks = vi.hoisted(() => ({
+  acquireTrackedBrowserSessionAccess: vi.fn(async () => () => {}),
+  claimTrackedBrowserSessionOwner: vi.fn(() => undefined),
   touchSessionBrowserTab: vi.fn(),
   trackSessionBrowserTab: vi.fn(),
   untrackSessionBrowserTab: vi.fn(),
@@ -301,6 +303,7 @@ vi.mock("./browser-tool.runtime.js", () => {
   };
 });
 
+import { setBrowserToolSessionDepsForTest } from "./browser-tool-session.js";
 import { createBrowserTool } from "./browser-tool.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 
@@ -342,6 +345,12 @@ function resetBrowserToolMocks() {
     ok: true,
     running: true,
     source: "gateway-host",
+  });
+  setBrowserToolSessionDepsForTest({
+    acquireTrackedBrowserSessionAccess:
+      sessionTabRegistryMocks.acquireTrackedBrowserSessionAccess as never,
+    claimTrackedBrowserSessionOwner:
+      sessionTabRegistryMocks.claimTrackedBrowserSessionOwner as never,
   });
 }
 
@@ -1736,15 +1745,47 @@ describe("browser tool url alias support", () => {
       title: "Example",
       url: "https://example.com",
     });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main", runId: "run-open" });
     await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
 
+    expect(sessionTabRegistryMocks.claimTrackedBrowserSessionOwner).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      ownerId: "run-open",
+    });
     expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       targetId: "tab-123",
       baseUrl: undefined,
       profile: undefined,
+      ownerId: "run-open",
     });
+  });
+
+  it("holds browser access across the full request for successor coordination", async () => {
+    let releaseAccess: (() => void) | undefined;
+    const acquireAccess = vi.fn(
+      () =>
+        new Promise<() => void>((resolve) => {
+          releaseAccess = () => resolve(() => {});
+        }),
+    );
+    setBrowserToolSessionDepsForTest({
+      acquireTrackedBrowserSessionAccess: acquireAccess,
+    });
+
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:subagent:child" });
+    const request = tool.execute?.("call-1", { action: "status" });
+
+    await vi.waitFor(() =>
+      expect(acquireAccess).toHaveBeenCalledWith({
+        sessionKey: "agent:main:subagent:child",
+      }),
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+
+    releaseAccess?.();
+    await request;
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledOnce();
   });
 
   it("touches tracked tabs for direct tab activity", async () => {
@@ -1755,7 +1796,7 @@ describe("browser tool url alias support", () => {
       url: "https://example.com",
       snapshot: "ok",
     });
-    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main", runId: "run-touch" });
     await tool.execute?.("call-1", {
       action: "snapshot",
       targetId: "tab-live",
@@ -1766,6 +1807,7 @@ describe("browser tool url alias support", () => {
       targetId: "tab-live",
       baseUrl: undefined,
       profile: undefined,
+      ownerId: "run-touch",
     });
   });
 

@@ -240,6 +240,13 @@ Tool factories receive trusted runtime context, including `deliveryContext`,
 `nativeChannelId` for the active platform conversation when available, and
 `requesterSenderId`.
 
+When available, `ctx.runId` is a host-issued opaque identifier for the active
+agent run. It is stable for that run and may be used to key ephemeral
+plugin-owned resources and their cleanup. Treat it as an uninterpreted value:
+do not parse it, expose it to users, persist it as application data, or use it
+as an authentication or authorization boundary. It may be absent outside an
+active agent run.
+
 ```typescript
 register(api) {
   api.registerTool(

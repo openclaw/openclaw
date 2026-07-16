@@ -24,6 +24,7 @@ const runtimeApiMocks = vi.hoisted(() => ({
   })),
   collectBrowserSecurityAuditFindings: vi.fn(() => []),
   handleBrowserGatewayRequest: vi.fn(),
+  hasTrackedBrowserSessionTabs: vi.fn(() => false),
   registerBrowserCli: vi.fn(),
   runBrowserProxyCommand: vi.fn(async () => "ok"),
   stopBrowserControlService: vi.fn(async () => undefined),
@@ -38,6 +39,7 @@ vi.mock("./register.runtime.js", async () => {
     createBrowserPluginService: runtimeApiMocks.createBrowserPluginService,
     createBrowserTool: runtimeApiMocks.createBrowserTool,
     handleBrowserGatewayRequest: runtimeApiMocks.handleBrowserGatewayRequest,
+    hasTrackedBrowserSessionTabs: runtimeApiMocks.hasTrackedBrowserSessionTabs,
     runBrowserProxyCommand: runtimeApiMocks.runBrowserProxyCommand,
   };
 });
@@ -172,6 +174,7 @@ describe("browser plugin", () => {
 
     const tool = factory({
       sessionKey: "agent:main:webchat:direct:123",
+      runId: "run-browser-1",
       browser: {
         sandboxBridgeUrl: "http://127.0.0.1:9999",
         allowHostControl: true,
@@ -190,10 +193,13 @@ describe("browser plugin", () => {
       sandboxBridgeUrl: "http://127.0.0.1:9999",
       allowHostControl: true,
       agentSessionKey: "agent:main:webchat:direct:123",
+      runId: "run-browser-1",
+      ownerClaim: expect.any(Number),
       mediaScope: {
         sessionKey: "agent:main:webchat:direct:123",
         chatType: "direct",
       },
+      sessionAccessAlreadyHeld: true,
     });
   });
 
@@ -228,6 +234,7 @@ describe("browser plugin", () => {
         channel: "telegram",
         chatType: "direct",
       },
+      sessionAccessAlreadyHeld: true,
     });
   });
 
@@ -256,6 +263,7 @@ describe("browser plugin", () => {
         channel: "telegram",
         chatType: "group",
       },
+      sessionAccessAlreadyHeld: true,
     });
   });
 
