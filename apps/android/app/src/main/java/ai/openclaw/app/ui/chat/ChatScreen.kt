@@ -321,7 +321,8 @@ fun ChatScreen(
     viewModel.clearChatDraft()
   }
 
-  LaunchedEffect(chatShareDraft?.id, lifecycleState) {
+  // An owner change cancels stale staging and retries the same queue head for the new composer.
+  LaunchedEffect(chatShareDraft?.id, lifecycleState, composerOwner) {
     if (!lifecycleState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
     val share = chatShareDraft ?: return@LaunchedEffect
     val ownerSnapshot = composerOwner
