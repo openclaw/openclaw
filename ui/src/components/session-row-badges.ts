@@ -5,7 +5,7 @@ import { icons } from "./icons.ts";
 
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
-export function isCloudWorkerPlacementState(
+function isCloudWorkerPlacementState(
   state: SessionPlacementState | undefined,
 ): state is Exclude<SessionPlacementState, "local" | "reclaimed"> {
   return state !== undefined && state !== "local" && state !== "reclaimed";
