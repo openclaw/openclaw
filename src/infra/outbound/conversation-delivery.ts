@@ -1,4 +1,5 @@
 /** Durable external-conversation delivery independent from local model sessions. */
+import crypto from "node:crypto";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import {
@@ -51,6 +52,17 @@ export class ConversationDeliveryRejectedError extends Error {
     super(message);
     this.name = "ConversationDeliveryRejectedError";
   }
+}
+
+function buildConversationDeliveryIntentId(agentId: string, operationId: string): string {
+  // Operation ids are agent-scoped, while the delivery queue is process-global.
+  // Bind both owners so equal tool-call ids cannot suppress another agent's send.
+  const digest = crypto
+    .createHash("sha256")
+    .update(JSON.stringify([agentId, operationId]))
+    .digest("hex")
+    .slice(0, 32);
+  return `convq_${digest}`;
 }
 
 export function resolveConversationDeliveryStoreScope(
@@ -178,7 +190,10 @@ export async function sendGatewayConversationMessage(params: {
       forceCoreDelivery: true,
       gatewayOwnedDelivery: true,
       requireQueuePersistence: true,
-      deliveryIntentId: begun.record.operationId,
+      deliveryIntentId: buildConversationDeliveryIntentId(
+        params.context.agentId,
+        begun.record.operationId,
+      ),
       deliveryCompletion: {
         kind: "conversation",
         agentId: scope.agentId,

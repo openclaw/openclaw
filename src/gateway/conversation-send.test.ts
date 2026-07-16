@@ -185,6 +185,40 @@ describe("runGatewayConversationSend", () => {
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
+  it("namespaces stable queue intents across agents", async () => {
+    const mainDeps = createDeps();
+    const workerDeps = createDeps();
+
+    await runGatewayConversationSend(
+      {
+        config: {},
+        agentId: "main",
+        senderIsOwner: true,
+        operationId: "shared-operation",
+        conversationRef: conversation.conversationRef,
+        message: "hello molty",
+      },
+      mainDeps,
+    );
+    await runGatewayConversationSend(
+      {
+        config: {},
+        agentId: "worker",
+        senderIsOwner: true,
+        operationId: "shared-operation",
+        conversationRef: conversation.conversationRef,
+        message: "hello molty",
+      },
+      workerDeps,
+    );
+
+    const mainIntent = mainDeps.runMessageAction.mock.calls[0]?.[0]?.deliveryIntentId;
+    const workerIntent = workerDeps.runMessageAction.mock.calls[0]?.[0]?.deliveryIntentId;
+    expect(mainIntent).toMatch(/^convq_[a-f0-9]{32}$/u);
+    expect(workerIntent).toMatch(/^convq_[a-f0-9]{32}$/u);
+    expect(mainIntent).not.toBe(workerIntent);
+  });
+
   it("maps unknown conversations to terminal input errors", async () => {
     const deps = createDeps();
     deps.resolveConversation.mockReturnValueOnce(undefined);
