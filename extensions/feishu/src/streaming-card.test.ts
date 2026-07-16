@@ -467,6 +467,44 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
+  it("sanitizes card tables over the Feishu limit at the CardKit write boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const updateBodies: string[] = [];
+    const deps = mockFetches(updateBodies);
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_table_limit",
+        appSecret: "secret",
+      },
+      undefined,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_1",
+        messageId: "om_1",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 1_000,
+    });
+
+    const table = (value: string) => `| ${value} | col |\n| --- | --- |\n| ${value} | x |`;
+    const text = [table("a"), table("b"), table("c"), table("d")].join("\n\n");
+    await session.update(text);
+    await vi.advanceTimersByTimeAsync(160);
+
+    expect(updateBodies).toHaveLength(1);
+    expect(JSON.parse(updateBodies[0] ?? "{}")).toMatchObject({
+      content: [table("a"), table("b"), table("c"), `\`\`\`\n${table("d")}\n\`\`\``].join("\n\n"),
+    });
+  });
+
   it("retries the same throttled snapshot after a CardKit body error", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_500);

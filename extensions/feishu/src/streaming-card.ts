@@ -14,6 +14,7 @@ import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
+import { sanitizeFeishuCardMarkdownTables } from "./markdown.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
 import type { FeishuDomain } from "./types.js";
@@ -424,7 +425,9 @@ export class FeishuStreamingSession {
             "User-Agent": getFeishuUserAgent(),
           },
           body: JSON.stringify({
-            content: text,
+            // Sanitize at the write boundary only; sentText/currentText keep
+            // raw text so update-vs-replace prefix checks stay consistent.
+            content: sanitizeFeishuCardMarkdownTables(text),
             sequence: this.state.sequence,
             uuid: `s_${this.state.cardId}_${this.state.sequence}`,
           }),
@@ -474,7 +477,11 @@ export class FeishuStreamingSession {
             "User-Agent": getFeishuUserAgent(),
           },
           body: JSON.stringify({
-            element: JSON.stringify({ tag: "markdown", content: text, element_id: "content" }),
+            element: JSON.stringify({
+              tag: "markdown",
+              content: sanitizeFeishuCardMarkdownTables(text),
+              element_id: "content",
+            }),
             sequence: this.state.sequence,
             uuid: `r_${this.state.cardId}_${this.state.sequence}`,
           }),

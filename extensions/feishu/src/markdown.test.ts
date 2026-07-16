@@ -4,7 +4,81 @@ import {
   chunkFeishuMarkdown,
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
+  sanitizeFeishuCardMarkdownTables,
 } from "./markdown.js";
+
+function markdownTable(header: string, value: string): string {
+  return `| ${header} | col |\n| --- | --- |\n| ${value} | x |`;
+}
+
+describe("sanitizeFeishuCardMarkdownTables", () => {
+  it("keeps text with up to three tables byte-identical", () => {
+    const input = [
+      "Intro",
+      markdownTable("a", "1"),
+      markdownTable("b", "2"),
+      markdownTable("c", "3"),
+      "Outro",
+    ].join("\n\n");
+    expect(sanitizeFeishuCardMarkdownTables(input)).toBe(input);
+  });
+
+  it("fences the fourth and later tables so the card stays under the Feishu table limit", () => {
+    const input = [
+      markdownTable("a", "1"),
+      markdownTable("b", "2"),
+      markdownTable("c", "3"),
+      markdownTable("d", "4"),
+      "between",
+      markdownTable("e", "5"),
+    ].join("\n\n");
+    expect(sanitizeFeishuCardMarkdownTables(input)).toBe(
+      [
+        markdownTable("a", "1"),
+        markdownTable("b", "2"),
+        markdownTable("c", "3"),
+        `\`\`\`\n${markdownTable("d", "4")}\n\`\`\``,
+        "between",
+        `\`\`\`\n${markdownTable("e", "5")}\n\`\`\``,
+      ].join("\n\n"),
+    );
+  });
+
+  it("does not count tables already inside code fences toward the limit", () => {
+    const fenced = `\`\`\`\n${markdownTable("z", "0")}\n\`\`\``;
+    const input = [
+      fenced,
+      markdownTable("a", "1"),
+      markdownTable("b", "2"),
+      markdownTable("c", "3"),
+    ].join("\n\n");
+    expect(sanitizeFeishuCardMarkdownTables(input)).toBe(input);
+  });
+
+  it("counts nested tables toward the limit and lets top-level tables absorb the overflow", () => {
+    const nestedTable = (value: string) =>
+      `- item\n\n  | ${value} | col |\n  | --- | --- |\n  | ${value} | x |`;
+    const input = [
+      nestedTable("n1"),
+      nestedTable("n2"),
+      markdownTable("a", "1"),
+      markdownTable("b", "2"),
+    ].join("\n\n");
+    expect(sanitizeFeishuCardMarkdownTables(input)).toBe(
+      [
+        nestedTable("n1"),
+        nestedTable("n2"),
+        markdownTable("a", "1"),
+        `\`\`\`\n${markdownTable("b", "2")}\n\`\`\``,
+      ].join("\n\n"),
+    );
+  });
+
+  it("ignores plain pipes and table-free text", () => {
+    expect(sanitizeFeishuCardMarkdownTables("a | b | c")).toBe("a | b | c");
+    expect(sanitizeFeishuCardMarkdownTables("no tables here")).toBe("no tables here");
+  });
+});
 
 describe("materializeFeishuPostMarkdownSoftBreaks", () => {
   it.each([

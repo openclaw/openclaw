@@ -14,6 +14,7 @@ import {
   assertFeishuPostWithinEnvelope,
   buildFeishuPostMessageContent,
   materializeFeishuPostMarkdownSoftBreaks,
+  sanitizeFeishuCardMarkdownTables,
 } from "./markdown.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -677,7 +678,7 @@ function buildMarkdownCard(text: string): Record<string, unknown> {
       elements: [
         {
           tag: "markdown",
-          content: text,
+          content: sanitizeFeishuCardMarkdownTables(text),
         },
       ],
     },
@@ -703,7 +704,9 @@ function buildStructuredCard(
     note?: string;
   },
 ): Record<string, unknown> {
-  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
+  const elements: Record<string, unknown>[] = [
+    { tag: "markdown", content: sanitizeFeishuCardMarkdownTables(text) },
+  ];
   if (options?.note) {
     elements.push({ tag: "hr" });
     elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });

@@ -325,6 +325,44 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it.each([
+    {
+      name: "markdown",
+      send: (text: string) =>
+        sendMarkdownCardFeishu({ cfg: {} as ClawdbotConfig, to: "oc_card", text }),
+    },
+    {
+      name: "structured",
+      send: (text: string) =>
+        sendStructuredCardFeishu({ cfg: {} as ClawdbotConfig, to: "oc_card", text }),
+    },
+  ])("fences card tables over the Feishu limit in $name cards", async ({ send }) => {
+    const table = (value: string) => `| ${value} | col |\n| --- | --- |\n| ${value} | x |`;
+    const text = [table("a"), table("b"), table("c"), table("d")].join("\n\n");
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await send(text);
+
+    const request = create.mock.calls[0]?.[0] as { data?: { content?: string } } | undefined;
+    const card = JSON.parse(request?.data?.content ?? "null") as {
+      body?: { elements?: Array<{ content?: string }> };
+    };
+    expect(card.body?.elements?.[0]?.content).toBe(
+      [table("a"), table("b"), table("c"), `\`\`\`\n${table("d")}\n\`\`\``].join("\n\n"),
+    );
+  });
+
   it("extracts text content from interactive card elements", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
