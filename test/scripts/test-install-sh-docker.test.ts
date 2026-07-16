@@ -1025,7 +1025,9 @@ printf 'status=%s\\n' "$status"
     expect(wrapper).toContain('-v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro"');
     expect(runner).toContain("Run official installer one-liner for latest release tarball");
     expect(runner).toContain("run_installer_for_package_spec");
-    expect(runner).toContain('bash -c "curl -fsSL \\"\\$1\\" | bash -s --');
+    expect(runner).toContain(
+      'bash -c "curl -fsSL --connect-timeout 10 --max-time 120 \\"\\$1\\" | bash -s --',
+    );
     expect(runner).not.toContain('npm_install_global "install latest release tarball"');
   });
 
