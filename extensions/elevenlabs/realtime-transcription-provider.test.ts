@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
@@ -159,5 +159,14 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(requests[0]?.searchParams.get("audio_format")).toBe("ulaw_8000");
     expect(requests[0]?.searchParams.get("commit_strategy")).toBe("vad");
     expect(requests[0]?.searchParams.get("language_code")).toBe("en");
+  });
+
+  describe("blank environment API key", () => {
+    it("treats a whitespace-only XI_API_KEY as not configured", () => {
+      vi.stubEnv("ELEVENLABS_API_KEY", "");
+      vi.stubEnv("XI_API_KEY", "   ");
+      const provider = buildElevenLabsRealtimeTranscriptionProvider();
+      expect(provider.isConfigured({ cfg: {} as OpenClawConfig, providerConfig: {} })).toBe(false);
+    });
   });
 });
