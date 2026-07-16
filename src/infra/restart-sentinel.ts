@@ -21,13 +21,13 @@ import {
 
 const sentinelLog = createSubsystemLogger("restart-sentinel");
 
-export type RestartSentinelLog = {
+type RestartSentinelLog = {
   stdoutTail?: string | null;
   stderrTail?: string | null;
   exitCode?: number | null;
 };
 
-export type RestartSentinelStep = {
+type RestartSentinelStep = {
   name: string;
   command: string;
   cwd?: string | null;
@@ -35,7 +35,7 @@ export type RestartSentinelStep = {
   log?: RestartSentinelLog | null;
 };
 
-export type RestartSentinelStats = {
+type RestartSentinelStats = {
   mode?: string;
   root?: string;
   requiresRestart?: boolean;
@@ -76,7 +76,7 @@ export type RestartSentinelPayload = {
   stats?: RestartSentinelStats | null;
 };
 
-export type RestartSentinel = {
+type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
 };
@@ -244,7 +244,11 @@ function resolveLegacyRestartSentinelPath(env: NodeJS.ProcessEnv): string {
 async function removeLegacyRestartSentinel(env: NodeJS.ProcessEnv): Promise<void> {
   try {
     await rm(resolveLegacyRestartSentinelPath(env), { force: true });
-  } catch {}
+  } catch (err) {
+    // Legacy cleanup must not block the canonical SQLite operation, but a
+    // failed removal can replay stale restart state after the database clears.
+    sentinelLog.warn(`Failed to remove legacy restart sentinel: ${formatErrorMessage(err)}`);
+  }
 }
 
 async function importLegacyRestartSentinel(

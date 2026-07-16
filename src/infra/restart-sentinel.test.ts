@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 // Covers restart sentinel persistence, summaries, and messages.
 
 const { mockWarn, mockThrowOpen, mockThrowWrite } = vi.hoisted(() => ({
@@ -497,12 +497,6 @@ describe("restart sentinel", () => {
 });
 
 describe("restart sentinel error visibility", () => {
-  afterEach(() => {
-    mockWarn.mockClear();
-    mockThrowOpen.mockReset();
-    mockThrowWrite.mockReset();
-  });
-
   it("logs a warning when clearRestartSentinel DB write fails", async () => {
     mockThrowWrite.mockImplementationOnce(() => {
       throw new Error("SQLITE_IOERR: disk I/O error");
@@ -513,7 +507,7 @@ describe("restart sentinel error visibility", () => {
 
       expect(mockWarn).toHaveBeenCalledTimes(1);
       expect(mockWarn).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to clear restart sentinel"),
+        "Failed to clear restart sentinel: SQLITE_IOERR: disk I/O error",
       );
     });
   });
@@ -528,7 +522,7 @@ describe("restart sentinel error visibility", () => {
 
       expect(mockWarn).toHaveBeenCalledTimes(1);
       expect(mockWarn).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to read restart sentinel"),
+        "Failed to read restart sentinel: SQLITE_CORRUPT: database disk image is malformed",
       );
     });
   });
@@ -543,7 +537,21 @@ describe("restart sentinel error visibility", () => {
 
       expect(mockWarn).toHaveBeenCalledTimes(1);
       expect(mockWarn).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to check restart sentinel"),
+        "Failed to check restart sentinel: SQLITE_BUSY: database is locked",
+      );
+    });
+  });
+
+  it("logs a warning when the legacy sentinel path cannot be removed", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "restart-sentinel.json");
+      await fs.mkdir(legacyPath);
+
+      await expect(clearRestartSentinel()).resolves.toBeUndefined();
+
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.stringMatching(/^Failed to remove legacy restart sentinel: .+/),
       );
     });
   });
