@@ -261,12 +261,12 @@ raw values into the command string:
 - `LOBSTER_ARGS_JSON` - every resolved arg as a single JSON string.
 
 That is the complete injected set. There are **no** per-step output variables
-such as `LOBSTER_STEP_<id>_STDOUT` or `LOBSTER_STEP_<id>_JSON_<field>`; those
-names do not exist and a shell reading them silently falls through to your
-default, misrouting logic. Read a prior step's output through the step-ref
-templates instead - `$step.stdout`, `$step.json`, or `$step.json.<field>` - in a
-`stdin:`, `env:`, or `condition:` value. (`LOBSTER_STATE_DIR` is a separate
-runtime setting for the state directory, not a per-run arg.)
+such as `LOBSTER_STEP_<id>_STDOUT` or `LOBSTER_STEP_<id>_JSON_<field>`; shells
+treat those names as unset, so parameter-expansion defaults can hide the error.
+Read a prior step's output through step references instead - `$step.stdout`,
+`$step.json`, or `$step.json.<field>` - in a `stdin:`, `env:`, or `condition:`
+value. (`LOBSTER_STATE_DIR` is a separate runtime setting for the state
+directory, not a per-run arg.)
 
 ## Tool parameters
 
