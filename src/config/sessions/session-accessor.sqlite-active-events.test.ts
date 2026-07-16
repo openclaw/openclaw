@@ -7,7 +7,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageAnchorPage,
@@ -98,6 +98,49 @@ describe("SQLite active transcript event projection", () => {
       { active_position: 0, event_seq: 1, message_position: 0 },
       { active_position: 1, event_seq: 3, message_position: 1 },
     ]);
+  });
+
+  it("reconciles a legacy flat append after a canonical tree", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "canonical-root",
+          parentId: null,
+          message: { role: "user", content: "canonical" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+
+    await appendTranscriptEvent(scope, {
+      id: "legacy-child",
+      parentId: "canonical-root",
+      message: { role: "assistant", content: "legacy" },
+    });
+
+    expect(
+      database.db
+        .prepare(
+          "SELECT needs_rebuild, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+        )
+        .get(scope.sessionId),
+    ).toEqual({ active_message_count: 1, needs_rebuild: 1 });
+
+    const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
+
+    expect(page.totalMessages).toBe(1);
+    expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "canonical-root",
+    ]);
+    expect(readSessionTranscriptMessageEventById(scope, "legacy-child")).toBeUndefined();
+    expect(
+      database.db
+        .prepare(
+          "SELECT needs_rebuild, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+        )
+        .get(scope.sessionId),
+    ).toEqual({ active_message_count: 1, needs_rebuild: 0 });
   });
 
   it("keeps projection state and rows on one snapshot during a concurrent append", async () => {

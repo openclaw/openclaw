@@ -317,17 +317,24 @@ export function indexAppendedTranscriptEventInTransaction(
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
     return;
   }
-  if (
-    isCanonicalSessionTranscriptEntry(params.event) &&
-    watermark.leafEventId === null &&
-    watermark.activeEventCount > 0
-  ) {
+  const isCanonicalEvent = isCanonicalSessionTranscriptEntry(params.event);
+  if (isCanonicalEvent && watermark.leafEventId === null && watermark.activeEventCount > 0) {
     // A canonical tree supersedes legacy flat message rows. Re-resolve once
     // instead of retaining rows that are no longer on the selected path.
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
     return;
   }
   const treeEntry = parseSessionTranscriptTreeEntry(params.event);
+  if (
+    !isCanonicalEvent &&
+    watermark.leafEventId !== null &&
+    shouldProjectActiveEvent(params.event)
+  ) {
+    // A noncanonical row after a tracked tree cursor may be a flat fallback or
+    // an opaque append ancestor. Only the full resolver can decide visibility.
+    markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
+    return;
+  }
   if (treeEntry && treeEntry.parentId !== watermark.leafEventId) {
     markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
     return;
