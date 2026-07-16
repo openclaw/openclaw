@@ -2166,7 +2166,12 @@ describe("grouped chat rendering", () => {
           const signal = init?.signal;
           signal?.addEventListener(
             "abort",
-            () => reject(signal.reason ?? new DOMException("aborted", "AbortError")),
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new DOMException("aborted", "AbortError"),
+              ),
             { once: true },
           );
         }),
