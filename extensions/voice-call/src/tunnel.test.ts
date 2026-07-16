@@ -1,10 +1,13 @@
 // Voice Call tests cover tunnel plugin behavior.
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 class FakeChildProcess extends EventEmitter {
-  readonly stdout = new EventEmitter();
-  readonly stderr = new EventEmitter();
+  // PassThrough honors setEncoding("utf8") like real child pipes, so split
+  // multibyte writes exercise the same decoder path as production ngrok.
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
   killedWith: NodeJS.Signals | null = null;
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
@@ -84,7 +87,13 @@ function nextProcess(): FakeChildProcess {
 }
 
 function emitNgrokUrl(proc: FakeChildProcess, url: string): void {
-  proc.stdout.emit("data", Buffer.from(`${JSON.stringify({ msg: "started tunnel", url })}\n`));
+  proc.stdout.write(`${JSON.stringify({ msg: "started tunnel", url })}\n`);
+}
+
+function writeUtf8Chunks(stream: PassThrough, text: string, firstBytes: number): void {
+  const bytes = Buffer.from(text, "utf8");
+  stream.write(bytes.subarray(0, firstBytes));
+  stream.write(bytes.subarray(firstBytes));
 }
 
 function commandResult(overrides: Record<string, unknown> = {}) {
@@ -129,11 +138,8 @@ describe("voice-call tunnels", () => {
     const proc = nextProcess();
     const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
 
-    proc.stdout.emit(
-      "data",
-      Buffer.from(
-        `${JSON.stringify({ msg: "started tunnel", url: "https://large.ngrok.io" })}\n${"x".repeat(20_000)}`,
-      ),
+    proc.stdout.write(
+      `${JSON.stringify({ msg: "started tunnel", url: "https://large.ngrok.io" })}\n${"x".repeat(20_000)}`,
     );
 
     const settled = await Promise.race([
@@ -190,7 +196,7 @@ describe("voice-call tunnels", () => {
     const proc = nextProcess();
     const result = startNgrokTunnel({ port: 3334, path: "/hook" });
 
-    proc.stderr.emit("data", Buffer.from("ERR_NGROK_3200: invalid auth token"));
+    proc.stderr.write("ERR_NGROK_3200: invalid auth token");
 
     await expect(result).rejects.toThrow("ngrok error: ERR_NGROK_3200: invalid auth token");
   });
@@ -203,10 +209,42 @@ describe("voice-call tunnels", () => {
     // A raw marker-length tail starts on the low surrogate. Production must
     // discard that dangling half while retaining the split marker prefix.
     expect(firstChunk.slice(-8).charCodeAt(0)).toBe(0xdd16);
-    proc.stderr.emit("data", Buffer.from(firstChunk));
-    proc.stderr.emit("data", Buffer.from("ROK_108: invalid tunnel config"));
+    proc.stderr.write(firstChunk);
+    proc.stderr.write("ROK_108: invalid tunnel config");
 
     await expect(result).rejects.toThrow("ngrok error: xERR_NGROK_108: invalid tunnel config");
+  });
+
+  it("preserves UTF-8 split across ngrok stderr chunks in ERR_NGROK text", async () => {
+    const proc = nextProcess();
+    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+    // Marker must not appear in the first decoded string, or startup rejects
+    // before the held UTF-8 continuation bytes arrive.
+    const message = "bad 😀 ERR_NGROK_3200: invalid token";
+    const bytes = Buffer.from(message, "utf8");
+    const splitAt = bytes.indexOf(Buffer.from("😀", "utf8")) + 2;
+
+    expect(bytes[splitAt - 2]).toBe(0xf0);
+    writeUtf8Chunks(proc.stderr, message, splitAt);
+
+    await expect(result).rejects.toThrow(`ngrok error: ${message}`);
+  });
+
+  it("preserves UTF-8 split across ngrok stdout log chunks", async () => {
+    const proc = nextProcess();
+    const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
+    // Keep URL ASCII; embed a real multibyte code point so the chunk cut is
+    // inside UTF-8 (JSON.stringify would escape emoji to \\u sequences).
+    const line = '{"msg":"started tunnel","url":"https://utf8.ngrok.io","info":"😀"}\n';
+    const bytes = Buffer.from(line, "utf8");
+    const splitAt = bytes.indexOf(Buffer.from("😀", "utf8")) + 2;
+
+    expect(bytes[splitAt - 2]).toBe(0xf0);
+    expect(bytes[splitAt]).toBe(0x98);
+    writeUtf8Chunks(proc.stdout, line, splitAt);
+
+    const tunnel = await result;
+    expect(tunnel.publicUrl).toBe("https://utf8.ngrok.io/voice/webhook");
   });
 
   it("starts Tailscale serve using the resolved tailnet DNS name", async () => {
