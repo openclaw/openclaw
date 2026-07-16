@@ -962,6 +962,36 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("completes shutdown under a long durable debounce without waiting for the window", async () => {
+    // Durable pump tasks await claim flush waiters; close must force-flush
+    // debounced batches before waiting on those pumps (socket-close timeout).
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 60_000,
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-shutdown-durable"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "held in debounce",
+        timestamp: 1_700_000_100,
+        pushName: "Tester",
+      }),
+    );
+    // Let accept+pump reach the flush waiter without exhausting the debounce window.
+    await settleInboundWork();
+
+    const closeStarted = Date.now();
+    await listener.close();
+    const closeElapsedMs = Date.now() - closeStarted;
+
+    expect(closeElapsedMs).toBeLessThan(5_000);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(inboundMessage(onMessage).payload.body).toBe("held in debounce");
+    expect(sock.end).toHaveBeenCalledTimes(1);
+  });
+
   it("lets a drained debounced inbound reply before closing the socket", async () => {
     vi.useFakeTimers();
     try {

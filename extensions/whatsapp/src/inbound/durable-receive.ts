@@ -1,7 +1,13 @@
 // Whatsapp plugin module implements durable receive behavior.
 import { createHash } from "node:crypto";
 import type { WAMessage } from "baileys";
-import { createDurableInboundReceiveJournalFromQueue } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelIngressDrain,
+  createDurableInboundReceiveJournalFromQueue,
+  type ChannelIngressDrain,
+  type ChannelIngressQueue,
+  type ChannelIngressQueueClaim,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { getWhatsAppRuntime } from "../runtime.js";
 import { BufferJSON } from "../session.runtime.js";
@@ -29,7 +35,7 @@ export type WhatsAppDurableInboundMetadata = {
   readReceipt?: WhatsAppReadReceiptTarget;
 };
 
-type WhatsAppDurableInboundCompletedMetadata = {
+export type WhatsAppDurableInboundCompletedMetadata = {
   readReceipt?: WhatsAppReadReceiptTarget;
 };
 
@@ -56,7 +62,25 @@ export function deserializeWhatsAppDurableInboundMessage(
   return JSON.parse(JSON.stringify(message), BufferJSON.reviver) as WAMessage;
 }
 
-export function createWhatsAppDurableInboundReceiveJournal(accountId: string) {
+export type WhatsAppDurableInboundStores = {
+  journal: ReturnType<
+    typeof createDurableInboundReceiveJournalFromQueue<
+      WhatsAppDurableInboundPayload,
+      WhatsAppDurableInboundMetadata,
+      WhatsAppDurableInboundCompletedMetadata
+    >
+  >;
+  queue: ChannelIngressQueue<
+    WhatsAppDurableInboundPayload,
+    WhatsAppDurableInboundMetadata,
+    WhatsAppDurableInboundCompletedMetadata
+  >;
+};
+
+/** Journal for accept-side dedupe + the queue the core drain claims against. */
+export function createWhatsAppDurableInboundStores(
+  accountId: string,
+): WhatsAppDurableInboundStores {
   const accountPart = hashNamespacePart(accountId);
   const runtime = getWhatsAppRuntime();
   const queue = runtime.state.openChannelIngressQueue<
@@ -67,7 +91,7 @@ export function createWhatsAppDurableInboundReceiveJournal(accountId: string) {
     accountId: accountPart,
     stateDir: runtime.state.resolveStateDir(),
   });
-  return createDurableInboundReceiveJournalFromQueue({
+  const journal = createDurableInboundReceiveJournalFromQueue({
     queue,
     retention: {
       pendingTtlMs: WHATSAPP_DURABLE_INBOUND_PENDING_TTL_MS,
@@ -76,6 +100,40 @@ export function createWhatsAppDurableInboundReceiveJournal(accountId: string) {
       pendingMaxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
       completedMaxEntries: WHATSAPP_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES,
       failedMaxEntries: WHATSAPP_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
+    },
+  });
+  return { journal, queue };
+}
+
+export type WhatsAppDurableClaim = ChannelIngressQueueClaim<
+  WhatsAppDurableInboundPayload,
+  WhatsAppDurableInboundMetadata
+>;
+
+/**
+ * Core drain over the WhatsApp inbound queue.
+ * Completes on dispatch return (full processing), not lifecycle.onAdopted —
+ * matches prior finalize-after-flush tombstone timing.
+ */
+export function createWhatsAppIngressDrain(params: {
+  queue: WhatsAppDurableInboundStores["queue"];
+  processClaimed: (claim: WhatsAppDurableClaim) => Promise<void>;
+  onLog?: (message: string) => void;
+  abortSignal?: AbortSignal;
+}): ChannelIngressDrain {
+  return createChannelIngressDrain({
+    queue: params.queue,
+    ...(params.onLog ? { onLog: params.onLog } : {}),
+    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    // No supersede: WhatsApp never had pre-adoption supersede semantics.
+    dispatchClaimedEvent: async (event) => {
+      try {
+        await params.processClaimed(event);
+        // Tombstone after full processing returns (not turn adoption).
+        return { kind: "completed" as const };
+      } catch (error) {
+        return { kind: "failed-retryable" as const, error };
+      }
     },
   });
 }

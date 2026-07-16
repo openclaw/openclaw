@@ -65,7 +65,8 @@ import {
 } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
-  createWhatsAppDurableInboundReceiveJournal,
+  createWhatsAppDurableInboundStores,
+  createWhatsAppIngressDrain,
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
   type WhatsAppDurableInboundMetadata,
@@ -458,11 +459,88 @@ export async function attachWebInboxToSocket(
     receiveOrder?: number;
   };
   type QueuedInboundMessage = AdmittedWebInboundCallbackMessage & QueuedInboundMessageMetadata;
-  const durableInboundJournal = createWhatsAppDurableInboundReceiveJournal(options.accountId);
+  const { journal: durableInboundJournal, queue: durableInboundQueue } =
+    createWhatsAppDurableInboundStores(options.accountId);
+  // Drain-owned claims: finalize skips journal complete/release; drain tombstones on return.
+  const drainOwnedDurableIds = new Set<string>();
+  // Per-claim flush waiters so processClaimed sees retryable flush failures the
+  // debouncer would otherwise swallow (onFlush catch + non-throwing chain).
+  type ClaimFlushWaiter = {
+    promise: Promise<void>;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+    settled: boolean;
+  };
+  const claimFlushWaiters = new Map<string, ClaimFlushWaiter>();
+  /** Set when enqueue schedules a flush that must settle the claim waiter. */
+  const claimIdsEnqueuedForFlush = new Set<string>();
+  const ensureClaimFlushWaiter = (durableId: string): ClaimFlushWaiter => {
+    const existing = claimFlushWaiters.get(durableId);
+    if (existing) {
+      return existing;
+    }
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    // Prevent unhandled rejection until processClaimed awaits.
+    void promise.catch(() => undefined);
+    const waiter: ClaimFlushWaiter = { promise, resolve, reject, settled: false };
+    claimFlushWaiters.set(durableId, waiter);
+    return waiter;
+  };
+  const settleClaimFlushWaiters = (entries: QueuedInboundMessage[], error?: unknown) => {
+    for (const entry of entries) {
+      if (!isNonEmptyString(entry.durableId)) {
+        continue;
+      }
+      const waiter = claimFlushWaiters.get(entry.durableId);
+      if (!waiter || waiter.settled) {
+        continue;
+      }
+      waiter.settled = true;
+      if (error !== undefined) {
+        waiter.reject(error);
+      } else {
+        waiter.resolve();
+      }
+    }
+  };
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
   const pendingMessageHandlers = new Set<Promise<void>>();
+  // Close-path coordination: resolve waiters when debounce work appears so
+  // shutdown can force-flush without timer-driven polling (fake-timer safe).
+  const debounceWorkWaiters = new Set<() => void>();
+  const notifyDebounceWork = () => {
+    if (debounceWorkWaiters.size === 0) {
+      return;
+    }
+    const waiters = [...debounceWorkWaiters];
+    debounceWorkWaiters.clear();
+    for (const resolve of waiters) {
+      resolve();
+    }
+  };
+  const waitForDebounceWorkOrIdle = (handlers: ReadonlyArray<Promise<void>>) => {
+    if (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
+      return Promise.resolve();
+    }
+    if (pendingMessageHandlers.size === 0) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      const finish = () => {
+        debounceWorkWaiters.delete(finish);
+        resolve();
+      };
+      debounceWorkWaiters.add(finish);
+      void Promise.allSettled(handlers).then(finish);
+    });
+  };
   let nextReceiveOrder = 0;
   const publishPendingWorkState = (at = Date.now()) => {
     options.onPendingWorkChanged?.(
@@ -506,7 +584,7 @@ export async function attachWebInboxToSocket(
       .filter((claim): claim is ChannelReplayClaimHandle => claim !== undefined);
     const durableEntries = entries.filter(
       (entry): entry is QueuedInboundMessage & { durableId: string } =>
-        isNonEmptyString(entry.durableId),
+        isNonEmptyString(entry.durableId) && !drainOwnedDurableIds.has(entry.durableId),
     );
     const readReceiptEntries = entries.filter(
       (entry): entry is QueuedInboundMessage & { readReceipt: WhatsAppReadReceiptTarget } =>
@@ -524,6 +602,10 @@ export async function attachWebInboxToSocket(
           }),
         ),
       );
+      // Drain-owned failures: throw so dispatchClaimedEvent returns failed-retryable.
+      if (entries.some((entry) => entry.durableId && drainOwnedDurableIds.has(entry.durableId))) {
+        throw retryableError;
+      }
       return;
     }
     await Promise.all([
@@ -549,16 +631,20 @@ export async function attachWebInboxToSocket(
       });
       activeInboundFlushes.add(flushTask);
       publishPendingWorkState();
+      notifyDebounceWork();
+      let flushError: unknown;
       try {
         const orderedEntries = orderDebouncedInboundEntries(entries);
         const last = orderedEntries.at(-1);
         if (!last) {
+          settleClaimFlushWaiters(entries);
           return;
         }
         try {
           if (orderedEntries.length === 1) {
             await options.onMessage(last);
             await finalizeInboundDelivery(orderedEntries);
+            settleClaimFlushWaiters(orderedEntries);
             return;
           }
           const mentioned = new Set<string>();
@@ -604,11 +690,23 @@ export async function attachWebInboxToSocket(
           });
           await options.onMessage(combinedMessage);
           await finalizeInboundDelivery(orderedEntries);
+          settleClaimFlushWaiters(orderedEntries);
         } catch (error) {
-          await finalizeInboundDelivery(orderedEntries, error);
+          flushError = error;
+          try {
+            await finalizeInboundDelivery(orderedEntries, error);
+          } catch (finalizeError) {
+            // Drain-owned retryable path rethrows from finalize — that is the
+            // authoritative outcome for claim waiters.
+            flushError = finalizeError;
+            throw finalizeError;
+          }
           throw error;
         }
       } finally {
+        if (flushError !== undefined) {
+          settleClaimFlushWaiters(entries, flushError);
+        }
         for (const entry of entries) {
           if (entry.debounceKey) {
             pendingDebounceKeys.delete(entry.debounceKey);
@@ -1156,6 +1254,15 @@ export async function attachWebInboxToSocket(
     return msgTsMs < appendAfterMs;
   };
 
+  // Accept-time normalization carried to the drain dispatch. Live delivery must
+  // not re-derive transient facts (LID mappings, group state) that resolved at
+  // receive time — a second lookup can fail and silently drop the message.
+  // Restart replay finds no entry and re-normalizes from the persisted payload.
+  const preparedInboundByDurableId = new Map<
+    string,
+    NonNullable<Awaited<ReturnType<typeof normalizeInboundMessage>>>
+  >();
+
   const processDurableInboundMessage = async (
     msg: WAMessage,
     upsertType: string | undefined,
@@ -1166,7 +1273,11 @@ export async function attachWebInboxToSocket(
       metadata?: WhatsAppDurableInboundMetadata;
     },
   ) => {
-    const inbound = await normalizeInboundMessage(msg);
+    const prepared = stored ? preparedInboundByDurableId.get(stored.id) : undefined;
+    if (stored) {
+      preparedInboundByDurableId.delete(stored.id);
+    }
+    const inbound = prepared ?? (await normalizeInboundMessage(msg));
     if (!inbound) {
       if (stored) {
         await completeUndeliverableDurableInbound(stored.id, stored.metadata);
@@ -1211,9 +1322,18 @@ export async function attachWebInboxToSocket(
           );
           return;
         }
-        if (accepted.kind === "pending" && accepted.record.attempts === 0) {
-          return;
-        }
+        // Enqueued (new or retryable). Hand the accept-time normalization to the
+        // drain dispatch (consumed once; crash replay re-normalizes), then kick
+        // the drain without awaiting idle — a pending handler must not block
+        // later messages in this upsert; the claim guarantees exactly-once.
+        preparedInboundByDurableId.set(durableId, inbound);
+        void pumpDurableInboundDrain().catch((err: unknown) => {
+          inboundLogger.warn(
+            { error: formatError(err) },
+            "whatsapp durable inbound drain pump failed",
+          );
+        });
+        return;
       } catch (err) {
         durableId = undefined;
         const error = formatError(err);
@@ -1227,10 +1347,16 @@ export async function attachWebInboxToSocket(
       }
     }
 
+    // Stored (drain claim) or live fallback without durable journal.
     const enriched = await enrichInboundMessage(msg);
     if (!enriched) {
-      await completeUndeliverableDurableInbound(durableId, durableMetadata);
+      // Pre-migration replay completed undeliverable rows AND sent the receipt.
+      // Drain still tombstones via dispatch return; receipt must not be skipped.
       await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
+      if (stored) {
+        return;
+      }
+      await completeUndeliverableDurableInbound(durableId, durableMetadata);
       return;
     }
 
@@ -1240,13 +1366,29 @@ export async function attachWebInboxToSocket(
       : ({ kind: "invalid" } as const);
     if (dedupeClaim.kind === "duplicate" || dedupeClaim.kind === "inflight") {
       if (dedupeClaim.kind === "duplicate") {
-        await completeUndeliverableDurableInbound(durableId, durableMetadata);
+        // Drain-claimed rows tombstone via the dispatch return; completing here
+        // would double-settle the claim (pre-migration live path still completes).
+        if (!stored) {
+          await completeUndeliverableDurableInbound(durableId, durableMetadata);
+        }
         await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
+        return;
+      }
+      // "inflight": another delivery holds the dedupe claim — keep durable row
+      // pending for replay (pre-migration). Do not complete the drain claim.
+      if (stored) {
+        throw new Error("whatsapp inbound dedupe claim contended (inflight)");
       }
       return;
     }
 
     recordAcceptedInboundActivity(options.accountId);
+    // Keep durableId on the entry so finalize can rethrow drain-owned failures.
+    // drainOwnedDurableIds only suppresses inline journal complete/release.
+    if (durableId && drainOwnedDurableIds.has(durableId)) {
+      ensureClaimFlushWaiter(durableId);
+      claimIdsEnqueuedForFlush.add(durableId);
+    }
     await enqueueInboundMessage(msg, inbound, enriched, {
       durableId,
       readReceipt: deliveryReadReceipt,
@@ -1255,19 +1397,58 @@ export async function attachWebInboxToSocket(
     });
   };
 
-  const replayPendingDurableInboundMessages = async () => {
-    const pending = await durableInboundJournal.pending();
-    for (const record of pending) {
+  const processClaimedDurableInbound = async (claim: {
+    id: string;
+    payload: WhatsAppDurableInboundPayload;
+    metadata?: WhatsAppDurableInboundMetadata;
+  }) => {
+    drainOwnedDurableIds.add(claim.id);
+    // Register before process so flush can settle even if it races enqueue.
+    const flushWaiter = ensureClaimFlushWaiter(claim.id);
+    try {
       await processDurableInboundMessage(
-        deserializeWhatsAppDurableInboundMessage(record.payload.message),
-        record.payload.upsertType,
-        record.payload.receivedAt,
+        deserializeWhatsAppDurableInboundMessage(claim.payload.message),
+        claim.payload.upsertType,
+        claim.payload.receivedAt,
         {
-          id: record.id,
-          payload: record.payload,
-          metadata: record.metadata,
+          id: claim.id,
+          payload: claim.payload,
+          metadata: claim.metadata,
         },
       );
+      // Undeliverable/duplicate early returns never enqueue — complete the waiter.
+      // Enqueued paths wait for this claim's own flush only (preserve debounce window).
+      if (!claimIdsEnqueuedForFlush.has(claim.id) && !flushWaiter.settled) {
+        flushWaiter.settled = true;
+        flushWaiter.resolve();
+      }
+      await flushWaiter.promise;
+    } finally {
+      claimIdsEnqueuedForFlush.delete(claim.id);
+      claimFlushWaiters.delete(claim.id);
+      drainOwnedDurableIds.delete(claim.id);
+    }
+  };
+
+  const durableInboundDrain = createWhatsAppIngressDrain({
+    queue: durableInboundQueue,
+    processClaimed: processClaimedDurableInbound,
+    onLog: (message) => inboundLogger.warn({ message }, "whatsapp ingress drain"),
+  });
+
+  const pumpDurableInboundDrain = async () => {
+    const pumpTask = (async () => {
+      await durableInboundDrain.recoverStaleClaims();
+      await durableInboundDrain.drainOnce();
+      await durableInboundDrain.waitForIdle();
+    })();
+    pendingMessageHandlers.add(pumpTask);
+    publishPendingWorkState();
+    try {
+      await pumpTask;
+    } finally {
+      pendingMessageHandlers.delete(pumpTask);
+      publishPendingWorkState();
     }
   };
 
@@ -1515,6 +1696,7 @@ export async function attachWebInboxToSocket(
       if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
         pendingDebounceKeys.add(debounceKey);
         publishPendingWorkState();
+        notifyDebounceWork();
       }
     }
     if (inboundMessage.event.id) {
@@ -1584,11 +1766,6 @@ export async function attachWebInboxToSocket(
       publishPendingWorkState();
     });
   };
-  const waitForPendingMessageHandlers = async () => {
-    while (pendingMessageHandlers.size > 0) {
-      await Promise.all(Array.from(pendingMessageHandlers));
-    }
-  };
   const drainDebouncedInboundMessages = async () => {
     while (pendingDebounceKeys.size > 0 || activeInboundFlushes.size > 0) {
       const debounceKeys = Array.from(pendingDebounceKeys);
@@ -1606,8 +1783,32 @@ export async function attachWebInboxToSocket(
   };
   const drainInboundBeforeSocketClose = async () => {
     groupMetadataCacheClosed = true;
-    await waitForPendingMessageHandlers();
+    // Durable pumps (via upsert handlers) park on claim flush waiters until the
+    // debouncer flushes. Interleave force-flush with event-driven wait for
+    // debounce enqueue so close cannot deadlock and stays fake-timer safe.
+    // Debounce-window parity preserved: flushKey, not cancel.
+    for (;;) {
+      await drainDebouncedInboundMessages();
+      if (pendingMessageHandlers.size === 0) {
+        break;
+      }
+      const handlers = Array.from(pendingMessageHandlers);
+      await Promise.race([Promise.allSettled(handlers), waitForDebounceWorkOrIdle(handlers)]);
+      if (
+        pendingMessageHandlers.size === 0 &&
+        pendingDebounceKeys.size === 0 &&
+        activeInboundFlushes.size === 0
+      ) {
+        break;
+      }
+    }
     await drainDebouncedInboundMessages();
+    // Drain-owned claims must finish (or release) before a successor monitor starts.
+    try {
+      await durableInboundDrain.waitForIdle();
+    } finally {
+      durableInboundDrain.dispose();
+    }
   };
   const drainInboundBeforeSocketCloseWithTimeout = async () => {
     let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -1728,7 +1929,7 @@ export async function attachWebInboxToSocket(
     forgetFullGroupMetadata(update.id);
   }) as unknown as (...args: unknown[]) => void);
 
-  const replayTask = replayPendingDurableInboundMessages().catch((err: unknown) => {
+  const replayTask = pumpDurableInboundDrain().catch((err: unknown) => {
     inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
     inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
   });
